@@ -120,8 +120,15 @@ fn main() {
         }
         Commands::Volume(cmd) => match cmd {
             VolumeCommands::Add { label, path } => {
-                println!("Adding volume '{label}' at {path}...");
-                println!("not yet implemented");
+                let catalog_root = dam::config::find_catalog_root()?;
+                let registry = DeviceRegistry::new(&catalog_root);
+                let volume = registry.register(
+                    &label,
+                    std::path::Path::new(&path),
+                    dam::models::VolumeType::Local,
+                )?;
+                println!("Registered volume '{}' ({})", volume.label, volume.id);
+                println!("  Path: {}", volume.mount_point.display());
                 Ok(())
             }
             VolumeCommands::List => {
