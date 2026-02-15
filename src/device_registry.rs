@@ -17,6 +17,13 @@ impl DeviceRegistry {
         }
     }
 
+    /// Create an empty volumes.yaml file.
+    pub fn init(catalog_root: &Path) -> Result<()> {
+        let path = catalog_root.join("volumes.yaml");
+        std::fs::write(path, "[]\n")?;
+        Ok(())
+    }
+
     /// Register a new volume.
     pub fn register(
         &self,

@@ -55,15 +55,29 @@ pub fn find_catalog_root() -> Result<PathBuf> {
 }
 
 // Simple TOML handling without a full toml crate dependency.
-// For the config file we just use serde_yaml as a placeholder; we'll switch to
-// a proper toml crate when we flesh this out.
+// We only have one optional field, so hand-written parsing is fine.
 fn toml_minimal_parse(contents: &str) -> Result<CatalogConfig> {
-    // Placeholder: for now just return defaults
-    let _ = contents;
-    Ok(CatalogConfig::default())
+    let mut default_volume = None;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("default_volume") {
+            let rest = rest.trim();
+            if let Some(value) = rest.strip_prefix('=') {
+                let value = value.trim().trim_matches('"');
+                default_volume = Some(value.parse::<Uuid>()?);
+            }
+        }
+    }
+    Ok(CatalogConfig { default_volume })
 }
 
-fn toml_minimal_serialize(_config: &CatalogConfig) -> Result<String> {
-    // Placeholder: write a minimal toml
-    Ok("# dam catalog configuration\n".to_string())
+fn toml_minimal_serialize(config: &CatalogConfig) -> Result<String> {
+    let mut out = String::from("# dam catalog configuration\n");
+    if let Some(vol) = &config.default_volume {
+        out.push_str(&format!("default_volume = \"{vol}\"\n"));
+    }
+    Ok(out)
 }

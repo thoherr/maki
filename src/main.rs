@@ -1,4 +1,7 @@
 use clap::{Parser, Subcommand};
+use dam::catalog::Catalog;
+use dam::config::CatalogConfig;
+use dam::device_registry::DeviceRegistry;
 
 #[derive(Parser)]
 #[command(name = "dam", about = "Digital Asset Manager", version)]
@@ -90,10 +93,29 @@ enum VolumeCommands {
 fn main() {
     let cli = Cli::parse();
 
-    let result: Result<(), Box<dyn std::error::Error>> = match cli.command {
+    let result: anyhow::Result<()> = (|| match cli.command {
         Commands::Init => {
-            println!("Initializing new dam catalog...");
-            println!("not yet implemented");
+            let catalog_root = std::env::current_dir()?;
+            let config_path = catalog_root.join("dam.toml");
+            if config_path.exists() {
+                anyhow::bail!("A dam catalog already exists in this directory.");
+            }
+
+            // Create directories
+            std::fs::create_dir_all(catalog_root.join("metadata"))?;
+            std::fs::create_dir_all(catalog_root.join("previews"))?;
+
+            // Write config
+            CatalogConfig::default().save(&catalog_root)?;
+
+            // Initialize SQLite schema
+            let catalog = Catalog::open(&catalog_root)?;
+            catalog.initialize()?;
+
+            // Write empty volumes registry
+            DeviceRegistry::init(&catalog_root)?;
+
+            println!("Initialized new dam catalog in {}", catalog_root.display());
             Ok(())
         }
         Commands::Volume(cmd) => match cmd {
@@ -155,7 +177,7 @@ fn main() {
             println!("not yet implemented");
             Ok(())
         }
-    };
+    })();
 
     if let Err(e) = result {
         eprintln!("Error: {e:#}");
