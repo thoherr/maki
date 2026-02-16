@@ -346,6 +346,42 @@ impl Catalog {
         }))
     }
 
+    /// Find which asset owns a variant by its content hash.
+    pub fn find_asset_id_by_variant(&self, content_hash: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT asset_id FROM variants WHERE content_hash = ?1",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![content_hash])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Reassign a variant to a different asset in the catalog.
+    pub fn update_variant_asset_id(&self, content_hash: &str, new_asset_id: &str) -> Result<()> {
+        let changed = self.conn.execute(
+            "UPDATE variants SET asset_id = ?1 WHERE content_hash = ?2",
+            rusqlite::params![new_asset_id, content_hash],
+        )?;
+        if changed == 0 {
+            anyhow::bail!("No variant found with hash '{content_hash}'");
+        }
+        Ok(())
+    }
+
+    /// Delete an asset row from the catalog.
+    pub fn delete_asset(&self, asset_id: &str) -> Result<()> {
+        let changed = self.conn.execute(
+            "DELETE FROM assets WHERE id = ?1",
+            rusqlite::params![asset_id],
+        )?;
+        if changed == 0 {
+            anyhow::bail!("No asset found with id '{asset_id}'");
+        }
+        Ok(())
+    }
+
     /// Rebuild the entire catalog from sidecar files.
     pub fn rebuild(&self) -> Result<()> {
         anyhow::bail!("not yet implemented")
@@ -642,5 +678,88 @@ mod tests {
         assert_eq!(details.variants[0].locations.len(), 1);
         assert_eq!(details.variants[0].locations[0].volume_label, "test-vol");
         assert_eq!(details.variants[0].locations[0].relative_path, "photos/photo.png");
+    }
+
+    #[test]
+    fn find_asset_id_by_variant_returns_correct_asset() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image);
+        let asset_id = asset.id.to_string();
+        catalog.insert_asset(&asset).unwrap();
+
+        let variant = crate::models::Variant {
+            content_hash: "sha256:findme".to_string(),
+            asset_id: asset.id,
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 1000,
+            original_filename: "test.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        catalog.insert_variant(&variant).unwrap();
+
+        let found = catalog.find_asset_id_by_variant("sha256:findme").unwrap();
+        assert_eq!(found, Some(asset_id));
+
+        let missing = catalog.find_asset_id_by_variant("sha256:nope").unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn delete_asset_removes_row() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image);
+        let asset_id = asset.id.to_string();
+        catalog.insert_asset(&asset).unwrap();
+
+        catalog.delete_asset(&asset_id).unwrap();
+
+        let count: i64 = catalog
+            .conn
+            .query_row("SELECT COUNT(*) FROM assets WHERE id = ?1", rusqlite::params![asset_id], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn delete_asset_errors_on_missing() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        assert!(catalog.delete_asset("nonexistent").is_err());
+    }
+
+    #[test]
+    fn update_variant_asset_id_changes_fk() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let asset1 = crate::models::Asset::new(crate::models::AssetType::Image);
+        let asset2 = crate::models::Asset::new(crate::models::AssetType::Image);
+        catalog.insert_asset(&asset1).unwrap();
+        catalog.insert_asset(&asset2).unwrap();
+
+        let variant = crate::models::Variant {
+            content_hash: "sha256:moveme".to_string(),
+            asset_id: asset1.id,
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 500,
+            original_filename: "move.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        catalog.insert_variant(&variant).unwrap();
+
+        catalog
+            .update_variant_asset_id("sha256:moveme", &asset2.id.to_string())
+            .unwrap();
+
+        let new_owner = catalog.find_asset_id_by_variant("sha256:moveme").unwrap();
+        assert_eq!(new_owner, Some(asset2.id.to_string()));
     }
 }

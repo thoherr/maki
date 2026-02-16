@@ -1,9 +1,21 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Result;
 
 use crate::catalog::{AssetDetails, Catalog, SearchRow};
 use crate::metadata_store::MetadataStore;
+
+/// Result of a group operation.
+#[derive(Debug)]
+pub struct GroupResult {
+    /// The asset ID that all variants were merged into.
+    pub target_id: String,
+    /// Number of variants moved from donor assets.
+    pub variants_moved: usize,
+    /// Number of donor assets removed.
+    pub donors_removed: usize,
+}
 
 /// Result of a tag add/remove operation.
 pub struct TagResult {
@@ -72,6 +84,103 @@ impl QueryEngine {
         catalog
             .load_asset_details(&full_id)?
             .ok_or_else(|| anyhow::anyhow!("Asset '{full_id}' not found in catalog"))
+    }
+
+    /// Group variants (identified by content hashes) into a single asset.
+    ///
+    /// Picks the oldest asset as the target, moves all other variants into it,
+    /// merges tags, and deletes donor assets.
+    pub fn group(&self, variant_hashes: &[String]) -> Result<GroupResult> {
+        if variant_hashes.is_empty() {
+            anyhow::bail!("No variant hashes provided");
+        }
+
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let store = MetadataStore::new(&self.catalog_root);
+
+        // Step 1: Look up owning asset for each hash
+        let mut asset_ids = Vec::new();
+        for hash in variant_hashes {
+            let asset_id = catalog
+                .find_asset_id_by_variant(hash)?
+                .ok_or_else(|| anyhow::anyhow!("No variant found with hash '{hash}'"))?;
+            asset_ids.push(asset_id);
+        }
+
+        // Step 2: Collect unique asset IDs
+        let unique_ids: Vec<String> = {
+            let mut seen = HashSet::new();
+            asset_ids
+                .iter()
+                .filter(|id| seen.insert((*id).clone()))
+                .cloned()
+                .collect()
+        };
+
+        if unique_ids.len() == 1 {
+            return Ok(GroupResult {
+                target_id: unique_ids.into_iter().next().unwrap(),
+                variants_moved: 0,
+                donors_removed: 0,
+            });
+        }
+
+        // Step 3: Load all assets from sidecar, pick oldest as target
+        let mut assets: Vec<crate::models::Asset> = unique_ids
+            .iter()
+            .map(|id| {
+                let uuid: uuid::Uuid = id.parse()?;
+                store.load(uuid)
+            })
+            .collect::<Result<_>>()?;
+
+        assets.sort_by_key(|a| a.created_at);
+        let target_id = assets[0].id;
+        let mut target = assets.remove(0);
+        let donors = assets; // remaining are donors
+
+        // Step 4: Merge variants and tags from donors into target
+        let mut variants_moved = 0;
+        let existing_tags: HashSet<String> = target.tags.iter().cloned().collect();
+        let mut all_tags = existing_tags;
+
+        for donor in &donors {
+            for variant in &donor.variants {
+                let mut moved_variant = variant.clone();
+                moved_variant.asset_id = target_id;
+                target.variants.push(moved_variant);
+                variants_moved += 1;
+            }
+            for tag in &donor.tags {
+                if all_tags.insert(tag.clone()) {
+                    target.tags.push(tag.clone());
+                }
+            }
+        }
+
+        // Step 5: Save target sidecar and update catalog
+        store.save(&target)?;
+        catalog.insert_asset(&target)?;
+
+        // Step 6: Update variant rows in catalog and clean up donors
+        for donor in &donors {
+            for variant in &donor.variants {
+                catalog.update_variant_asset_id(
+                    &variant.content_hash,
+                    &target_id.to_string(),
+                )?;
+            }
+            store.delete(donor.id)?;
+            catalog.delete_asset(&donor.id.to_string())?;
+        }
+
+        let donors_removed = donors.len();
+
+        Ok(GroupResult {
+            target_id: target_id.to_string(),
+            variants_moved,
+            donors_removed,
+        })
     }
 
     /// Add or remove tags on an asset. Updates both sidecar YAML and SQLite catalog.
@@ -146,6 +255,114 @@ mod tests {
         store.save(&asset).unwrap();
 
         (dir, asset.id.to_string())
+    }
+
+    use crate::models::{Variant, VariantRole};
+
+    /// Set up a temp catalog with two assets, each with one variant, for group tests.
+    /// Returns (dir, hash1, hash2, asset_id1, asset_id2).
+    fn setup_group_env() -> (tempfile::TempDir, String, String, String, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let catalog_root = dir.path();
+
+        let catalog = Catalog::open(catalog_root).unwrap();
+        catalog.initialize().unwrap();
+        let store = MetadataStore::new(catalog_root);
+
+        // Create first asset (older)
+        let mut asset1 = Asset::new(AssetType::Image);
+        asset1.created_at = chrono::Utc::now() - chrono::Duration::hours(2);
+        asset1.tags = vec!["landscape".to_string()];
+        let variant1 = Variant {
+            content_hash: "sha256:hash1".to_string(),
+            asset_id: asset1.id,
+            role: VariantRole::Original,
+            format: "arw".to_string(),
+            file_size: 25_000_000,
+            original_filename: "DSC_001.ARW".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        asset1.variants.push(variant1.clone());
+        catalog.insert_asset(&asset1).unwrap();
+        catalog.insert_variant(&variant1).unwrap();
+        store.save(&asset1).unwrap();
+
+        // Create second asset (newer)
+        let mut asset2 = Asset::new(AssetType::Image);
+        asset2.tags = vec!["nature".to_string()];
+        let variant2 = Variant {
+            content_hash: "sha256:hash2".to_string(),
+            asset_id: asset2.id,
+            role: VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 5_000_000,
+            original_filename: "DSC_001.JPG".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        asset2.variants.push(variant2.clone());
+        catalog.insert_asset(&asset2).unwrap();
+        catalog.insert_variant(&variant2).unwrap();
+        store.save(&asset2).unwrap();
+
+        let id1 = asset1.id.to_string();
+        let id2 = asset2.id.to_string();
+        (dir, "sha256:hash1".to_string(), "sha256:hash2".to_string(), id1, id2)
+    }
+
+    #[test]
+    fn group_two_variants_from_two_assets() {
+        let (dir, hash1, hash2, id1, id2) = setup_group_env();
+        let engine = QueryEngine::new(dir.path());
+
+        let result = engine.group(&[hash1, hash2]).unwrap();
+
+        // Target should be the older asset (asset1)
+        assert_eq!(result.target_id, id1);
+        assert_eq!(result.variants_moved, 1);
+        assert_eq!(result.donors_removed, 1);
+
+        // Target should now have both variants
+        let details = engine.show(&id1).unwrap();
+        assert_eq!(details.variants.len(), 2);
+
+        // Donor should be gone
+        assert!(engine.show(&id2).is_err());
+    }
+
+    #[test]
+    fn group_already_same_asset_is_noop() {
+        let (dir, hash1, _, id1, _) = setup_group_env();
+        let engine = QueryEngine::new(dir.path());
+
+        let result = engine.group(&[hash1.clone(), hash1]).unwrap();
+
+        assert_eq!(result.target_id, id1);
+        assert_eq!(result.variants_moved, 0);
+        assert_eq!(result.donors_removed, 0);
+    }
+
+    #[test]
+    fn group_nonexistent_hash_errors() {
+        let (dir, _, _, _, _) = setup_group_env();
+        let engine = QueryEngine::new(dir.path());
+
+        let result = engine.group(&["sha256:bogus".to_string()]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No variant found"));
+    }
+
+    #[test]
+    fn group_merges_tags() {
+        let (dir, hash1, hash2, id1, _) = setup_group_env();
+        let engine = QueryEngine::new(dir.path());
+
+        engine.group(&[hash1, hash2]).unwrap();
+
+        let details = engine.show(&id1).unwrap();
+        assert!(details.tags.contains(&"landscape".to_string()));
+        assert!(details.tags.contains(&"nature".to_string()));
     }
 
     #[test]

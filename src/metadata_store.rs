@@ -53,6 +53,15 @@ impl MetadataStore {
         Ok(asset)
     }
 
+    /// Delete the sidecar YAML file for an asset.
+    pub fn delete(&self, asset_id: Uuid) -> Result<()> {
+        let path = self.sidecar_path(asset_id);
+        if path.exists() {
+            std::fs::remove_file(&path)?;
+        }
+        Ok(())
+    }
+
     /// Enumerate all known assets.
     pub fn list(&self) -> Result<Vec<AssetSummary>> {
         anyhow::bail!("not yet implemented")

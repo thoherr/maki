@@ -266,8 +266,20 @@ fn main() {
             Ok(())
         }
         Commands::Group { variant_hashes } => {
-            println!("Grouping {} variant(s)...", variant_hashes.len());
-            println!("not yet implemented");
+            let catalog_root = dam::config::find_catalog_root()?;
+            let engine = QueryEngine::new(&catalog_root);
+            let result = engine.group(&variant_hashes)?;
+
+            let short_id = &result.target_id[..8];
+            println!(
+                "Grouped {} variant(s) into asset {short_id}",
+                variant_hashes.len()
+            );
+            if result.donors_removed > 0 {
+                println!("  Merged {} donor asset(s)", result.donors_removed);
+            } else {
+                println!("  Already grouped (no changes)");
+            }
             Ok(())
         }
         Commands::Relocate { asset_id, volume } => {
