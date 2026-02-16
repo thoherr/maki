@@ -26,6 +26,7 @@ The system is organized in four layers, from top to bottom:
 - **Text-based metadata**: sidecar files (YAML/TOML) are the source of truth for all metadata.
 - **SQLite as local catalog**: fast queries, single file, no server. Acts as cache/index over the authoritative sidecar files.
 - **Offline-capable**: the local catalog holds enough information (index + thumbnails) to browse and search without media being mounted.
+- **Duplicate location tracking**: when the same content (same SHA-256) is found at a new file path, the location is added to the existing variant rather than being silently skipped. This preserves knowledge of all physical copies, enables the `duplicates` command, and supports future cleanup/consolidation workflows.
 
 ## Technology
 

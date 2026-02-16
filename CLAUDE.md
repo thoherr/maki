@@ -35,4 +35,6 @@ Core CLI is functional. See `specification.md` for full requirements.
 
 **Implemented commands**: `init`, `volume add/list`, `import`, `search`, `show`, `tag`, `group`, `rebuild-catalog`
 
+**Import behavior**: When importing a file whose content already exists (same SHA-256), the import adds the new file location to the existing variant rather than silently skipping. This tracks where identical content lives across the filesystem. Only truly skips when the exact same location (volume + path) is already recorded.
+
 **Not yet implemented**: `relocate`, `verify`, `duplicates`

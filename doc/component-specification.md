@@ -154,7 +154,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 **Responsibility**: high-level operations that orchestrate the other components.
 
 **Operations**:
-- `import(paths, volume_id) -> Vec<Asset>` — hash files, extract metadata (EXIF etc.), create assets, create variants, write sidecars, update catalog. Auto-groups RAW+JPEG pairs by matching filename stems and timestamps.
+- `import(paths, volume_id) -> ImportResult` — hash files, extract metadata (EXIF etc.), create assets, create variants, write sidecars, update catalog. Auto-groups RAW+JPEG pairs by matching filename stems and timestamps. When a file's content hash already exists, the new file location is added to the existing variant (both sidecar and catalog) rather than being silently skipped. Only truly skips when the exact location (volume + relative path) is already tracked. Reports per-file status as `Imported`, `LocationAdded`, or `Skipped`.
 - `group(variant_hashes) -> Asset` — manually group variants into one asset.
 - `ungroup(asset_id, variant_hash)` — remove a variant from a group.
 - `tag(asset_id, tags)` — add tags to an asset.
