@@ -51,7 +51,9 @@ A storage device or mount point.
 | is_online | bool | Derived at runtime from mount point availability |
 
 ### Recipe
-Processing instructions associated with a variant.
+Processing instructions associated with a variant. During import, files with recognized recipe extensions that share a filename stem with a media file in the same directory are automatically attached as recipes rather than imported as variants.
+
+Known recipe extensions: `.xmp` (Adobe/Lightroom/CaptureOne), `.cos` / `.cot` / `.cop` (CaptureOne session/template/preset), `.pp3` (RawTherapee), `.dop` (DxO), `.on1` (ON1).
 
 | Field | Type | Description |
 |---|---|---|
@@ -154,7 +156,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 **Responsibility**: high-level operations that orchestrate the other components.
 
 **Operations**:
-- `import(paths, volume_id) -> ImportResult` — hash files, extract metadata (EXIF etc.), create assets, create variants, write sidecars, update catalog. Auto-groups RAW+JPEG pairs by matching filename stems and timestamps. When a file's content hash already exists, the new file location is added to the existing variant (both sidecar and catalog) rather than being silently skipped. Only truly skips when the exact location (volume + relative path) is already tracked. Reports per-file status as `Imported`, `LocationAdded`, or `Skipped`.
+- `import(paths, volume_id) -> ImportResult` — hash files, extract metadata (EXIF etc.), create assets, create variants, write sidecars, update catalog. Auto-groups files that share the same filename stem and reside in the same directory (e.g. `DSC_4521.NEF`, `DSC_4521.jpg`, `DSC_4521.xmp`, `DSC_4521.cos` all become one asset). Media files become variants; processing sidecars (`.xmp`, `.cos`, `.cot`, `.cop`, etc.) are attached as recipes. When a file's content hash already exists, the new file location is added to the existing variant (both sidecar and catalog) rather than being silently skipped. Only truly skips when the exact location (volume + relative path) is already tracked. Reports per-file status as `Imported`, `LocationAdded`, or `Skipped`.
 - `group(variant_hashes) -> Asset` — manually group variants into one asset.
 - `ungroup(asset_id, variant_hash)` — remove a variant from a group.
 - `tag(asset_id, tags)` — add tags to an asset.

@@ -27,6 +27,7 @@ The system is organized in four layers, from top to bottom:
 - **SQLite as local catalog**: fast queries, single file, no server. Acts as cache/index over the authoritative sidecar files.
 - **Offline-capable**: the local catalog holds enough information (index + thumbnails) to browse and search without media being mounted.
 - **Duplicate location tracking**: when the same content (same SHA-256) is found at a new file path, the location is added to the existing variant rather than being silently skipped. This preserves knowledge of all physical copies, enables the `duplicates` command, and supports future cleanup/consolidation workflows.
+- **Stem-based auto-grouping**: files sharing the same filename stem in the same directory are grouped into one asset during import (e.g. `DSC_4521.NEF` + `DSC_4521.jpg` + `DSC_4521.xmp`). Media files become variants; processing sidecars (XMP, COS, etc.) are attached as recipes. No timestamp matching is required — directory co-location and stem identity are sufficient.
 
 ## Technology
 
