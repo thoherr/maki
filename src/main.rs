@@ -196,7 +196,7 @@ fn main() {
                     let name = path.file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or_else(|| path.to_str().unwrap_or("?"));
-                    eprintln!("  {} — {} ({:.3}s)", name, label, elapsed.as_secs_f64());
+                    eprintln!("  {} — {} ({})", name, label, format_duration(elapsed));
                 })?
             } else {
                 service.import(&canonical_paths, &volume)?
@@ -358,13 +358,28 @@ fn main() {
     })();
 
     if cli.timing {
-        let elapsed = start.elapsed();
-        eprintln!("Elapsed: {:.3}s", elapsed.as_secs_f64());
+        eprintln!("Elapsed: {}", format_duration(start.elapsed()));
     }
 
     if let Err(e) = result {
         eprintln!("Error: {e:#}");
         std::process::exit(1);
+    }
+}
+
+fn format_duration(d: std::time::Duration) -> String {
+    let total_millis = d.as_millis();
+    let hours = total_millis / 3_600_000;
+    let minutes = (total_millis % 3_600_000) / 60_000;
+    let seconds = (total_millis % 60_000) / 1_000;
+    let millis = total_millis % 1_000;
+
+    if hours > 0 {
+        format!("{hours}h {minutes:02}m {seconds:02}.{millis:03}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds:02}.{millis:03}s")
+    } else {
+        format!("{seconds}.{millis:03}s")
     }
 }
 
