@@ -83,7 +83,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = MetadataStore::new(dir.path());
 
-        let asset = Asset::new(AssetType::Image);
+        let asset = Asset::new(AssetType::Image, "sha256:meta_test1");
         let id = asset.id;
 
         store.save(&asset).unwrap();

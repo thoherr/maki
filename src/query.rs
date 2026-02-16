@@ -247,7 +247,7 @@ mod tests {
         catalog.initialize().unwrap();
 
         // Create and persist an asset
-        let mut asset = Asset::new(AssetType::Image);
+        let mut asset = Asset::new(AssetType::Image, "sha256:tag_env");
         asset.tags = vec!["existing".to_string()];
         catalog.insert_asset(&asset).unwrap();
 
@@ -270,7 +270,7 @@ mod tests {
         let store = MetadataStore::new(catalog_root);
 
         // Create first asset (older)
-        let mut asset1 = Asset::new(AssetType::Image);
+        let mut asset1 = Asset::new(AssetType::Image, "sha256:hash1");
         asset1.created_at = chrono::Utc::now() - chrono::Duration::hours(2);
         asset1.tags = vec!["landscape".to_string()];
         let variant1 = Variant {
@@ -289,7 +289,7 @@ mod tests {
         store.save(&asset1).unwrap();
 
         // Create second asset (newer)
-        let mut asset2 = Asset::new(AssetType::Image);
+        let mut asset2 = Asset::new(AssetType::Image, "sha256:hash2");
         asset2.tags = vec!["nature".to_string()];
         let variant2 = Variant {
             content_hash: "sha256:hash2".to_string(),

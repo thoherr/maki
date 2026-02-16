@@ -436,7 +436,7 @@ mod tests {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
 
-        let asset = crate::models::Asset::new(crate::models::AssetType::Image);
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:test1");
         catalog.insert_asset(&asset).unwrap();
 
         let count: i64 = catalog
@@ -458,7 +458,7 @@ mod tests {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
 
-        let asset = crate::models::Asset::new(crate::models::AssetType::Image);
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:test2");
         catalog.insert_asset(&asset).unwrap();
 
         let variant = crate::models::Variant {
@@ -481,7 +481,7 @@ mod tests {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
 
-        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image);
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:search1");
         asset.name = Some("sunset photo".to_string());
         asset.description = Some("A beautiful sunset over the ocean".to_string());
         asset.tags = vec!["landscape".to_string(), "nature".to_string()];
@@ -500,7 +500,7 @@ mod tests {
         catalog.insert_variant(&variant).unwrap();
 
         // Add a second asset of different type
-        let mut asset2 = crate::models::Asset::new(crate::models::AssetType::Video);
+        let mut asset2 = crate::models::Asset::new(crate::models::AssetType::Video, "sha256:search2");
         asset2.name = Some("holiday clip".to_string());
         catalog.insert_asset(&asset2).unwrap();
 
@@ -586,7 +586,7 @@ mod tests {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
 
-        let asset = crate::models::Asset::new(crate::models::AssetType::Image);
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:test3");
         let full_id = asset.id.to_string();
         catalog.insert_asset(&asset).unwrap();
 
@@ -608,8 +608,8 @@ mod tests {
         catalog.initialize().unwrap();
 
         // Insert two assets and use an empty prefix to match both
-        let a1 = crate::models::Asset::new(crate::models::AssetType::Image);
-        let a2 = crate::models::Asset::new(crate::models::AssetType::Video);
+        let a1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ambig1");
+        let a2 = crate::models::Asset::new(crate::models::AssetType::Video, "sha256:ambig2");
         catalog.insert_asset(&a1).unwrap();
         catalog.insert_asset(&a2).unwrap();
 
@@ -651,7 +651,7 @@ mod tests {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
 
-        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image);
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:loc1");
         asset.name = Some("located asset".to_string());
         catalog.insert_asset(&asset).unwrap();
 
@@ -693,7 +693,7 @@ mod tests {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
 
-        let asset = crate::models::Asset::new(crate::models::AssetType::Image);
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:findme");
         let asset_id = asset.id.to_string();
         catalog.insert_asset(&asset).unwrap();
 
@@ -721,7 +721,7 @@ mod tests {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
 
-        let asset = crate::models::Asset::new(crate::models::AssetType::Image);
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:delete1");
         let asset_id = asset.id.to_string();
         catalog.insert_asset(&asset).unwrap();
 
@@ -746,8 +746,8 @@ mod tests {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
 
-        let asset1 = crate::models::Asset::new(crate::models::AssetType::Image);
-        let asset2 = crate::models::Asset::new(crate::models::AssetType::Image);
+        let asset1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:move1");
+        let asset2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:move2");
         catalog.insert_asset(&asset1).unwrap();
         catalog.insert_asset(&asset2).unwrap();
 

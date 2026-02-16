@@ -89,7 +89,7 @@ impl AssetService {
 
             let exif_data = crate::exif_reader::extract(file_path);
 
-            let mut asset = Asset::new(asset_type);
+            let mut asset = Asset::new(asset_type, &content_hash);
             if let Some(date_taken) = exif_data.date_taken {
                 asset.created_at = date_taken;
             }
