@@ -291,6 +291,16 @@ fn main() {
                 }
             }
 
+            if !details.recipes.is_empty() {
+                println!("\nRecipes:");
+                for r in &details.recipes {
+                    println!("  [{}] {} ({})", r.recipe_type, r.software, r.content_hash);
+                    if let Some(path) = &r.relative_path {
+                        println!("    Path: {path}");
+                    }
+                }
+            }
+
             Ok(())
         }
         Commands::Tag { asset_id, remove, tags } => {

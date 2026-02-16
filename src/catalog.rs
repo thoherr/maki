@@ -26,6 +26,7 @@ pub struct AssetDetails {
     pub tags: Vec<String>,
     pub description: Option<String>,
     pub variants: Vec<VariantDetails>,
+    pub recipes: Vec<RecipeDetails>,
 }
 
 /// Variant details within an `AssetDetails`.
@@ -45,6 +46,15 @@ pub struct VariantDetails {
 pub struct LocationDetails {
     pub volume_label: String,
     pub relative_path: String,
+}
+
+/// Recipe details within an `AssetDetails`.
+#[derive(Debug)]
+pub struct RecipeDetails {
+    pub software: String,
+    pub recipe_type: String,
+    pub content_hash: String,
+    pub relative_path: Option<String>,
 }
 
 /// SQLite-backed local catalog for fast queries. This is a derived cache,
@@ -361,6 +371,25 @@ impl Catalog {
             })
             .collect();
 
+        // Load recipes linked to any variant of this asset
+        let mut rstmt = self.conn.prepare(
+            "SELECT r.software, r.recipe_type, r.content_hash, r.relative_path \
+             FROM recipes r \
+             JOIN variants v ON r.variant_hash = v.content_hash \
+             WHERE v.asset_id = ?1",
+        )?;
+        let recipes: Vec<RecipeDetails> = rstmt
+            .query_map(rusqlite::params![asset_id], |rrow| {
+                Ok(RecipeDetails {
+                    software: rrow.get(0)?,
+                    recipe_type: rrow.get(1)?,
+                    content_hash: rrow.get(2)?,
+                    relative_path: rrow.get(3)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
         Ok(Some(AssetDetails {
             id,
             name,
@@ -369,6 +398,7 @@ impl Catalog {
             tags,
             description,
             variants,
+            recipes,
         }))
     }
 
