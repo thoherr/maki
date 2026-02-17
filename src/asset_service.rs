@@ -923,6 +923,7 @@ impl AssetService {
         paths: &[PathBuf],
         volume_filter: Option<&str>,
         asset_filter: Option<&str>,
+        filter: &FileTypeFilter,
         on_file: impl Fn(&Path, VerifyStatus),
     ) -> Result<VerifyResult> {
         let content_store = ContentStore::new(&self.catalog_root);
@@ -943,6 +944,15 @@ impl AssetService {
             let volumes = registry.list()?;
 
             for file_path in &files {
+                // Skip files whose extension isn't in an enabled type group
+                let ext = file_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+                if !ext.is_empty() && !filter.is_importable(ext) {
+                    continue;
+                }
+
                 // Find which volume this file is on
                 let volume = volumes.iter().find(|v| file_path.starts_with(&v.mount_point));
                 let volume = match volume {

@@ -106,6 +106,14 @@ enum Commands {
         /// Verify only a specific asset
         #[arg(long)]
         asset: Option<String>,
+
+        /// Include additional file type groups (e.g. captureone, documents)
+        #[arg(long)]
+        include: Vec<String>,
+
+        /// Skip default file type groups (e.g. audio, xmp)
+        #[arg(long)]
+        skip: Vec<String>,
     },
 
     /// Find duplicate files
@@ -451,9 +459,28 @@ fn main() {
 
             Ok(())
         }
-        Commands::Verify { paths, volume, asset } => {
+        Commands::Verify { paths, volume, asset, include, skip } => {
+            use dam::asset_service::FileTypeFilter;
+
             let catalog_root = dam::config::find_catalog_root()?;
             let service = AssetService::new(&catalog_root);
+
+            // Build file type filter (same logic as import)
+            let mut filter = FileTypeFilter::default();
+            for group in &include {
+                if skip.contains(group) {
+                    anyhow::bail!(
+                        "Group '{}' cannot be both included and skipped.",
+                        group
+                    );
+                }
+            }
+            for group in &include {
+                filter.include(group)?;
+            }
+            for group in &skip {
+                filter.skip(group)?;
+            }
 
             let canonical_paths: Vec<PathBuf> = paths
                 .iter()
@@ -469,6 +496,7 @@ fn main() {
                     &canonical_paths,
                     volume.as_deref(),
                     asset.as_deref(),
+                    &filter,
                     |path, status| {
                         let label = match status {
                             VerifyStatus::Ok => "OK",
@@ -488,6 +516,7 @@ fn main() {
                     &canonical_paths,
                     volume.as_deref(),
                     asset.as_deref(),
+                    &filter,
                     |_, _| {},
                 )?
             };
