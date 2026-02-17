@@ -262,6 +262,7 @@ fn main() {
                         FileStatus::LocationAdded => "location added",
                         FileStatus::Skipped => "skipped",
                         FileStatus::RecipeAttached => "recipe",
+                        FileStatus::RecipeUpdated => "recipe updated",
                     };
                     let name = path.file_name()
                         .and_then(|n| n.to_str())
@@ -284,6 +285,9 @@ fn main() {
             }
             if result.recipes_attached > 0 {
                 parts.push(format!("{} recipe(s) attached", result.recipes_attached));
+            }
+            if result.recipes_updated > 0 {
+                parts.push(format!("{} recipe(s) updated", result.recipes_updated));
             }
             if result.previews_generated > 0 {
                 parts.push(format!("{} preview(s) generated", result.previews_generated));
@@ -501,6 +505,7 @@ fn main() {
                         let label = match status {
                             VerifyStatus::Ok => "OK",
                             VerifyStatus::Mismatch => "FAILED",
+                            VerifyStatus::Modified => "MODIFIED",
                             VerifyStatus::Missing => "MISSING",
                             VerifyStatus::Skipped => "SKIPPED",
                             VerifyStatus::Untracked => "UNTRACKED",
@@ -530,6 +535,9 @@ fn main() {
             let mut parts: Vec<String> = Vec::new();
             if result.verified > 0 {
                 parts.push(format!("{} verified", result.verified));
+            }
+            if result.modified > 0 {
+                parts.push(format!("{} modified", result.modified));
             }
             if result.failed > 0 {
                 parts.push(format!("{} FAILED", result.failed));

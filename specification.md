@@ -27,7 +27,7 @@
 - **`import`** — hash files (SHA-256), extract EXIF metadata, create assets/variants, write YAML sidecars, insert into SQLite catalog
   - Stem-based auto-grouping: files sharing the same filename stem in the same directory are grouped into one asset (e.g. `DSC_4521.nef` + `DSC_4521.jpg` → 1 asset, 2 variants)
   - RAW files take priority as the primary variant (defining asset identity via deterministic UUID and EXIF-based `created_at`)
-  - Recipe handling: processing sidecars (`.xmp`, `.cos`, `.cot`, `.cop`, `.pp3`, `.dop`, `.on1`) are attached as Recipe records to the primary variant
+  - Recipe handling: processing sidecars (`.xmp`, `.cos`, `.cot`, `.cop`, `.pp3`, `.dop`, `.on1`) are attached as Recipe records to the primary variant. Recipes are identified by location (volume + path), not content hash — re-importing after external edits updates the recipe in place and re-extracts XMP metadata. Standalone recipe imports (no co-located media) resolve to parent variants by stem + directory matching
   - Duplicate location tracking: re-importing the same content from a different path adds the new location to the existing variant
   - Per-file progress logging with `-l` flag; elapsed timing with `-t` flag
   - Summary only reports non-zero stat categories
@@ -41,7 +41,7 @@
 - **Preview generation during import** — 800px JPEG thumbnails are generated for each imported variant. Uses the `image` crate for standard formats, `dcraw`/`dcraw_emu` (LibRaw) for RAW files, and `ffmpeg` for videos. Previews stored in `previews/<hash-prefix>/<hash>.jpg`. Missing external tools are silently skipped; preview failure never blocks import.
 - **`show`** now displays preview status (path if exists, "(none)" otherwise)
 - **`relocate`** — copy or move all asset files (variants + recipes) to a target volume: `dam relocate <asset-id> <target-volume> [--remove-source] [--dry-run]`. Copies files with SHA-256 integrity verification, preserves relative paths, updates sidecar and catalog metadata. Without `--remove-source`, the asset gains additional locations. With `--remove-source`, source files are deleted after verified copy. `--dry-run` shows the plan without making changes.
-- **`verify`** — re-hash files on disk and compare against stored content hashes to detect corruption or bit rot: `dam verify [PATHS...] [--volume <label>] [--asset <id>]`. Without arguments, verifies all file locations on all online volumes. With paths, verifies specific files or directories. `--volume` limits to a specific volume; `--asset` limits to a specific asset. Updates `verified_at` timestamps on successful verification. Exits with code 1 if any mismatches are found.
+- **`verify`** — re-hash files on disk and compare against stored content hashes to detect corruption or bit rot: `dam verify [PATHS...] [--volume <label>] [--asset <id>]`. Without arguments, verifies all file locations on all online volumes. With paths, verifies specific files or directories. `--volume` limits to a specific volume; `--asset` limits to a specific asset. Updates `verified_at` timestamps on successful verification. Exits with code 1 if any mismatches are found. Modified recipe files are reported as "modified" (not "FAILED") and do not trigger exit code 1 — their stored hash is updated to reflect the new content.
 
 ### not yet implemented
 

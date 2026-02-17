@@ -841,3 +841,205 @@ fn verify_path_recognizes_recipe_sidecars() {
         .success()
         .stdout(predicate::str::contains("2 verified"));
 }
+
+#[test]
+fn reimport_updated_recipe_updates_in_place() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let photos = root.join("photos");
+    std::fs::create_dir_all(&photos).unwrap();
+    create_test_file(&photos, "DSC_200.nef", b"raw image for update test");
+
+    let xmp_v1 = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="3">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>original_tag</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+   <dc:description>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">Original description</rdf:li>
+    </rdf:Alt>
+   </dc:description>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+    create_test_file(&photos, "DSC_200.xmp", xmp_v1.as_bytes());
+
+    // First import
+    dam()
+        .current_dir(&root)
+        .args(["import", photos.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("1 imported")
+                .and(predicate::str::contains("1 recipe")),
+        );
+
+    // Modify the XMP
+    let xmp_v2 = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="5">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>original_tag</rdf:li>
+     <rdf:li>new_tag</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+   <dc:description>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">Updated description</rdf:li>
+    </rdf:Alt>
+   </dc:description>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+    std::fs::write(photos.join("DSC_200.xmp"), xmp_v2).unwrap();
+
+    // Re-import same directory
+    dam()
+        .current_dir(&root)
+        .args(["import", photos.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("1 recipe(s) updated")
+                .and(predicate::str::contains("1 skipped")),
+        );
+
+    // Verify metadata was updated
+    let output = dam()
+        .current_dir(&root)
+        .args(["search", "DSC_200"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let short_id = stdout.split_whitespace().next().expect("search returned an ID");
+
+    dam()
+        .current_dir(&root)
+        .args(["show", short_id])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("new_tag")
+                .and(predicate::str::contains("Updated description"))
+                .and(predicate::str::contains("5")),
+        );
+}
+
+#[test]
+fn standalone_recipe_attaches_to_parent() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let photos = root.join("photos");
+    std::fs::create_dir_all(&photos).unwrap();
+    create_test_file(&photos, "DSC_300.nef", b"raw image for standalone test");
+
+    // Import NEF only
+    dam()
+        .current_dir(&root)
+        .args(["import", photos.join("DSC_300.nef").to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 imported"));
+
+    // Now create XMP and import it separately
+    let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="4">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>standalone_tag</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+    create_test_file(&photos, "DSC_300.xmp", xmp.as_bytes());
+
+    dam()
+        .current_dir(&root)
+        .args(["import", photos.join("DSC_300.xmp").to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 recipe"));
+
+    // Verify only one asset exists (no standalone Other asset created)
+    let output = dam()
+        .current_dir(&root)
+        .args(["search", "DSC_300"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("1 result"),
+        "Expected 1 result, got: {stdout}"
+    );
+
+    // Verify the recipe is attached and metadata applied
+    let short_id = stdout.split_whitespace().next().expect("search returned an ID");
+    dam()
+        .current_dir(&root)
+        .args(["show", short_id])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Recipes:")
+                .and(predicate::str::contains("standalone_tag"))
+                .and(predicate::str::contains("rating")),
+        );
+}
+
+#[test]
+fn verify_recipe_modification_not_failure() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let photos = root.join("photos");
+    std::fs::create_dir_all(&photos).unwrap();
+    create_test_file(&photos, "DSC_400.nef", b"raw image for verify modify test");
+    create_test_file(&photos, "DSC_400.xmp", b"xmp original content");
+
+    // Import
+    dam()
+        .current_dir(&root)
+        .args(["import", photos.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("1 imported")
+                .and(predicate::str::contains("1 recipe")),
+        );
+
+    // Modify XMP on disk
+    std::fs::write(photos.join("DSC_400.xmp"), b"xmp modified content").unwrap();
+
+    // Verify — should report "modified", NOT "FAILED", and exit 0
+    dam()
+        .current_dir(&root)
+        .arg("verify")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("modified")
+                .and(predicate::str::contains("FAILED").not()),
+        );
+}

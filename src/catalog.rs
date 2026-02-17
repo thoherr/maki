@@ -125,7 +125,8 @@ impl Catalog {
                 recipe_type TEXT NOT NULL,
                 content_hash TEXT NOT NULL,
                 volume_id TEXT,
-                relative_path TEXT
+                relative_path TEXT,
+                verified_at TEXT
             );",
         )?;
         Ok(())
@@ -559,6 +560,99 @@ impl Catalog {
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    /// Find a recipe by its location (variant_hash, volume_id, relative_path).
+    /// Returns `(recipe_id, content_hash)` if found.
+    pub fn find_recipe_by_location(
+        &self,
+        variant_hash: &str,
+        volume_id: &str,
+        relative_path: &str,
+    ) -> Result<Option<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, content_hash FROM recipes \
+             WHERE variant_hash = ?1 AND volume_id = ?2 AND relative_path = ?3",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![variant_hash, volume_id, relative_path])?;
+        match rows.next()? {
+            Some(row) => Ok(Some((row.get(0)?, row.get(1)?))),
+            None => Ok(None),
+        }
+    }
+
+    /// Update a recipe's content hash (used when a recipe file changes on re-import).
+    pub fn update_recipe_content_hash(&self, recipe_id: &str, new_content_hash: &str) -> Result<()> {
+        let changed = self.conn.execute(
+            "UPDATE recipes SET content_hash = ?1 WHERE id = ?2",
+            rusqlite::params![new_content_hash, recipe_id],
+        )?;
+        if changed == 0 {
+            anyhow::bail!("No recipe found with id '{recipe_id}'");
+        }
+        Ok(())
+    }
+
+    /// Find a recipe by volume and path (ignoring variant_hash).
+    /// Returns `(recipe_id, content_hash, variant_hash)` if found.
+    pub fn find_recipe_by_volume_and_path(
+        &self,
+        volume_id: &str,
+        relative_path: &str,
+    ) -> Result<Option<(String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, content_hash, variant_hash FROM recipes \
+             WHERE volume_id = ?1 AND relative_path = ?2",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![volume_id, relative_path])?;
+        match rows.next()? {
+            Some(row) => Ok(Some((row.get(0)?, row.get(1)?, row.get(2)?))),
+            None => Ok(None),
+        }
+    }
+
+    /// Update `verified_at` timestamp on a recipe by its location.
+    pub fn update_recipe_verified_at(
+        &self,
+        variant_hash: &str,
+        volume_id: &str,
+        relative_path: &str,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE recipes SET verified_at = ?1 \
+             WHERE variant_hash = ?2 AND volume_id = ?3 AND relative_path = ?4",
+            rusqlite::params![now, variant_hash, volume_id, relative_path],
+        )?;
+        Ok(())
+    }
+
+    /// Find a variant whose file location on the given volume shares the same
+    /// directory prefix and filename stem. Returns `(content_hash, asset_id)`.
+    pub fn find_variant_hash_by_stem_and_directory(
+        &self,
+        stem: &str,
+        directory_prefix: &str,
+        volume_id: &str,
+    ) -> Result<Option<(String, String)>> {
+        // Match file_locations where: same volume, path starts with directory_prefix,
+        // and the filename (without extension) matches the stem.
+        let path_pattern = if directory_prefix.is_empty() {
+            format!("{stem}.%")
+        } else {
+            format!("{directory_prefix}/{stem}.%")
+        };
+        let mut stmt = self.conn.prepare(
+            "SELECT fl.content_hash, v.asset_id FROM file_locations fl \
+             JOIN variants v ON fl.content_hash = v.content_hash \
+             WHERE fl.volume_id = ?1 AND fl.relative_path LIKE ?2 \
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![volume_id, path_pattern])?;
+        match rows.next()? {
+            Some(row) => Ok(Some((row.get(0)?, row.get(1)?))),
+            None => Ok(None),
+        }
     }
 
     /// Drop and recreate data tables (assets, variants, file_locations, recipes).
@@ -1295,5 +1389,188 @@ mod tests {
             .update_recipe_location("nonexistent-id", "vol", "path")
             .unwrap_err();
         assert!(err.to_string().contains("No recipe found"));
+    }
+
+    /// Helper to set up a catalog with a volume, asset, variant, and recipe for recipe tests.
+    fn setup_recipe_catalog() -> (Catalog, crate::models::Volume, crate::models::Asset, String) {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let volume = crate::models::Volume::new(
+            "vol".to_string(),
+            std::path::PathBuf::from("/mnt/vol"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:rectest");
+        catalog.insert_asset(&asset).unwrap();
+
+        let variant = crate::models::Variant {
+            content_hash: "sha256:rectest".to_string(),
+            asset_id: asset.id,
+            role: crate::models::VariantRole::Original,
+            format: "nef".to_string(),
+            file_size: 1000,
+            original_filename: "photo.nef".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        catalog.insert_variant(&variant).unwrap();
+
+        let loc = crate::models::FileLocation {
+            volume_id: volume.id,
+            relative_path: std::path::PathBuf::from("photos/photo.nef"),
+            verified_at: None,
+        };
+        catalog.insert_file_location("sha256:rectest", &loc).unwrap();
+
+        let recipe_id = uuid::Uuid::new_v4();
+        let recipe = crate::models::Recipe {
+            id: recipe_id,
+            variant_hash: "sha256:rectest".to_string(),
+            software: "Adobe/CaptureOne".to_string(),
+            recipe_type: crate::models::RecipeType::Sidecar,
+            content_hash: "sha256:recipe_old".to_string(),
+            location: crate::models::FileLocation {
+                volume_id: volume.id,
+                relative_path: std::path::PathBuf::from("photos/photo.xmp"),
+                verified_at: None,
+            },
+        };
+        catalog.insert_recipe(&recipe).unwrap();
+
+        (catalog, volume, asset, recipe_id.to_string())
+    }
+
+    #[test]
+    fn find_recipe_by_location_returns_match() {
+        let (catalog, volume, _, recipe_id) = setup_recipe_catalog();
+        let result = catalog
+            .find_recipe_by_location(
+                "sha256:rectest",
+                &volume.id.to_string(),
+                "photos/photo.xmp",
+            )
+            .unwrap();
+        assert!(result.is_some());
+        let (id, hash) = result.unwrap();
+        assert_eq!(id, recipe_id);
+        assert_eq!(hash, "sha256:recipe_old");
+    }
+
+    #[test]
+    fn find_recipe_by_location_returns_none() {
+        let (catalog, volume, _, _) = setup_recipe_catalog();
+        let result = catalog
+            .find_recipe_by_location(
+                "sha256:rectest",
+                &volume.id.to_string(),
+                "photos/other.xmp",
+            )
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn update_recipe_content_hash_works() {
+        let (catalog, volume, _, recipe_id) = setup_recipe_catalog();
+        catalog
+            .update_recipe_content_hash(&recipe_id, "sha256:recipe_new")
+            .unwrap();
+
+        let result = catalog
+            .find_recipe_by_location(
+                "sha256:rectest",
+                &volume.id.to_string(),
+                "photos/photo.xmp",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.1, "sha256:recipe_new");
+    }
+
+    #[test]
+    fn find_recipe_by_volume_and_path_works() {
+        let (catalog, volume, _, recipe_id) = setup_recipe_catalog();
+        let result = catalog
+            .find_recipe_by_volume_and_path(
+                &volume.id.to_string(),
+                "photos/photo.xmp",
+            )
+            .unwrap();
+        assert!(result.is_some());
+        let (id, hash, variant_hash) = result.unwrap();
+        assert_eq!(id, recipe_id);
+        assert_eq!(hash, "sha256:recipe_old");
+        assert_eq!(variant_hash, "sha256:rectest");
+
+        // Non-existent path returns None
+        let result = catalog
+            .find_recipe_by_volume_and_path(
+                &volume.id.to_string(),
+                "photos/nonexistent.xmp",
+            )
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn update_recipe_verified_at_works() {
+        let (catalog, volume, _, _) = setup_recipe_catalog();
+        catalog
+            .update_recipe_verified_at(
+                "sha256:rectest",
+                &volume.id.to_string(),
+                "photos/photo.xmp",
+            )
+            .unwrap();
+
+        let verified: Option<String> = catalog
+            .conn
+            .query_row(
+                "SELECT verified_at FROM recipes WHERE variant_hash = ?1 AND volume_id = ?2 AND relative_path = ?3",
+                rusqlite::params!["sha256:rectest", volume.id.to_string(), "photos/photo.xmp"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(verified.is_some());
+    }
+
+    #[test]
+    fn find_variant_hash_by_stem_and_directory_works() {
+        let (catalog, volume, _, _) = setup_recipe_catalog();
+
+        // "photo" stem in "photos" directory should match "photos/photo.nef"
+        let result = catalog
+            .find_variant_hash_by_stem_and_directory(
+                "photo",
+                "photos",
+                &volume.id.to_string(),
+            )
+            .unwrap();
+        assert!(result.is_some());
+        let (hash, _asset_id) = result.unwrap();
+        assert_eq!(hash, "sha256:rectest");
+
+        // Wrong stem returns None
+        let result = catalog
+            .find_variant_hash_by_stem_and_directory(
+                "other",
+                "photos",
+                &volume.id.to_string(),
+            )
+            .unwrap();
+        assert!(result.is_none());
+
+        // Wrong directory returns None
+        let result = catalog
+            .find_variant_hash_by_stem_and_directory(
+                "photo",
+                "other_dir",
+                &volume.id.to_string(),
+            )
+            .unwrap();
+        assert!(result.is_none());
     }
 }

@@ -152,6 +152,7 @@ pub enum FileStatus {
     LocationAdded,
     Skipped,
     RecipeAttached,
+    RecipeUpdated,
 }
 
 /// Result of an import operation.
@@ -160,6 +161,7 @@ pub struct ImportResult {
     pub locations_added: usize,
     pub skipped: usize,
     pub recipes_attached: usize,
+    pub recipes_updated: usize,
     pub previews_generated: usize,
 }
 
@@ -201,6 +203,7 @@ struct StemGroup {
 pub enum VerifyStatus {
     Ok,
     Mismatch,
+    Modified,
     Missing,
     Skipped,
     Untracked,
@@ -210,6 +213,7 @@ pub enum VerifyStatus {
 pub struct VerifyResult {
     pub verified: usize,
     pub failed: usize,
+    pub modified: usize,
     pub skipped: usize,
     pub errors: Vec<String>,
 }
@@ -258,6 +262,7 @@ impl AssetService {
         let mut locations_added = 0;
         let mut skipped = 0;
         let mut recipes_attached = 0;
+        let mut recipes_updated = 0;
         let mut previews_generated = 0;
 
         for group in &groups {
@@ -518,17 +523,15 @@ impl AssetService {
                         continue;
                     }
 
-                    // No group asset and variant doesn't exist: import as standalone
+                    // Try to find a parent variant by stem + directory on this volume
                     let ext = file_path
                         .extension()
                         .and_then(|e| e.to_str())
                         .unwrap_or("");
-                    let filename = file_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unknown")
-                        .to_string();
-                    let file_size = std::fs::metadata(file_path)?.len();
+                    let stem = file_path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
                     let relative_path = file_path
                         .strip_prefix(&volume.mount_point)
                         .with_context(|| {
@@ -538,6 +541,90 @@ impl AssetService {
                                 volume.mount_point.display()
                             )
                         })?;
+                    let dir_prefix = relative_path
+                        .parent()
+                        .unwrap_or_else(|| Path::new(""))
+                        .to_string_lossy();
+
+                    if let Some((parent_variant_hash, parent_asset_id)) =
+                        catalog.find_variant_hash_by_stem_and_directory(
+                            stem,
+                            &dir_prefix,
+                            &volume.id.to_string(),
+                        )?
+                    {
+                        // Found parent variant — attach recipe to it
+                        let asset_uuid: Uuid = parent_asset_id.parse()?;
+                        let mut asset = metadata_store.load(asset_uuid)?;
+
+                        let location = FileLocation {
+                            volume_id: volume.id,
+                            relative_path: relative_path.to_path_buf(),
+                            verified_at: None,
+                        };
+
+                        // Location-based dedup on the parent asset
+                        let existing_recipe = asset.recipes.iter().find(|r| {
+                            r.location.volume_id == volume.id
+                                && r.location.relative_path == relative_path
+                        });
+
+                        if let Some(existing) = existing_recipe {
+                            if existing.content_hash == content_hash {
+                                skipped += 1;
+                                on_file(file_path, FileStatus::Skipped, file_start.elapsed());
+                            } else {
+                                let recipe_id = existing.id;
+                                let recipe_id_str = recipe_id.to_string();
+                                let recipe_mut = asset.recipes.iter_mut().find(|r| r.id == recipe_id).unwrap();
+                                recipe_mut.content_hash = content_hash.clone();
+                                catalog.update_recipe_content_hash(&recipe_id_str, &content_hash)?;
+                                if ext.eq_ignore_ascii_case("xmp") {
+                                    let xmp = crate::xmp_reader::extract(file_path);
+                                    reapply_xmp_data(&xmp, &mut asset, &parent_variant_hash);
+                                    catalog.insert_asset(&asset)?;
+                                    if let Some(v) = asset.variants.iter().find(|v| v.content_hash == parent_variant_hash) {
+                                        catalog.insert_variant(v)?;
+                                    }
+                                }
+                                metadata_store.save(&asset)?;
+                                recipes_updated += 1;
+                                on_file(file_path, FileStatus::RecipeUpdated, file_start.elapsed());
+                            }
+                        } else {
+                            // Attach new recipe to parent
+                            let recipe = Recipe {
+                                id: Uuid::new_v4(),
+                                variant_hash: parent_variant_hash.clone(),
+                                software: determine_recipe_software(ext).to_string(),
+                                recipe_type: RecipeType::Sidecar,
+                                content_hash: content_hash.clone(),
+                                location,
+                            };
+                            asset.recipes.push(recipe.clone());
+                            if ext.eq_ignore_ascii_case("xmp") {
+                                let xmp = crate::xmp_reader::extract(file_path);
+                                apply_xmp_data(&xmp, &mut asset, &parent_variant_hash);
+                                catalog.insert_asset(&asset)?;
+                                if let Some(v) = asset.variants.iter().find(|v| v.content_hash == parent_variant_hash) {
+                                    catalog.insert_variant(v)?;
+                                }
+                            }
+                            metadata_store.save(&asset)?;
+                            catalog.insert_recipe(&recipe)?;
+                            recipes_attached += 1;
+                            on_file(file_path, FileStatus::RecipeAttached, file_start.elapsed());
+                        }
+                        continue;
+                    }
+
+                    // No parent found — import as standalone asset
+                    let filename = file_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let file_size = std::fs::metadata(file_path)?.len();
                     let location = FileLocation {
                         volume_id: volume.id,
                         relative_path: relative_path.to_path_buf(),
@@ -597,14 +684,47 @@ impl AssetService {
 
                 let asset = group_asset.as_mut().unwrap();
 
-                // Check if this recipe is already attached
-                let already_attached = asset.recipes.iter().any(|r| r.content_hash == content_hash);
-                if already_attached {
-                    skipped += 1;
-                    on_file(file_path, FileStatus::Skipped, file_start.elapsed());
+                // Location-based recipe dedup: find existing recipe at same location
+                let existing_recipe = asset.recipes.iter().find(|r| {
+                    r.location.volume_id == volume.id
+                        && r.location.relative_path == relative_path
+                });
+
+                if let Some(existing) = existing_recipe {
+                    if existing.content_hash == content_hash {
+                        // Same location, same hash — nothing changed
+                        skipped += 1;
+                        on_file(file_path, FileStatus::Skipped, file_start.elapsed());
+                        continue;
+                    }
+                    // Same location, different hash — recipe was modified externally
+                    let recipe_id = existing.id;
+                    let recipe_id_str = recipe_id.to_string();
+
+                    // Update in-memory
+                    let recipe_mut = asset.recipes.iter_mut().find(|r| r.id == recipe_id).unwrap();
+                    recipe_mut.content_hash = content_hash.clone();
+
+                    // Update catalog
+                    catalog.update_recipe_content_hash(&recipe_id_str, &content_hash)?;
+
+                    // Re-extract XMP metadata if applicable
+                    if ext.eq_ignore_ascii_case("xmp") {
+                        let xmp = crate::xmp_reader::extract(file_path);
+                        reapply_xmp_data(&xmp, asset, variant_hash);
+                        catalog.insert_asset(asset)?;
+                        if let Some(v) = asset.variants.iter().find(|v| v.content_hash == *variant_hash) {
+                            catalog.insert_variant(v)?;
+                        }
+                    }
+
+                    metadata_store.save(asset)?;
+                    recipes_updated += 1;
+                    on_file(file_path, FileStatus::RecipeUpdated, file_start.elapsed());
                     continue;
                 }
 
+                // No existing recipe at this location — attach new recipe
                 let recipe = Recipe {
                     id: Uuid::new_v4(),
                     variant_hash: variant_hash.clone(),
@@ -639,6 +759,7 @@ impl AssetService {
             locations_added,
             skipped,
             recipes_attached,
+            recipes_updated,
             previews_generated,
         })
     }
@@ -934,6 +1055,7 @@ impl AssetService {
         let mut result = VerifyResult {
             verified: 0,
             failed: 0,
+            modified: 0,
             skipped: 0,
             errors: Vec::new(),
         };
@@ -1008,10 +1130,52 @@ impl AssetService {
                         on_file(file_path, VerifyStatus::Ok);
                     }
                     None => {
-                        // Not a variant — check if it's a known recipe file
+                        // Not a variant — check if it's a known recipe file by hash
                         if catalog.has_recipe_by_content_hash(&hash)? {
                             result.verified += 1;
+                            catalog.update_recipe_verified_at(
+                                &hash,
+                                &volume.id.to_string(),
+                                &relative_path.to_string_lossy(),
+                            )?;
                             on_file(file_path, VerifyStatus::Ok);
+                        } else if let Some((recipe_id, _old_hash, variant_hash)) =
+                            catalog.find_recipe_by_volume_and_path(
+                                &volume.id.to_string(),
+                                &relative_path.to_string_lossy(),
+                            )?
+                        {
+                            // Recipe at this location has a different hash — modified
+                            catalog.update_recipe_content_hash(&recipe_id, &hash)?;
+
+                            // Update the sidecar via the variant's owning asset
+                            if let Some(asset_id_str) = catalog.find_asset_id_by_variant(&variant_hash)? {
+                                let asset_uuid: Uuid = asset_id_str.parse()?;
+                                let mut asset = metadata_store.load(asset_uuid)?;
+                                if let Some(recipe) = asset.recipes.iter_mut().find(|r| {
+                                    r.location.volume_id == volume.id
+                                        && r.location.relative_path == relative_path
+                                }) {
+                                    recipe.content_hash = hash.clone();
+
+                                    let ext = relative_path.extension()
+                                        .and_then(|e| e.to_str())
+                                        .unwrap_or("");
+                                    if ext.eq_ignore_ascii_case("xmp") {
+                                        let xmp = crate::xmp_reader::extract(file_path);
+                                        reapply_xmp_data(&xmp, &mut asset, &variant_hash);
+                                        catalog.insert_asset(&asset)?;
+                                        if let Some(v) = asset.variants.iter().find(|v| v.content_hash == variant_hash) {
+                                            catalog.insert_variant(v)?;
+                                        }
+                                    }
+
+                                    metadata_store.save(&asset)?;
+                                }
+                            }
+
+                            result.modified += 1;
+                            on_file(file_path, VerifyStatus::Modified);
                         } else {
                             result.skipped += 1;
                             result.errors.push(format!(
@@ -1058,6 +1222,7 @@ impl AssetService {
                             volume_filter_resolved.as_ref(),
                             &variant.content_hash,
                             loc,
+                            false,
                             &mut result,
                             &on_file,
                         )?;
@@ -1074,6 +1239,7 @@ impl AssetService {
                         volume_filter_resolved.as_ref(),
                         &recipe.content_hash,
                         &recipe.location,
+                        true,
                         &mut result,
                         &on_file,
                     )?;
@@ -1095,6 +1261,7 @@ impl AssetService {
         volume_filter: Option<&Volume>,
         content_hash: &str,
         loc: &FileLocation,
+        is_recipe: bool,
         result: &mut VerifyResult,
         on_file: &impl Fn(&Path, VerifyStatus),
     ) -> Result<()> {
@@ -1144,29 +1311,80 @@ impl AssetService {
         match content_store.verify(content_hash, &full_path) {
             Ok(true) => {
                 result.verified += 1;
-                catalog.update_verified_at(
-                    content_hash,
-                    &volume.id.to_string(),
-                    &loc.relative_path.to_string_lossy(),
-                )?;
-                self.update_sidecar_verified_at(
-                    metadata_store,
-                    catalog,
-                    content_hash,
-                    volume.id,
-                    &loc.relative_path,
-                )?;
+                if is_recipe {
+                    catalog.update_recipe_verified_at(
+                        content_hash,
+                        &volume.id.to_string(),
+                        &loc.relative_path.to_string_lossy(),
+                    )?;
+                } else {
+                    catalog.update_verified_at(
+                        content_hash,
+                        &volume.id.to_string(),
+                        &loc.relative_path.to_string_lossy(),
+                    )?;
+                    self.update_sidecar_verified_at(
+                        metadata_store,
+                        catalog,
+                        content_hash,
+                        volume.id,
+                        &loc.relative_path,
+                    )?;
+                }
                 on_file(&full_path, VerifyStatus::Ok);
             }
             Ok(false) => {
-                result.failed += 1;
-                result.errors.push(format!(
-                    "FAILED: {} ({}:{})",
-                    full_path.display(),
-                    volume.label,
-                    loc.relative_path.display()
-                ));
-                on_file(&full_path, VerifyStatus::Mismatch);
+                if is_recipe {
+                    // Recipe files are expected to change — report as modified, not failed
+                    let new_hash = content_store.hash_file(&full_path)?;
+
+                    // Update the recipe's stored hash in the catalog
+                    if let Some((recipe_id, _, _)) = catalog.find_recipe_by_volume_and_path(
+                        &volume.id.to_string(),
+                        &loc.relative_path.to_string_lossy(),
+                    )? {
+                        catalog.update_recipe_content_hash(&recipe_id, &new_hash)?;
+                    }
+
+                    // Update the sidecar file
+                    if let Some(asset_id) = catalog.find_asset_id_by_variant(content_hash)? {
+                        let uuid: Uuid = asset_id.parse()?;
+                        let mut asset = metadata_store.load(uuid)?;
+                        if let Some(recipe) = asset.recipes.iter_mut().find(|r| {
+                            r.location.volume_id == loc.volume_id
+                                && r.location.relative_path == loc.relative_path
+                        }) {
+                            recipe.content_hash = new_hash.clone();
+
+                            // Re-extract XMP data if applicable
+                            let ext = loc.relative_path.extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("");
+                            if ext.eq_ignore_ascii_case("xmp") {
+                                let xmp = crate::xmp_reader::extract(&full_path);
+                                reapply_xmp_data(&xmp, &mut asset, content_hash);
+                                catalog.insert_asset(&asset)?;
+                                if let Some(v) = asset.variants.iter().find(|v| v.content_hash == content_hash) {
+                                    catalog.insert_variant(v)?;
+                                }
+                            }
+
+                            metadata_store.save(&asset)?;
+                        }
+                    }
+
+                    result.modified += 1;
+                    on_file(&full_path, VerifyStatus::Modified);
+                } else {
+                    result.failed += 1;
+                    result.errors.push(format!(
+                        "FAILED: {} ({}:{})",
+                        full_path.display(),
+                        volume.label,
+                        loc.relative_path.display()
+                    ));
+                    on_file(&full_path, VerifyStatus::Mismatch);
+                }
             }
             Err(e) => {
                 result.skipped += 1;
@@ -1240,6 +1458,29 @@ fn apply_xmp_data(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant_h
                 .source_metadata
                 .entry(key.clone())
                 .or_insert_with(|| val.clone());
+        }
+    }
+}
+
+/// Re-apply XMP metadata when a recipe file has been modified.
+/// Unlike `apply_xmp_data` (initial import, conservative merge):
+/// - Keywords: merge (add new; cannot remove since we don't track provenance)
+/// - Description: overwrite (user explicitly edited the XMP)
+/// - source_metadata: overwrite XMP-sourced keys (rating, label, creator, copyright)
+fn reapply_xmp_data(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant_hash: &str) {
+    for kw in &xmp.keywords {
+        if !asset.tags.contains(kw) {
+            asset.tags.push(kw.clone());
+        }
+    }
+
+    if xmp.description.is_some() {
+        asset.description.clone_from(&xmp.description);
+    }
+
+    if let Some(variant) = asset.variants.iter_mut().find(|v| v.content_hash == variant_hash) {
+        for (key, val) in &xmp.source_metadata {
+            variant.source_metadata.insert(key.clone(), val.clone());
         }
     }
 }
@@ -1491,6 +1732,55 @@ mod tests {
         assert_eq!(determine_recipe_software("dop"), "DxO");
         assert_eq!(determine_recipe_software("on1"), "ON1");
         assert_eq!(determine_recipe_software("txt"), "Unknown");
+    }
+
+    #[test]
+    fn reapply_xmp_data_overwrites_metadata() {
+        let mut asset = Asset::new(AssetType::Image, "sha256:reapply_test");
+        asset.description = Some("old description".to_string());
+        asset.tags = vec!["existing_tag".to_string()];
+
+        let variant = Variant {
+            content_hash: "sha256:reapply_test".to_string(),
+            asset_id: asset.id,
+            role: VariantRole::Original,
+            format: "nef".to_string(),
+            file_size: 100,
+            original_filename: "test.nef".to_string(),
+            source_metadata: {
+                let mut m = std::collections::HashMap::new();
+                m.insert("rating".to_string(), "3".to_string());
+                m.insert("exif_key".to_string(), "exif_value".to_string());
+                m
+            },
+            locations: vec![],
+        };
+        asset.variants.push(variant);
+
+        let xmp = crate::xmp_reader::XmpData {
+            keywords: vec!["new_tag".to_string(), "existing_tag".to_string()],
+            description: Some("new description".to_string()),
+            source_metadata: {
+                let mut m = std::collections::HashMap::new();
+                m.insert("rating".to_string(), "5".to_string());
+                m.insert("label".to_string(), "Red".to_string());
+                m
+            },
+        };
+
+        reapply_xmp_data(&xmp, &mut asset, "sha256:reapply_test");
+
+        // Description overwritten
+        assert_eq!(asset.description.as_deref(), Some("new description"));
+        // Tags merged (no duplicates)
+        assert!(asset.tags.contains(&"existing_tag".to_string()));
+        assert!(asset.tags.contains(&"new_tag".to_string()));
+        assert_eq!(asset.tags.len(), 2);
+        // source_metadata: XMP keys overwritten, non-XMP keys preserved
+        let meta = &asset.variants[0].source_metadata;
+        assert_eq!(meta.get("rating").unwrap(), "5");
+        assert_eq!(meta.get("label").unwrap(), "Red");
+        assert_eq!(meta.get("exif_key").unwrap(), "exif_value");
     }
 
     #[test]
