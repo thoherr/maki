@@ -727,3 +727,88 @@ fn rebuild_catalog_restores_data() {
         .success()
         .stdout(predicate::str::contains("keeper"));
 }
+
+#[test]
+fn verify_all_passes() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "intact.jpg", b"intact file data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .arg("verify")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("verified"));
+}
+
+#[test]
+fn verify_detects_corruption() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "corrupt.jpg", b"original data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Corrupt the file
+    std::fs::write(&file, b"corrupted data!!!").unwrap();
+
+    dam()
+        .current_dir(&root)
+        .arg("verify")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("FAILED"));
+}
+
+#[test]
+fn verify_with_volume_flag() {
+    let dir = tempdir().unwrap();
+    let (root, vol1, _vol2) = init_two_volumes(dir.path());
+    let file = create_test_file(&vol1, "vol_verify.jpg", b"vol verify data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .args(["verify", "--volume", "vol1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("verified"));
+}
+
+#[test]
+fn verify_specific_path() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file1 = create_test_file(&root, "file_a.jpg", b"data a");
+    let file2 = create_test_file(&root, "file_b.jpg", b"data b");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file1.to_str().unwrap(), file2.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Verify only file_a
+    dam()
+        .current_dir(&root)
+        .args(["verify", file1.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 verified"));
+}

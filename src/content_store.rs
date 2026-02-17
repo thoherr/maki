@@ -64,9 +64,12 @@ impl ContentStore {
         Ok(())
     }
 
-    /// Re-hash file at location and confirm integrity.
-    pub fn verify(&self, _content_hash: &str, _location: &crate::models::FileLocation) -> Result<bool> {
-        anyhow::bail!("not yet implemented")
+    /// Re-hash file at the given path and compare against the expected content hash.
+    /// Returns `true` if hashes match, `false` on mismatch.
+    /// Returns an error only for I/O failures (file not found, permission denied).
+    pub fn verify(&self, content_hash: &str, path: &Path) -> Result<bool> {
+        let actual = self.hash_file(path)?;
+        Ok(actual == content_hash)
     }
 }
 
@@ -139,6 +142,35 @@ mod tests {
 
         assert!(dest.exists());
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "nested copy");
+    }
+
+    #[test]
+    fn verify_returns_true_for_matching_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("verify_match.txt");
+        std::fs::write(&file_path, "hello world").unwrap();
+
+        let store = ContentStore::new(dir.path());
+        let hash = store.hash_file(&file_path).unwrap();
+        assert!(store.verify(&hash, &file_path).unwrap());
+    }
+
+    #[test]
+    fn verify_returns_false_for_mismatched_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("verify_mismatch.txt");
+        std::fs::write(&file_path, "hello world").unwrap();
+
+        let store = ContentStore::new(dir.path());
+        assert!(!store.verify("sha256:0000000000000000", &file_path).unwrap());
+    }
+
+    #[test]
+    fn verify_errors_for_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ContentStore::new(dir.path());
+        let result = store.verify("sha256:abc", &dir.path().join("nonexistent.txt"));
+        assert!(result.is_err());
     }
 
     #[test]

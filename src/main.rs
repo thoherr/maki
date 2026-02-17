@@ -96,9 +96,16 @@ enum Commands {
 
     /// Check file integrity
     Verify {
+        /// Files or directories to verify
+        paths: Vec<String>,
+
         /// Limit verification to a specific volume
         #[arg(long)]
         volume: Option<String>,
+
+        /// Verify only a specific asset
+        #[arg(long)]
+        asset: Option<String>,
     },
 
     /// Find duplicate files
@@ -444,13 +451,73 @@ fn main() {
 
             Ok(())
         }
-        Commands::Verify { volume } => {
-            if let Some(vol) = &volume {
-                println!("Verifying volume {vol}...");
+        Commands::Verify { paths, volume, asset } => {
+            let catalog_root = dam::config::find_catalog_root()?;
+            let service = AssetService::new(&catalog_root);
+
+            let canonical_paths: Vec<PathBuf> = paths
+                .iter()
+                .map(|p| {
+                    std::fs::canonicalize(p)
+                        .unwrap_or_else(|_| PathBuf::from(p))
+                })
+                .collect();
+
+            let result = if cli.log {
+                use dam::asset_service::VerifyStatus;
+                service.verify(
+                    &canonical_paths,
+                    volume.as_deref(),
+                    asset.as_deref(),
+                    |path, status| {
+                        let label = match status {
+                            VerifyStatus::Ok => "OK",
+                            VerifyStatus::Mismatch => "FAILED",
+                            VerifyStatus::Missing => "MISSING",
+                            VerifyStatus::Skipped => "SKIPPED",
+                            VerifyStatus::Untracked => "UNTRACKED",
+                        };
+                        let name = path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or_else(|| path.to_str().unwrap_or("?"));
+                        eprintln!("  {} — {}", name, label);
+                    },
+                )?
             } else {
-                println!("Verifying all online volumes...");
+                service.verify(
+                    &canonical_paths,
+                    volume.as_deref(),
+                    asset.as_deref(),
+                    |_, _| {},
+                )?
+            };
+
+            // Print error details
+            for err in &result.errors {
+                eprintln!("  {err}");
             }
-            println!("not yet implemented");
+
+            // Print summary
+            let mut parts: Vec<String> = Vec::new();
+            if result.verified > 0 {
+                parts.push(format!("{} verified", result.verified));
+            }
+            if result.failed > 0 {
+                parts.push(format!("{} FAILED", result.failed));
+            }
+            if result.skipped > 0 {
+                parts.push(format!("{} skipped", result.skipped));
+            }
+            if parts.is_empty() {
+                println!("Verify: nothing to verify");
+            } else {
+                println!("Verify complete: {}", parts.join(", "));
+            }
+
+            if result.failed > 0 {
+                std::process::exit(1);
+            }
+
             Ok(())
         }
         Commands::Duplicates => {

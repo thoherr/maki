@@ -197,6 +197,23 @@ struct StemGroup {
     recipe_files: Vec<PathBuf>,
 }
 
+/// Status of a single file during verification.
+pub enum VerifyStatus {
+    Ok,
+    Mismatch,
+    Missing,
+    Skipped,
+    Untracked,
+}
+
+/// Result of a verify operation.
+pub struct VerifyResult {
+    pub verified: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub errors: Vec<String>,
+}
+
 /// High-level operations that orchestrate the other components.
 pub struct AssetService {
     catalog_root: PathBuf,
@@ -893,6 +910,296 @@ impl AssetService {
             removed,
             actions,
         })
+    }
+
+    /// Verify file integrity by re-hashing files and comparing against stored content hashes.
+    ///
+    /// Two modes:
+    /// - **Path mode** (`paths` non-empty): verify specific files/directories on disk.
+    /// - **Catalog mode** (`paths` empty): verify all known file locations, optionally
+    ///   filtered by `volume_filter` or `asset_filter`.
+    pub fn verify(
+        &self,
+        paths: &[PathBuf],
+        volume_filter: Option<&str>,
+        asset_filter: Option<&str>,
+        on_file: impl Fn(&Path, VerifyStatus),
+    ) -> Result<VerifyResult> {
+        let content_store = ContentStore::new(&self.catalog_root);
+        let metadata_store = MetadataStore::new(&self.catalog_root);
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let registry = DeviceRegistry::new(&self.catalog_root);
+
+        let mut result = VerifyResult {
+            verified: 0,
+            failed: 0,
+            skipped: 0,
+            errors: Vec::new(),
+        };
+
+        if !paths.is_empty() {
+            // Path mode
+            let files = resolve_files(paths);
+            let volumes = registry.list()?;
+
+            for file_path in &files {
+                // Find which volume this file is on
+                let volume = volumes.iter().find(|v| file_path.starts_with(&v.mount_point));
+                let volume = match volume {
+                    Some(v) => v,
+                    None => {
+                        result.skipped += 1;
+                        result.errors.push(format!(
+                            "No volume found for {}",
+                            file_path.display()
+                        ));
+                        on_file(file_path, VerifyStatus::Skipped);
+                        continue;
+                    }
+                };
+
+                let relative_path = file_path
+                    .strip_prefix(&volume.mount_point)
+                    .unwrap_or(file_path);
+
+                // Hash the file
+                let hash = match content_store.hash_file(file_path) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        result.skipped += 1;
+                        result.errors.push(format!(
+                            "{}: {}",
+                            file_path.display(),
+                            e
+                        ));
+                        on_file(file_path, VerifyStatus::Missing);
+                        continue;
+                    }
+                };
+
+                // Look up variant by hash
+                match catalog.find_asset_id_by_variant(&hash)? {
+                    Some(_) => {
+                        // File matches a known variant — verified
+                        result.verified += 1;
+                        catalog.update_verified_at(
+                            &hash,
+                            &volume.id.to_string(),
+                            &relative_path.to_string_lossy(),
+                        )?;
+                        // Also update sidecar verified_at
+                        self.update_sidecar_verified_at(
+                            &metadata_store,
+                            &catalog,
+                            &hash,
+                            volume.id,
+                            relative_path,
+                        )?;
+                        on_file(file_path, VerifyStatus::Ok);
+                    }
+                    None => {
+                        result.skipped += 1;
+                        result.errors.push(format!(
+                            "Untracked: {}",
+                            file_path.display()
+                        ));
+                        on_file(file_path, VerifyStatus::Untracked);
+                    }
+                }
+            }
+        } else {
+            // Catalog mode
+            let volume_filter_resolved = match volume_filter {
+                Some(label) => Some(registry.resolve_volume(label)?),
+                None => None,
+            };
+
+            let volumes = registry.list()?;
+
+            let assets = if let Some(asset_id) = asset_filter {
+                let full_id = catalog
+                    .resolve_asset_id(asset_id)?
+                    .ok_or_else(|| anyhow::anyhow!("No asset found matching '{asset_id}'"))?;
+                let uuid: Uuid = full_id.parse()?;
+                vec![metadata_store.load(uuid)?]
+            } else {
+                let summaries = metadata_store.list()?;
+                summaries
+                    .iter()
+                    .map(|s| metadata_store.load(s.id))
+                    .collect::<Result<Vec<_>>>()?
+            };
+
+            for asset in &assets {
+                // Verify variant file locations
+                for variant in &asset.variants {
+                    for loc in &variant.locations {
+                        self.verify_location(
+                            &content_store,
+                            &catalog,
+                            &metadata_store,
+                            &volumes,
+                            volume_filter_resolved.as_ref(),
+                            &variant.content_hash,
+                            loc,
+                            &mut result,
+                            &on_file,
+                        )?;
+                    }
+                }
+
+                // Verify recipe file locations
+                for recipe in &asset.recipes {
+                    self.verify_location(
+                        &content_store,
+                        &catalog,
+                        &metadata_store,
+                        &volumes,
+                        volume_filter_resolved.as_ref(),
+                        &recipe.content_hash,
+                        &recipe.location,
+                        &mut result,
+                        &on_file,
+                    )?;
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Verify a single file location (used by catalog mode).
+    #[allow(clippy::too_many_arguments)]
+    fn verify_location(
+        &self,
+        content_store: &ContentStore,
+        catalog: &Catalog,
+        metadata_store: &MetadataStore,
+        volumes: &[Volume],
+        volume_filter: Option<&Volume>,
+        content_hash: &str,
+        loc: &FileLocation,
+        result: &mut VerifyResult,
+        on_file: &impl Fn(&Path, VerifyStatus),
+    ) -> Result<()> {
+        // Apply volume filter
+        if let Some(filter_vol) = volume_filter {
+            if loc.volume_id != filter_vol.id {
+                return Ok(());
+            }
+        }
+
+        // Find the volume
+        let volume = match volumes.iter().find(|v| v.id == loc.volume_id) {
+            Some(v) => v,
+            None => {
+                result.skipped += 1;
+                result.errors.push(format!(
+                    "Volume {} not found for {}",
+                    loc.volume_id,
+                    loc.relative_path.display()
+                ));
+                on_file(&loc.relative_path, VerifyStatus::Skipped);
+                return Ok(());
+            }
+        };
+
+        // Skip offline volumes
+        if !volume.is_online {
+            result.skipped += 1;
+            on_file(&loc.relative_path, VerifyStatus::Skipped);
+            return Ok(());
+        }
+
+        let full_path = volume.mount_point.join(&loc.relative_path);
+
+        if !full_path.exists() {
+            result.skipped += 1;
+            result.errors.push(format!(
+                "Missing: {} ({}:{})",
+                full_path.display(),
+                volume.label,
+                loc.relative_path.display()
+            ));
+            on_file(&full_path, VerifyStatus::Missing);
+            return Ok(());
+        }
+
+        match content_store.verify(content_hash, &full_path) {
+            Ok(true) => {
+                result.verified += 1;
+                catalog.update_verified_at(
+                    content_hash,
+                    &volume.id.to_string(),
+                    &loc.relative_path.to_string_lossy(),
+                )?;
+                self.update_sidecar_verified_at(
+                    metadata_store,
+                    catalog,
+                    content_hash,
+                    volume.id,
+                    &loc.relative_path,
+                )?;
+                on_file(&full_path, VerifyStatus::Ok);
+            }
+            Ok(false) => {
+                result.failed += 1;
+                result.errors.push(format!(
+                    "FAILED: {} ({}:{})",
+                    full_path.display(),
+                    volume.label,
+                    loc.relative_path.display()
+                ));
+                on_file(&full_path, VerifyStatus::Mismatch);
+            }
+            Err(e) => {
+                result.skipped += 1;
+                result.errors.push(format!(
+                    "Error reading {}: {}",
+                    full_path.display(),
+                    e
+                ));
+                on_file(&full_path, VerifyStatus::Missing);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Update the `verified_at` timestamp in the sidecar YAML for a specific file location.
+    fn update_sidecar_verified_at(
+        &self,
+        metadata_store: &MetadataStore,
+        catalog: &Catalog,
+        content_hash: &str,
+        volume_id: Uuid,
+        relative_path: &Path,
+    ) -> Result<()> {
+        let asset_id = match catalog.find_asset_id_by_variant(content_hash)? {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+        let uuid: Uuid = asset_id.parse()?;
+        let mut asset = metadata_store.load(uuid)?;
+        let now = chrono::Utc::now();
+
+        let mut changed = false;
+        for variant in &mut asset.variants {
+            if variant.content_hash == content_hash {
+                for loc in &mut variant.locations {
+                    if loc.volume_id == volume_id && loc.relative_path == relative_path {
+                        loc.verified_at = Some(now);
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        if changed {
+            metadata_store.save(&asset)?;
+        }
+
+        Ok(())
     }
 }
 

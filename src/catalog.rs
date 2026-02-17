@@ -535,6 +535,22 @@ impl Catalog {
         Ok(())
     }
 
+    /// Update the `verified_at` timestamp for a file location.
+    pub fn update_verified_at(
+        &self,
+        content_hash: &str,
+        volume_id: &str,
+        relative_path: &str,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE file_locations SET verified_at = ?1 \
+             WHERE content_hash = ?2 AND volume_id = ?3 AND relative_path = ?4",
+            rusqlite::params![now, content_hash, volume_id, relative_path],
+        )?;
+        Ok(())
+    }
+
     /// Drop and recreate data tables (assets, variants, file_locations, recipes).
     /// Keeps the volumes table intact. Ensures the schema is up to date.
     pub fn rebuild(&self) -> Result<()> {
@@ -1188,6 +1204,77 @@ mod tests {
             .unwrap();
         assert_eq!(row.0, vol2.id.to_string());
         assert_eq!(row.1, "backup/photo.xmp");
+    }
+
+    #[test]
+    fn update_verified_at_sets_timestamp() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let volume = crate::models::Volume::new(
+            "vol".to_string(),
+            std::path::PathBuf::from("/mnt/vol"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ver1");
+        catalog.insert_asset(&asset).unwrap();
+
+        let variant = crate::models::Variant {
+            content_hash: "sha256:ver1".to_string(),
+            asset_id: asset.id,
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 100,
+            original_filename: "photo.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        catalog.insert_variant(&variant).unwrap();
+
+        let loc = crate::models::FileLocation {
+            volume_id: volume.id,
+            relative_path: std::path::PathBuf::from("photos/photo.jpg"),
+            verified_at: None,
+        };
+        catalog.insert_file_location(&variant.content_hash, &loc).unwrap();
+
+        // Initially null
+        let before: Option<String> = catalog
+            .conn
+            .query_row(
+                "SELECT verified_at FROM file_locations WHERE content_hash = ?1",
+                rusqlite::params!["sha256:ver1"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(before.is_none());
+
+        // Update
+        catalog
+            .update_verified_at("sha256:ver1", &volume.id.to_string(), "photos/photo.jpg")
+            .unwrap();
+
+        let after: Option<String> = catalog
+            .conn
+            .query_row(
+                "SELECT verified_at FROM file_locations WHERE content_hash = ?1",
+                rusqlite::params!["sha256:ver1"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(after.is_some());
+    }
+
+    #[test]
+    fn update_verified_at_noop_for_missing() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        // Should not error, just update 0 rows
+        catalog
+            .update_verified_at("sha256:nope", "some-vol", "some/path.jpg")
+            .unwrap();
     }
 
     #[test]

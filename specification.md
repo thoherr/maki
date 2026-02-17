@@ -41,8 +41,8 @@
 - **Preview generation during import** — 800px JPEG thumbnails are generated for each imported variant. Uses the `image` crate for standard formats, `dcraw`/`dcraw_emu` (LibRaw) for RAW files, and `ffmpeg` for videos. Previews stored in `previews/<hash-prefix>/<hash>.jpg`. Missing external tools are silently skipped; preview failure never blocks import.
 - **`show`** now displays preview status (path if exists, "(none)" otherwise)
 - **`relocate`** — copy or move all asset files (variants + recipes) to a target volume: `dam relocate <asset-id> <target-volume> [--remove-source] [--dry-run]`. Copies files with SHA-256 integrity verification, preserves relative paths, updates sidecar and catalog metadata. Without `--remove-source`, the asset gains additional locations. With `--remove-source`, source files are deleted after verified copy. `--dry-run` shows the plan without making changes.
+- **`verify`** — re-hash files on disk and compare against stored content hashes to detect corruption or bit rot: `dam verify [PATHS...] [--volume <label>] [--asset <id>]`. Without arguments, verifies all file locations on all online volumes. With paths, verifies specific files or directories. `--volume` limits to a specific volume; `--asset` limits to a specific asset. Updates `verified_at` timestamps on successful verification. Exits with code 1 if any mismatches are found.
 
 ### not yet implemented
 
-- **`verify`** — check file integrity by re-hashing and comparing
 - Web GUI for visual browsing
