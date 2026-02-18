@@ -24,11 +24,12 @@
 
 - **`init`** — initialize a new catalog in the current directory (creates metadata dir, SQLite schema, volume registry, config)
 - **`volume add/list`** — register storage volumes and list them with online/offline status
-- **`import`** — hash files (SHA-256), extract EXIF metadata, create assets/variants, write YAML sidecars, insert into SQLite catalog
+- **`import`** — hash files (SHA-256), extract EXIF metadata, create assets/variants, write YAML sidecars, insert into SQLite catalog. `dam import <paths...> [--volume V] [--include G] [--skip G]`
   - Stem-based auto-grouping: files sharing the same filename stem in the same directory are grouped into one asset (e.g. `DSC_4521.nef` + `DSC_4521.jpg` → 1 asset, 2 variants)
   - RAW files take priority as the primary variant (defining asset identity via deterministic UUID and EXIF-based `created_at`)
   - Recipe handling: processing sidecars (`.xmp`, `.cos`, `.cot`, `.cop`, `.pp3`, `.dop`, `.on1`) are attached as Recipe records to the primary variant. Recipes are identified by location (volume + path), not content hash — re-importing after external edits updates the recipe in place and re-extracts XMP metadata. Standalone recipe imports (no co-located media) resolve to parent variants by stem + directory matching
   - Duplicate location tracking: re-importing the same content from a different path adds the new location to the existing variant
+  - `--volume` overrides auto-detection of which volume the files belong to
   - Per-file progress logging with `-l` flag; elapsed timing with `-t` flag
   - Summary only reports non-zero stat categories
 - **`search`** — search assets by text, type, tag, or format via SQLite catalog

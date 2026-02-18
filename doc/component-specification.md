@@ -80,19 +80,7 @@ Known recipe extensions: `.xmp` (Adobe/Lightroom/CaptureOne), `.cos` / `.cot` / 
 - `verify(hash, location) -> bool` — re-hash file at location, confirm integrity.
 - `remove_location(hash, location)` — unregister a location (file moved/deleted externally).
 
-**Storage layout on a volume**:
-```
-<volume_root>/
-  dam-store/
-    ab/cd/abcdef1234...   # files stored by hash prefix (2-level sharding)
-```
-
-Alternatively, files can remain in their original directory structure and the content store only tracks their location (non-destructive mode). This is important for interoperability with tools like CaptureOne that expect a specific directory layout.
-
-**Design decision — managed vs. referenced storage**:
-- **Managed**: files are moved into the hash-based directory structure. Full dedup, clean layout.
-- **Referenced**: files stay where they are. The store just indexes their hash and path. No dedup on disk, but no disruption to existing workflows.
-- Both modes should be supported per-volume.
+**Storage model**: referenced mode — files stay in their original directory structure on each volume. The content store indexes their hash and location but never moves or renames originals. This preserves interoperability with tools like CaptureOne that expect a specific directory layout. Deduplication is logical (same hash → same variant) rather than physical.
 
 ### 2. Metadata Store
 
@@ -149,10 +137,10 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 **Operations**:
 - `register(label, mount_point, type) -> Volume` — add a new volume.
 - `list() -> Vec<Volume>` — list all volumes with online/offline status.
-- `detect_online()` — check which mount points are currently available.
-- `scan(volume_id)` — scan a volume for new/changed/deleted files.
+- `resolve_volume(label_or_id) -> Volume` — find a volume by label or UUID.
+- `find_volume_for_path(path) -> Volume` — find which registered volume contains a given path.
 
-**Online detection**: simply checks if the mount point directory exists and contains a marker file (`.dam-volume-id` containing the volume UUID).
+**Online detection**: checks if the mount point directory exists (`mount_point.exists()`).
 
 ### 5. Asset Service
 
@@ -161,7 +149,6 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 **Operations**:
 - `import(paths, volume_id) -> ImportResult` — hash files, extract metadata (EXIF etc.), create assets, create variants, write sidecars, update catalog. Auto-groups files that share the same filename stem and reside in the same directory (e.g. `DSC_4521.NEF`, `DSC_4521.jpg`, `DSC_4521.xmp`, `DSC_4521.cos` all become one asset). Media files become variants; processing sidecars (`.xmp`, `.cos`, `.cot`, `.cop`, etc.) are attached as recipes. Standalone recipe files (no co-located media) are resolved to parent variants by matching filename stem and directory on the same volume. When a file's content hash already exists, the new file location is added to the existing variant (both sidecar and catalog) rather than being silently skipped. Only truly skips when the exact location (volume + relative path) is already tracked. Re-importing a modified recipe updates it in place (new hash, re-extracted XMP metadata). Reports per-file status as `Imported`, `LocationAdded`, `Skipped`, `RecipeAttached`, or `RecipeUpdated`. Supports `--include`/`--skip` flags for file type group filtering.
 - `group(variant_hashes) -> Asset` — manually group variants into one asset.
-- `ungroup(asset_id, variant_hash)` — remove a variant from a group.
 - `tag(asset_id, tags)` — add tags to an asset.
 - `relocate(asset_id, target_volume)` — move all variants of an asset to another volume. Supports `--remove-source` (move instead of copy) and `--dry-run`.
 - `find_duplicates() -> Vec<DuplicateGroup>` — find variants with same hash on multiple locations.
@@ -219,10 +206,10 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 ### 10. CLI
 
 **Global flags**:
-- `-t` / `--time` — show elapsed time after command execution
-- `-l` / `--log` — log individual file progress during import/verify
 - `--json` — output machine-readable JSON
+- `-l` / `--log` — log individual file progress during import/verify
 - `-d` / `--debug` — show stderr output from external tools (ffmpeg, dcraw, dcraw_emu)
+- `-t` / `--time` — show elapsed time after command execution
 
 **Subcommands**:
 ```
@@ -235,7 +222,7 @@ dam show <asset-id>                               # show asset details
 dam tag <asset-id> [--remove] <tags...>           # add/remove tags
 dam group <variant-hashes...>                     # group variants into one asset
 dam relocate <id> <vol> [--remove-source] [--dry-run]  # copy/move asset
-dam verify [PATHS...] [--volume V] [--asset ID]   # check file integrity
+dam verify [PATHS...] [--volume V] [--asset ID] [--include G] [--skip G]  # check file integrity
 dam duplicates [--format F]                       # find duplicates
 dam generate-previews [PATHS...] [--asset ID] [--volume V] [--include G] [--skip G] [--force]  # generate thumbnails
 dam stats [--types] [--volumes] [--tags] [--verified] [--all] [--limit N]  # catalog statistics

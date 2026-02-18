@@ -18,9 +18,9 @@ A digital asset manager designed for large collections of images and videos (ter
 
 - **Language**: Rust
 - **Platforms**: macOS, Linux
-- **Interface**: CLI-first (`dam` command), optional web GUI
+- **Interface**: CLI-first (`dam` command)
 - **Catalog**: SQLite (cache/index), YAML sidecar files (source of truth)
-- **Key crates**: clap, sha2, serde, rusqlite, axum, kamadak-exif, quick-xml, image
+- **Key crates**: clap, sha2, serde, rusqlite, kamadak-exif, quick-xml, image, uuid
 - **External tools**: dcraw/libraw (RAW previews), ffmpeg (video thumbnails)
 
 ## Architecture
