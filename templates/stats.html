@@ -122,59 +122,51 @@
 <!-- Volumes -->
 <div class="stats-section">
     <h2>Volumes</h2>
-    <div class="volume-cards">
-    {% for vol in volumes %}
-        <div class="volume-card {% if vol.is_online %}vol-online{% else %}vol-offline{% endif %}">
-            <div class="volume-header">
-                {% if vol.is_online %}
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                {% else %}
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#991b1b" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                {% endif %}
-                <strong>{{ vol.label }}</strong>
-                {% if vol.is_online %}
-                <span class="badge badge-online">online</span>
-                {% else %}
-                <span class="badge badge-offline">offline</span>
-                {% endif %}
-            </div>
-            <div class="vol-stats">
-                <div class="vol-stat">
-                    <span class="vol-stat-val">{{ vol.assets }}</span>
-                    <span class="vol-stat-lbl">assets</span>
-                </div>
-                <div class="vol-stat">
-                    <span class="vol-stat-val">{{ vol.variants }}</span>
-                    <span class="vol-stat-lbl">variants</span>
-                </div>
-                <div class="vol-stat">
-                    <span class="vol-stat-val">{{ vol.recipes }}</span>
-                    <span class="vol-stat-lbl">recipes</span>
-                </div>
-                <div class="vol-stat">
-                    <span class="vol-stat-val">{{ vol.size|fmt_bytes }}</span>
-                    <span class="vol-stat-lbl">size</span>
-                </div>
-            </div>
-            {% if !vol.formats.is_empty() %}
-            <div class="vol-formats">
-                {% for fmt in vol.formats %}
-                <span class="fmt-chip">{{ fmt }}</span>
-                {% endfor %}
-            </div>
-            {% endif %}
-            <div class="vol-verify">
-                <div class="vol-verify-header">
-                    <span>Verification</span>
-                    <span>{{ vol.verified_count }} / {{ vol.total_locations }}</span>
-                </div>
-                <div class="mini-bar-track">
-                    <div class="mini-bar-fill {{ vol.verification_pct|verify_class }}" style="width: {{ vol.verification_pct|pct0 }}%"></div>
-                </div>
-            </div>
-        </div>
-    {% endfor %}
-    </div>
+    <table class="stats-table volumes-table">
+        <thead>
+            <tr>
+                <th>Label</th>
+                <th>Status</th>
+                <th>Assets</th>
+                <th>Variants</th>
+                <th>Recipes</th>
+                <th>Size</th>
+                <th>Formats</th>
+                <th style="width: 20%;">Verification</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for vol in volumes %}
+            <tr>
+                <td><strong>{{ vol.label }}</strong></td>
+                <td>
+                    {% if vol.is_online %}
+                    <span class="badge badge-online">online</span>
+                    {% else %}
+                    <span class="badge badge-offline">offline</span>
+                    {% endif %}
+                </td>
+                <td>{{ vol.assets }}</td>
+                <td>{{ vol.variants }}</td>
+                <td>{{ vol.recipes }}</td>
+                <td>{{ vol.size|fmt_bytes }}</td>
+                <td>
+                    {% for fmt in vol.formats %}
+                    <span class="fmt-chip">{{ fmt }}</span>
+                    {% endfor %}
+                </td>
+                <td>
+                    <div class="inline-bar">
+                        <div class="inline-bar-track">
+                            <div class="inline-bar-fill {{ vol.verification_pct|verify_class }}" style="width: {{ vol.verification_pct|pct0 }}%"></div>
+                        </div>
+                        <span class="inline-bar-label">{{ vol.verification_pct|pct0 }}%</span>
+                    </div>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
 </div>
 {% when None %}
 {% endmatch %}

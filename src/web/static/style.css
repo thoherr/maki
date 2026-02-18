@@ -432,9 +432,12 @@ details[open] summary { margin-bottom: 0.5rem; }
 /* Overview cards */
 .stats-overview {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+    grid-template-columns: repeat(5, 1fr);
     gap: 1rem;
     margin: 1.5rem 0 2rem;
+}
+@media (max-width: 768px) {
+    .stats-overview { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }
 .stat-card {
     background: var(--bg-card);
@@ -548,48 +551,10 @@ details[open] summary { margin-bottom: 0.5rem; }
     border-bottom: 1px solid var(--border);
 }
 
-/* Volume cards */
-.volume-cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 1rem;
-}
-.volume-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-left: 4px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow);
-    padding: 1.25rem;
-}
-.volume-card.vol-online { border-left-color: #059669; }
-.volume-card.vol-offline { border-left-color: #dc3545; }
-.volume-header {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-    font-size: 1.05rem;
-}
+/* Volumes table */
 .badge-online { background: #d1fae5; color: #065f46; }
 .badge-offline { background: #fee2e2; color: #991b1b; }
-
-.vol-stats {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-    text-align: center;
-}
-.vol-stat-val { display: block; font-size: 1.15rem; font-weight: 700; }
-.vol-stat-lbl { display: block; font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
-
-.vol-formats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.3rem;
-    margin-bottom: 1rem;
-}
+.volumes-table td { vertical-align: middle; }
 .fmt-chip {
     display: inline-block;
     padding: 0.1rem 0.5rem;
@@ -599,26 +564,7 @@ details[open] summary { margin-bottom: 0.5rem; }
     text-transform: uppercase;
     background: var(--badge-bg);
     color: var(--text-muted);
-}
-
-.vol-verify { border-top: 1px solid var(--border); padding-top: 0.75rem; }
-.vol-verify-header {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    margin-bottom: 0.35rem;
-}
-.mini-bar-track {
-    height: 6px;
-    background: var(--badge-bg);
-    border-radius: 3px;
-    overflow: hidden;
-}
-.mini-bar-fill {
-    height: 100%;
-    border-radius: 3px;
-    transition: width 0.3s;
+    margin: 0.1rem;
 }
 
 /* Fill colors for progress bars */
