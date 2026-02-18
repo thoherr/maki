@@ -92,7 +92,10 @@ impl PreviewGenerator {
                 std::fs::remove_file(&dest).ok();
                 // Check if it's a missing-tool error — return None instead of propagating
                 let msg = e.to_string();
-                if msg.contains("not found") || msg.contains("No such file") {
+                if msg.contains("not found")
+                    || msg.contains("No such file")
+                    || msg.contains("does not contain any stream")
+                {
                     Ok(None)
                 } else {
                     Err(e)
