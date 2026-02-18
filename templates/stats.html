@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+
+{% block title %}Stats - DAM{% endblock %}
+
+{% block content %}
+<h1>Catalog Statistics</h1>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.overview.assets }}</div>
+        <div class="stat-label">Assets</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.overview.variants }}</div>
+        <div class="stat-label">Variants</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.overview.recipes }}</div>
+        <div class="stat-label">Recipes</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.overview.volumes_online }} / {{ stats.overview.volumes_total }}</div>
+        <div class="stat-label">Volumes Online</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ total_size_fmt }}</div>
+        <div class="stat-label">Total Size</div>
+    </div>
+</div>
+
+{% match stats.types %}
+{% when Some with (types) %}
+<div class="stats-section">
+    <h2>Asset Types</h2>
+    <table class="stats-table">
+        <thead>
+            <tr><th>Type</th><th>Count</th><th>%</th></tr>
+        </thead>
+        <tbody>
+        {% for t in types.asset_types %}
+            <tr>
+                <td>{{ t.asset_type }}</td>
+                <td>{{ t.count }}</td>
+                <td>{{ t.percentage|pct1 }}%</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    {% if !types.variant_formats.is_empty() %}
+    <h3>Variant Formats</h3>
+    <table class="stats-table">
+        <thead>
+            <tr><th>Format</th><th>Count</th></tr>
+        </thead>
+        <tbody>
+        {% for f in types.variant_formats %}
+            <tr><td>{{ f.format }}</td><td>{{ f.count }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    {% if !types.recipe_formats.is_empty() %}
+    <h3>Recipe Formats</h3>
+    <table class="stats-table">
+        <thead>
+            <tr><th>Format</th><th>Count</th></tr>
+        </thead>
+        <tbody>
+        {% for f in types.recipe_formats %}
+            <tr><td>{{ f.format }}</td><td>{{ f.count }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+{% when None %}
+{% endmatch %}
+
+{% match stats.volumes %}
+{% when Some with (volumes) %}
+<div class="stats-section">
+    <h2>Volumes</h2>
+    <div class="volume-cards">
+    {% for vol in volumes %}
+        <div class="volume-card">
+            <div class="volume-header">
+                <strong>{{ vol.label }}</strong>
+                {% if vol.is_online %}
+                <span class="badge badge-online">online</span>
+                {% else %}
+                <span class="badge badge-offline">offline</span>
+                {% endif %}
+            </div>
+            <table class="meta-table">
+                <tr><th>Assets</th><td>{{ vol.assets }}</td></tr>
+                <tr><th>Variants</th><td>{{ vol.variants }}</td></tr>
+                <tr><th>Recipes</th><td>{{ vol.recipes }}</td></tr>
+                <tr><th>Directories</th><td>{{ vol.directories }}</td></tr>
+                <tr><th>Size</th><td>{{ vol.size|fmt_bytes }}</td></tr>
+                {% if !vol.formats.is_empty() %}
+                <tr><th>Formats</th><td>{{ vol.formats.join(", ") }}</td></tr>
+                {% endif %}
+                <tr>
+                    <th>Verified</th>
+                    <td>
+                        {{ vol.verified_count }} / {{ vol.total_locations }}
+                        ({{ vol.verification_pct|pct0 }}%)
+                    </td>
+                </tr>
+            </table>
+        </div>
+    {% endfor %}
+    </div>
+</div>
+{% when None %}
+{% endmatch %}
+
+{% match stats.tags %}
+{% when Some with (tags) %}
+<div class="stats-section">
+    <h2>Tags</h2>
+    <div class="stats-grid stats-grid-3">
+        <div class="stat-card">
+            <div class="stat-value">{{ tags.unique_tags }}</div>
+            <div class="stat-label">Unique Tags</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">{{ tags.tagged_assets }}</div>
+            <div class="stat-label">Tagged Assets</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">{{ tags.untagged_assets }}</div>
+            <div class="stat-label">Untagged Assets</div>
+        </div>
+    </div>
+    {% if !tags.top_tags.is_empty() %}
+    <h3>Top Tags</h3>
+    <div class="tags-cloud">
+        {% for t in tags.top_tags %}
+        <span class="tag-chip">{{ t.tag }} <span class="tag-count">({{ t.count }})</span></span>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% when None %}
+{% endmatch %}
+
+{% match stats.verified %}
+{% when Some with (v) %}
+<div class="stats-section">
+    <h2>Verification</h2>
+    <div class="verification-overview">
+        <div class="progress-bar-container">
+            <div class="progress-bar" style="width: {{ v.coverage_pct|pct0 }}%"></div>
+        </div>
+        <div class="progress-label">{{ v.coverage_pct|pct1 }}% verified ({{ v.verified_locations }} / {{ v.total_locations }} locations)</div>
+    </div>
+    <table class="meta-table" style="margin-top: 0.75rem;">
+        <tr><th>Unverified</th><td>{{ v.unverified_locations }}</td></tr>
+        {% match v.oldest_verified_at %}
+        {% when Some with (date) %}
+        <tr><th>Oldest Verification</th><td>{{ date }}</td></tr>
+        {% when None %}
+        {% endmatch %}
+        {% match v.newest_verified_at %}
+        {% when Some with (date) %}
+        <tr><th>Newest Verification</th><td>{{ date }}</td></tr>
+        {% when None %}
+        {% endmatch %}
+    </table>
+
+    {% if !v.per_volume.is_empty() %}
+    <h3>Per Volume</h3>
+    <table class="stats-table">
+        <thead>
+            <tr><th>Volume</th><th>Status</th><th>Locations</th><th>Verified</th><th>Coverage</th></tr>
+        </thead>
+        <tbody>
+        {% for pv in v.per_volume %}
+            <tr>
+                <td>{{ pv.label }}</td>
+                <td>
+                    {% if pv.is_online %}
+                    <span class="badge badge-online">online</span>
+                    {% else %}
+                    <span class="badge badge-offline">offline</span>
+                    {% endif %}
+                </td>
+                <td>{{ pv.locations }}</td>
+                <td>{{ pv.verified }}</td>
+                <td>{{ pv.coverage_pct|pct0 }}%</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+{% when None %}
+{% endmatch %}
+
+{% endblock %}

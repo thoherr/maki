@@ -1,6 +1,6 @@
 use askama::Template;
 
-use crate::catalog::{AssetDetails, SearchRow};
+use crate::catalog::{AssetDetails, CatalogStats, SearchRow};
 
 /// Compute preview URL from a content hash like "sha256:abcdef...".
 pub fn preview_url(content_hash: &str) -> String {
@@ -237,6 +237,13 @@ impl AssetPage {
 }
 
 #[derive(Template)]
+#[template(path = "stats.html")]
+pub struct StatsPage {
+    pub stats: CatalogStats,
+    pub total_size_fmt: String,
+}
+
+#[derive(Template)]
 #[template(path = "tags_fragment.html")]
 pub struct TagsFragment {
     pub asset_id: String,
@@ -248,4 +255,19 @@ pub struct TagsFragment {
 pub struct RatingFragment {
     pub asset_id: String,
     pub rating: Option<u8>,
+}
+
+/// Custom askama filters for templates.
+mod filters {
+    pub fn fmt_bytes(bytes: &u64) -> ::askama::Result<String> {
+        Ok(super::format_size(*bytes))
+    }
+
+    pub fn pct1(val: &f64) -> ::askama::Result<String> {
+        Ok(format!("{val:.1}"))
+    }
+
+    pub fn pct0(val: &f64) -> ::askama::Result<String> {
+        Ok(format!("{val:.0}"))
+    }
 }

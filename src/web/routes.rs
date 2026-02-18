@@ -8,9 +8,11 @@ use axum::Form;
 
 use crate::catalog::{SearchOptions, SearchSort};
 
+use crate::device_registry::DeviceRegistry;
+
 use super::templates::{
-    AssetCard, AssetPage, BrowsePage, FormatOption, RatingFragment, ResultsPartial, TagOption,
-    TagsFragment, VolumeOption,
+    format_size, AssetCard, AssetPage, BrowsePage, FormatOption, RatingFragment, ResultsPartial,
+    StatsPage, TagOption, TagsFragment, VolumeOption,
 };
 use super::AppState;
 
@@ -343,6 +345,38 @@ pub async fn stats_api(State(state): State<Arc<AppState>>) -> Response {
 
     match result {
         Ok(Ok(stats)) => axum::Json(stats).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+/// GET /stats — stats HTML page.
+pub async fn stats_page(State(state): State<Arc<AppState>>) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+        let registry = DeviceRegistry::new(&state.catalog_root);
+        let vol_list = registry.list()?;
+        let volumes_info: Vec<(String, String, bool)> = vol_list
+            .iter()
+            .map(|v| (v.label.clone(), v.id.to_string(), v.is_online))
+            .collect();
+
+        let stats = catalog.build_stats(&volumes_info, true, true, true, true, 20)?;
+        let total_size_fmt = format_size(stats.overview.total_size);
+
+        let tmpl = StatsPage {
+            stats,
+            total_size_fmt,
+        };
+        Ok::<_, anyhow::Error>(tmpl.render()?)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(html)) => Html(html).into_response(),
         Ok(Err(e)) => {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
         }
