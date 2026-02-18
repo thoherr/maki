@@ -51,7 +51,7 @@ A storage device or mount point.
 | is_online | bool | Derived at runtime from mount point availability |
 
 ### Recipe
-Processing instructions associated with a variant. During import, files with recognized recipe extensions that share a filename stem with a media file in the same directory are automatically attached as recipes rather than imported as variants.
+Processing instructions associated with a variant. During import, files with recognized recipe extensions that share a filename stem with a media file in the same directory are automatically attached as recipes rather than imported as variants. Standalone recipe files (imported without a co-located media file) are resolved to their parent variant by matching filename stem and directory.
 
 Known recipe extensions: `.xmp` (Adobe/Lightroom/CaptureOne), `.cos` / `.cot` / `.cop` (CaptureOne session/template/preset), `.pp3` (RawTherapee), `.dop` (DxO), `.on1` (ON1).
 
@@ -61,8 +61,11 @@ Known recipe extensions: `.xmp` (Adobe/Lightroom/CaptureOne), `.cos` / `.cot` / 
 | variant_hash | SHA-256 | Which variant this recipe belongs to |
 | software | String | e.g. "CaptureOne 23", "Photoshop 2024" |
 | recipe_type | Enum | Sidecar (XMP, COS, etc.), EmbeddedExport |
-| content_hash | SHA-256 | Hash of the recipe file itself (for dedup/change detection) |
-| location | FileLocation | Where the recipe file lives |
+| content_hash | SHA-256 | Hash of the recipe file itself (mutable — updated when file changes) |
+| location | FileLocation | Where the recipe file lives (primary identity for dedup) |
+| verified_at | DateTime | Last time hash was verified at this location |
+
+**Design decision — location-based identity**: Recipes are identified by their location `(variant_hash, volume_id, relative_path)` rather than their content hash. This is because recipe files (XMP, COS, etc.) are routinely edited by external software. Re-importing after an external edit updates the recipe in place (new hash, re-extracted XMP metadata) rather than creating a duplicate. During verification, a changed recipe hash is reported as "modified" (not a failure) and the stored hash is updated.
 
 ## Components
 
@@ -156,13 +159,13 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 **Responsibility**: high-level operations that orchestrate the other components.
 
 **Operations**:
-- `import(paths, volume_id) -> ImportResult` — hash files, extract metadata (EXIF etc.), create assets, create variants, write sidecars, update catalog. Auto-groups files that share the same filename stem and reside in the same directory (e.g. `DSC_4521.NEF`, `DSC_4521.jpg`, `DSC_4521.xmp`, `DSC_4521.cos` all become one asset). Media files become variants; processing sidecars (`.xmp`, `.cos`, `.cot`, `.cop`, etc.) are attached as recipes. When a file's content hash already exists, the new file location is added to the existing variant (both sidecar and catalog) rather than being silently skipped. Only truly skips when the exact location (volume + relative path) is already tracked. Reports per-file status as `Imported`, `LocationAdded`, or `Skipped`.
+- `import(paths, volume_id) -> ImportResult` — hash files, extract metadata (EXIF etc.), create assets, create variants, write sidecars, update catalog. Auto-groups files that share the same filename stem and reside in the same directory (e.g. `DSC_4521.NEF`, `DSC_4521.jpg`, `DSC_4521.xmp`, `DSC_4521.cos` all become one asset). Media files become variants; processing sidecars (`.xmp`, `.cos`, `.cot`, `.cop`, etc.) are attached as recipes. Standalone recipe files (no co-located media) are resolved to parent variants by matching filename stem and directory on the same volume. When a file's content hash already exists, the new file location is added to the existing variant (both sidecar and catalog) rather than being silently skipped. Only truly skips when the exact location (volume + relative path) is already tracked. Re-importing a modified recipe updates it in place (new hash, re-extracted XMP metadata). Reports per-file status as `Imported`, `LocationAdded`, `Skipped`, `RecipeAttached`, or `RecipeUpdated`. Supports `--include`/`--skip` flags for file type group filtering.
 - `group(variant_hashes) -> Asset` — manually group variants into one asset.
 - `ungroup(asset_id, variant_hash)` — remove a variant from a group.
 - `tag(asset_id, tags)` — add tags to an asset.
-- `relocate(asset_id, target_volume)` — move all variants of an asset to another volume.
+- `relocate(asset_id, target_volume)` — move all variants of an asset to another volume. Supports `--remove-source` (move instead of copy) and `--dry-run`.
 - `find_duplicates() -> Vec<DuplicateGroup>` — find variants with same hash on multiple locations.
-- `check_integrity(scope) -> Vec<IntegrityIssue>` — verify hashes for a volume or all online volumes.
+- `verify(paths, volume, asset) -> VerifyResult` — re-hash files on disk and compare against stored content hashes. Reports `Ok`, `Mismatch`, `Modified` (recipe with changed hash), `Missing`, `Skipped`, or `Untracked`. Modified recipes are not treated as failures — their stored hash is updated. Supports path mode (verify specific files/dirs), catalog mode (verify all locations), `--volume`, `--asset`, and `--include`/`--skip` filters.
 
 ### 6. Query Engine
 
@@ -184,23 +187,40 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 - Store previews in `<catalog_root>/previews/<hash-prefix>/<hash>.jpg` at a standard size (e.g. 800px longest edge).
 - Generate on import, regenerate on demand.
 
-### 8. CLI
+### 8. Output Formatting
+
+**Responsibility**: flexible output for scripting, pipelines, and machine consumption.
+
+**Module**: `src/format.rs` — template engine with `{placeholder}` substitution and escape sequences.
+
+**Capabilities**:
+- **Global `--json` flag**: available on all commands. Outputs structured JSON to stdout; human-readable messages go to stderr. All result types derive `serde::Serialize`.
+- **`--format` flag** (on `search` and `duplicates`): presets (`ids`, `short`, `full`, `json`) or custom templates (`'{id}\t{name}\t{tags}'`). When `--format` is explicit, result counts are suppressed.
+- **`-q`/`--quiet`** (on `search`): shorthand for `--format=ids`, outputting one UUID per line for scripting.
+- **Template placeholders**: `{id}`, `{short_id}`, `{name}`, `{filename}`, `{type}`, `{format}`, `{date}`, `{tags}`, `{description}`, `{hash}`. Templates support `\t` and `\n` escape sequences.
+
+### 9. CLI
+
+**Global flags**:
+- `-t` / `--time` — show elapsed time after command execution
+- `-l` / `--log` — log individual file progress during import/verify
+- `--json` — output machine-readable JSON
 
 **Subcommands**:
 ```
-dam init                              # initialize a new catalog in current directory
-dam volume add <label> <path>         # register a volume
-dam volume list                       # list volumes and status
-dam import <paths...>                 # import files into the catalog
-dam search <query>                    # search assets
-dam show <asset-id>                   # show asset details
-dam tag <asset-id> <tags...>          # add tags
-dam group <variant-hashes...>         # group variants into one asset
-dam relocate <asset-id> <volume>      # move asset to another volume
-dam verify [--volume <vol>]           # check file integrity
-dam duplicates                        # find duplicates
-dam generate-previews [--asset <id>] [--force]  # generate/regenerate thumbnails
-dam rebuild-catalog                   # rebuild SQLite from sidecars
+dam init                                          # initialize a new catalog
+dam volume add <label> <path>                     # register a volume
+dam volume list                                   # list volumes and status
+dam import <paths...> [--include G] [--skip G]    # import files
+dam search <query> [--format F] [-q]              # search assets
+dam show <asset-id>                               # show asset details
+dam tag <asset-id> [--remove] <tags...>           # add/remove tags
+dam group <variant-hashes...>                     # group variants into one asset
+dam relocate <id> <vol> [--remove-source] [--dry-run]  # copy/move asset
+dam verify [PATHS...] [--volume V] [--asset ID]   # check file integrity
+dam duplicates [--format F]                       # find duplicates
+dam generate-previews [--asset <id>] [--force]    # generate thumbnails
+dam rebuild-catalog                               # rebuild SQLite from sidecars
 ```
 
 ## Catalog Directory Structure
