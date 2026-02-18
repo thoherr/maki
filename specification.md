@@ -48,6 +48,7 @@
   - `search -q` / `--quiet`: shorthand for `--format=ids`
   - `duplicates --format=<preset|template>`: same presets, with additional `{locations}` placeholder
   - When `--format` is explicitly set, result counts are suppressed
+- **`stats`** — show catalog statistics: `dam stats [--types] [--volumes] [--tags] [--verified] [--all] [--limit N]`. Without flags, shows overview (assets, variants, recipes, volumes, total size). `--types` adds asset type breakdown with percentages and top variant/recipe formats. `--volumes` adds per-volume details (asset/variant/recipe counts, size, directories, formats, verification coverage). `--tags` shows unique tag count, tagged/untagged assets, and top tags by frequency. `--verified` shows verification health (coverage, oldest/newest timestamps, per-volume breakdown). `--all` enables all sections. `--limit N` controls top-N lists (default 20). Supports `--json` for structured output.
 
 ### not yet implemented
 

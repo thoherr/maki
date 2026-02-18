@@ -199,7 +199,24 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 - **`-q`/`--quiet`** (on `search`): shorthand for `--format=ids`, outputting one UUID per line for scripting.
 - **Template placeholders**: `{id}`, `{short_id}`, `{name}`, `{filename}`, `{type}`, `{format}`, `{date}`, `{tags}`, `{description}`, `{hash}`. Templates support `\t` and `\n` escape sequences.
 
-### 9. CLI
+### 9. Stats
+
+**Responsibility**: aggregate and display catalog statistics from the SQLite index.
+
+**Implementation**: query methods on `Catalog` (in `src/catalog.rs`) compute counts, breakdowns, and coverage metrics. The `build_stats()` method assembles all sections into a `CatalogStats` struct, merging catalog data with device registry (online/offline status).
+
+**Sections** (each gated by a CLI flag):
+- **Overview** (always shown): asset/variant/recipe counts, volume totals (online/offline), total file size.
+- **Types** (`--types`): asset type breakdown with percentages, top variant formats, recipe format distribution.
+- **Volumes** (`--volumes`): per-volume asset/variant/recipe counts, size, directory count, format list, verification coverage.
+- **Tags** (`--tags`): unique tag count, tagged/untagged asset counts, top tags by frequency.
+- **Verification** (`--verified`): location verification coverage, oldest/newest timestamps, per-volume breakdown.
+
+**Flags**: `--all` enables all sections. `--limit N` controls top-N lists (default 20). `--json` outputs structured `CatalogStats` JSON.
+
+**Edge cases**: empty catalog returns all zeros without errors. Division-by-zero for percentages is guarded. Volumes with no files are included in `--volumes` with zero counts. Recipe format is extracted from `relative_path` extension in Rust, falling back to "unknown".
+
+### 10. CLI
 
 **Global flags**:
 - `-t` / `--time` — show elapsed time after command execution
@@ -220,6 +237,7 @@ dam relocate <id> <vol> [--remove-source] [--dry-run]  # copy/move asset
 dam verify [PATHS...] [--volume V] [--asset ID]   # check file integrity
 dam duplicates [--format F]                       # find duplicates
 dam generate-previews [--asset <id>] [--force]    # generate thumbnails
+dam stats [--types] [--volumes] [--tags] [--verified] [--all] [--limit N]  # catalog statistics
 dam rebuild-catalog                               # rebuild SQLite from sidecars
 ```
 
