@@ -1454,3 +1454,23 @@ fn stats_tags_shows_frequencies() {
                 .and(predicate::str::contains("sunset")),
         );
 }
+
+#[test]
+fn debug_flag_accepted() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // --debug before subcommand
+    dam()
+        .current_dir(&root)
+        .args(["--debug", "stats"])
+        .assert()
+        .success();
+
+    // -d shorthand
+    dam()
+        .current_dir(&root)
+        .args(["-d", "stats"])
+        .assert()
+        .success();
+}

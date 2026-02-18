@@ -23,6 +23,10 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
+    /// Show debug output from external tools (ffmpeg, dcraw)
+    #[arg(short = 'd', long = "debug", global = true)]
+    debug: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -322,7 +326,7 @@ fn main() {
             // Find which volume contains the first path
             let volume = registry.find_volume_for_path(&canonical_paths[0])?;
 
-            let service = AssetService::new(&catalog_root);
+            let service = AssetService::new(&catalog_root, cli.debug);
             let result = if cli.log {
                 use dam::asset_service::FileStatus;
                 service.import_with_callback(&canonical_paths, &volume, &filter, |path, status, elapsed| {
@@ -480,7 +484,7 @@ fn main() {
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&details)?);
             } else {
-                let preview_gen = dam::preview::PreviewGenerator::new(&catalog_root);
+                let preview_gen = dam::preview::PreviewGenerator::new(&catalog_root, cli.debug);
 
                 println!("Asset: {}", details.id);
                 if let Some(name) = &details.name {
@@ -603,7 +607,7 @@ fn main() {
             dry_run,
         } => {
             let catalog_root = dam::config::find_catalog_root()?;
-            let service = AssetService::new(&catalog_root);
+            let service = AssetService::new(&catalog_root, cli.debug);
             let result = service.relocate(&asset_id, &volume, remove_source, dry_run)?;
 
             if cli.json {
@@ -642,7 +646,7 @@ fn main() {
             use dam::asset_service::FileTypeFilter;
 
             let catalog_root = dam::config::find_catalog_root()?;
-            let service = AssetService::new(&catalog_root);
+            let service = AssetService::new(&catalog_root, cli.debug);
 
             // Build file type filter (same logic as import)
             let mut filter = FileTypeFilter::default();
@@ -820,7 +824,7 @@ fn main() {
         }
         Commands::GeneratePreviews { asset, force } => {
             let catalog_root = dam::config::find_catalog_root()?;
-            let preview_gen = dam::preview::PreviewGenerator::new(&catalog_root);
+            let preview_gen = dam::preview::PreviewGenerator::new(&catalog_root, cli.debug);
             let metadata_store = MetadataStore::new(&catalog_root);
             let registry = dam::device_registry::DeviceRegistry::new(&catalog_root);
             let volumes = registry.list()?;

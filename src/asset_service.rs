@@ -223,12 +223,14 @@ pub struct VerifyResult {
 /// High-level operations that orchestrate the other components.
 pub struct AssetService {
     catalog_root: PathBuf,
+    debug: bool,
 }
 
 impl AssetService {
-    pub fn new(catalog_root: &Path) -> Self {
+    pub fn new(catalog_root: &Path, debug: bool) -> Self {
         Self {
             catalog_root: catalog_root.to_path_buf(),
+            debug,
         }
     }
 
@@ -253,7 +255,7 @@ impl AssetService {
         let content_store = ContentStore::new(&self.catalog_root);
         let metadata_store = MetadataStore::new(&self.catalog_root);
         let catalog = Catalog::open(&self.catalog_root)?;
-        let preview_gen = crate::preview::PreviewGenerator::new(&self.catalog_root);
+        let preview_gen = crate::preview::PreviewGenerator::new(&self.catalog_root, self.debug);
 
         catalog.ensure_volume(volume)?;
 
@@ -1895,7 +1897,7 @@ mod tests {
             crate::models::VolumeType::Local,
         );
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
 
         // First import
         let r1 = service.import(&[dir_a.join("photo.jpg")], &volume, &default_filter()).unwrap();
@@ -1944,7 +1946,7 @@ mod tests {
             crate::models::VolumeType::Local,
         );
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
 
         // First import
         let r1 = service
@@ -1978,7 +1980,7 @@ mod tests {
             crate::models::VolumeType::Local,
         );
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         let result = service
             .import(&[photos.clone()], &volume, &default_filter())
             .unwrap();
@@ -2016,7 +2018,7 @@ mod tests {
             crate::models::VolumeType::Local,
         );
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         let result = service
             .import(&[photos.clone()], &volume, &default_filter())
             .unwrap();
@@ -2053,7 +2055,7 @@ mod tests {
             crate::models::VolumeType::Local,
         );
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         let mut filter = FileTypeFilter::default();
         filter.include("captureone").unwrap();
         let result = service.import(&[photos.clone()], &volume, &filter).unwrap();
@@ -2090,7 +2092,7 @@ mod tests {
             crate::models::VolumeType::Local,
         );
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         let result = service
             .import(&[dir_a, dir_b], &volume, &default_filter())
             .unwrap();
@@ -2116,7 +2118,7 @@ mod tests {
             crate::models::VolumeType::Local,
         );
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         let result = service
             .import(&[vol_dir.path().join("solo.jpg")], &volume, &default_filter())
             .unwrap();
@@ -2204,7 +2206,7 @@ mod tests {
             crate::models::VolumeType::Local,
         );
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         let result = service.import(&[photos], &volume, &default_filter()).unwrap();
         assert_eq!(result.imported, 1);
         assert_eq!(result.recipes_attached, 1);
@@ -2243,7 +2245,7 @@ mod tests {
             crate::models::VolumeType::Local,
         );
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         service.import(&[photos], &volume, &default_filter()).unwrap();
 
         let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
@@ -2270,7 +2272,7 @@ mod tests {
             crate::models::VolumeType::Local,
         );
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         service.import(&[photos], &volume, &default_filter()).unwrap();
 
         // Now manually add a tag to the asset
@@ -2326,7 +2328,7 @@ mod tests {
         // Create a file on vol1
         std::fs::write(vol1_dir.path().join("photo.jpg"), "photo data").unwrap();
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         service
             .import(
                 &[vol1_dir.path().join("photo.jpg")],
@@ -2361,7 +2363,7 @@ mod tests {
 
         std::fs::write(vol1_dir.path().join("photo.jpg"), "move me").unwrap();
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         service
             .import(
                 &[vol1_dir.path().join("photo.jpg")],
@@ -2397,7 +2399,7 @@ mod tests {
         std::fs::write(photos.join("DSC.nef"), "raw data for relocate").unwrap();
         std::fs::write(photos.join("DSC.xmp"), "xmp recipe data").unwrap();
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         service
             .import(&[photos], &vol1, &default_filter())
             .unwrap();
@@ -2421,7 +2423,7 @@ mod tests {
 
         std::fs::write(vol1_dir.path().join("photo.jpg"), "skip test").unwrap();
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         service
             .import(
                 &[vol1_dir.path().join("photo.jpg")],
@@ -2451,7 +2453,7 @@ mod tests {
 
         std::fs::write(vol1_dir.path().join("photo.jpg"), "dry run test").unwrap();
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         service
             .import(
                 &[vol1_dir.path().join("photo.jpg")],
@@ -2481,7 +2483,7 @@ mod tests {
 
         std::fs::write(vol1_dir.path().join("photo.jpg"), "noop test").unwrap();
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         service
             .import(
                 &[vol1_dir.path().join("photo.jpg")],
@@ -2507,7 +2509,7 @@ mod tests {
 
         std::fs::write(vol1_dir.path().join("photo.jpg"), "offline test").unwrap();
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         service
             .import(
                 &[vol1_dir.path().join("photo.jpg")],
@@ -2540,7 +2542,7 @@ mod tests {
     fn relocate_fails_for_unknown_asset_id() {
         let (catalog_dir, _vol1_dir, _vol2_dir, _vol1, _vol2) = setup_relocate();
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         let err = service
             .relocate("nonexistent-id", "vol2", false, false)
             .unwrap_err();
@@ -2553,7 +2555,7 @@ mod tests {
 
         std::fs::write(vol1_dir.path().join("photo.jpg"), "unknown vol test").unwrap();
 
-        let service = AssetService::new(catalog_dir.path());
+        let service = AssetService::new(catalog_dir.path(), false);
         service
             .import(
                 &[vol1_dir.path().join("photo.jpg")],

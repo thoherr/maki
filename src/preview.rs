@@ -8,12 +8,14 @@ const PREVIEW_MAX_EDGE: u32 = 800;
 /// Creates and caches thumbnails for browsing.
 pub struct PreviewGenerator {
     preview_dir: PathBuf,
+    debug: bool,
 }
 
 impl PreviewGenerator {
-    pub fn new(catalog_root: &Path) -> Self {
+    pub fn new(catalog_root: &Path, debug: bool) -> Self {
         Self {
             preview_dir: catalog_root.join("previews"),
+            debug,
         }
     }
 
@@ -123,6 +125,12 @@ impl PreviewGenerator {
                 .arg(source)
                 .output()
                 .context("Failed to run dcraw")?;
+            if self.debug {
+                eprintln!("[debug] dcraw -e -c {}", source.display());
+                if !output.stderr.is_empty() {
+                    eprintln!("[debug] dcraw stderr: {}", String::from_utf8_lossy(&output.stderr));
+                }
+            }
             if output.status.success() && !output.stdout.is_empty() {
                 let img = image::load_from_memory(&output.stdout)
                     .context("Failed to decode dcraw output")?;
@@ -137,15 +145,19 @@ impl PreviewGenerator {
         // Strategy 2: dcraw_emu — process the RAW to a temp TIFF (half-size for speed)
         if tool_available("dcraw_emu") {
             let temp_tiff = dest.with_extension("tmp.tiff");
-            let status = Command::new("dcraw_emu")
+            if self.debug {
+                eprintln!("[debug] dcraw_emu -h -T -Z {} {}", temp_tiff.display(), source.display());
+            }
+            let output = Command::new("dcraw_emu")
                 .args(["-h", "-T", "-Z"])
                 .arg(&temp_tiff)
                 .arg(source)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
+                .output()
                 .context("Failed to run dcraw_emu")?;
-            if status.success() && temp_tiff.exists() {
+            if self.debug && !output.stderr.is_empty() {
+                eprintln!("[debug] dcraw_emu stderr: {}", String::from_utf8_lossy(&output.stderr));
+            }
+            if output.status.success() && temp_tiff.exists() {
                 let img = image::open(&temp_tiff).with_context(|| {
                     format!("Failed to open dcraw_emu output {}", temp_tiff.display())
                 })?;
@@ -155,6 +167,10 @@ impl PreviewGenerator {
                     format!("Failed to save preview to {}", dest.display())
                 })?;
                 return Ok(());
+            }
+            if !output.status.success() {
+                let stderr_text = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!("dcraw_emu failed: {}", stderr_text.trim());
             }
             std::fs::remove_file(&temp_tiff).ok();
         }
@@ -172,19 +188,25 @@ impl PreviewGenerator {
 
         // Extract first frame to a temp file, then resize
         let temp_frame = dest.with_extension("tmp.jpg");
-        let status = Command::new("ffmpeg")
+        if self.debug {
+            eprintln!("[debug] ffmpeg -i {} -vframes 1 -f image2 -update 1 -y {}", source.display(), temp_frame.display());
+        }
+        let output = Command::new("ffmpeg")
             .args(["-i"])
             .arg(source)
-            .args(["-vframes", "1", "-f", "image2", "-y"])
+            .args(["-vframes", "1", "-f", "image2", "-update", "1", "-y"])
             .arg(&temp_frame)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
+            .output()
             .context("Failed to run ffmpeg")?;
 
-        if !status.success() {
+        if self.debug && !output.stderr.is_empty() {
+            eprintln!("[debug] ffmpeg stderr: {}", String::from_utf8_lossy(&output.stderr));
+        }
+
+        if !output.status.success() {
             std::fs::remove_file(&temp_frame).ok();
-            anyhow::bail!("ffmpeg exited with non-zero status");
+            let stderr_text = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("ffmpeg failed: {}", stderr_text.trim());
         }
 
         // Load the extracted frame, resize, and save as the final preview
@@ -245,7 +267,7 @@ mod tests {
     #[test]
     fn preview_path_shards_correctly() {
         let dir = tempfile::tempdir().unwrap();
-        let gen = PreviewGenerator::new(dir.path());
+        let gen = PreviewGenerator::new(dir.path(), false);
         let path = gen.preview_path("sha256:abcdef1234567890");
         assert_eq!(
             path,
@@ -257,14 +279,14 @@ mod tests {
     #[test]
     fn has_preview_false_when_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let gen = PreviewGenerator::new(dir.path());
+        let gen = PreviewGenerator::new(dir.path(), false);
         assert!(!gen.has_preview("sha256:0000000000"));
     }
 
     #[test]
     fn generate_returns_none_for_audio() {
         let dir = tempfile::tempdir().unwrap();
-        let gen = PreviewGenerator::new(dir.path());
+        let gen = PreviewGenerator::new(dir.path(), false);
         let result = gen
             .generate("sha256:abc123", Path::new("/fake/file.mp3"), "mp3")
             .unwrap();
@@ -274,7 +296,7 @@ mod tests {
     #[test]
     fn generate_image_creates_preview() {
         let dir = tempfile::tempdir().unwrap();
-        let gen = PreviewGenerator::new(dir.path());
+        let gen = PreviewGenerator::new(dir.path(), false);
 
         // Create a real 1600x1200 PNG in the temp dir
         let img = image::DynamicImage::new_rgb8(1600, 1200);
@@ -299,7 +321,7 @@ mod tests {
     #[test]
     fn generate_skips_if_already_exists() {
         let dir = tempfile::tempdir().unwrap();
-        let gen = PreviewGenerator::new(dir.path());
+        let gen = PreviewGenerator::new(dir.path(), false);
 
         let img = image::DynamicImage::new_rgb8(100, 100);
         let source = dir.path().join("small.png");
@@ -325,7 +347,7 @@ mod tests {
     #[test]
     fn regenerate_overwrites_existing() {
         let dir = tempfile::tempdir().unwrap();
-        let gen = PreviewGenerator::new(dir.path());
+        let gen = PreviewGenerator::new(dir.path(), false);
 
         // Create initial preview from a 200x200 image
         let img = image::DynamicImage::new_rgb8(200, 200);
@@ -365,5 +387,33 @@ mod tests {
         let resized = resize_image(&img);
         assert_eq!(resized.width(), 400);
         assert_eq!(resized.height(), 300);
+    }
+
+    #[test]
+    fn generate_video_includes_stderr_on_failure() {
+        if !tool_available("ffmpeg") {
+            return; // skip if ffmpeg not installed
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let gen = PreviewGenerator::new(dir.path(), false);
+
+        // Create a file that is not a valid video
+        let bad_source = dir.path().join("bad.mov");
+        std::fs::write(&bad_source, b"not a video").unwrap();
+
+        let dest = gen.preview_path("sha256:badvideo");
+        ensure_parent(&dest).unwrap();
+        // Call generate_video directly to bypass do_generate's error filter
+        let err = gen.generate_video(&dest, &bad_source).unwrap_err();
+        let msg = err.to_string();
+        // Should contain ffmpeg's actual error output, not just "non-zero status"
+        assert!(
+            msg.contains("ffmpeg failed:"),
+            "Expected 'ffmpeg failed:' in error, got: {msg}"
+        );
+        assert!(
+            !msg.contains("non-zero status"),
+            "Should not have generic 'non-zero status' message, got: {msg}"
+        );
     }
 }
