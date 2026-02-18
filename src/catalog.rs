@@ -6,7 +6,7 @@ use rusqlite::Connection;
 use crate::models::{Asset, FileLocation, Recipe, Variant};
 
 /// A row returned from a search query.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct SearchRow {
     pub asset_id: String,
     pub name: Option<String>,
@@ -14,10 +14,13 @@ pub struct SearchRow {
     pub created_at: String,
     pub original_filename: String,
     pub format: String,
+    pub tags: Vec<String>,
+    pub description: Option<String>,
+    pub content_hash: String,
 }
 
 /// Full asset details returned by `load_asset_details`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct AssetDetails {
     pub id: String,
     pub name: Option<String>,
@@ -30,7 +33,7 @@ pub struct AssetDetails {
 }
 
 /// Variant details within an `AssetDetails`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct VariantDetails {
     pub content_hash: String,
     pub role: String,
@@ -42,14 +45,14 @@ pub struct VariantDetails {
 }
 
 /// File location details within a `VariantDetails`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct LocationDetails {
     pub volume_label: String,
     pub relative_path: String,
 }
 
 /// A variant that exists in multiple file locations.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct DuplicateEntry {
     pub content_hash: String,
     pub original_filename: String,
@@ -60,7 +63,7 @@ pub struct DuplicateEntry {
 }
 
 /// Recipe details within an `AssetDetails`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct RecipeDetails {
     pub software: String,
     pub recipe_type: String,
@@ -243,7 +246,8 @@ impl Catalog {
         format: Option<&str>,
     ) -> Result<Vec<SearchRow>> {
         let mut sql = String::from(
-            "SELECT a.id, a.name, a.asset_type, a.created_at, v.original_filename, v.format \
+            "SELECT a.id, a.name, a.asset_type, a.created_at, v.original_filename, v.format, \
+             a.tags, a.description, v.content_hash \
              FROM assets a JOIN variants v ON a.id = v.asset_id WHERE 1=1",
         );
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -273,6 +277,8 @@ impl Catalog {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(param_refs.as_slice(), |row| {
+            let tags_json: String = row.get(6)?;
+            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
             Ok(SearchRow {
                 asset_id: row.get(0)?,
                 name: row.get(1)?,
@@ -280,6 +286,9 @@ impl Catalog {
                 created_at: row.get(3)?,
                 original_filename: row.get(4)?,
                 format: row.get(5)?,
+                tags,
+                description: row.get(7)?,
+                content_hash: row.get(8)?,
             })
         })?;
 

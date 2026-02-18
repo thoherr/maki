@@ -1043,3 +1043,250 @@ fn verify_recipe_modification_not_failure() {
                 .and(predicate::str::contains("FAILED").not()),
         );
 }
+
+// ─── Formatting tests ──────────────────────────────────────────────
+
+#[test]
+fn search_format_ids_outputs_uuids() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "photo.jpg", b"ids-format-test");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["search", "--format=ids", "type:image"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines.len(), 1);
+    // Should be a UUID (36 chars with hyphens)
+    assert_eq!(lines[0].len(), 36, "Expected full UUID, got: {}", lines[0]);
+    // Should NOT have "result(s)" count
+    assert!(!stdout.contains("result(s)"));
+}
+
+#[test]
+fn search_quiet_shorthand() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "photo.jpg", b"quiet-test");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["search", "-q", "type:image"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].len(), 36);
+}
+
+#[test]
+fn search_format_json_outputs_valid_json() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "photo.jpg", b"json-format-test");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["search", "--format=json", "type:image"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    let arr = parsed.as_array().expect("should be array");
+    assert_eq!(arr.len(), 1);
+    assert!(arr[0]["asset_id"].is_string());
+    assert!(arr[0]["content_hash"].is_string());
+    assert!(arr[0]["tags"].is_array());
+}
+
+#[test]
+fn search_format_template_renders_placeholders() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "sunset.jpg", b"template-test");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["search", "--format={short_id}\t{filename}\t{format}", "type:image"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines.len(), 1);
+    let parts: Vec<&str> = lines[0].split('\t').collect();
+    assert_eq!(parts.len(), 3);
+    assert_eq!(parts[0].len(), 8, "short_id should be 8 chars");
+    assert_eq!(parts[1], "sunset.jpg");
+    assert_eq!(parts[2], "jpg");
+}
+
+#[test]
+fn search_json_global_flag() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "photo.jpg", b"global-json-test");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "search", "type:image"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert!(parsed.is_array());
+}
+
+#[test]
+fn show_json_outputs_asset_details() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "photo.jpg", b"show-json-test");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Get asset ID via search -q
+    let output = dam()
+        .current_dir(&root)
+        .args(["search", "-q", "type:image"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let asset_id = String::from_utf8(output).unwrap().trim().to_string();
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "show", &asset_id])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert!(parsed["id"].is_string());
+    assert!(parsed["asset_type"].is_string());
+    assert!(parsed["variants"].is_array());
+}
+
+#[test]
+fn volume_list_json() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "volume", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    let arr = parsed.as_array().expect("should be array");
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["label"].as_str(), Some("test-vol"));
+    assert!(arr[0]["is_online"].is_boolean());
+}
+
+#[test]
+fn import_json_outputs_result() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "photo.jpg", b"import-json-test");
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "import", root.to_str().unwrap()])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert!(parsed["imported"].is_number());
+    assert_eq!(parsed["imported"].as_u64(), Some(1));
+}
+
+#[test]
+fn duplicates_format_json() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["duplicates", "--format=json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert!(parsed.is_array());
+}

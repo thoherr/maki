@@ -47,3 +47,10 @@ Core CLI is functional. See `specification.md` for full requirements.
 - **Relocate command**: Copies or moves all files of an asset (variants + recipes) to a target volume. `dam relocate <asset-id> <target-volume> [--remove-source] [--dry-run]`. Without `--remove-source`, files are copied and the asset gains additional locations. With `--remove-source`, source files are deleted after verified copy. `--dry-run` shows what would happen without making changes. Preserves relative paths on the target volume. Verifies file integrity via SHA-256 after copy.
 
 - **Verify command**: Re-hashes files on disk and compares against stored content hashes to detect corruption or bit rot. `dam verify [PATHS...] [--volume <label>] [--asset <id>]`. Without arguments, verifies all file locations on all online volumes. With paths, verifies specific files/directories. `--volume` limits to a specific volume; `--asset` limits to a specific asset. Updates `verified_at` timestamps on successful verification. Exits with code 1 if any mismatches are found. Recipe files that have been modified externally are reported as "modified" (not "FAILED") and do not trigger exit code 1 — their stored hash is updated to reflect the new content.
+
+**Output formatting**:
+- **Global `--json` flag**: Available on all commands. Outputs structured JSON to stdout; human-readable messages go to stderr. All data types (`SearchRow`, `AssetDetails`, `ImportResult`, `VerifyResult`, `RelocateResult`, `DuplicateEntry`) derive `serde::Serialize`.
+- **`search --format`**: Presets: `ids` (one UUID per line), `short` (default), `full` (with tags/description), `json` (JSON array). Custom templates: `'{id}\t{name}\t{tags}'` with placeholder substitution. Result count suppressed when `--format` is explicit.
+- **`search -q`**: Shorthand for `--format=ids`, for scripting (e.g. `for id in $(dam search -q tag:landscape); do ...`).
+- **`duplicates --format`**: Same presets as search, plus `{locations}` placeholder for templates.
+- **Format module** (`src/format.rs`): Template engine with `{placeholder}` substitution, escape sequences (`\t`, `\n`), preset parsing.

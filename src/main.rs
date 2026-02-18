@@ -19,6 +19,10 @@ struct Cli {
     #[arg(short = 'l', long = "log", global = true)]
     log: bool,
 
+    /// Output machine-readable JSON (valid JSON on stdout, messages on stderr)
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -50,6 +54,14 @@ enum Commands {
     Search {
         /// Free-text keywords and optional filters (type:image, tag:landscape, format:jpg)
         query: String,
+
+        /// Output format: ids, short, full, json, or a custom template (e.g. '{id}\t{name}')
+        #[arg(long)]
+        format: Option<String>,
+
+        /// Shorthand for --format=ids (one asset ID per line, for scripting)
+        #[arg(short = 'q', long = "quiet")]
+        quiet: bool,
     },
 
     /// Show asset details
@@ -117,7 +129,11 @@ enum Commands {
     },
 
     /// Find duplicate files
-    Duplicates,
+    Duplicates {
+        /// Output format: ids, short, full, json, or a custom template (e.g. '{hash}\t{filename}')
+        #[arg(long)]
+        format: Option<String>,
+    },
 
     /// Generate or regenerate preview thumbnails
     GeneratePreviews {
@@ -175,7 +191,14 @@ fn main() {
             // Write empty volumes registry
             DeviceRegistry::init(&catalog_root)?;
 
-            println!("Initialized new dam catalog in {}", catalog_root.display());
+            if cli.json {
+                println!("{}", serde_json::json!({
+                    "status": "initialized",
+                    "path": catalog_root.display().to_string()
+                }));
+            } else {
+                println!("Initialized new dam catalog in {}", catalog_root.display());
+            }
             Ok(())
         }
         Commands::Volume(cmd) => match cmd {
@@ -187,15 +210,34 @@ fn main() {
                     std::path::Path::new(&path),
                     dam::models::VolumeType::Local,
                 )?;
-                println!("Registered volume '{}' ({})", volume.label, volume.id);
-                println!("  Path: {}", volume.mount_point.display());
+                if cli.json {
+                    println!("{}", serde_json::json!({
+                        "id": volume.id.to_string(),
+                        "label": volume.label,
+                        "path": volume.mount_point.display().to_string(),
+                    }));
+                } else {
+                    println!("Registered volume '{}' ({})", volume.label, volume.id);
+                    println!("  Path: {}", volume.mount_point.display());
+                }
                 Ok(())
             }
             VolumeCommands::List => {
                 let catalog_root = dam::config::find_catalog_root()?;
                 let registry = DeviceRegistry::new(&catalog_root);
                 let volumes = registry.list()?;
-                if volumes.is_empty() {
+                if cli.json {
+                    let json_volumes: Vec<serde_json::Value> = volumes.iter().map(|v| {
+                        serde_json::json!({
+                            "id": v.id.to_string(),
+                            "label": v.label,
+                            "path": v.mount_point.display().to_string(),
+                            "volume_type": format!("{:?}", v.volume_type).to_lowercase(),
+                            "is_online": v.is_online,
+                        })
+                    }).collect();
+                    println!("{}", serde_json::to_string_pretty(&json_volumes)?);
+                } else if volumes.is_empty() {
                     println!("No volumes registered.");
                 } else {
                     for v in &volumes {
@@ -273,51 +315,129 @@ fn main() {
                 service.import(&canonical_paths, &volume, &filter)?
             };
 
-            let mut parts: Vec<String> = Vec::new();
-            if result.imported > 0 {
-                parts.push(format!("{} imported", result.imported));
-            }
-            if result.skipped > 0 {
-                parts.push(format!("{} skipped", result.skipped));
-            }
-            if result.locations_added > 0 {
-                parts.push(format!("{} location(s) added", result.locations_added));
-            }
-            if result.recipes_attached > 0 {
-                parts.push(format!("{} recipe(s) attached", result.recipes_attached));
-            }
-            if result.recipes_updated > 0 {
-                parts.push(format!("{} recipe(s) updated", result.recipes_updated));
-            }
-            if result.previews_generated > 0 {
-                parts.push(format!("{} preview(s) generated", result.previews_generated));
-            }
-            if parts.is_empty() {
-                println!("Import: nothing to import");
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                println!("Import complete: {}", parts.join(", "));
+                let mut parts: Vec<String> = Vec::new();
+                if result.imported > 0 {
+                    parts.push(format!("{} imported", result.imported));
+                }
+                if result.skipped > 0 {
+                    parts.push(format!("{} skipped", result.skipped));
+                }
+                if result.locations_added > 0 {
+                    parts.push(format!("{} location(s) added", result.locations_added));
+                }
+                if result.recipes_attached > 0 {
+                    parts.push(format!("{} recipe(s) attached", result.recipes_attached));
+                }
+                if result.recipes_updated > 0 {
+                    parts.push(format!("{} recipe(s) updated", result.recipes_updated));
+                }
+                if result.previews_generated > 0 {
+                    parts.push(format!("{} preview(s) generated", result.previews_generated));
+                }
+                if parts.is_empty() {
+                    println!("Import: nothing to import");
+                } else {
+                    println!("Import complete: {}", parts.join(", "));
+                }
             }
             Ok(())
         }
-        Commands::Search { query } => {
+        Commands::Search { query, format, quiet } => {
+            use dam::format::{self, OutputFormat};
+
             let catalog_root = dam::config::find_catalog_root()?;
             let engine = QueryEngine::new(&catalog_root);
             let results = engine.search(&query)?;
-            if results.is_empty() {
-                println!("No results found.");
+
+            // Determine output format
+            let output_format = if quiet {
+                OutputFormat::Ids
+            } else if let Some(fmt) = &format {
+                format::parse_format(fmt).map_err(|e| anyhow::anyhow!(e))?
+            } else if cli.json {
+                OutputFormat::Json
             } else {
-                for row in &results {
-                    let display_name = row
-                        .name
-                        .as_deref()
-                        .unwrap_or(&row.original_filename);
-                    let short_id = &row.asset_id[..8];
-                    println!(
-                        "{}  {} [{}] ({}) — {}",
-                        short_id, display_name, row.asset_type, row.format, row.created_at
-                    );
+                OutputFormat::Short
+            };
+
+            let explicit_format = quiet || format.is_some();
+
+            if results.is_empty() {
+                match output_format {
+                    OutputFormat::Json => println!("[]"),
+                    _ => {
+                        if !explicit_format {
+                            println!("No results found.");
+                        }
+                    }
                 }
-                println!("\n{} result(s)", results.len());
+            } else {
+                match output_format {
+                    OutputFormat::Ids => {
+                        for row in &results {
+                            println!("{}", row.asset_id);
+                        }
+                    }
+                    OutputFormat::Short => {
+                        for row in &results {
+                            let display_name = row
+                                .name
+                                .as_deref()
+                                .unwrap_or(&row.original_filename);
+                            let short_id = &row.asset_id[..8];
+                            println!(
+                                "{}  {} [{}] ({}) — {}",
+                                short_id, display_name, row.asset_type, row.format, row.created_at
+                            );
+                        }
+                        println!("\n{} result(s)", results.len());
+                    }
+                    OutputFormat::Full => {
+                        for row in &results {
+                            let display_name = row
+                                .name
+                                .as_deref()
+                                .unwrap_or(&row.original_filename);
+                            let short_id = &row.asset_id[..8];
+                            let tags = if row.tags.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" tags:{}", row.tags.join(","))
+                            };
+                            let desc = row.description.as_deref().unwrap_or("");
+                            println!(
+                                "{}  {} [{}] ({}) — {}{} {}",
+                                short_id, display_name, row.asset_type, row.format,
+                                row.created_at, tags, desc
+                            );
+                        }
+                        println!("\n{} result(s)", results.len());
+                    }
+                    OutputFormat::Json => {
+                        println!("{}", serde_json::to_string_pretty(&results)?);
+                    }
+                    OutputFormat::Template(ref tpl) => {
+                        for row in &results {
+                            let tags_str = row.tags.join(", ");
+                            let desc = row.description.as_deref().unwrap_or("");
+                            let values = format::search_row_values(
+                                &row.asset_id,
+                                row.name.as_deref(),
+                                &row.original_filename,
+                                &row.asset_type,
+                                &row.format,
+                                &row.created_at,
+                                &tags_str,
+                                desc,
+                                &row.content_hash,
+                            );
+                            println!("{}", format::render_template(tpl, &values));
+                        }
+                    }
+                }
             }
             Ok(())
         }
@@ -325,64 +445,69 @@ fn main() {
             let catalog_root = dam::config::find_catalog_root()?;
             let engine = QueryEngine::new(&catalog_root);
             let details = engine.show(&asset_id)?;
-            let preview_gen = dam::preview::PreviewGenerator::new(&catalog_root);
 
-            println!("Asset: {}", details.id);
-            if let Some(name) = &details.name {
-                println!("Name:  {name}");
-            }
-            println!("Type:  {}", details.asset_type);
-            println!("Date:  {}", details.created_at);
-            if !details.tags.is_empty() {
-                println!("Tags:  {}", details.tags.join(", "));
-            }
-            if let Some(desc) = &details.description {
-                println!("Description: {desc}");
-            }
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&details)?);
+            } else {
+                let preview_gen = dam::preview::PreviewGenerator::new(&catalog_root);
 
-            // Show preview status for the primary variant
-            if let Some(primary) = details.variants.first() {
-                let preview_path = preview_gen.preview_path(&primary.content_hash);
-                if preview_gen.has_preview(&primary.content_hash) {
-                    println!("Preview: {}", preview_path.display());
-                } else {
-                    println!("Preview: (none)");
+                println!("Asset: {}", details.id);
+                if let Some(name) = &details.name {
+                    println!("Name:  {name}");
                 }
-            }
+                println!("Type:  {}", details.asset_type);
+                println!("Date:  {}", details.created_at);
+                if !details.tags.is_empty() {
+                    println!("Tags:  {}", details.tags.join(", "));
+                }
+                if let Some(desc) = &details.description {
+                    println!("Description: {desc}");
+                }
 
-            if !details.variants.is_empty() {
-                println!("\nVariants:");
-                for v in &details.variants {
-                    println!(
-                        "  [{}] {} ({}, {})",
-                        v.role,
-                        v.original_filename,
-                        v.format,
-                        format_size(v.file_size)
-                    );
-                    println!("    Hash: {}", v.content_hash);
-                    for loc in &v.locations {
-                        println!(
-                            "    Location: {} \u{2192} {}",
-                            loc.volume_label, loc.relative_path
-                        );
+                // Show preview status for the primary variant
+                if let Some(primary) = details.variants.first() {
+                    let preview_path = preview_gen.preview_path(&primary.content_hash);
+                    if preview_gen.has_preview(&primary.content_hash) {
+                        println!("Preview: {}", preview_path.display());
+                    } else {
+                        println!("Preview: (none)");
                     }
-                    if !v.source_metadata.is_empty() {
-                        let mut keys: Vec<&String> = v.source_metadata.keys().collect();
-                        keys.sort();
-                        for key in keys {
-                            println!("    {}: {}", key, v.source_metadata[key]);
+                }
+
+                if !details.variants.is_empty() {
+                    println!("\nVariants:");
+                    for v in &details.variants {
+                        println!(
+                            "  [{}] {} ({}, {})",
+                            v.role,
+                            v.original_filename,
+                            v.format,
+                            format_size(v.file_size)
+                        );
+                        println!("    Hash: {}", v.content_hash);
+                        for loc in &v.locations {
+                            println!(
+                                "    Location: {} \u{2192} {}",
+                                loc.volume_label, loc.relative_path
+                            );
+                        }
+                        if !v.source_metadata.is_empty() {
+                            let mut keys: Vec<&String> = v.source_metadata.keys().collect();
+                            keys.sort();
+                            for key in keys {
+                                println!("    {}: {}", key, v.source_metadata[key]);
+                            }
                         }
                     }
                 }
-            }
 
-            if !details.recipes.is_empty() {
-                println!("\nRecipes:");
-                for r in &details.recipes {
-                    println!("  [{}] {} ({})", r.recipe_type, r.software, r.content_hash);
-                    if let Some(path) = &r.relative_path {
-                        println!("    Path: {path}");
+                if !details.recipes.is_empty() {
+                    println!("\nRecipes:");
+                    for r in &details.recipes {
+                        println!("  [{}] {} ({})", r.recipe_type, r.software, r.content_hash);
+                        if let Some(path) = &r.relative_path {
+                            println!("    Path: {path}");
+                        }
                     }
                 }
             }
@@ -394,17 +519,24 @@ fn main() {
             let engine = QueryEngine::new(&catalog_root);
             let result = engine.tag(&asset_id, &tags, remove)?;
 
-            if !result.changed.is_empty() {
-                if remove {
-                    println!("Removed tags: {}", result.changed.join(", "));
-                } else {
-                    println!("Added tags: {}", result.changed.join(", "));
-                }
-            }
-            if result.current_tags.is_empty() {
-                println!("Tags: (none)");
+            if cli.json {
+                println!("{}", serde_json::json!({
+                    "changed": result.changed,
+                    "tags": result.current_tags,
+                }));
             } else {
-                println!("Tags: {}", result.current_tags.join(", "));
+                if !result.changed.is_empty() {
+                    if remove {
+                        println!("Removed tags: {}", result.changed.join(", "));
+                    } else {
+                        println!("Added tags: {}", result.changed.join(", "));
+                    }
+                }
+                if result.current_tags.is_empty() {
+                    println!("Tags: (none)");
+                } else {
+                    println!("Tags: {}", result.current_tags.join(", "));
+                }
             }
             Ok(())
         }
@@ -413,15 +545,23 @@ fn main() {
             let engine = QueryEngine::new(&catalog_root);
             let result = engine.group(&variant_hashes)?;
 
-            let short_id = &result.target_id[..8];
-            println!(
-                "Grouped {} variant(s) into asset {short_id}",
-                variant_hashes.len()
-            );
-            if result.donors_removed > 0 {
-                println!("  Merged {} donor asset(s)", result.donors_removed);
+            if cli.json {
+                println!("{}", serde_json::json!({
+                    "target_id": result.target_id,
+                    "variants_moved": result.variants_moved,
+                    "donors_removed": result.donors_removed,
+                }));
             } else {
-                println!("  Already grouped (no changes)");
+                let short_id = &result.target_id[..8];
+                println!(
+                    "Grouped {} variant(s) into asset {short_id}",
+                    variant_hashes.len()
+                );
+                if result.donors_removed > 0 {
+                    println!("  Merged {} donor asset(s)", result.donors_removed);
+                } else {
+                    println!("  Already grouped (no changes)");
+                }
             }
             Ok(())
         }
@@ -435,30 +575,34 @@ fn main() {
             let service = AssetService::new(&catalog_root);
             let result = service.relocate(&asset_id, &volume, remove_source, dry_run)?;
 
-            if dry_run {
-                println!("Dry run — no changes made:");
-            }
-
-            for action in &result.actions {
-                println!("  {action}");
-            }
-
-            let verb = if remove_source { "moved" } else { "copied" };
-            let mut parts: Vec<String> = Vec::new();
-            if result.copied > 0 {
-                parts.push(format!("{} {verb}", result.copied));
-            }
-            if result.skipped > 0 {
-                parts.push(format!("{} skipped", result.skipped));
-            }
-            if parts.is_empty() {
-                if result.actions.len() == 1 {
-                    // The "already on target" message was printed above
-                } else {
-                    println!("Relocate: nothing to do");
-                }
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                println!("Relocate complete: {}", parts.join(", "));
+                if dry_run {
+                    println!("Dry run — no changes made:");
+                }
+
+                for action in &result.actions {
+                    println!("  {action}");
+                }
+
+                let verb = if remove_source { "moved" } else { "copied" };
+                let mut parts: Vec<String> = Vec::new();
+                if result.copied > 0 {
+                    parts.push(format!("{} {verb}", result.copied));
+                }
+                if result.skipped > 0 {
+                    parts.push(format!("{} skipped", result.skipped));
+                }
+                if parts.is_empty() {
+                    if result.actions.len() == 1 {
+                        // The "already on target" message was printed above
+                    } else {
+                        println!("Relocate: nothing to do");
+                    }
+                } else {
+                    println!("Relocate complete: {}", parts.join(", "));
+                }
             }
 
             Ok(())
@@ -526,29 +670,33 @@ fn main() {
                 )?
             };
 
-            // Print error details
-            for err in &result.errors {
-                eprintln!("  {err}");
-            }
-
-            // Print summary
-            let mut parts: Vec<String> = Vec::new();
-            if result.verified > 0 {
-                parts.push(format!("{} verified", result.verified));
-            }
-            if result.modified > 0 {
-                parts.push(format!("{} modified", result.modified));
-            }
-            if result.failed > 0 {
-                parts.push(format!("{} FAILED", result.failed));
-            }
-            if result.skipped > 0 {
-                parts.push(format!("{} skipped", result.skipped));
-            }
-            if parts.is_empty() {
-                println!("Verify: nothing to verify");
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                println!("Verify complete: {}", parts.join(", "));
+                // Print error details
+                for err in &result.errors {
+                    eprintln!("  {err}");
+                }
+
+                // Print summary
+                let mut parts: Vec<String> = Vec::new();
+                if result.verified > 0 {
+                    parts.push(format!("{} verified", result.verified));
+                }
+                if result.modified > 0 {
+                    parts.push(format!("{} modified", result.modified));
+                }
+                if result.failed > 0 {
+                    parts.push(format!("{} FAILED", result.failed));
+                }
+                if result.skipped > 0 {
+                    parts.push(format!("{} skipped", result.skipped));
+                }
+                if parts.is_empty() {
+                    println!("Verify: nothing to verify");
+                } else {
+                    println!("Verify complete: {}", parts.join(", "));
+                }
             }
 
             if result.failed > 0 {
@@ -557,37 +705,82 @@ fn main() {
 
             Ok(())
         }
-        Commands::Duplicates => {
+        Commands::Duplicates { format } => {
+            use dam::format::{self, OutputFormat};
+
             let catalog_root = dam::config::find_catalog_root()?;
             let catalog = Catalog::open(&catalog_root)?;
             let entries = catalog.find_duplicates()?;
 
-            if entries.is_empty() {
-                println!("No duplicates found.");
+            let output_format = if let Some(fmt) = &format {
+                format::parse_format(fmt).map_err(|e| anyhow::anyhow!(e))?
+            } else if cli.json {
+                OutputFormat::Json
             } else {
-                for entry in &entries {
-                    let display_name = entry
-                        .asset_name
-                        .as_deref()
-                        .unwrap_or(&entry.original_filename);
-                    println!(
-                        "{} ({}, {})",
-                        display_name,
-                        entry.format,
-                        format_size(entry.file_size)
-                    );
-                    println!("  Hash: {}", entry.content_hash);
-                    for loc in &entry.locations {
-                        println!(
-                            "    {} \u{2192} {}",
-                            loc.volume_label, loc.relative_path
-                        );
+                OutputFormat::Short
+            };
+
+            if entries.is_empty() {
+                match output_format {
+                    OutputFormat::Json => println!("[]"),
+                    _ => {
+                        if format.is_none() {
+                            println!("No duplicates found.");
+                        }
                     }
                 }
-                println!(
-                    "\n{} file(s) with duplicate locations",
-                    entries.len()
-                );
+            } else {
+                match output_format {
+                    OutputFormat::Ids => {
+                        for entry in &entries {
+                            println!("{}", entry.content_hash);
+                        }
+                    }
+                    OutputFormat::Short | OutputFormat::Full => {
+                        for entry in &entries {
+                            let display_name = entry
+                                .asset_name
+                                .as_deref()
+                                .unwrap_or(&entry.original_filename);
+                            println!(
+                                "{} ({}, {})",
+                                display_name,
+                                entry.format,
+                                format_size(entry.file_size)
+                            );
+                            println!("  Hash: {}", entry.content_hash);
+                            for loc in &entry.locations {
+                                println!(
+                                    "    {} \u{2192} {}",
+                                    loc.volume_label, loc.relative_path
+                                );
+                            }
+                        }
+                        println!(
+                            "\n{} file(s) with duplicate locations",
+                            entries.len()
+                        );
+                    }
+                    OutputFormat::Json => {
+                        println!("{}", serde_json::to_string_pretty(&entries)?);
+                    }
+                    OutputFormat::Template(ref tpl) => {
+                        for entry in &entries {
+                            let mut values = std::collections::HashMap::new();
+                            values.insert("hash", entry.content_hash.clone());
+                            values.insert("filename", entry.original_filename.clone());
+                            values.insert("format", entry.format.clone());
+                            values.insert("size", format_size(entry.file_size));
+                            values.insert("name", entry.asset_name.as_deref()
+                                .unwrap_or(&entry.original_filename).to_string());
+                            let locs: Vec<String> = entry.locations.iter()
+                                .map(|l| format!("{}:{}", l.volume_label, l.relative_path))
+                                .collect();
+                            values.insert("locations", locs.join(", "));
+                            println!("{}", format::render_template(tpl, &values));
+                        }
+                    }
+                }
             }
             Ok(())
         }
@@ -652,10 +845,18 @@ fn main() {
                 }
             }
 
-            println!(
-                "Generated {} preview(s), {} skipped, {} failed",
-                generated, skipped, failed
-            );
+            if cli.json {
+                println!("{}", serde_json::json!({
+                    "generated": generated,
+                    "skipped": skipped,
+                    "failed": failed,
+                }));
+            } else {
+                println!(
+                    "Generated {} preview(s), {} skipped, {} failed",
+                    generated, skipped, failed
+                );
+            }
             Ok(())
         }
         Commands::RebuildCatalog => {
@@ -676,9 +877,16 @@ fn main() {
             let store = MetadataStore::new(&catalog_root);
             let result = store.sync_to_catalog(&catalog)?;
 
-            println!("Rebuild complete: {} asset(s) synced", result.synced);
-            if result.errors > 0 {
-                println!("  {} error(s) encountered", result.errors);
+            if cli.json {
+                println!("{}", serde_json::json!({
+                    "synced": result.synced,
+                    "errors": result.errors,
+                }));
+            } else {
+                println!("Rebuild complete: {} asset(s) synced", result.synced);
+                if result.errors > 0 {
+                    println!("  {} error(s) encountered", result.errors);
+                }
             }
             Ok(())
         }

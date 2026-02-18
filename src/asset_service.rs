@@ -156,6 +156,7 @@ pub enum FileStatus {
 }
 
 /// Result of an import operation.
+#[derive(serde::Serialize)]
 pub struct ImportResult {
     pub imported: usize,
     pub locations_added: usize,
@@ -166,7 +167,7 @@ pub struct ImportResult {
 }
 
 /// Result of a relocate operation.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct RelocateResult {
     pub copied: usize,
     pub skipped: usize,
@@ -210,6 +211,7 @@ pub enum VerifyStatus {
 }
 
 /// Result of a verify operation.
+#[derive(serde::Serialize)]
 pub struct VerifyResult {
     pub verified: usize,
     pub failed: usize,

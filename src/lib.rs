@@ -4,6 +4,7 @@ pub mod config;
 pub mod content_store;
 pub mod device_registry;
 pub mod exif_reader;
+pub mod format;
 pub mod metadata_store;
 pub mod models;
 pub mod preview;
