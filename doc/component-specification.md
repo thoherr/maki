@@ -229,7 +229,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 dam init                                          # initialize a new catalog
 dam volume add <label> <path>                     # register a volume
 dam volume list                                   # list volumes and status
-dam import <paths...> [--include G] [--skip G]    # import files
+dam import <paths...> [--volume V] [--include G] [--skip G]  # import files
 dam search <query> [--format F] [-q]              # search assets
 dam show <asset-id>                               # show asset details
 dam tag <asset-id> [--remove] <tags...>           # add/remove tags
@@ -237,7 +237,7 @@ dam group <variant-hashes...>                     # group variants into one asse
 dam relocate <id> <vol> [--remove-source] [--dry-run]  # copy/move asset
 dam verify [PATHS...] [--volume V] [--asset ID]   # check file integrity
 dam duplicates [--format F]                       # find duplicates
-dam generate-previews [--asset <id>] [--force]    # generate thumbnails
+dam generate-previews [PATHS...] [--asset ID] [--volume V] [--include G] [--skip G] [--force]  # generate thumbnails
 dam stats [--types] [--volumes] [--tags] [--verified] [--all] [--limit N]  # catalog statistics
 dam rebuild-catalog                               # rebuild SQLite from sidecars
 ```

@@ -11,21 +11,21 @@ use dam::query::QueryEngine;
 #[derive(Parser)]
 #[command(name = "dam", about = "Digital Asset Manager", version)]
 struct Cli {
-    /// Show elapsed time after command execution
-    #[arg(short = 't', long = "time", global = true)]
-    timing: bool,
-
-    /// Log individual file progress during import
-    #[arg(short = 'l', long = "log", global = true)]
-    log: bool,
-
     /// Output machine-readable JSON (valid JSON on stdout, messages on stderr)
-    #[arg(long, global = true)]
+    #[arg(long, global = true, display_order = 30)]
     json: bool,
 
+    /// Log individual file progress during import
+    #[arg(short = 'l', long = "log", global = true, display_order = 40)]
+    log: bool,
+
     /// Show debug output from external tools (ffmpeg, dcraw)
-    #[arg(short = 'd', long = "debug", global = true)]
+    #[arg(short = 'd', long = "debug", global = true, display_order = 41)]
     debug: bool,
+
+    /// Show elapsed time after command execution
+    #[arg(short = 't', long = "time", global = true, display_order = 42)]
+    timing: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -45,12 +45,16 @@ enum Commands {
         /// Paths to files or directories to import
         paths: Vec<String>,
 
+        /// Import onto a specific volume (instead of auto-detecting from path)
+        #[arg(long, display_order = 10)]
+        volume: Option<String>,
+
         /// Include additional file type groups (e.g. captureone, documents)
-        #[arg(long)]
+        #[arg(long, display_order = 12)]
         include: Vec<String>,
 
         /// Skip default file type groups (e.g. audio, xmp)
-        #[arg(long)]
+        #[arg(long, display_order = 13)]
         skip: Vec<String>,
     },
 
@@ -116,19 +120,19 @@ enum Commands {
         paths: Vec<String>,
 
         /// Limit verification to a specific volume
-        #[arg(long)]
+        #[arg(long, display_order = 10)]
         volume: Option<String>,
 
         /// Verify only a specific asset
-        #[arg(long)]
+        #[arg(long, display_order = 11)]
         asset: Option<String>,
 
         /// Include additional file type groups (e.g. captureone, documents)
-        #[arg(long)]
+        #[arg(long, display_order = 12)]
         include: Vec<String>,
 
         /// Skip default file type groups (e.g. audio, xmp)
-        #[arg(long)]
+        #[arg(long, display_order = 13)]
         skip: Vec<String>,
     },
 
@@ -141,12 +145,27 @@ enum Commands {
 
     /// Generate or regenerate preview thumbnails
     GeneratePreviews {
+        /// Files or directories to generate previews for
+        paths: Vec<String>,
+
+        /// Limit to variants on a specific volume
+        #[arg(long, display_order = 10)]
+        volume: Option<String>,
+
         /// Only generate preview for a specific asset
-        #[arg(long)]
+        #[arg(long, display_order = 11)]
         asset: Option<String>,
 
+        /// Include additional file type groups (e.g. captureone, documents)
+        #[arg(long, display_order = 12)]
+        include: Vec<String>,
+
+        /// Skip default file type groups (e.g. audio, xmp)
+        #[arg(long, display_order = 13)]
+        skip: Vec<String>,
+
         /// Force regeneration even if previews already exist
-        #[arg(long)]
+        #[arg(long, display_order = 20)]
         force: bool,
     },
 
@@ -282,6 +301,7 @@ fn main() {
         },
         Commands::Import {
             paths,
+            volume,
             include,
             skip,
         } => {
@@ -323,8 +343,12 @@ fn main() {
                 anyhow::bail!("No paths specified for import.");
             }
 
-            // Find which volume contains the first path
-            let volume = registry.find_volume_for_path(&canonical_paths[0])?;
+            // Resolve volume: explicit --volume flag, or auto-detect from path
+            let volume = if let Some(label) = &volume {
+                registry.resolve_volume(label)?
+            } else {
+                registry.find_volume_for_path(&canonical_paths[0])?
+            };
 
             let service = AssetService::new(&catalog_root, cli.debug);
             let result = if cli.log {
@@ -822,64 +846,159 @@ fn main() {
             }
             Ok(())
         }
-        Commands::GeneratePreviews { asset, force } => {
+        Commands::GeneratePreviews { paths, asset, volume, include, skip, force } => {
+            use dam::asset_service::FileTypeFilter;
+
             let catalog_root = dam::config::find_catalog_root()?;
             let preview_gen = dam::preview::PreviewGenerator::new(&catalog_root, cli.debug);
             let metadata_store = MetadataStore::new(&catalog_root);
             let registry = dam::device_registry::DeviceRegistry::new(&catalog_root);
+            let catalog = dam::catalog::Catalog::open(&catalog_root)?;
             let volumes = registry.list()?;
 
-            let assets = if let Some(asset_id) = &asset {
-                let engine = QueryEngine::new(&catalog_root);
-                let details = engine.show(asset_id)?;
-                let uuid: uuid::Uuid = details.id.parse()?;
-                vec![metadata_store.load(uuid)?]
-            } else {
-                let summaries = metadata_store.list()?;
-                summaries
-                    .iter()
-                    .map(|s| metadata_store.load(s.id))
-                    .collect::<Result<Vec<_>, _>>()?
-            };
+            // Build file type filter
+            let mut filter = FileTypeFilter::default();
+            for group in &include {
+                if skip.contains(group) {
+                    anyhow::bail!(
+                        "Group '{}' cannot be both included and skipped.",
+                        group
+                    );
+                }
+            }
+            for group in &include {
+                filter.include(group)?;
+            }
+            for group in &skip {
+                filter.skip(group)?;
+            }
 
             let mut generated = 0usize;
             let mut skipped = 0usize;
             let mut failed = 0usize;
 
-            for asset in &assets {
-                // Use the primary (first) variant
-                if let Some(variant) = asset.variants.first() {
-                    // Try to find a reachable file for this variant
-                    let source_path = variant.locations.iter().find_map(|loc| {
-                        volumes.iter().find_map(|v| {
-                            if v.id == loc.volume_id && v.is_online {
-                                let full = v.mount_point.join(&loc.relative_path);
-                                if full.exists() { Some(full) } else { None }
-                            } else {
-                                None
-                            }
-                        })
-                    });
+            // Canonicalize input paths
+            let canonical_paths: Vec<PathBuf> = paths
+                .iter()
+                .map(|p| {
+                    std::fs::canonicalize(p)
+                        .unwrap_or_else(|_| PathBuf::from(p))
+                })
+                .collect();
 
-                    if let Some(path) = source_path {
+            if !canonical_paths.is_empty() {
+                // PATHS mode: resolve files, look up each in catalog
+                let files = dam::asset_service::resolve_files(&canonical_paths);
+
+                for file_path in &files {
+                    // Filter by extension
+                    let ext = file_path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("");
+                    if !ext.is_empty() && !filter.is_importable(ext) {
+                        continue;
+                    }
+
+                    // Find which volume this file is on
+                    let vol = volumes.iter().find(|v| file_path.starts_with(&v.mount_point));
+                    let vol = match vol {
+                        Some(v) => v,
+                        None => continue,
+                    };
+
+                    let relative_path = file_path
+                        .strip_prefix(&vol.mount_point)
+                        .unwrap_or(file_path);
+
+                    // Look up variant in catalog
+                    if let Some((content_hash, format)) = catalog.find_variant_by_volume_and_path(
+                        &vol.id.to_string(),
+                        &relative_path.to_string_lossy(),
+                    )? {
                         let result = if force {
-                            preview_gen.regenerate(&variant.content_hash, &path, &variant.format)
+                            preview_gen.regenerate(&content_hash, file_path, &format)
                         } else {
-                            preview_gen.generate(&variant.content_hash, &path, &variant.format)
+                            preview_gen.generate(&content_hash, file_path, &format)
                         };
                         match result {
                             Ok(Some(_)) => generated += 1,
                             Ok(None) => skipped += 1,
                             Err(e) => {
-                                eprintln!("  Failed for {}: {e:#}", asset.id);
+                                eprintln!("  Failed for {}: {e:#}", file_path.display());
                                 failed += 1;
                             }
+                        }
+                    }
+                }
+            } else {
+                // Catalog mode: iterate assets
+                let volume_filter = match &volume {
+                    Some(label) => Some(registry.resolve_volume(label)?),
+                    None => None,
+                };
+
+                let assets = if let Some(asset_id) = &asset {
+                    let engine = QueryEngine::new(&catalog_root);
+                    let details = engine.show(asset_id)?;
+                    let uuid: uuid::Uuid = details.id.parse()?;
+                    vec![metadata_store.load(uuid)?]
+                } else {
+                    let summaries = metadata_store.list()?;
+                    summaries
+                        .iter()
+                        .map(|s| metadata_store.load(s.id))
+                        .collect::<Result<Vec<_>, _>>()?
+                };
+
+                for asset_data in &assets {
+                    // Use the primary (first) variant
+                    if let Some(variant) = asset_data.variants.first() {
+                        // Apply format filter
+                        let ext = &variant.format;
+                        if !ext.is_empty() && !filter.is_importable(ext) {
+                            skipped += 1;
+                            continue;
+                        }
+
+                        // Try to find a reachable file for this variant
+                        let source_path = variant.locations.iter().find_map(|loc| {
+                            // Apply volume filter
+                            if let Some(ref vf) = volume_filter {
+                                if loc.volume_id != vf.id {
+                                    return None;
+                                }
+                            }
+                            volumes.iter().find_map(|v| {
+                                if v.id == loc.volume_id && v.is_online {
+                                    let full = v.mount_point.join(&loc.relative_path);
+                                    if full.exists() { Some(full) } else { None }
+                                } else {
+                                    None
+                                }
+                            })
+                        });
+
+                        if let Some(path) = source_path {
+                            let result = if force {
+                                preview_gen.regenerate(&variant.content_hash, &path, &variant.format)
+                            } else {
+                                preview_gen.generate(&variant.content_hash, &path, &variant.format)
+                            };
+                            match result {
+                                Ok(Some(_)) => generated += 1,
+                                Ok(None) => skipped += 1,
+                                Err(e) => {
+                                    eprintln!("  Failed for {}: {e:#}", asset_data.id);
+                                    failed += 1;
+                                }
+                            }
+                        } else {
+                            skipped += 1;
                         }
                     } else {
                         skipped += 1;
                     }
-                } else {
-                    skipped += 1;
                 }
             }
 

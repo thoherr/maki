@@ -1592,7 +1592,7 @@ fn group_by_stem(files: &[PathBuf], filter: &FileTypeFilter) -> Vec<StemGroup> {
 
 /// Expand paths: if a path is a directory, recurse into it collecting files.
 /// Skips hidden files/directories (starting with '.').
-fn resolve_files(paths: &[PathBuf]) -> Vec<PathBuf> {
+pub fn resolve_files(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut result = Vec::new();
     for path in paths {
         if path.is_dir() {

@@ -1474,3 +1474,94 @@ fn debug_flag_accepted() {
         .assert()
         .success();
 }
+
+#[test]
+fn import_with_volume_flag() {
+    let dir = tempdir().unwrap();
+    let (root, vol1, _vol2) = init_two_volumes(dir.path());
+
+    create_test_file(&vol1, "explicit_vol.jpg", b"explicit volume test data");
+
+    // Import with explicit --volume instead of auto-detect
+    dam()
+        .current_dir(&root)
+        .args([
+            "import",
+            "--volume",
+            "vol1",
+            vol1.join("explicit_vol.jpg").to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 imported"));
+
+    // Verify it landed on vol1
+    let output = dam()
+        .current_dir(&root)
+        .args(["search", "explicit_vol"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let short_id = stdout.split_whitespace().next().expect("search returned an ID");
+
+    dam()
+        .current_dir(&root)
+        .args(["show", short_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("vol1"));
+}
+
+#[test]
+fn generate_previews_with_volume_filter() {
+    let dir = tempdir().unwrap();
+    let (root, vol1, vol2) = init_two_volumes(dir.path());
+
+    create_test_file(&vol1, "vol1_photo.jpg", b"vol1 preview data");
+    create_test_file(&vol2, "vol2_photo.jpg", b"vol2 preview data");
+
+    // Import both
+    dam()
+        .current_dir(&root)
+        .args(["import", vol1.join("vol1_photo.jpg").to_str().unwrap()])
+        .assert()
+        .success();
+    dam()
+        .current_dir(&root)
+        .args(["import", vol2.join("vol2_photo.jpg").to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Generate previews only for vol1
+    dam()
+        .current_dir(&root)
+        .args(["generate-previews", "--volume", "vol1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("preview(s)"));
+}
+
+#[test]
+fn generate_previews_with_paths() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let sub = root.join("photos");
+    std::fs::create_dir_all(&sub).unwrap();
+    create_test_file(&sub, "path_test.jpg", b"path preview data");
+
+    // Import first
+    dam()
+        .current_dir(&root)
+        .args(["import", sub.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Generate previews using PATHS mode
+    dam()
+        .current_dir(&root)
+        .args(["generate-previews", sub.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("preview(s)"));
+}

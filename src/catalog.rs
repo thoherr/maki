@@ -759,6 +759,26 @@ impl Catalog {
         Ok(())
     }
 
+    /// Find a variant by its exact volume + relative_path.
+    /// Returns `(content_hash, format)`.
+    pub fn find_variant_by_volume_and_path(
+        &self,
+        volume_id: &str,
+        relative_path: &str,
+    ) -> Result<Option<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT v.content_hash, v.format FROM file_locations fl \
+             JOIN variants v ON fl.content_hash = v.content_hash \
+             WHERE fl.volume_id = ?1 AND fl.relative_path = ?2 \
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![volume_id, relative_path])?;
+        match rows.next()? {
+            Some(row) => Ok(Some((row.get(0)?, row.get(1)?))),
+            None => Ok(None),
+        }
+    }
+
     /// Find a variant whose file location on the given volume shares the same
     /// directory prefix and filename stem. Returns `(content_hash, asset_id)`.
     pub fn find_variant_hash_by_stem_and_directory(
