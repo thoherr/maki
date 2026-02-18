@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -69,6 +70,128 @@ pub struct RecipeDetails {
     pub recipe_type: String,
     pub content_hash: String,
     pub relative_path: Option<String>,
+}
+
+/// Top-level container for catalog statistics.
+#[derive(Debug, serde::Serialize)]
+pub struct CatalogStats {
+    pub overview: OverviewStats,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub types: Option<TypeStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volumes: Option<Vec<VolumeStats>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<TagStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verified: Option<VerificationStats>,
+}
+
+/// Overview counts for the entire catalog.
+#[derive(Debug, serde::Serialize)]
+pub struct OverviewStats {
+    pub assets: u64,
+    pub variants: u64,
+    pub recipes: u64,
+    pub volumes_total: u64,
+    pub volumes_online: u64,
+    pub volumes_offline: u64,
+    pub total_size: u64,
+}
+
+/// Breakdown by asset type and file formats.
+#[derive(Debug, serde::Serialize)]
+pub struct TypeStats {
+    pub asset_types: Vec<TypeCount>,
+    pub variant_formats: Vec<FormatCount>,
+    pub recipe_formats: Vec<FormatCount>,
+}
+
+/// A single asset-type count entry.
+#[derive(Debug, serde::Serialize)]
+pub struct TypeCount {
+    pub asset_type: String,
+    pub count: u64,
+    pub percentage: f64,
+}
+
+/// A single format count entry.
+#[derive(Debug, serde::Serialize)]
+pub struct FormatCount {
+    pub format: String,
+    pub count: u64,
+}
+
+/// Per-volume statistics.
+#[derive(Debug, serde::Serialize)]
+pub struct VolumeStats {
+    pub label: String,
+    pub volume_id: String,
+    pub is_online: bool,
+    pub assets: u64,
+    pub variants: u64,
+    pub recipes: u64,
+    pub formats: Vec<String>,
+    pub directories: u64,
+    pub size: u64,
+    pub verified_count: u64,
+    pub total_locations: u64,
+    pub verification_pct: f64,
+    pub oldest_verified_at: Option<String>,
+}
+
+/// Internal helper for per-volume data before merging with device registry.
+struct VolumeStatsRaw {
+    volume_id: String,
+    label: String,
+    assets: u64,
+    variants: u64,
+    recipes: u64,
+    formats: Vec<String>,
+    directories: u64,
+    size: u64,
+    verified_count: u64,
+    total_locations: u64,
+    oldest_verified_at: Option<String>,
+}
+
+/// Tag usage statistics.
+#[derive(Debug, serde::Serialize)]
+pub struct TagStats {
+    pub unique_tags: u64,
+    pub tagged_assets: u64,
+    pub untagged_assets: u64,
+    pub top_tags: Vec<TagCount>,
+}
+
+/// A single tag frequency entry.
+#[derive(Debug, serde::Serialize)]
+pub struct TagCount {
+    pub tag: String,
+    pub count: u64,
+}
+
+/// Verification health statistics.
+#[derive(Debug, serde::Serialize)]
+pub struct VerificationStats {
+    pub total_locations: u64,
+    pub verified_locations: u64,
+    pub unverified_locations: u64,
+    pub coverage_pct: f64,
+    pub oldest_verified_at: Option<String>,
+    pub newest_verified_at: Option<String>,
+    pub per_volume: Vec<VolumeVerificationStats>,
+}
+
+/// Per-volume verification summary.
+#[derive(Debug, serde::Serialize)]
+pub struct VolumeVerificationStats {
+    pub label: String,
+    pub volume_id: String,
+    pub is_online: bool,
+    pub locations: u64,
+    pub verified: u64,
+    pub coverage_pct: f64,
+    pub oldest_verified_at: Option<String>,
 }
 
 /// SQLite-backed local catalog for fast queries. This is a derived cache,
@@ -675,6 +798,483 @@ impl Catalog {
         )?;
         self.initialize()?;
         Ok(())
+    }
+
+    // ── Stats queries ──────────────────────────────────────────────
+
+    /// Core overview counts: (assets, variants, recipes, total_size).
+    pub fn stats_overview(&self) -> Result<(u64, u64, u64, u64)> {
+        let assets: u64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM assets", [], |r| r.get(0),
+        )?;
+        let variants: u64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM variants", [], |r| r.get(0),
+        )?;
+        let recipes: u64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM recipes", [], |r| r.get(0),
+        )?;
+        let total_size: u64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(file_size), 0) FROM variants", [], |r| r.get(0),
+        )?;
+        Ok((assets, variants, recipes, total_size))
+    }
+
+    /// Asset type breakdown: Vec<(type_name, count)>.
+    pub fn stats_asset_types(&self) -> Result<Vec<(String, u64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT asset_type, COUNT(*) FROM assets GROUP BY asset_type ORDER BY COUNT(*) DESC",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Top variant formats: Vec<(format, count)>.
+    pub fn stats_variant_formats(&self, limit: usize) -> Result<Vec<(String, u64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT format, COUNT(*) FROM variants GROUP BY format ORDER BY COUNT(*) DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![limit as u64], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// All recipe relative paths (for extension extraction in Rust).
+    pub fn stats_recipe_paths(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT relative_path FROM recipes WHERE relative_path IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Per-volume statistics (before merging device registry).
+    fn stats_per_volume(&self) -> Result<Vec<VolumeStatsRaw>> {
+        // 1. Core counts per volume
+        let mut core: HashMap<String, (String, u64, u64, u64)> = HashMap::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT fl.volume_id, v.label, COUNT(*) AS loc_count, \
+                 COUNT(DISTINCT va.asset_id) AS asset_count, \
+                 COALESCE(SUM(va.file_size), 0) AS total_size \
+                 FROM file_locations fl \
+                 JOIN volumes v ON fl.volume_id = v.id \
+                 JOIN variants va ON fl.content_hash = va.content_hash \
+                 GROUP BY fl.volume_id",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, u64>(2)?,
+                    r.get::<_, u64>(3)?,
+                    r.get::<_, u64>(4)?,
+                ))
+            })?;
+            for row in rows {
+                let (vid, label, loc_count, asset_count, size) = row?;
+                core.insert(vid, (label, loc_count, asset_count, size));
+            }
+        }
+
+        // 2. Unique variant count per volume
+        let mut variant_counts: HashMap<String, u64> = HashMap::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT volume_id, COUNT(DISTINCT content_hash) FROM file_locations GROUP BY volume_id",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u64>(1)?)))?;
+            for row in rows {
+                let (vid, count) = row?;
+                variant_counts.insert(vid, count);
+            }
+        }
+
+        // 3. Paths per volume (for directory counting)
+        let mut dirs_per_vol: HashMap<String, u64> = HashMap::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT volume_id, relative_path FROM file_locations",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            let mut vol_dirs: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+            for row in rows {
+                let (vid, path) = row?;
+                let parent = std::path::Path::new(&path)
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                vol_dirs.entry(vid).or_default().insert(parent);
+            }
+            for (vid, dirs) in vol_dirs {
+                dirs_per_vol.insert(vid, dirs.len() as u64);
+            }
+        }
+
+        // 4. Formats per volume
+        let mut formats_per_vol: HashMap<String, Vec<String>> = HashMap::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT DISTINCT fl.volume_id, va.format \
+                 FROM file_locations fl \
+                 JOIN variants va ON fl.content_hash = va.content_hash \
+                 ORDER BY fl.volume_id, va.format",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            for row in rows {
+                let (vid, fmt) = row?;
+                formats_per_vol.entry(vid).or_default().push(fmt);
+            }
+        }
+
+        // 5. Recipe count per volume
+        let mut recipes_per_vol: HashMap<String, u64> = HashMap::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT volume_id, COUNT(*) FROM recipes WHERE volume_id IS NOT NULL GROUP BY volume_id",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u64>(1)?)))?;
+            for row in rows {
+                let (vid, count) = row?;
+                recipes_per_vol.insert(vid, count);
+            }
+        }
+
+        // 6. Verification per volume
+        let mut verif_per_vol: HashMap<String, (u64, u64, Option<String>)> = HashMap::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT volume_id, \
+                 COUNT(*) AS total, \
+                 SUM(CASE WHEN verified_at IS NOT NULL THEN 1 ELSE 0 END) AS verified, \
+                 MIN(verified_at) AS oldest \
+                 FROM file_locations GROUP BY volume_id",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, u64>(1)?,
+                    r.get::<_, u64>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
+            })?;
+            for row in rows {
+                let (vid, total, verified, oldest) = row?;
+                verif_per_vol.insert(vid, (total, verified, oldest));
+            }
+        }
+
+        // Also include volumes from the volumes table that have no file_locations
+        let mut all_volume_ids: HashMap<String, String> = HashMap::new();
+        {
+            let mut stmt = self.conn.prepare("SELECT id, label FROM volumes")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            for row in rows {
+                let (vid, label) = row?;
+                all_volume_ids.insert(vid, label);
+            }
+        }
+
+        // Merge all data
+        let mut result = Vec::new();
+        for (vid, label) in &all_volume_ids {
+            let (core_label, loc_count, asset_count, size) = core
+                .get(vid)
+                .cloned()
+                .unwrap_or_else(|| (label.clone(), 0, 0, 0));
+            let _ = core_label; // use label from volumes table
+            let variants = *variant_counts.get(vid).unwrap_or(&0);
+            let dirs = *dirs_per_vol.get(vid).unwrap_or(&0);
+            let formats = formats_per_vol.remove(vid).unwrap_or_default();
+            let recipes = *recipes_per_vol.get(vid).unwrap_or(&0);
+            let (total_locs, verified, oldest) = verif_per_vol
+                .get(vid)
+                .cloned()
+                .unwrap_or((0, 0, None));
+
+            result.push(VolumeStatsRaw {
+                volume_id: vid.clone(),
+                label: label.clone(),
+                assets: asset_count,
+                variants,
+                recipes,
+                formats,
+                directories: dirs,
+                size,
+                verified_count: verified,
+                total_locations: total_locs.max(loc_count),
+                oldest_verified_at: oldest,
+            });
+        }
+
+        result.sort_by(|a, b| a.label.cmp(&b.label));
+        Ok(result)
+    }
+
+    /// All tags JSON strings from assets table (for parsing + counting in Rust).
+    pub fn stats_all_tags_json(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT tags FROM assets")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Tag coverage: (tagged_count, untagged_count).
+    pub fn stats_tag_coverage(&self) -> Result<(u64, u64)> {
+        let tagged: u64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM assets WHERE tags != '[]'", [], |r| r.get(0),
+        )?;
+        let untagged: u64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM assets WHERE tags = '[]'", [], |r| r.get(0),
+        )?;
+        Ok((tagged, untagged))
+    }
+
+    /// Verification overview for file_locations:
+    /// (total, verified, oldest_verified_at, newest_verified_at).
+    pub fn stats_verification_overview(&self) -> Result<(u64, u64, Option<String>, Option<String>)> {
+        let total: u64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM file_locations", [], |r| r.get(0),
+        )?;
+        let verified: u64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM file_locations WHERE verified_at IS NOT NULL", [], |r| r.get(0),
+        )?;
+        let oldest: Option<String> = self.conn.query_row(
+            "SELECT MIN(verified_at) FROM file_locations WHERE verified_at IS NOT NULL", [], |r| r.get(0),
+        )?;
+        let newest: Option<String> = self.conn.query_row(
+            "SELECT MAX(verified_at) FROM file_locations WHERE verified_at IS NOT NULL", [], |r| r.get(0),
+        )?;
+        Ok((total, verified, oldest, newest))
+    }
+
+    /// Verification counts for recipes: (total, verified).
+    pub fn stats_recipe_verification(&self) -> Result<(u64, u64)> {
+        let total: u64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM recipes", [], |r| r.get(0),
+        )?;
+        let verified: u64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM recipes WHERE verified_at IS NOT NULL", [], |r| r.get(0),
+        )?;
+        Ok((total, verified))
+    }
+
+    /// Per-volume verification: Vec<(label, volume_id, total, verified, oldest_verified_at)>.
+    pub fn stats_verification_per_volume(&self) -> Result<Vec<(String, String, u64, u64, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT v.label, fl.volume_id, \
+             COUNT(*) AS total, \
+             SUM(CASE WHEN fl.verified_at IS NOT NULL THEN 1 ELSE 0 END) AS verified, \
+             MIN(fl.verified_at) AS oldest \
+             FROM file_locations fl \
+             JOIN volumes v ON fl.volume_id = v.id \
+             GROUP BY fl.volume_id \
+             ORDER BY v.label",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, u64>(2)?,
+                r.get::<_, u64>(3)?,
+                r.get::<_, Option<String>>(4)?,
+            ))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Build full CatalogStats with optional sections.
+    pub fn build_stats(
+        &self,
+        volumes_info: &[(String, String, bool)], // (label, volume_id, is_online)
+        show_types: bool,
+        show_volumes: bool,
+        show_tags: bool,
+        show_verified: bool,
+        limit: usize,
+    ) -> Result<CatalogStats> {
+        let (assets, variants, recipes, total_size) = self.stats_overview()?;
+
+        let volumes_total = volumes_info.len() as u64;
+        let volumes_online = volumes_info.iter().filter(|v| v.2).count() as u64;
+        let volumes_offline = volumes_total - volumes_online;
+
+        let overview = OverviewStats {
+            assets,
+            variants,
+            recipes,
+            volumes_total,
+            volumes_online,
+            volumes_offline,
+            total_size,
+        };
+
+        let types = if show_types {
+            let asset_types_raw = self.stats_asset_types()?;
+            let total_assets = assets.max(1) as f64;
+            let asset_types: Vec<TypeCount> = asset_types_raw
+                .into_iter()
+                .map(|(t, c)| TypeCount {
+                    asset_type: t,
+                    count: c,
+                    percentage: (c as f64 / total_assets) * 100.0,
+                })
+                .collect();
+
+            let variant_formats: Vec<FormatCount> = self
+                .stats_variant_formats(limit)?
+                .into_iter()
+                .map(|(f, c)| FormatCount { format: f, count: c })
+                .collect();
+
+            let recipe_paths = self.stats_recipe_paths()?;
+            let mut recipe_ext_counts: HashMap<String, u64> = HashMap::new();
+            for path in &recipe_paths {
+                let ext = std::path::Path::new(path)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("unknown")
+                    .to_lowercase();
+                *recipe_ext_counts.entry(ext).or_default() += 1;
+            }
+            let mut recipe_formats: Vec<FormatCount> = recipe_ext_counts
+                .into_iter()
+                .map(|(f, c)| FormatCount { format: f, count: c })
+                .collect();
+            recipe_formats.sort_by(|a, b| b.count.cmp(&a.count));
+            if recipe_formats.len() > limit {
+                recipe_formats.truncate(limit);
+            }
+
+            Some(TypeStats {
+                asset_types,
+                variant_formats,
+                recipe_formats,
+            })
+        } else {
+            None
+        };
+
+        let volumes = if show_volumes {
+            let raw = self.stats_per_volume()?;
+            let vol_stats: Vec<VolumeStats> = raw
+                .into_iter()
+                .map(|r| {
+                    let is_online = volumes_info
+                        .iter()
+                        .find(|v| v.1 == r.volume_id)
+                        .map(|v| v.2)
+                        .unwrap_or(false);
+                    let verification_pct = if r.total_locations > 0 {
+                        (r.verified_count as f64 / r.total_locations as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+                    VolumeStats {
+                        label: r.label,
+                        volume_id: r.volume_id,
+                        is_online,
+                        assets: r.assets,
+                        variants: r.variants,
+                        recipes: r.recipes,
+                        formats: r.formats,
+                        directories: r.directories,
+                        size: r.size,
+                        verified_count: r.verified_count,
+                        total_locations: r.total_locations,
+                        verification_pct,
+                        oldest_verified_at: r.oldest_verified_at,
+                    }
+                })
+                .collect();
+            Some(vol_stats)
+        } else {
+            None
+        };
+
+        let tags = if show_tags {
+            let (tagged, untagged) = self.stats_tag_coverage()?;
+            let all_tags_json = self.stats_all_tags_json()?;
+            let mut tag_freq: HashMap<String, u64> = HashMap::new();
+            for tags_str in &all_tags_json {
+                if let Ok(tags) = serde_json::from_str::<Vec<String>>(tags_str) {
+                    for tag in tags {
+                        *tag_freq.entry(tag).or_default() += 1;
+                    }
+                }
+            }
+            let unique_tags = tag_freq.len() as u64;
+            let mut sorted: Vec<(String, u64)> = tag_freq.into_iter().collect();
+            sorted.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            if sorted.len() > limit {
+                sorted.truncate(limit);
+            }
+            let top_tags: Vec<TagCount> = sorted
+                .into_iter()
+                .map(|(tag, count)| TagCount { tag, count })
+                .collect();
+
+            Some(TagStats {
+                unique_tags,
+                tagged_assets: tagged,
+                untagged_assets: untagged,
+                top_tags,
+            })
+        } else {
+            None
+        };
+
+        let verified = if show_verified {
+            let (total, verified_count, oldest, newest) = self.stats_verification_overview()?;
+            let coverage_pct = if total > 0 {
+                (verified_count as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            let per_volume_raw = self.stats_verification_per_volume()?;
+            let per_volume: Vec<VolumeVerificationStats> = per_volume_raw
+                .into_iter()
+                .map(|(label, vid, total, verified, oldest)| {
+                    let is_online = volumes_info
+                        .iter()
+                        .find(|v| v.1 == vid)
+                        .map(|v| v.2)
+                        .unwrap_or(false);
+                    let cov = if total > 0 {
+                        (verified as f64 / total as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+                    VolumeVerificationStats {
+                        label,
+                        volume_id: vid,
+                        is_online,
+                        locations: total,
+                        verified,
+                        coverage_pct: cov,
+                        oldest_verified_at: oldest,
+                    }
+                })
+                .collect();
+
+            Some(VerificationStats {
+                total_locations: total,
+                verified_locations: verified_count,
+                unverified_locations: total - verified_count,
+                coverage_pct,
+                oldest_verified_at: oldest,
+                newest_verified_at: newest,
+                per_volume,
+            })
+        } else {
+            None
+        };
+
+        Ok(CatalogStats {
+            overview,
+            types,
+            volumes,
+            tags,
+            verified,
+        })
     }
 }
 
@@ -1581,5 +2181,215 @@ mod tests {
             )
             .unwrap();
         assert!(result.is_none());
+    }
+
+    // ── Stats tests ──────────────────────────────────────────────
+
+    #[test]
+    fn stats_overview_empty_catalog() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let (assets, variants, recipes, size) = catalog.stats_overview().unwrap();
+        assert_eq!(assets, 0);
+        assert_eq!(variants, 0);
+        assert_eq!(recipes, 0);
+        assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn stats_overview_with_data() {
+        let catalog = setup_search_catalog();
+
+        let (assets, variants, recipes, size) = catalog.stats_overview().unwrap();
+        assert_eq!(assets, 2);
+        assert_eq!(variants, 2);
+        assert_eq!(recipes, 0);
+        assert_eq!(size, 105_000); // 5000 + 100_000
+    }
+
+    #[test]
+    fn stats_asset_types_groups_correctly() {
+        let catalog = setup_search_catalog();
+
+        let types = catalog.stats_asset_types().unwrap();
+        assert_eq!(types.len(), 2);
+        // Both should be present (image, video)
+        let type_names: Vec<&str> = types.iter().map(|t| t.0.as_str()).collect();
+        assert!(type_names.contains(&"image"));
+        assert!(type_names.contains(&"video"));
+    }
+
+    #[test]
+    fn stats_variant_formats_respects_limit() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        // Insert 3 variants with different formats
+        for (i, fmt) in ["jpg", "png", "tiff"].iter().enumerate() {
+            let hash = format!("sha256:limit{i}");
+            let asset = crate::models::Asset::new(crate::models::AssetType::Image, &hash);
+            catalog.insert_asset(&asset).unwrap();
+            let variant = crate::models::Variant {
+                content_hash: hash,
+                asset_id: asset.id,
+                role: crate::models::VariantRole::Original,
+                format: fmt.to_string(),
+                file_size: 100,
+                original_filename: format!("file.{fmt}"),
+                source_metadata: Default::default(),
+                locations: vec![],
+            };
+            catalog.insert_variant(&variant).unwrap();
+        }
+
+        let formats = catalog.stats_variant_formats(2).unwrap();
+        assert_eq!(formats.len(), 2); // limited to 2
+    }
+
+    #[test]
+    fn stats_tag_coverage_counts_correctly() {
+        let catalog = setup_search_catalog();
+
+        let (tagged, untagged) = catalog.stats_tag_coverage().unwrap();
+        // setup_search_catalog: asset1 has tags, asset2 has empty tags
+        assert_eq!(tagged, 1);
+        assert_eq!(untagged, 1);
+    }
+
+    #[test]
+    fn stats_per_volume_computes_directories() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let volume = crate::models::Volume::new(
+            "vol".to_string(),
+            std::path::PathBuf::from("/mnt/vol"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:dirs1");
+        catalog.insert_asset(&asset).unwrap();
+
+        // Two variants in different directories
+        for (i, path) in ["photos/a.jpg", "archive/b.jpg"].iter().enumerate() {
+            let hash = format!("sha256:dirs{}", i + 1);
+            if i > 0 {
+                let a2 = crate::models::Asset::new(crate::models::AssetType::Image, &hash);
+                catalog.insert_asset(&a2).unwrap();
+                let v = crate::models::Variant {
+                    content_hash: hash.clone(),
+                    asset_id: a2.id,
+                    role: crate::models::VariantRole::Original,
+                    format: "jpg".to_string(),
+                    file_size: 100,
+                    original_filename: "b.jpg".to_string(),
+                    source_metadata: Default::default(),
+                    locations: vec![],
+                };
+                catalog.insert_variant(&v).unwrap();
+            } else {
+                let v = crate::models::Variant {
+                    content_hash: hash.clone(),
+                    asset_id: asset.id,
+                    role: crate::models::VariantRole::Original,
+                    format: "jpg".to_string(),
+                    file_size: 100,
+                    original_filename: "a.jpg".to_string(),
+                    source_metadata: Default::default(),
+                    locations: vec![],
+                };
+                catalog.insert_variant(&v).unwrap();
+            }
+            let loc = crate::models::FileLocation {
+                volume_id: volume.id,
+                relative_path: std::path::PathBuf::from(path),
+                verified_at: None,
+            };
+            catalog.insert_file_location(&format!("sha256:dirs{}", i + 1), &loc).unwrap();
+        }
+
+        let raw = catalog.stats_per_volume().unwrap();
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].directories, 2); // "photos" and "archive"
+        assert_eq!(raw[0].total_locations, 2);
+    }
+
+    #[test]
+    fn stats_verification_overview_correct() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let volume = crate::models::Volume::new(
+            "vol".to_string(),
+            std::path::PathBuf::from("/mnt/vol"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+
+        // Two variants, one with verified_at set
+        let a1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:v1");
+        catalog.insert_asset(&a1).unwrap();
+        let v1 = crate::models::Variant {
+            content_hash: "sha256:v1".to_string(),
+            asset_id: a1.id,
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 100,
+            original_filename: "a.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        catalog.insert_variant(&v1).unwrap();
+        let loc1 = crate::models::FileLocation {
+            volume_id: volume.id,
+            relative_path: std::path::PathBuf::from("a.jpg"),
+            verified_at: Some(chrono::Utc::now()),
+        };
+        catalog.insert_file_location("sha256:v1", &loc1).unwrap();
+
+        let a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:v2");
+        catalog.insert_asset(&a2).unwrap();
+        let v2 = crate::models::Variant {
+            content_hash: "sha256:v2".to_string(),
+            asset_id: a2.id,
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 200,
+            original_filename: "b.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        catalog.insert_variant(&v2).unwrap();
+        let loc2 = crate::models::FileLocation {
+            volume_id: volume.id,
+            relative_path: std::path::PathBuf::from("b.jpg"),
+            verified_at: None,
+        };
+        catalog.insert_file_location("sha256:v2", &loc2).unwrap();
+
+        let (total, verified, oldest, newest) = catalog.stats_verification_overview().unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(verified, 1);
+        assert!(oldest.is_some());
+        assert!(newest.is_some());
+    }
+
+    #[test]
+    fn build_stats_empty_catalog() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let stats = catalog.build_stats(&[], true, true, true, true, 20).unwrap();
+        assert_eq!(stats.overview.assets, 0);
+        assert_eq!(stats.overview.variants, 0);
+        assert_eq!(stats.overview.recipes, 0);
+        assert_eq!(stats.overview.total_size, 0);
+        assert_eq!(stats.overview.volumes_total, 0);
+        assert!(stats.types.unwrap().asset_types.is_empty());
+        assert!(stats.volumes.unwrap().is_empty());
+        assert_eq!(stats.tags.as_ref().unwrap().unique_tags, 0);
+        assert_eq!(stats.verified.as_ref().unwrap().total_locations, 0);
     }
 }

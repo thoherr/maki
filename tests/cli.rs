@@ -1290,3 +1290,167 @@ fn duplicates_format_json() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     assert!(parsed.is_array());
 }
+
+// ─── Stats tests ────────────────────────────────────────────────
+
+#[test]
+fn stats_shows_overview() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "photo.jpg", b"stats overview data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .arg("stats")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Catalog Overview")
+                .and(predicate::str::contains("Assets:"))
+                .and(predicate::str::contains("Variants:"))
+                .and(predicate::str::contains("Volumes:")),
+        );
+}
+
+#[test]
+fn stats_empty_catalog() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    dam()
+        .current_dir(&root)
+        .arg("stats")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Assets:    0")
+                .and(predicate::str::contains("Variants:  0")),
+        );
+}
+
+#[test]
+fn stats_all_shows_all_sections() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "photo.jpg", b"stats all data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .args(["stats", "--all"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Catalog Overview")
+                .and(predicate::str::contains("Asset Types"))
+                .and(predicate::str::contains("Volumes"))
+                .and(predicate::str::contains("Tags"))
+                .and(predicate::str::contains("Verification")),
+        );
+}
+
+#[test]
+fn stats_types_flag() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "photo.jpg", b"stats types data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .args(["stats", "--types"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Asset Types")
+                .and(predicate::str::contains("image"))
+                .and(predicate::str::contains("Variant Formats"))
+                .and(predicate::str::contains("jpg")),
+        );
+}
+
+#[test]
+fn stats_json_output() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "photo.jpg", b"stats json data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "stats", "--all"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert!(parsed["overview"]["assets"].is_number());
+    assert_eq!(parsed["overview"]["assets"].as_u64(), Some(1));
+    assert!(parsed["types"]["asset_types"].is_array());
+    assert!(parsed["volumes"].is_array());
+    assert!(parsed["tags"]["unique_tags"].is_number());
+    assert!(parsed["verified"]["total_locations"].is_number());
+}
+
+#[test]
+fn stats_tags_shows_frequencies() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "photo.jpg", b"stats tags data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Get asset ID and add tags
+    let output = dam()
+        .current_dir(&root)
+        .args(["search", "-q", "type:image"])
+        .output()
+        .unwrap();
+    let asset_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    dam()
+        .current_dir(&root)
+        .args(["tag", &asset_id, "landscape", "sunset"])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .args(["stats", "--tags"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Tags")
+                .and(predicate::str::contains("Tagged assets:   1"))
+                .and(predicate::str::contains("landscape"))
+                .and(predicate::str::contains("sunset")),
+        );
+}

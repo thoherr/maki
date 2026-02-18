@@ -148,6 +148,33 @@ enum Commands {
 
     /// Rebuild SQLite catalog from sidecar files
     RebuildCatalog,
+
+    /// Show catalog statistics
+    Stats {
+        /// Show asset type and format breakdown
+        #[arg(long)]
+        types: bool,
+
+        /// Show per-volume details
+        #[arg(long)]
+        volumes: bool,
+
+        /// Show tag usage statistics
+        #[arg(long)]
+        tags: bool,
+
+        /// Show verification health
+        #[arg(long)]
+        verified: bool,
+
+        /// Show all sections
+        #[arg(long)]
+        all: bool,
+
+        /// Max entries for top-N lists (default: 20)
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -897,6 +924,38 @@ fn main() {
             }
             Ok(())
         }
+        Commands::Stats { types, volumes, tags, verified, all, limit } => {
+            let catalog_root = dam::config::find_catalog_root()?;
+            let catalog = Catalog::open(&catalog_root)?;
+            let registry = DeviceRegistry::new(&catalog_root);
+            let vol_list = registry.list()?;
+
+            let volumes_info: Vec<(String, String, bool)> = vol_list
+                .iter()
+                .map(|v| (v.label.clone(), v.id.to_string(), v.is_online))
+                .collect();
+
+            let show_types = types || all;
+            let show_volumes = volumes || all;
+            let show_tags = tags || all;
+            let show_verified = verified || all;
+
+            let stats = catalog.build_stats(
+                &volumes_info,
+                show_types,
+                show_volumes,
+                show_tags,
+                show_verified,
+                limit,
+            )?;
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&stats)?);
+            } else {
+                print_stats_human(&stats);
+            }
+            Ok(())
+        }
     })();
 
     if cli.timing {
@@ -938,5 +997,88 @@ fn format_size(bytes: u64) -> String {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else {
         format!("{bytes} B")
+    }
+}
+
+fn print_stats_human(stats: &dam::catalog::CatalogStats) {
+    let o = &stats.overview;
+    println!("Catalog Overview");
+    println!("  Assets:    {}", o.assets);
+    println!("  Variants:  {}", o.variants);
+    println!("  Recipes:   {}", o.recipes);
+    println!("  Volumes:   {} ({} online, {} offline)", o.volumes_total, o.volumes_online, o.volumes_offline);
+    println!("  Total size: {}", format_size(o.total_size));
+
+    if let Some(types) = &stats.types {
+        println!("\nAsset Types");
+        for t in &types.asset_types {
+            println!("  {:<12} {:>6}  ({:.1}%)", t.asset_type, t.count, t.percentage);
+        }
+        if !types.variant_formats.is_empty() {
+            println!("\nVariant Formats");
+            for f in &types.variant_formats {
+                println!("  {:<12} {:>6}", f.format, f.count);
+            }
+        }
+        if !types.recipe_formats.is_empty() {
+            println!("\nRecipe Formats");
+            for f in &types.recipe_formats {
+                println!("  {:<12} {:>6}", f.format, f.count);
+            }
+        }
+    }
+
+    if let Some(volumes) = &stats.volumes {
+        println!("\nVolumes");
+        for v in volumes {
+            let status = if v.is_online { "online" } else { "offline" };
+            println!("  {} [{}]", v.label, status);
+            println!("    Assets: {}  Variants: {}  Recipes: {}", v.assets, v.variants, v.recipes);
+            println!("    Size: {}  Directories: {}", format_size(v.size), v.directories);
+            if !v.formats.is_empty() {
+                println!("    Formats: {}", v.formats.join(", "));
+            }
+            println!("    Verified: {}/{} ({:.1}%)", v.verified_count, v.total_locations, v.verification_pct);
+            if let Some(oldest) = &v.oldest_verified_at {
+                println!("    Oldest verification: {oldest}");
+            }
+        }
+    }
+
+    if let Some(tags) = &stats.tags {
+        println!("\nTags");
+        println!("  Unique tags:     {}", tags.unique_tags);
+        println!("  Tagged assets:   {}", tags.tagged_assets);
+        println!("  Untagged assets: {}", tags.untagged_assets);
+        if !tags.top_tags.is_empty() {
+            println!("\n  Top Tags");
+            for t in &tags.top_tags {
+                println!("    {:<20} {:>4}", t.tag, t.count);
+            }
+        }
+    }
+
+    if let Some(v) = &stats.verified {
+        println!("\nVerification");
+        println!("  Total locations:    {}", v.total_locations);
+        println!("  Verified:           {}", v.verified_locations);
+        println!("  Unverified:         {}", v.unverified_locations);
+        println!("  Coverage:           {:.1}%", v.coverage_pct);
+        if let Some(oldest) = &v.oldest_verified_at {
+            println!("  Oldest verified:    {oldest}");
+        }
+        if let Some(newest) = &v.newest_verified_at {
+            println!("  Newest verified:    {newest}");
+        }
+        if !v.per_volume.is_empty() {
+            println!("\n  Per Volume");
+            for pv in &v.per_volume {
+                let status = if pv.is_online { "online" } else { "offline" };
+                println!(
+                    "    {} [{}]: {}/{} ({:.1}%)",
+                    pv.label, status, pv.verified, pv.locations, pv.coverage_pct
+                );
+            }
+        }
     }
 }
