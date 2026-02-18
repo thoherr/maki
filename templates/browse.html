@@ -7,7 +7,7 @@
       hx-get="/api/search"
       hx-target="#results"
       hx-push-url="true"
-      hx-vals='js:{"q": document.querySelector("[name=q]").value, "type": document.querySelector("[name=type]").value, "tag": document.querySelector("[name=tag]").value, "format": document.querySelector("[name=format]").value, "volume": document.querySelector("[name=volume]").value, "rating": document.querySelector("[name=rating]").value, "sort": document.querySelector("[name=sort]").value, "page": "1"}'>
+      hx-vals='js:{"q": document.querySelector("[name=q]").value, "type": document.querySelector("[name=type]").value, "tag": getSelectedTags().join(","), "format": document.querySelector("[name=format]").value, "volume": (document.querySelector("[name=volume]") || {value:""}).value, "rating": document.querySelector("[name=rating]").value, "sort": document.querySelector("[name=sort]").value, "page": "1"}'>
     <input type="text" name="q" placeholder="Search assets..." value="{{ query }}" autocomplete="off">
     <select name="type">
         <option value="">All types</option>
@@ -16,12 +16,11 @@
         <option value="audio"{% if asset_type == "audio" %} selected{% endif %}>Audio</option>
         <option value="document"{% if asset_type == "document" %} selected{% endif %}>Document</option>
     </select>
-    <select name="tag">
-        <option value="">All tags</option>
-        {% for t in all_tags %}
-        <option value="{{ t.name }}"{% if tag == t.name %} selected{% endif %}>{{ t.name }} ({{ t.count }})</option>
-        {% endfor %}
-    </select>
+    <div class="tag-filter" id="tag-filter">
+        <div class="tag-filter-chips" id="tag-chips"></div>
+        <input type="text" class="tag-filter-input" id="tag-input" placeholder="Filter by tags..." autocomplete="off">
+        <div class="tag-autocomplete" id="tag-autocomplete"></div>
+    </div>
     <select name="format">
         <option value="">All formats</option>
         {% for f in all_formats %}
@@ -57,4 +56,174 @@
 <div id="results">
     {% include "results.html" %}
 </div>
+
+<script>
+(function() {
+    var allTags = [];
+    var initialTagStr = "{{ tag }}";
+
+    function fetchTags() {
+        fetch('/api/tags')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                allTags = data.map(function(t) { return t[0]; });
+            });
+    }
+
+    function getSelectedTags() {
+        var chips = document.querySelectorAll('#tag-chips .tag-chip');
+        var tags = [];
+        chips.forEach(function(c) { tags.push(c.getAttribute('data-tag')); });
+        return tags;
+    }
+
+    function renderChips() {
+        var container = document.getElementById('tag-chips');
+        var tags = getSelectedTags();
+        // Clear and re-render isn't needed; we add/remove individually
+        return tags;
+    }
+
+    function addTag(name) {
+        name = name.trim();
+        if (!name) return;
+        var existing = getSelectedTags();
+        if (existing.indexOf(name) !== -1) return;
+
+        var chip = document.createElement('span');
+        chip.className = 'tag-chip';
+        chip.setAttribute('data-tag', name);
+        chip.textContent = name;
+
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'remove-tag';
+        btn.innerHTML = '&times;';
+        btn.onclick = function() {
+            chip.remove();
+            triggerSearch();
+        };
+        chip.appendChild(btn);
+
+        document.getElementById('tag-chips').appendChild(chip);
+        document.getElementById('tag-input').value = '';
+        hideAutocomplete();
+    }
+
+    function addTagAndSearch(name) {
+        addTag(name);
+        triggerSearch();
+    }
+
+    function triggerSearch() {
+        var form = document.querySelector('.search-bar');
+        if (form) htmx.trigger(form, 'submit');
+    }
+
+    function showSuggestions(query) {
+        var ac = document.getElementById('tag-autocomplete');
+        var selected = getSelectedTags();
+        query = query.toLowerCase();
+
+        var matches = allTags.filter(function(t) {
+            return t.toLowerCase().indexOf(query) !== -1 && selected.indexOf(t) === -1;
+        }).slice(0, 10);
+
+        if (matches.length === 0) {
+            ac.style.display = 'none';
+            return;
+        }
+
+        ac.innerHTML = '';
+        matches.forEach(function(t) {
+            var div = document.createElement('div');
+            div.className = 'tag-suggestion';
+            div.textContent = t;
+            div.onmousedown = function(e) {
+                e.preventDefault();
+                addTagAndSearch(t);
+            };
+            ac.appendChild(div);
+        });
+        ac.style.display = 'block';
+    }
+
+    function hideAutocomplete() {
+        document.getElementById('tag-autocomplete').style.display = 'none';
+    }
+
+    // Event handlers
+    var input = document.getElementById('tag-input');
+
+    input.addEventListener('input', function() {
+        var val = this.value.trim();
+        if (val.length > 0) {
+            showSuggestions(val);
+        } else {
+            hideAutocomplete();
+        }
+    });
+
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            var val = this.value.trim();
+            if (val) {
+                addTagAndSearch(val);
+            }
+        } else if (e.key === 'Backspace' && this.value === '') {
+            var chips = document.querySelectorAll('#tag-chips .tag-chip');
+            if (chips.length > 0) {
+                chips[chips.length - 1].remove();
+                triggerSearch();
+            }
+        }
+    });
+
+    input.addEventListener('blur', function() {
+        // Small delay so click on suggestion registers first
+        setTimeout(hideAutocomplete, 150);
+    });
+
+    input.addEventListener('focus', function() {
+        var val = this.value.trim();
+        if (val.length > 0) {
+            showSuggestions(val);
+        }
+    });
+
+    // Prevent form submit on Enter in tag input
+    input.closest('form').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && e.target === input) {
+            e.preventDefault();
+        }
+    });
+
+    // Handle popstate (browser back/forward)
+    window.addEventListener('popstate', function() {
+        var params = new URLSearchParams(window.location.search);
+        var tagParam = params.get('tag') || '';
+        var container = document.getElementById('tag-chips');
+        container.innerHTML = '';
+        if (tagParam) {
+            tagParam.split(',').forEach(function(t) {
+                t = t.trim();
+                if (t) addTag(t);
+            });
+        }
+    });
+
+    // Initialize
+    fetchTags();
+    if (initialTagStr) {
+        initialTagStr.split(',').forEach(function(t) {
+            t = t.trim();
+            if (t) addTag(t);
+        });
+    }
+
+    // Expose for hx-vals
+    window.getSelectedTags = getSelectedTags;
+})();
+</script>
 {% endblock %}

@@ -476,8 +476,13 @@ impl Catalog {
             params.push(Box::new(asset_type.to_lowercase()));
         }
         if let Some(tag) = tag {
-            sql.push_str(" AND a.tags LIKE ?");
-            params.push(Box::new(format!("%{tag}%")));
+            for t in tag.split(',') {
+                let t = t.trim();
+                if !t.is_empty() {
+                    sql.push_str(" AND a.tags LIKE ?");
+                    params.push(Box::new(format!("%\"{t}\"%")));
+                }
+            }
         }
         if let Some(format_filter) = format {
             sql.push_str(" AND v.format = ?");
@@ -1002,8 +1007,13 @@ impl Catalog {
         }
         if let Some(tag) = opts.tag {
             if !tag.is_empty() {
-                sql.push_str(" AND a.tags LIKE ?");
-                params.push(Box::new(format!("%\"{tag}\"%")));
+                for t in tag.split(',') {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        sql.push_str(" AND a.tags LIKE ?");
+                        params.push(Box::new(format!("%\"{t}\"%")));
+                    }
+                }
             }
         }
         if let Some(format_filter) = opts.format {
@@ -1095,8 +1105,13 @@ impl Catalog {
         }
         if let Some(tag) = opts.tag {
             if !tag.is_empty() {
-                sql.push_str(" AND a.tags LIKE ?");
-                params.push(Box::new(format!("%\"{tag}\"%")));
+                for t in tag.split(',') {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        sql.push_str(" AND a.tags LIKE ?");
+                        params.push(Box::new(format!("%\"{t}\"%")));
+                    }
+                }
             }
         }
         if let Some(format_filter) = opts.format {
