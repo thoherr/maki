@@ -59,6 +59,40 @@ dam serve
 
 All commands support `--json` for machine-readable output. See `dam --help` and `dam <command> --help` for full usage.
 
+## Configuration
+
+All settings live in `dam.toml` at the catalog root (created by `dam init`). Every section and field is optional — an empty file or a missing section uses the defaults shown below.
+
+```toml
+# Default volume for import when auto-detection is ambiguous
+# default_volume = "550e8400-e29b-41d4-a716-446655440000"
+
+[preview]
+max_edge = 800        # Maximum pixel size of the longest edge (default: 800)
+format = "jpeg"       # Preview format: "jpeg" or "webp" (default: "jpeg")
+quality = 85          # JPEG quality 1–100 (default: 85; ignored for webp)
+
+[serve]
+port = 8080           # Web UI port (default: 8080, overridden by --port)
+bind = "127.0.0.1"    # Web UI bind address (default: "127.0.0.1", overridden by --bind)
+
+[import]
+exclude = [           # Filename patterns to skip during import (glob syntax)
+  "Thumbs.db",
+  ".DS_Store",
+  "*.tmp",
+]
+auto_tags = [         # Tags automatically applied to every newly imported asset
+  "inbox",
+]
+```
+
+**Notes:**
+- CLI flags (`--port`, `--bind`) override the corresponding `dam.toml` values.
+- `exclude` patterns match filenames only (not paths) using glob syntax (`*`, `?`, `[...]`).
+- `auto_tags` are merged with any tags extracted from XMP sidecars (no duplicates).
+- Changing `format` or `max_edge` affects newly generated previews; existing previews are not regenerated automatically (use `dam generate-previews --force`).
+
 ## Architecture
 
 The system uses a two-tier storage model:

@@ -20,7 +20,7 @@ A digital asset manager designed for large collections of images and videos (ter
 - **Platforms**: macOS, Linux
 - **Interface**: CLI-first (`dam` command)
 - **Catalog**: SQLite (cache/index), YAML sidecar files (source of truth)
-- **Key crates**: clap, sha2, serde, rusqlite, kamadak-exif, quick-xml, image, imageproc, ab_glyph, lofty, uuid, axum, askama, tokio, tower-http
+- **Key crates**: clap, sha2, serde, rusqlite, kamadak-exif, quick-xml, image, imageproc, ab_glyph, lofty, uuid, axum, askama, tokio, tower-http, toml, glob-match
 - **External tools**: dcraw/libraw (RAW previews), ffmpeg (video thumbnails)
 
 ## Architecture
@@ -61,3 +61,11 @@ Core CLI is functional. See `specification.md` for full requirements.
 - **`search -q`**: Shorthand for `--format=ids`, for scripting (e.g. `for id in $(dam search -q tag:landscape); do ...`).
 - **`duplicates --format`**: Same presets as search, plus `{locations}` placeholder for templates.
 - **Format module** (`src/format.rs`): Template engine with `{placeholder}` substitution, escape sequences (`\t`, `\n`), preset parsing.
+
+**Configuration** (`dam.toml`):
+- Parsed via `toml` crate with serde. All sections optional; missing fields use defaults. Validated on load.
+- `default_volume: Option<Uuid>` — fallback volume for import.
+- `[preview]`: `max_edge: u32` (default 800), `format: "jpeg"|"webp"` (default jpeg), `quality: u8` 1–100 (default 85, JPEG only; WebP is lossless via `image` crate). Stored in `PreviewConfig`. Passed to `PreviewGenerator` and `AssetService`.
+- `[serve]`: `port: u16` (default 8080), `bind: String` (default "127.0.0.1"). CLI `--port`/`--bind` flags override.
+- `[import]`: `exclude: Vec<String>` (glob patterns matched against filenames via `glob_match`), `auto_tags: Vec<String>` (merged into new assets, deduplicated with XMP tags). Passed to `import_with_callback` and `resolve_files`.
+- Config structs: `CatalogConfig` in `src/config.rs` with sub-structs `PreviewConfig`, `ServeConfig`, `ImportConfig`. User-facing documentation in `README.md`.
