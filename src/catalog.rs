@@ -237,6 +237,17 @@ pub struct SearchOptions<'a> {
     pub volume: Option<&'a str>,
     pub rating_min: Option<u8>,
     pub rating_exact: Option<u8>,
+    pub camera: Option<&'a str>,
+    pub lens: Option<&'a str>,
+    pub iso_min: Option<i64>,
+    pub iso_max: Option<i64>,
+    pub focal_min: Option<f64>,
+    pub focal_max: Option<f64>,
+    pub f_min: Option<f64>,
+    pub f_max: Option<f64>,
+    pub width_min: Option<i64>,
+    pub height_min: Option<i64>,
+    pub meta_filters: Vec<(&'a str, &'a str)>,
     pub sort: SearchSort,
     pub page: u32,
     pub per_page: u32,
@@ -252,6 +263,17 @@ impl<'a> Default for SearchOptions<'a> {
             volume: None,
             rating_min: None,
             rating_exact: None,
+            camera: None,
+            lens: None,
+            iso_min: None,
+            iso_max: None,
+            focal_min: None,
+            focal_max: None,
+            f_min: None,
+            f_max: None,
+            width_min: None,
+            height_min: None,
+            meta_filters: Vec::new(),
             sort: SearchSort::DateDesc,
             page: 1,
             per_page: 60,
@@ -332,6 +354,36 @@ impl Catalog {
         )?;
         // Migration: add rating column to existing catalogs (ignored if already present)
         let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN rating INTEGER");
+
+        // Migration: add indexed metadata columns to variants
+        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN camera_model TEXT");
+        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN lens_model TEXT");
+        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN focal_length_mm REAL");
+        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN f_number REAL");
+        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN iso INTEGER");
+        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN image_width INTEGER");
+        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN image_height INTEGER");
+
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_variants_camera ON variants(camera_model);
+             CREATE INDEX IF NOT EXISTS idx_variants_lens ON variants(lens_model);
+             CREATE INDEX IF NOT EXISTS idx_variants_iso ON variants(iso);
+             CREATE INDEX IF NOT EXISTS idx_variants_focal ON variants(focal_length_mm);",
+        )?;
+
+        // Backfill metadata columns from existing JSON (only rows not yet populated)
+        let _ = self.conn.execute_batch(
+            "UPDATE variants SET
+                camera_model = json_extract(source_metadata, '$.camera_model'),
+                lens_model = json_extract(source_metadata, '$.lens_model'),
+                iso = CAST(json_extract(source_metadata, '$.iso') AS INTEGER),
+                focal_length_mm = CAST(REPLACE(json_extract(source_metadata, '$.focal_length'), ' mm', '') AS REAL),
+                f_number = CAST(json_extract(source_metadata, '$.f_number') AS REAL),
+                image_width = CAST(json_extract(source_metadata, '$.image_width') AS INTEGER),
+                image_height = CAST(json_extract(source_metadata, '$.image_height') AS INTEGER)
+            WHERE camera_model IS NULL AND source_metadata != '{}'"
+        );
+
         Ok(())
     }
 
@@ -365,10 +417,23 @@ impl Catalog {
 
     /// Insert a variant into the catalog.
     pub fn insert_variant(&self, variant: &Variant) -> Result<()> {
-        let meta_json = serde_json::to_string(&variant.source_metadata)?;
+        let meta = &variant.source_metadata;
+        let meta_json = serde_json::to_string(meta)?;
+
+        let camera_model = meta.get("camera_model").cloned();
+        let lens_model = meta.get("lens_model").cloned();
+        let focal_length_mm: Option<f64> = meta
+            .get("focal_length")
+            .and_then(|v| v.trim_end_matches(" mm").parse().ok());
+        let f_number: Option<f64> = meta.get("f_number").and_then(|v| v.parse().ok());
+        let iso: Option<i64> = meta.get("iso").and_then(|v| v.parse().ok());
+        let image_width: Option<i64> = meta.get("image_width").and_then(|v| v.parse().ok());
+        let image_height: Option<i64> = meta.get("image_height").and_then(|v| v.parse().ok());
+
         self.conn.execute(
-            "INSERT OR REPLACE INTO variants (content_hash, asset_id, role, format, file_size, original_filename, source_metadata) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT OR REPLACE INTO variants (content_hash, asset_id, role, format, file_size, original_filename, source_metadata, \
+             camera_model, lens_model, focal_length_mm, f_number, iso, image_width, image_height) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             rusqlite::params![
                 variant.content_hash,
                 variant.asset_id.to_string(),
@@ -377,6 +442,13 @@ impl Catalog {
                 variant.file_size,
                 variant.original_filename,
                 meta_json,
+                camera_model,
+                lens_model,
+                focal_length_mm,
+                f_number,
+                iso,
+                image_width,
+                image_height,
             ],
         )?;
         Ok(())
@@ -457,73 +529,17 @@ impl Catalog {
         rating_min: Option<u8>,
         rating_exact: Option<u8>,
     ) -> Result<Vec<SearchRow>> {
-        let mut sql = String::from(
-            "SELECT a.id, a.name, a.asset_type, a.created_at, v.original_filename, v.format, \
-             a.tags, a.description, v.content_hash, a.rating \
-             FROM assets a JOIN variants v ON a.id = v.asset_id WHERE 1=1",
-        );
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-
-        if let Some(text) = text {
-            sql.push_str(" AND (a.name LIKE ? OR v.original_filename LIKE ? OR a.description LIKE ?)");
-            let pattern = format!("%{text}%");
-            params.push(Box::new(pattern.clone()));
-            params.push(Box::new(pattern.clone()));
-            params.push(Box::new(pattern));
-        }
-        if let Some(asset_type) = asset_type {
-            sql.push_str(" AND a.asset_type = ?");
-            params.push(Box::new(asset_type.to_lowercase()));
-        }
-        if let Some(tag) = tag {
-            for t in tag.split(',') {
-                let t = t.trim();
-                if !t.is_empty() {
-                    sql.push_str(" AND a.tags LIKE ?");
-                    params.push(Box::new(format!("%\"{t}\"%")));
-                }
-            }
-        }
-        if let Some(format_filter) = format {
-            sql.push_str(" AND v.format = ?");
-            params.push(Box::new(format_filter.to_lowercase()));
-        }
-        if let Some(min) = rating_min {
-            sql.push_str(" AND a.rating >= ?");
-            params.push(Box::new(min as i64));
-        }
-        if let Some(exact) = rating_exact {
-            sql.push_str(" AND a.rating = ?");
-            params.push(Box::new(exact as i64));
-        }
-
-        sql.push_str(" ORDER BY a.created_at DESC");
-
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(param_refs.as_slice(), |row| {
-            let tags_json: String = row.get(6)?;
-            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-            let rating_val: Option<i64> = row.get(9)?;
-            Ok(SearchRow {
-                asset_id: row.get(0)?,
-                name: row.get(1)?,
-                asset_type: row.get(2)?,
-                created_at: row.get(3)?,
-                original_filename: row.get(4)?,
-                format: row.get(5)?,
-                tags,
-                description: row.get(7)?,
-                content_hash: row.get(8)?,
-                rating: rating_val.map(|r| r as u8),
-            })
-        })?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
+        let opts = SearchOptions {
+            text,
+            asset_type,
+            tag,
+            format: format,
+            rating_min,
+            rating_exact,
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        self.search_paginated(&opts)
     }
 
     /// Resolve a short asset ID prefix to a full UUID string.
@@ -973,27 +989,20 @@ impl Catalog {
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// Paginated search with dynamic filters and sorting.
-    pub fn search_paginated(&self, opts: &SearchOptions) -> Result<Vec<SearchRow>> {
-        let mut sql = String::from(
-            "SELECT a.id, a.name, a.asset_type, a.created_at, v.original_filename, v.format, \
-             a.tags, a.description, v.content_hash, a.rating \
-             FROM assets a JOIN variants v ON a.id = v.asset_id",
-        );
+    /// Build the WHERE clause and parameters for search queries.
+    /// Returns (where_clause, params, needs_file_locations_join).
+    fn build_search_where(opts: &SearchOptions) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>, bool) {
+        let mut clauses = Vec::new();
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-
-        if opts.volume.is_some() {
-            sql.push_str(" JOIN file_locations fl ON v.content_hash = fl.content_hash");
-        }
-
-        sql.push_str(" WHERE 1=1");
+        let mut needs_fl_join = opts.volume.is_some();
 
         if let Some(text) = opts.text {
             if !text.is_empty() {
-                sql.push_str(
-                    " AND (a.name LIKE ? OR v.original_filename LIKE ? OR a.description LIKE ?)",
+                clauses.push(
+                    "(a.name LIKE ? OR v.original_filename LIKE ? OR a.description LIKE ? OR v.source_metadata LIKE ?)".to_string(),
                 );
                 let pattern = format!("%{text}%");
+                params.push(Box::new(pattern.clone()));
                 params.push(Box::new(pattern.clone()));
                 params.push(Box::new(pattern.clone()));
                 params.push(Box::new(pattern));
@@ -1001,7 +1010,7 @@ impl Catalog {
         }
         if let Some(asset_type) = opts.asset_type {
             if !asset_type.is_empty() {
-                sql.push_str(" AND a.asset_type = ?");
+                clauses.push("a.asset_type = ?".to_string());
                 params.push(Box::new(asset_type.to_lowercase()));
             }
         }
@@ -1010,7 +1019,7 @@ impl Catalog {
                 for t in tag.split(',') {
                     let t = t.trim();
                     if !t.is_empty() {
-                        sql.push_str(" AND a.tags LIKE ?");
+                        clauses.push("a.tags LIKE ?".to_string());
                         params.push(Box::new(format!("%\"{t}\"%")));
                     }
                 }
@@ -1018,25 +1027,107 @@ impl Catalog {
         }
         if let Some(format_filter) = opts.format {
             if !format_filter.is_empty() {
-                sql.push_str(" AND v.format = ?");
+                clauses.push("v.format = ?".to_string());
                 params.push(Box::new(format_filter.to_lowercase()));
             }
         }
         if let Some(volume) = opts.volume {
             if !volume.is_empty() {
-                sql.push_str(" AND fl.volume_id = ?");
+                clauses.push("fl.volume_id = ?".to_string());
                 params.push(Box::new(volume.to_string()));
             }
         }
         if let Some(min) = opts.rating_min {
-            sql.push_str(" AND a.rating >= ?");
+            clauses.push("a.rating >= ?".to_string());
             params.push(Box::new(min as i64));
         }
         if let Some(exact) = opts.rating_exact {
-            sql.push_str(" AND a.rating = ?");
+            clauses.push("a.rating = ?".to_string());
             params.push(Box::new(exact as i64));
         }
 
+        // Metadata column filters
+        if let Some(camera) = opts.camera {
+            if !camera.is_empty() {
+                clauses.push("v.camera_model LIKE ?".to_string());
+                params.push(Box::new(format!("%{camera}%")));
+            }
+        }
+        if let Some(lens) = opts.lens {
+            if !lens.is_empty() {
+                clauses.push("v.lens_model LIKE ?".to_string());
+                params.push(Box::new(format!("%{lens}%")));
+            }
+        }
+        if let Some(min) = opts.iso_min {
+            clauses.push("v.iso >= ?".to_string());
+            params.push(Box::new(min));
+        }
+        if let Some(max) = opts.iso_max {
+            clauses.push("v.iso <= ?".to_string());
+            params.push(Box::new(max));
+        }
+        if let Some(min) = opts.focal_min {
+            clauses.push("v.focal_length_mm >= ?".to_string());
+            params.push(Box::new(min));
+        }
+        if let Some(max) = opts.focal_max {
+            clauses.push("v.focal_length_mm <= ?".to_string());
+            params.push(Box::new(max));
+        }
+        if let Some(min) = opts.f_min {
+            clauses.push("v.f_number >= ?".to_string());
+            params.push(Box::new(min));
+        }
+        if let Some(max) = opts.f_max {
+            clauses.push("v.f_number <= ?".to_string());
+            params.push(Box::new(max));
+        }
+        if let Some(min) = opts.width_min {
+            clauses.push("v.image_width >= ?".to_string());
+            params.push(Box::new(min));
+        }
+        if let Some(min) = opts.height_min {
+            clauses.push("v.image_height >= ?".to_string());
+            params.push(Box::new(min));
+        }
+
+        // JSON fallback filters (meta:key=value)
+        for (key, value) in &opts.meta_filters {
+            clauses.push(format!("json_extract(v.source_metadata, '$.{key}') LIKE ?"));
+            params.push(Box::new(format!("%{value}%")));
+        }
+
+        let where_clause = if clauses.is_empty() {
+            " WHERE 1=1".to_string()
+        } else {
+            format!(" WHERE {}", clauses.join(" AND "))
+        };
+
+        // If any metadata column filter references fl., we need the join
+        // (already handled by opts.volume check above, but be safe)
+        if !needs_fl_join {
+            needs_fl_join = where_clause.contains("fl.");
+        }
+
+        (where_clause, params, needs_fl_join)
+    }
+
+    /// Paginated search with dynamic filters and sorting.
+    pub fn search_paginated(&self, opts: &SearchOptions) -> Result<Vec<SearchRow>> {
+        let (where_clause, mut params, needs_fl_join) = Self::build_search_where(opts);
+
+        let mut sql = String::from(
+            "SELECT a.id, a.name, a.asset_type, a.created_at, v.original_filename, v.format, \
+             a.tags, a.description, v.content_hash, a.rating \
+             FROM assets a JOIN variants v ON a.id = v.asset_id",
+        );
+
+        if needs_fl_join {
+            sql.push_str(" JOIN file_locations fl ON v.content_hash = fl.content_hash");
+        }
+
+        sql.push_str(&where_clause);
         sql.push_str(&format!(" ORDER BY {}", opts.sort.to_sql()));
 
         let page = opts.page.max(1);
@@ -1075,65 +1166,17 @@ impl Catalog {
 
     /// Count total results matching the same filters as search_paginated (without LIMIT/OFFSET).
     pub fn search_count(&self, opts: &SearchOptions) -> Result<u64> {
+        let (where_clause, params, needs_fl_join) = Self::build_search_where(opts);
+
         let mut sql = String::from(
             "SELECT COUNT(*) FROM assets a JOIN variants v ON a.id = v.asset_id",
         );
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
-        if opts.volume.is_some() {
+        if needs_fl_join {
             sql.push_str(" JOIN file_locations fl ON v.content_hash = fl.content_hash");
         }
 
-        sql.push_str(" WHERE 1=1");
-
-        if let Some(text) = opts.text {
-            if !text.is_empty() {
-                sql.push_str(
-                    " AND (a.name LIKE ? OR v.original_filename LIKE ? OR a.description LIKE ?)",
-                );
-                let pattern = format!("%{text}%");
-                params.push(Box::new(pattern.clone()));
-                params.push(Box::new(pattern.clone()));
-                params.push(Box::new(pattern));
-            }
-        }
-        if let Some(asset_type) = opts.asset_type {
-            if !asset_type.is_empty() {
-                sql.push_str(" AND a.asset_type = ?");
-                params.push(Box::new(asset_type.to_lowercase()));
-            }
-        }
-        if let Some(tag) = opts.tag {
-            if !tag.is_empty() {
-                for t in tag.split(',') {
-                    let t = t.trim();
-                    if !t.is_empty() {
-                        sql.push_str(" AND a.tags LIKE ?");
-                        params.push(Box::new(format!("%\"{t}\"%")));
-                    }
-                }
-            }
-        }
-        if let Some(format_filter) = opts.format {
-            if !format_filter.is_empty() {
-                sql.push_str(" AND v.format = ?");
-                params.push(Box::new(format_filter.to_lowercase()));
-            }
-        }
-        if let Some(volume) = opts.volume {
-            if !volume.is_empty() {
-                sql.push_str(" AND fl.volume_id = ?");
-                params.push(Box::new(volume.to_string()));
-            }
-        }
-        if let Some(min) = opts.rating_min {
-            sql.push_str(" AND a.rating >= ?");
-            params.push(Box::new(min as i64));
-        }
-        if let Some(exact) = opts.rating_exact {
-            sql.push_str(" AND a.rating = ?");
-            params.push(Box::new(exact as i64));
-        }
+        sql.push_str(&where_clause);
 
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|p| p.as_ref()).collect();
@@ -2720,5 +2763,284 @@ mod tests {
         assert!(stats.volumes.unwrap().is_empty());
         assert_eq!(stats.tags.as_ref().unwrap().unique_tags, 0);
         assert_eq!(stats.verified.as_ref().unwrap().total_locations, 0);
+    }
+
+    /// Helper to create a catalog with metadata-rich variants for metadata search tests.
+    fn setup_metadata_catalog() -> Catalog {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        // Asset 1: Fuji camera
+        let asset1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:meta1");
+        catalog.insert_asset(&asset1).unwrap();
+
+        let mut meta1 = HashMap::new();
+        meta1.insert("camera_model".to_string(), "X-T5".to_string());
+        meta1.insert("lens_model".to_string(), "XF56mmF1.2 R".to_string());
+        meta1.insert("focal_length".to_string(), "56 mm".to_string());
+        meta1.insert("f_number".to_string(), "1.2".to_string());
+        meta1.insert("iso".to_string(), "400".to_string());
+        meta1.insert("image_width".to_string(), "6240".to_string());
+        meta1.insert("image_height".to_string(), "4160".to_string());
+        meta1.insert("camera_make".to_string(), "FUJIFILM".to_string());
+
+        let variant1 = crate::models::Variant {
+            content_hash: "sha256:meta1".to_string(),
+            asset_id: asset1.id,
+            role: crate::models::VariantRole::Original,
+            format: "raf".to_string(),
+            file_size: 50_000_000,
+            original_filename: "DSCF0001.RAF".to_string(),
+            source_metadata: meta1,
+            locations: vec![],
+        };
+        catalog.insert_variant(&variant1).unwrap();
+
+        // Asset 2: Nikon camera
+        let asset2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:meta2");
+        catalog.insert_asset(&asset2).unwrap();
+
+        let mut meta2 = HashMap::new();
+        meta2.insert("camera_model".to_string(), "Z 6II".to_string());
+        meta2.insert("lens_model".to_string(), "NIKKOR Z 24-70mm f/4 S".to_string());
+        meta2.insert("focal_length".to_string(), "50 mm".to_string());
+        meta2.insert("f_number".to_string(), "4.0".to_string());
+        meta2.insert("iso".to_string(), "3200".to_string());
+        meta2.insert("image_width".to_string(), "6048".to_string());
+        meta2.insert("image_height".to_string(), "4024".to_string());
+        meta2.insert("camera_make".to_string(), "NIKON CORPORATION".to_string());
+        meta2.insert("label".to_string(), "Red".to_string());
+
+        let variant2 = crate::models::Variant {
+            content_hash: "sha256:meta2".to_string(),
+            asset_id: asset2.id,
+            role: crate::models::VariantRole::Original,
+            format: "nef".to_string(),
+            file_size: 40_000_000,
+            original_filename: "DSC_0001.NEF".to_string(),
+            source_metadata: meta2,
+            locations: vec![],
+        };
+        catalog.insert_variant(&variant2).unwrap();
+
+        catalog
+    }
+
+    #[test]
+    fn insert_variant_populates_metadata_columns() {
+        let catalog = setup_metadata_catalog();
+
+        let row: (Option<String>, Option<String>, Option<f64>, Option<f64>, Option<i64>, Option<i64>, Option<i64>) =
+            catalog.conn.query_row(
+                "SELECT camera_model, lens_model, focal_length_mm, f_number, iso, image_width, image_height \
+                 FROM variants WHERE content_hash = 'sha256:meta1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+            ).unwrap();
+
+        assert_eq!(row.0.as_deref(), Some("X-T5"));
+        assert_eq!(row.1.as_deref(), Some("XF56mmF1.2 R"));
+        assert!((row.2.unwrap() - 56.0).abs() < 0.01);
+        assert!((row.3.unwrap() - 1.2).abs() < 0.01);
+        assert_eq!(row.4, Some(400));
+        assert_eq!(row.5, Some(6240));
+        assert_eq!(row.6, Some(4160));
+    }
+
+    #[test]
+    fn backfill_metadata_from_json() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        // First initialize without metadata columns by creating a minimal schema
+        catalog.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS assets (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                created_at TEXT NOT NULL,
+                asset_type TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '[]',
+                description TEXT,
+                rating INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS variants (
+                content_hash TEXT PRIMARY KEY,
+                asset_id TEXT NOT NULL REFERENCES assets(id),
+                role TEXT NOT NULL,
+                format TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                original_filename TEXT NOT NULL,
+                source_metadata TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE TABLE IF NOT EXISTS file_locations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content_hash TEXT NOT NULL REFERENCES variants(content_hash),
+                volume_id TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                verified_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS volumes (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                mount_point TEXT NOT NULL,
+                volume_type TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS recipes (
+                id TEXT PRIMARY KEY,
+                variant_hash TEXT NOT NULL REFERENCES variants(content_hash),
+                software TEXT NOT NULL,
+                recipe_type TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                volume_id TEXT,
+                relative_path TEXT,
+                verified_at TEXT
+            );"
+        ).unwrap();
+
+        // Insert an asset and variant using old schema (no metadata columns)
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:old1");
+        catalog.conn.execute(
+            "INSERT INTO assets (id, name, created_at, asset_type, tags) VALUES (?1, NULL, ?2, 'image', '[]')",
+            rusqlite::params![asset.id.to_string(), asset.created_at.to_rfc3339()],
+        ).unwrap();
+
+        catalog.conn.execute(
+            "INSERT INTO variants (content_hash, asset_id, role, format, file_size, original_filename, source_metadata) \
+             VALUES ('sha256:old1', ?1, 'original', 'nef', 30000000, 'OLD.NEF', \
+             '{\"camera_model\":\"D850\",\"iso\":\"800\",\"focal_length\":\"70 mm\",\"f_number\":\"2.8\"}')",
+            rusqlite::params![asset.id.to_string()],
+        ).unwrap();
+
+        // Now run initialize() which should add columns and backfill
+        catalog.initialize().unwrap();
+
+        let row: (Option<String>, Option<i64>, Option<f64>, Option<f64>) =
+            catalog.conn.query_row(
+                "SELECT camera_model, iso, focal_length_mm, f_number FROM variants WHERE content_hash = 'sha256:old1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            ).unwrap();
+
+        assert_eq!(row.0.as_deref(), Some("D850"));
+        assert_eq!(row.1, Some(800));
+        assert!((row.2.unwrap() - 70.0).abs() < 0.01);
+        assert!((row.3.unwrap() - 2.8).abs() < 0.01);
+    }
+
+    #[test]
+    fn search_by_camera() {
+        let catalog = setup_metadata_catalog();
+        let opts = SearchOptions {
+            camera: Some("X-T5"),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original_filename, "DSCF0001.RAF");
+    }
+
+    #[test]
+    fn search_by_camera_partial() {
+        let catalog = setup_metadata_catalog();
+        let opts = SearchOptions {
+            camera: Some("Z 6"),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original_filename, "DSC_0001.NEF");
+    }
+
+    #[test]
+    fn search_by_iso_exact_and_range() {
+        let catalog = setup_metadata_catalog();
+
+        // Exact ISO
+        let opts = SearchOptions {
+            iso_min: Some(400),
+            iso_max: Some(400),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original_filename, "DSCF0001.RAF");
+
+        // ISO range 100-800: should match Fuji (400) only
+        let opts = SearchOptions {
+            iso_min: Some(100),
+            iso_max: Some(800),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original_filename, "DSCF0001.RAF");
+
+        // ISO min 1000+: should match Nikon (3200) only
+        let opts = SearchOptions {
+            iso_min: Some(1000),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original_filename, "DSC_0001.NEF");
+    }
+
+    #[test]
+    fn search_by_focal_range() {
+        let catalog = setup_metadata_catalog();
+
+        // focal 50-56: should match both
+        let opts = SearchOptions {
+            focal_min: Some(50.0),
+            focal_max: Some(56.0),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 2);
+
+        // focal 55-60: should match Fuji (56mm) only
+        let opts = SearchOptions {
+            focal_min: Some(55.0),
+            focal_max: Some(60.0),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original_filename, "DSCF0001.RAF");
+    }
+
+    #[test]
+    fn search_text_includes_metadata() {
+        let catalog = setup_metadata_catalog();
+
+        // "FUJIFILM" exists in source_metadata JSON but not in name/filename/description
+        let opts = SearchOptions {
+            text: Some("FUJIFILM"),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original_filename, "DSCF0001.RAF");
+    }
+
+    #[test]
+    fn search_meta_json_extract() {
+        let catalog = setup_metadata_catalog();
+
+        // meta:label=Red should match the Nikon variant
+        let opts = SearchOptions {
+            meta_filters: vec![("label", "Red")],
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original_filename, "DSC_0001.NEF");
     }
 }

@@ -3,8 +3,161 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::catalog::{AssetDetails, Catalog, SearchRow};
+use crate::catalog::{AssetDetails, Catalog, SearchOptions, SearchRow};
 use crate::metadata_store::MetadataStore;
+
+/// Parsed search query with all supported filter prefixes.
+#[derive(Debug, Default)]
+pub struct ParsedSearch {
+    pub text: Option<String>,
+    pub asset_type: Option<String>,
+    pub tag: Option<String>,
+    pub format: Option<String>,
+    pub rating_min: Option<u8>,
+    pub rating_exact: Option<u8>,
+    pub camera: Option<String>,
+    pub lens: Option<String>,
+    pub iso_min: Option<i64>,
+    pub iso_max: Option<i64>,
+    pub focal_min: Option<f64>,
+    pub focal_max: Option<f64>,
+    pub f_min: Option<f64>,
+    pub f_max: Option<f64>,
+    pub width_min: Option<i64>,
+    pub height_min: Option<i64>,
+    pub meta_filters: Vec<(String, String)>,
+}
+
+impl ParsedSearch {
+    /// Convert to `SearchOptions` for passing to catalog search methods.
+    pub fn to_search_options(&self) -> SearchOptions<'_> {
+        SearchOptions {
+            text: self.text.as_deref(),
+            asset_type: self.asset_type.as_deref(),
+            tag: self.tag.as_deref(),
+            format: self.format.as_deref(),
+            rating_min: self.rating_min,
+            rating_exact: self.rating_exact,
+            camera: self.camera.as_deref(),
+            lens: self.lens.as_deref(),
+            iso_min: self.iso_min,
+            iso_max: self.iso_max,
+            focal_min: self.focal_min,
+            focal_max: self.focal_max,
+            f_min: self.f_min,
+            f_max: self.f_max,
+            width_min: self.width_min,
+            height_min: self.height_min,
+            meta_filters: self
+                .meta_filters
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+}
+
+/// Parse a search query string into structured filters.
+///
+/// Supports prefix filters: `type:image`, `tag:landscape`, `format:jpg`, `rating:3+`,
+/// `camera:fuji`, `lens:56mm`, `iso:3200`, `iso:100-800`, `focal:50`, `focal:35-70`,
+/// `f:2.8`, `f:1.4-2.8`, `width:4000+`, `height:2000+`, `meta:key=value`.
+/// Remaining tokens are joined as free-text search.
+pub fn parse_search_query(query: &str) -> ParsedSearch {
+    let mut parsed = ParsedSearch::default();
+    let mut text_parts = Vec::new();
+
+    for token in query.split_whitespace() {
+        if let Some(value) = token.strip_prefix("type:") {
+            parsed.asset_type = Some(value.to_string());
+        } else if let Some(value) = token.strip_prefix("tag:") {
+            parsed.tag = Some(value.to_string());
+        } else if let Some(value) = token.strip_prefix("format:") {
+            parsed.format = Some(value.to_string());
+        } else if let Some(value) = token.strip_prefix("rating:") {
+            if let Some(num_str) = value.strip_suffix('+') {
+                if let Ok(n) = num_str.parse::<u8>() {
+                    parsed.rating_min = Some(n);
+                }
+            } else if let Ok(n) = value.parse::<u8>() {
+                parsed.rating_exact = Some(n);
+            }
+        } else if let Some(value) = token.strip_prefix("camera:") {
+            parsed.camera = Some(value.to_string());
+        } else if let Some(value) = token.strip_prefix("lens:") {
+            parsed.lens = Some(value.to_string());
+        } else if let Some(value) = token.strip_prefix("iso:") {
+            parse_int_range(value, &mut parsed.iso_min, &mut parsed.iso_max);
+        } else if let Some(value) = token.strip_prefix("focal:") {
+            parse_float_range(value, &mut parsed.focal_min, &mut parsed.focal_max);
+        } else if let Some(value) = token.strip_prefix("f:") {
+            parse_float_range(value, &mut parsed.f_min, &mut parsed.f_max);
+        } else if let Some(value) = token.strip_prefix("width:") {
+            if let Some(num_str) = value.strip_suffix('+') {
+                if let Ok(n) = num_str.parse::<i64>() {
+                    parsed.width_min = Some(n);
+                }
+            } else if let Ok(n) = value.parse::<i64>() {
+                parsed.width_min = Some(n);
+            }
+        } else if let Some(value) = token.strip_prefix("height:") {
+            if let Some(num_str) = value.strip_suffix('+') {
+                if let Ok(n) = num_str.parse::<i64>() {
+                    parsed.height_min = Some(n);
+                }
+            } else if let Ok(n) = value.parse::<i64>() {
+                parsed.height_min = Some(n);
+            }
+        } else if let Some(value) = token.strip_prefix("meta:") {
+            if let Some((key, val)) = value.split_once('=') {
+                parsed.meta_filters.push((key.to_string(), val.to_string()));
+            }
+        } else {
+            text_parts.push(token);
+        }
+    }
+
+    if !text_parts.is_empty() {
+        parsed.text = Some(text_parts.join(" "));
+    }
+
+    parsed
+}
+
+/// Parse an integer range value: "3200" (exact), "3200+" (min), "100-800" (range).
+fn parse_int_range(value: &str, min: &mut Option<i64>, max: &mut Option<i64>) {
+    if let Some(num_str) = value.strip_suffix('+') {
+        if let Ok(n) = num_str.parse::<i64>() {
+            *min = Some(n);
+        }
+    } else if let Some((lo, hi)) = value.split_once('-') {
+        if let (Ok(lo_n), Ok(hi_n)) = (lo.parse::<i64>(), hi.parse::<i64>()) {
+            *min = Some(lo_n);
+            *max = Some(hi_n);
+        }
+    } else if let Ok(n) = value.parse::<i64>() {
+        *min = Some(n);
+        *max = Some(n);
+    }
+}
+
+/// Parse a float range value: "2.8" (exact), "2.8+" (min), "1.4-2.8" (range).
+fn parse_float_range(value: &str, min: &mut Option<f64>, max: &mut Option<f64>) {
+    if let Some(num_str) = value.strip_suffix('+') {
+        if let Ok(n) = num_str.parse::<f64>() {
+            *min = Some(n);
+        }
+    } else if let Some((lo, hi)) = value.split_once('-') {
+        if let (Ok(lo_n), Ok(hi_n)) = (lo.parse::<f64>(), hi.parse::<f64>()) {
+            *min = Some(lo_n);
+            *max = Some(hi_n);
+        }
+    } else if let Ok(n) = value.parse::<f64>() {
+        *min = Some(n);
+        *max = Some(n);
+    }
+}
 
 /// Result of a group operation.
 #[derive(Debug)]
@@ -39,52 +192,18 @@ impl QueryEngine {
 
     /// Search assets by a free-text query string.
     ///
-    /// Supports prefix filters: `type:image`, `tag:landscape`, `format:jpg`.
-    /// Remaining tokens are joined as free-text search against name/filename/description.
-    /// Multiple tokens are AND-ed.
+    /// Supports prefix filters: `type:image`, `tag:landscape`, `format:jpg`, `rating:3+`,
+    /// `camera:fuji`, `lens:56mm`, `iso:3200`, `focal:50`, `f:2.8`, `width:4000+`,
+    /// `height:2000+`, `meta:key=value`.
+    /// Remaining tokens are joined as free-text search against name/filename/description/metadata.
     pub fn search(&self, query: &str) -> Result<Vec<SearchRow>> {
-        let mut text_parts = Vec::new();
-        let mut asset_type = None;
-        let mut tag = None;
-        let mut format = None;
-        let mut rating_min = None;
-        let mut rating_exact = None;
-
-        for token in query.split_whitespace() {
-            if let Some(value) = token.strip_prefix("type:") {
-                asset_type = Some(value.to_string());
-            } else if let Some(value) = token.strip_prefix("tag:") {
-                tag = Some(value.to_string());
-            } else if let Some(value) = token.strip_prefix("format:") {
-                format = Some(value.to_string());
-            } else if let Some(value) = token.strip_prefix("rating:") {
-                if let Some(num_str) = value.strip_suffix('+') {
-                    if let Ok(n) = num_str.parse::<u8>() {
-                        rating_min = Some(n);
-                    }
-                } else if let Ok(n) = value.parse::<u8>() {
-                    rating_exact = Some(n);
-                }
-            } else {
-                text_parts.push(token);
-            }
-        }
-
-        let text = if text_parts.is_empty() {
-            None
-        } else {
-            Some(text_parts.join(" "))
+        let parsed = parse_search_query(query);
+        let opts = SearchOptions {
+            per_page: u32::MAX,
+            ..parsed.to_search_options()
         };
-
         let catalog = Catalog::open(&self.catalog_root)?;
-        catalog.search_assets(
-            text.as_deref(),
-            asset_type.as_deref(),
-            tag.as_deref(),
-            format.as_deref(),
-            rating_min,
-            rating_exact,
-        )
+        catalog.search_paginated(&opts)
     }
 
     /// Look up a single asset by its full ID or a unique prefix.
@@ -458,5 +577,115 @@ mod tests {
         // Verify catalog
         let details = engine.show(&id).unwrap();
         assert!(details.tags.contains(&"new_tag".to_string()));
+    }
+
+    // ── parse_search_query tests ──────────────────────────────────
+
+    #[test]
+    fn parse_camera_filter() {
+        let p = parse_search_query("camera:fuji");
+        assert_eq!(p.camera.as_deref(), Some("fuji"));
+        assert!(p.text.is_none());
+    }
+
+    #[test]
+    fn parse_lens_filter() {
+        let p = parse_search_query("lens:56mm");
+        assert_eq!(p.lens.as_deref(), Some("56mm"));
+    }
+
+    #[test]
+    fn parse_iso_exact() {
+        let p = parse_search_query("iso:3200");
+        assert_eq!(p.iso_min, Some(3200));
+        assert_eq!(p.iso_max, Some(3200));
+    }
+
+    #[test]
+    fn parse_iso_min() {
+        let p = parse_search_query("iso:3200+");
+        assert_eq!(p.iso_min, Some(3200));
+        assert!(p.iso_max.is_none());
+    }
+
+    #[test]
+    fn parse_iso_range() {
+        let p = parse_search_query("iso:100-800");
+        assert_eq!(p.iso_min, Some(100));
+        assert_eq!(p.iso_max, Some(800));
+    }
+
+    #[test]
+    fn parse_focal_exact() {
+        let p = parse_search_query("focal:50");
+        assert!((p.focal_min.unwrap() - 50.0).abs() < 0.01);
+        assert!((p.focal_max.unwrap() - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_focal_range() {
+        let p = parse_search_query("focal:35-70");
+        assert!((p.focal_min.unwrap() - 35.0).abs() < 0.01);
+        assert!((p.focal_max.unwrap() - 70.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_f_exact() {
+        let p = parse_search_query("f:2.8");
+        assert!((p.f_min.unwrap() - 2.8).abs() < 0.01);
+        assert!((p.f_max.unwrap() - 2.8).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_f_min() {
+        let p = parse_search_query("f:2.8+");
+        assert!((p.f_min.unwrap() - 2.8).abs() < 0.01);
+        assert!(p.f_max.is_none());
+    }
+
+    #[test]
+    fn parse_f_range() {
+        let p = parse_search_query("f:1.4-2.8");
+        assert!((p.f_min.unwrap() - 1.4).abs() < 0.01);
+        assert!((p.f_max.unwrap() - 2.8).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_width_min() {
+        let p = parse_search_query("width:4000+");
+        assert_eq!(p.width_min, Some(4000));
+    }
+
+    #[test]
+    fn parse_height_min() {
+        let p = parse_search_query("height:2000+");
+        assert_eq!(p.height_min, Some(2000));
+    }
+
+    #[test]
+    fn parse_meta_filter() {
+        let p = parse_search_query("meta:label=Red");
+        assert_eq!(p.meta_filters.len(), 1);
+        assert_eq!(p.meta_filters[0].0, "label");
+        assert_eq!(p.meta_filters[0].1, "Red");
+    }
+
+    #[test]
+    fn parse_mixed_filters_with_text() {
+        let p = parse_search_query("camera:fuji sunset iso:400 landscape");
+        assert_eq!(p.camera.as_deref(), Some("fuji"));
+        assert_eq!(p.iso_min, Some(400));
+        assert_eq!(p.iso_max, Some(400));
+        assert_eq!(p.text.as_deref(), Some("sunset landscape"));
+    }
+
+    #[test]
+    fn parse_existing_filters_still_work() {
+        let p = parse_search_query("type:image tag:nature format:jpg rating:3+");
+        assert_eq!(p.asset_type.as_deref(), Some("image"));
+        assert_eq!(p.tag.as_deref(), Some("nature"));
+        assert_eq!(p.format.as_deref(), Some("jpg"));
+        assert_eq!(p.rating_min, Some(3));
+        assert!(p.rating_exact.is_none());
     }
 }

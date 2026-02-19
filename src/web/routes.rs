@@ -6,7 +6,8 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use axum::Form;
 
-use crate::catalog::{SearchOptions, SearchSort};
+use crate::catalog::SearchSort;
+use crate::query::parse_search_query;
 
 use crate::device_registry::DeviceRegistry;
 
@@ -47,33 +48,14 @@ pub async fn browse_page(
         let sort_str = params.sort.as_deref().unwrap_or("date_desc");
         let page = params.page.unwrap_or(1).max(1);
 
-        // Parse rating filter: "3" = exact, "3+" = minimum
-        let (rating_min, rating_exact) = parse_rating_filter(rating_str);
-
-        let opts = SearchOptions {
-            text: if query.is_empty() { None } else { Some(query) },
-            asset_type: if asset_type.is_empty() {
-                None
-            } else {
-                Some(asset_type)
-            },
-            tag: if tag.is_empty() { None } else { Some(tag) },
-            format: if format.is_empty() {
-                None
-            } else {
-                Some(format)
-            },
-            volume: if volume.is_empty() {
-                None
-            } else {
-                Some(volume)
-            },
-            rating_min,
-            rating_exact,
-            sort: SearchSort::from_str(sort_str),
-            page,
-            per_page: 60,
-        };
+        let parsed = merge_search_params(query, asset_type, tag, format, rating_str);
+        let mut opts = parsed.to_search_options();
+        if !volume.is_empty() {
+            opts.volume = Some(volume);
+        }
+        opts.sort = SearchSort::from_str(sort_str);
+        opts.page = page;
+        opts.per_page = 60;
 
         let total = catalog.search_count(&opts)?;
         let rows = catalog.search_paginated(&opts)?;
@@ -144,32 +126,14 @@ pub async fn search_api(
         let sort_str = params.sort.as_deref().unwrap_or("date_desc");
         let page = params.page.unwrap_or(1).max(1);
 
-        let (rating_min, rating_exact) = parse_rating_filter(rating_str);
-
-        let opts = SearchOptions {
-            text: if query.is_empty() { None } else { Some(query) },
-            asset_type: if asset_type.is_empty() {
-                None
-            } else {
-                Some(asset_type)
-            },
-            tag: if tag.is_empty() { None } else { Some(tag) },
-            format: if format.is_empty() {
-                None
-            } else {
-                Some(format)
-            },
-            volume: if volume.is_empty() {
-                None
-            } else {
-                Some(volume)
-            },
-            rating_min,
-            rating_exact,
-            sort: SearchSort::from_str(sort_str),
-            page,
-            per_page: 60,
-        };
+        let parsed = merge_search_params(query, asset_type, tag, format, rating_str);
+        let mut opts = parsed.to_search_options();
+        if !volume.is_empty() {
+            opts.volume = Some(volume);
+        }
+        opts.sort = SearchSort::from_str(sort_str);
+        opts.page = page;
+        opts.per_page = 60;
 
         let total = catalog.search_count(&opts)?;
         let rows = catalog.search_paginated(&opts)?;
@@ -382,6 +346,44 @@ pub async fn stats_page(State(state): State<Arc<AppState>>) -> Response {
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
     }
+}
+
+use crate::query::ParsedSearch;
+
+/// Parse the `q` param through `parse_search_query` and overlay explicit dropdown params.
+/// Returns a `ParsedSearch` (owned) that can be converted to `SearchOptions` by the caller.
+fn merge_search_params(
+    query: &str,
+    asset_type: &str,
+    tag: &str,
+    format: &str,
+    rating_str: &str,
+) -> ParsedSearch {
+    let mut parsed = parse_search_query(query);
+
+    // Explicit dropdown params override parsed values
+    if !asset_type.is_empty() {
+        parsed.asset_type = Some(asset_type.to_string());
+    }
+    if !tag.is_empty() {
+        parsed.tag = Some(tag.to_string());
+    }
+    if !format.is_empty() {
+        parsed.format = Some(format.to_string());
+    }
+    if !rating_str.is_empty() {
+        let (rating_min, rating_exact) = parse_rating_filter(rating_str);
+        if rating_min.is_some() {
+            parsed.rating_min = rating_min;
+            parsed.rating_exact = None;
+        }
+        if rating_exact.is_some() {
+            parsed.rating_exact = rating_exact;
+            parsed.rating_min = None;
+        }
+    }
+
+    parsed
 }
 
 /// Parse a rating filter string into (rating_min, rating_exact).
