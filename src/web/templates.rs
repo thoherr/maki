@@ -236,6 +236,18 @@ impl AssetPage {
     }
 }
 
+pub struct TagPageEntry {
+    pub name: String,
+    pub count: u64,
+}
+
+#[derive(Template)]
+#[template(path = "tags.html")]
+pub struct TagsPage {
+    pub tags: Vec<TagPageEntry>,
+    pub total_tags: u64,
+}
+
 #[derive(Template)]
 #[template(path = "stats.html")]
 pub struct StatsPage {

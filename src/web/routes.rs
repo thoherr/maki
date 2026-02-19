@@ -13,7 +13,7 @@ use crate::device_registry::DeviceRegistry;
 
 use super::templates::{
     format_size, AssetCard, AssetPage, BrowsePage, FormatOption, RatingFragment, ResultsPartial,
-    StatsPage, TagOption, TagsFragment, VolumeOption,
+    StatsPage, TagOption, TagPageEntry, TagsFragment, TagsPage, VolumeOption,
 };
 use super::AppState;
 
@@ -309,6 +309,34 @@ pub async fn stats_api(State(state): State<Arc<AppState>>) -> Response {
 
     match result {
         Ok(Ok(stats)) => axum::Json(stats).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+/// GET /tags — tags HTML page.
+pub async fn tags_page(State(state): State<Arc<AppState>>) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+        let tags = catalog.list_all_tags()?;
+        let total_tags = tags.len() as u64;
+        let entries: Vec<TagPageEntry> = tags
+            .into_iter()
+            .map(|(name, count)| TagPageEntry { name, count })
+            .collect();
+        let tmpl = TagsPage {
+            tags: entries,
+            total_tags,
+        };
+        Ok::<_, anyhow::Error>(tmpl.render()?)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(html)) => Html(html).into_response(),
         Ok(Err(e)) => {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
         }
