@@ -8,15 +8,11 @@ use sha2::{Digest, Sha256};
 use crate::models::Volume;
 
 /// Manages file identity, deduplication, and physical location tracking.
-pub struct ContentStore {
-    catalog_root: std::path::PathBuf,
-}
+pub struct ContentStore;
 
 impl ContentStore {
-    pub fn new(catalog_root: &Path) -> Self {
-        Self {
-            catalog_root: catalog_root.to_path_buf(),
-        }
+    pub fn new(_catalog_root: &Path) -> Self {
+        Self
     }
 
     /// Hash a file and return the SHA-256 content hash as "sha256:<hex>".
