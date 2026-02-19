@@ -30,7 +30,6 @@
   - Recipe handling: processing sidecars (`.xmp`, `.cos`, `.cot`, `.cop`, `.pp3`, `.dop`, `.on1`) are attached as Recipe records to the primary variant. Recipes are identified by location (volume + path), not content hash — re-importing after external edits updates the recipe in place and re-extracts XMP metadata. Standalone recipe imports (no co-located media) resolve to parent variants by stem + directory matching
   - Duplicate location tracking: re-importing the same content from a different path adds the new location to the existing variant
   - `--volume` overrides auto-detection of which volume the files belong to
-  - Per-file progress logging with `-l` flag; elapsed timing with `-t` flag
   - Summary only reports non-zero stat categories
 - **`search`** — search assets by text, type, tag, or format via SQLite catalog
 - **`show`** — display full asset details including variants, locations, source metadata, and recipes
@@ -38,13 +37,15 @@
 - **`group`** — manually group variants into one asset by content hash (merges donor assets, combines tags)
 - **`rebuild-catalog`** — drop and rebuild SQLite catalog from YAML sidecar files (including recipes)
 - **`duplicates`** — find files with the same content hash across multiple locations, showing all volume/path pairs
-- **`generate-previews`** — generate missing preview thumbnails. Supports `PATHS` (resolve files on disk), `--asset`, `--volume`, `--include`/`--skip` (file type groups), and `--force` (regenerate existing)
+- **`generate-previews`** — generate missing preview thumbnails. Supports `PATHS` (resolve files on disk), `--asset`, `--volume`, `--include`/`--skip` (file type groups), and `--force` (regenerate existing). Per-file progress with `-l` flag
 - **Preview generation during import** — previews are generated for each imported variant. Uses the `image` crate for standard formats (800px JPEG thumbnails), `dcraw`/`dcraw_emu` (LibRaw) for RAW files, and `ffmpeg` for videos. Non-visual formats (audio, documents, unknown) get an info card — an 800x600 JPEG showing file metadata (name, format, size, and audio properties like duration/bitrate via `lofty`). When external tools (dcraw, ffmpeg) are missing, RAW and video files also fall back to an info card. Previews stored in `previews/<hash-prefix>/<hash>.jpg`. Preview failure never blocks import.
 - **`show`** now displays preview status (path if exists, "(none)" otherwise)
 - **`relocate`** — copy or move all asset files (variants + recipes) to a target volume: `dam relocate <asset-id> <target-volume> [--remove-source] [--dry-run]`. Copies files with SHA-256 integrity verification, preserves relative paths, updates sidecar and catalog metadata. Without `--remove-source`, the asset gains additional locations. With `--remove-source`, source files are deleted after verified copy. `--dry-run` shows the plan without making changes.
 - **`verify`** — re-hash files on disk and compare against stored content hashes to detect corruption or bit rot: `dam verify [PATHS...] [--volume <label>] [--asset <id>]`. Without arguments, verifies all file locations on all online volumes. With paths, verifies specific files or directories. `--volume` limits to a specific volume; `--asset` limits to a specific asset. Updates `verified_at` timestamps on successful verification. Exits with code 1 if any mismatches are found. Modified recipe files are reported as "modified" (not "FAILED") and do not trigger exit code 1 — their stored hash is updated to reflect the new content.
 - **Output formatting** — flexible output for scripting and machine consumption:
   - Global `--json` flag on all commands: outputs structured JSON to stdout, human messages to stderr
+  - Global `-l` / `--log` flag: per-file progress logging for multi-file commands (import, verify, generate-previews). Prints `filename — status (duration)` to stderr
+  - Global `-t` / `--time` flag: shows total elapsed time after command execution
   - Global `--debug` / `-d` flag: shows stderr output from external tools (ffmpeg, dcraw, dcraw_emu) for diagnosing preview generation issues
   - `search --format=<preset|template>`: presets are `ids` (one UUID per line), `short` (default compact), `full` (with tags/description), `json` (JSON array). Custom templates use `{placeholder}` syntax, e.g. `'{id}\t{name}\t{tags}'`. Supported placeholders: `id`, `short_id`, `name`, `filename`, `type`, `format`, `date`, `tags`, `description`, `hash`
   - `search -q` / `--quiet`: shorthand for `--format=ids`

@@ -57,7 +57,7 @@ dam serve
 | `dam rebuild-catalog` | Rebuild SQLite index from sidecar files |
 | `dam serve` | Start the web UI server |
 
-All commands support `--json` for machine-readable output. See `dam --help` and `dam <command> --help` for full usage.
+**Global flags**: `--json` (machine-readable output), `-l`/`--log` (per-file progress for import, verify, generate-previews), `-d`/`--debug` (external tool stderr), `-t`/`--time` (elapsed time). See `dam --help` and `dam <command> --help` for full usage.
 
 ## Configuration
 

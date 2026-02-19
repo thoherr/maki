@@ -1566,3 +1566,38 @@ fn generate_previews_with_paths() {
         .success()
         .stdout(predicate::str::contains("preview(s)"));
 }
+
+#[test]
+fn generate_previews_log_shows_per_file_progress() {
+    use image::{ImageBuffer, Rgb};
+
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Create a real 1x1 PNG so preview generation succeeds
+    let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_pixel(1, 1, Rgb([255, 0, 0]));
+    let img_path = root.join("log_test.png");
+    img.save(&img_path).unwrap();
+
+    dam()
+        .current_dir(&root)
+        .args(["import", img_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // With --log, per-file progress appears on stderr
+    dam()
+        .current_dir(&root)
+        .args(["--log", "generate-previews"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("log_test.png"));
+
+    // Without --log, no per-file output on stderr
+    dam()
+        .current_dir(&root)
+        .args(["generate-previews"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+}

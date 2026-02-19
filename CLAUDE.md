@@ -55,7 +55,9 @@ Core CLI is functional. See `specification.md` for full requirements.
 
 **Output formatting**:
 - **Global `--json` flag**: Available on all commands. Outputs structured JSON to stdout; human-readable messages go to stderr. All data types (`SearchRow`, `AssetDetails`, `ImportResult`, `VerifyResult`, `RelocateResult`, `DuplicateEntry`) derive `serde::Serialize`.
+- **Global `--log` / `-l` flag**: Per-file progress logging for multi-file commands (import, verify, generate-previews). Each file prints `filename — status (duration)` to stderr.
 - **Global `--debug` / `-d` flag**: Shows stderr output from external tools (ffmpeg, dcraw, dcraw_emu) for diagnosing preview generation issues. Prints the command line and stderr to eprintln.
+- **Global `--time` / `-t` flag**: Shows total elapsed time after command execution.
 - **Rating**: First-class `Option<u8>` field on `Asset` (persisted in sidecar YAML and SQLite `assets.rating` column). Extracted from XMP during import. Editable via `QueryEngine::set_rating()` and web UI inline stars. Filterable in CLI search (`rating:N` exact, `rating:N+` minimum) and web UI (dropdown). Displayed as stars in `dam show` output and web UI browse cards/asset detail.
 - **`search --format`**: Presets: `ids` (one UUID per line), `short` (default), `full` (with tags/description), `json` (JSON array). Custom templates: `'{id}\t{name}\t{tags}'` with placeholder substitution. Result count suppressed when `--format` is explicit.
 - **`search -q`**: Shorthand for `--format=ids`, for scripting (e.g. `for id in $(dam search -q tag:landscape); do ...`).

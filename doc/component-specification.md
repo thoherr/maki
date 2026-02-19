@@ -238,7 +238,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 
 **Global flags**:
 - `--json` — output machine-readable JSON
-- `-l` / `--log` — log individual file progress during import/verify
+- `-l` / `--log` — log individual file progress (import, verify, generate-previews)
 - `-d` / `--debug` — show stderr output from external tools (ffmpeg, dcraw, dcraw_emu)
 - `-t` / `--time` — show elapsed time after command execution
 
