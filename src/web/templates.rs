@@ -256,6 +256,13 @@ pub struct StatsPage {
 }
 
 #[derive(Template)]
+#[template(path = "preview_fragment.html")]
+pub struct PreviewFragment {
+    pub asset_id: String,
+    pub primary_preview_url: Option<String>,
+}
+
+#[derive(Template)]
 #[template(path = "tags_fragment.html")]
 pub struct TagsFragment {
     pub asset_id: String,

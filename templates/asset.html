@@ -6,12 +6,9 @@
 <a href="javascript:history.back()" class="back-link">&larr; Back</a>
 <div class="asset-detail">
     <div class="asset-preview">
-        {% match primary_preview_url %}
-        {% when Some with (url) %}
-        <img src="{{ url }}" alt="{{ display_name }}">
-        {% when None %}
-        <div class="no-preview">No preview available</div>
-        {% endmatch %}
+        <div id="preview">
+            {% include "preview_fragment.html" %}
+        </div>
     </div>
     <div class="asset-info">
         <h1>{{ display_name }}</h1>

@@ -12,8 +12,8 @@ use crate::query::parse_search_query;
 use crate::device_registry::DeviceRegistry;
 
 use super::templates::{
-    format_size, AssetCard, AssetPage, BrowsePage, FormatOption, RatingFragment, ResultsPartial,
-    StatsPage, TagOption, TagPageEntry, TagsFragment, TagsPage, VolumeOption,
+    format_size, AssetCard, AssetPage, BrowsePage, FormatOption, PreviewFragment, RatingFragment,
+    ResultsPartial, StatsPage, TagOption, TagPageEntry, TagsFragment, TagsPage, VolumeOption,
 };
 use super::AppState;
 
@@ -451,6 +451,73 @@ pub async fn set_rating(
         let tmpl = RatingFragment {
             asset_id,
             rating: new_rating,
+        };
+        Ok::<_, anyhow::Error>(tmpl.render()?)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(html)) => Html(html).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+/// POST /api/asset/{id}/preview — generate preview, return preview fragment.
+pub async fn generate_preview(
+    State(state): State<Arc<AppState>>,
+    Path(asset_id): Path<String>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let engine = state.query_engine();
+        let details = engine.show(&asset_id)?;
+
+        let primary = details
+            .variants
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("Asset has no variants"))?;
+
+        let content_hash = &primary.content_hash;
+        let format = &primary.format;
+
+        // Resolve the source file path from the first online location
+        let registry = DeviceRegistry::new(&state.catalog_root);
+        let volumes = registry.list()?;
+
+        let source_path = primary
+            .locations
+            .iter()
+            .find_map(|loc| {
+                let vol = volumes.iter().find(|v| v.label == loc.volume_label)?;
+                if !vol.is_online {
+                    return None;
+                }
+                let path = vol.mount_point.join(&loc.relative_path);
+                if path.exists() {
+                    Some(path)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!("No online file location found for primary variant")
+            })?;
+
+        let preview_gen = state.preview_generator();
+        preview_gen.regenerate(content_hash, &source_path, format)?;
+
+        let preview_url = if preview_gen.has_preview(content_hash) {
+            Some(super::templates::preview_url(content_hash))
+        } else {
+            None
+        };
+
+        let tmpl = PreviewFragment {
+            asset_id,
+            primary_preview_url: preview_url,
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
