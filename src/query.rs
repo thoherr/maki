@@ -4,8 +4,11 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::catalog::{AssetDetails, Catalog, SearchOptions, SearchRow};
+use crate::content_store::ContentStore;
 use crate::device_registry::DeviceRegistry;
 use crate::metadata_store::MetadataStore;
+use crate::models::Asset;
+use crate::xmp_reader;
 
 /// Parsed search query with all supported filter prefixes.
 #[derive(Debug, Default)]
@@ -448,12 +451,18 @@ impl QueryEngine {
         if let Some(description) = &fields.description {
             asset.description = description.clone();
         }
+        let rating_changed = fields.rating.is_some();
         if let Some(rating) = &fields.rating {
             asset.rating = *rating;
         }
 
         store.save(&asset)?;
         catalog.insert_asset(&asset)?;
+
+        if rating_changed {
+            let rating = asset.rating;
+            self.write_back_rating_to_xmp(&mut asset, rating, &catalog, &store);
+        }
 
         Ok(EditResult {
             asset_id: full_id,
@@ -464,6 +473,7 @@ impl QueryEngine {
     }
 
     /// Set the rating on an asset. Updates both sidecar YAML and SQLite catalog.
+    /// Also writes back the rating to any `.xmp` recipe files on disk.
     /// Returns the new rating value.
     pub fn set_rating(&self, asset_id_prefix: &str, rating: Option<u8>) -> Result<Option<u8>> {
         let catalog = Catalog::open(&self.catalog_root)?;
@@ -479,7 +489,99 @@ impl QueryEngine {
         store.save(&asset)?;
         catalog.update_asset_rating(&full_id, rating)?;
 
+        self.write_back_rating_to_xmp(&mut asset, rating, &catalog, &store);
+
         Ok(rating)
+    }
+
+    /// Write back a rating change to `.xmp` recipe files on disk.
+    ///
+    /// For each XMP recipe on an online volume, updates the `xmp:Rating` value,
+    /// re-hashes the file, and updates the recipe's content hash in catalog and sidecar.
+    /// Silently skips offline volumes and missing files.
+    fn write_back_rating_to_xmp(
+        &self,
+        asset: &mut Asset,
+        rating: Option<u8>,
+        catalog: &Catalog,
+        store: &MetadataStore,
+    ) {
+        let registry = DeviceRegistry::new(&self.catalog_root);
+        let volumes = match registry.list() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("Warning: could not load volumes for XMP write-back: {e}");
+                return;
+            }
+        };
+
+        let online: HashMap<uuid::Uuid, &std::path::Path> = volumes
+            .iter()
+            .filter(|v| v.is_online)
+            .map(|v| (v.id, v.mount_point.as_path()))
+            .collect();
+
+        let content_store = ContentStore::new(&self.catalog_root);
+        let mut sidecar_dirty = false;
+
+        for recipe in &mut asset.recipes {
+            let ext = recipe
+                .location
+                .relative_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if ext != "xmp" {
+                continue;
+            }
+
+            let mount_point = match online.get(&recipe.location.volume_id) {
+                Some(mp) => *mp,
+                None => continue, // volume offline
+            };
+
+            let full_path = mount_point.join(&recipe.location.relative_path);
+            if !full_path.exists() {
+                continue;
+            }
+
+            match xmp_reader::update_rating(&full_path, rating) {
+                Ok(true) => {
+                    // File was modified — re-hash and update catalog
+                    match content_store.hash_file(&full_path) {
+                        Ok(new_hash) => {
+                            if let Err(e) = catalog.update_recipe_content_hash(
+                                &recipe.id.to_string(),
+                                &new_hash,
+                            ) {
+                                eprintln!(
+                                    "Warning: could not update recipe hash in catalog: {e}"
+                                );
+                            }
+                            recipe.content_hash = new_hash;
+                            sidecar_dirty = true;
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: could not re-hash XMP file: {e}");
+                        }
+                    }
+                }
+                Ok(false) => {} // no change needed
+                Err(e) => {
+                    eprintln!(
+                        "Warning: could not write rating to {}: {e}",
+                        full_path.display()
+                    );
+                }
+            }
+        }
+
+        if sidecar_dirty {
+            if let Err(e) = store.save(asset) {
+                eprintln!("Warning: could not save sidecar after XMP write-back: {e}");
+            }
+        }
     }
 }
 

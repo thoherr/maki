@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use anyhow::Result;
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use regex::Regex;
 
 /// Extracted metadata from an XMP sidecar file.
 pub struct XmpData {
@@ -49,6 +51,69 @@ pub fn extract(path: &Path) -> XmpData {
         Err(_) => return XmpData::empty(),
     };
     parse_xmp(&content)
+}
+
+/// Update the `xmp:Rating` value in an XMP file on disk.
+///
+/// Uses string-based find/replace to preserve all other XMP content byte-for-byte.
+/// Returns `Ok(true)` if the file was modified, `Ok(false)` if no change was needed.
+/// Rating of `None` or `Some(0)` writes `"0"` (XMP convention for "no rating").
+pub fn update_rating(path: &Path, rating: Option<u8>) -> Result<bool> {
+    let content = std::fs::read_to_string(path)?;
+    let rating_str = match rating {
+        Some(r) if r > 0 => r.to_string(),
+        _ => "0".to_string(),
+    };
+
+    let modified = update_rating_in_string(&content, &rating_str);
+
+    if modified == content {
+        return Ok(false);
+    }
+
+    std::fs::write(path, &modified)?;
+    Ok(true)
+}
+
+/// Apply a rating update to an XMP string, returning the modified string.
+fn update_rating_in_string(content: &str, rating_str: &str) -> String {
+    // Try attribute form: xmp:Rating="..."
+    let attr_re = Regex::new(r#"xmp:Rating="[^"]*""#).unwrap();
+    if attr_re.is_match(content) {
+        return attr_re
+            .replace(content, format!(r#"xmp:Rating="{rating_str}""#))
+            .into_owned();
+    }
+
+    // Try element form: <xmp:Rating>...</xmp:Rating>
+    let elem_re = Regex::new(r"<xmp:Rating>[^<]*</xmp:Rating>").unwrap();
+    if elem_re.is_match(content) {
+        return elem_re
+            .replace(
+                content,
+                format!("<xmp:Rating>{rating_str}</xmp:Rating>"),
+            )
+            .into_owned();
+    }
+
+    // Neither form found — inject attribute if rating > 0
+    if rating_str == "0" {
+        return content.to_string();
+    }
+
+    // Inject xmp:Rating attribute into the first rdf:Description element
+    let desc_re = Regex::new(r"(<rdf:Description\b)").unwrap();
+    if desc_re.is_match(content) {
+        return desc_re
+            .replace(
+                content,
+                format!(r#"${{1}} xmp:Rating="{rating_str}""#),
+            )
+            .into_owned();
+    }
+
+    // No rdf:Description found — can't inject, return unchanged
+    content.to_string()
 }
 
 /// Parse XMP metadata from an XML string.
@@ -352,5 +417,176 @@ mod tests {
         let data = parse_xmp(xmp);
         assert_eq!(data.source_metadata.get("rating").unwrap(), "2");
         assert_eq!(data.source_metadata.get("label").unwrap(), "Green");
+    }
+
+    // ── update_rating tests ──────────────────────────────────
+
+    #[test]
+    fn update_rating_attribute_form() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="3"
+    xmp:Label="Blue">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_rating_in_string(xmp, "5");
+        assert!(result.contains(r#"xmp:Rating="5""#));
+        assert!(result.contains(r#"xmp:Label="Blue""#));
+        assert!(!result.contains(r#"xmp:Rating="3""#));
+    }
+
+    #[test]
+    fn update_rating_element_form() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+   <xmp:Rating>2</xmp:Rating>
+   <xmp:Label>Green</xmp:Label>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_rating_in_string(xmp, "4");
+        assert!(result.contains("<xmp:Rating>4</xmp:Rating>"));
+        assert!(result.contains("<xmp:Label>Green</xmp:Label>"));
+        assert!(!result.contains("<xmp:Rating>2</xmp:Rating>"));
+    }
+
+    #[test]
+    fn update_rating_inject_when_missing() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Label="Red">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_rating_in_string(xmp, "3");
+        assert!(result.contains(r#"xmp:Rating="3""#));
+        assert!(result.contains(r#"xmp:Label="Red""#));
+    }
+
+    #[test]
+    fn update_rating_clear_sets_zero() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="4">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_rating_in_string(xmp, "0");
+        assert!(result.contains(r#"xmp:Rating="0""#));
+        assert!(!result.contains(r#"xmp:Rating="4""#));
+    }
+
+    #[test]
+    fn update_rating_no_inject_when_clearing() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_rating_in_string(xmp, "0");
+        // Should not inject xmp:Rating="0" when there's no existing rating
+        assert!(!result.contains("xmp:Rating"));
+        assert_eq!(result, xmp);
+    }
+
+    #[test]
+    fn update_rating_preserves_other_content() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="2"
+    xmp:Label="Blue">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>landscape</rdf:li>
+     <rdf:li>sunset</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+   <dc:description>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">A beautiful sunset</rdf:li>
+    </rdf:Alt>
+   </dc:description>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_rating_in_string(xmp, "5");
+        assert!(result.contains(r#"xmp:Rating="5""#));
+        assert!(result.contains(r#"xmp:Label="Blue""#));
+        assert!(result.contains("<rdf:li>landscape</rdf:li>"));
+        assert!(result.contains("<rdf:li>sunset</rdf:li>"));
+        assert!(result.contains("A beautiful sunset"));
+    }
+
+    #[test]
+    fn update_rating_file_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.xmp");
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="1">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+        std::fs::write(&path, xmp).unwrap();
+
+        let modified = update_rating(&path, Some(4)).unwrap();
+        assert!(modified);
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains(r#"xmp:Rating="4""#));
+    }
+
+    #[test]
+    fn update_rating_nonexistent_file() {
+        let result = update_rating(Path::new("/nonexistent/file.xmp"), Some(3));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn update_rating_no_change_returns_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.xmp");
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="3">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+        std::fs::write(&path, xmp).unwrap();
+
+        let modified = update_rating(&path, Some(3)).unwrap();
+        assert!(!modified);
     }
 }

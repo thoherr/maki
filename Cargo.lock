@@ -597,6 +597,7 @@ dependencies = [
  "lofty",
  "predicates",
  "quick-xml",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
