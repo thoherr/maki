@@ -268,6 +268,14 @@
     // Expose for hx-vals
     window.getSelectedTags = getSelectedTags;
     window.getFilterRating = getFilterRating;
+
+    // Refresh results when page is restored from bfcache (e.g., back from asset detail)
+    // so that changes made on the asset page (rating, tags) are reflected.
+    window.addEventListener('pageshow', function(event) {
+        if (event.persisted) {
+            htmx.ajax('GET', window.location.href, {target: '#results', swap: 'innerHTML'});
+        }
+    });
 })();
 </script>
 {% endblock %}
