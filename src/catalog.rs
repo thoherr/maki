@@ -943,6 +943,102 @@ impl Catalog {
         Ok(())
     }
 
+    // ── Sync queries ───────────────────────────────────────────────
+
+    /// List all file locations on a volume whose path starts with the given prefix.
+    /// Returns `(content_hash, relative_path)` pairs.
+    pub fn list_locations_for_volume_under_prefix(
+        &self,
+        volume_id: &str,
+        prefix: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let pattern = if prefix.is_empty() {
+            "%".to_string()
+        } else {
+            format!("{prefix}%")
+        };
+        let mut stmt = self.conn.prepare(
+            "SELECT content_hash, relative_path FROM file_locations \
+             WHERE volume_id = ?1 AND relative_path LIKE ?2",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![volume_id, pattern], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// List all recipes on a volume whose path starts with the given prefix.
+    /// Returns `(recipe_id, content_hash, variant_hash, relative_path)` tuples.
+    pub fn list_recipes_for_volume_under_prefix(
+        &self,
+        volume_id: &str,
+        prefix: &str,
+    ) -> Result<Vec<(String, String, String, String)>> {
+        let pattern = if prefix.is_empty() {
+            "%".to_string()
+        } else {
+            format!("{prefix}%")
+        };
+        let mut stmt = self.conn.prepare(
+            "SELECT id, content_hash, variant_hash, relative_path FROM recipes \
+             WHERE volume_id = ?1 AND relative_path LIKE ?2",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![volume_id, pattern], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// Update the relative_path for a file location (variant moved on disk).
+    pub fn update_file_location_path(
+        &self,
+        content_hash: &str,
+        volume_id: &str,
+        old_path: &str,
+        new_path: &str,
+    ) -> Result<()> {
+        let changed = self.conn.execute(
+            "UPDATE file_locations SET relative_path = ?1 \
+             WHERE content_hash = ?2 AND volume_id = ?3 AND relative_path = ?4",
+            rusqlite::params![new_path, content_hash, volume_id, old_path],
+        )?;
+        if changed == 0 {
+            anyhow::bail!(
+                "No file location found for hash '{content_hash}' at '{old_path}'"
+            );
+        }
+        Ok(())
+    }
+
+    /// Update the relative_path for a recipe (recipe file moved on disk).
+    pub fn update_recipe_relative_path(
+        &self,
+        recipe_id: &str,
+        new_path: &str,
+    ) -> Result<()> {
+        let changed = self.conn.execute(
+            "UPDATE recipes SET relative_path = ?1 WHERE id = ?2",
+            rusqlite::params![new_path, recipe_id],
+        )?;
+        if changed == 0 {
+            anyhow::bail!("No recipe found with id '{recipe_id}'");
+        }
+        Ok(())
+    }
+
     // ── Stats queries ──────────────────────────────────────────────
 
     /// Core overview counts: (assets, variants, recipes, total_size).

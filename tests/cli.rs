@@ -1810,3 +1810,287 @@ fn generate_previews_log_shows_per_file_progress() {
         .success()
         .stderr(predicate::str::is_empty());
 }
+
+// ── Sync tests ─────────────────────────────────────────────────────
+
+#[test]
+fn sync_detects_unchanged() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "photo.jpg", b"photo data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .args(["sync", root.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("unchanged"));
+}
+
+#[test]
+fn sync_detects_moved_file() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let sub = root.join("originals");
+    std::fs::create_dir_all(&sub).unwrap();
+    let file = create_test_file(&sub, "photo.jpg", b"moved photo data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Move the file to a new directory
+    let new_sub = root.join("renamed");
+    std::fs::create_dir_all(&new_sub).unwrap();
+    std::fs::rename(&file, new_sub.join("photo.jpg")).unwrap();
+
+    // Dry run — should detect moved
+    dam()
+        .current_dir(&root)
+        .args(["sync", root.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("moved"));
+
+    // Apply — should update location
+    dam()
+        .current_dir(&root)
+        .args(["sync", "--apply", root.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("moved"));
+
+    // Verify the location was updated by running show (should show new path)
+    let search_output = dam()
+        .current_dir(&root)
+        .args(["search", "--format", "ids", "*"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&search_output.get_output().stdout);
+    let asset_id = stdout.trim();
+
+    dam()
+        .current_dir(&root)
+        .args(["--json", "show", asset_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("renamed/photo.jpg"));
+}
+
+#[test]
+fn sync_detects_new_file() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file1 = create_test_file(&root, "existing.jpg", b"existing data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file1.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Create a new file that wasn't imported
+    create_test_file(&root, "brand_new.jpg", b"brand new data");
+
+    dam()
+        .current_dir(&root)
+        .args(["sync", root.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("new"))
+        .stdout(predicate::str::contains("Tip: run 'dam import'"));
+}
+
+#[test]
+fn sync_detects_missing_file() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "gone.jpg", b"will be deleted");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Delete the file
+    std::fs::remove_file(&file).unwrap();
+
+    dam()
+        .current_dir(&root)
+        .args(["sync", root.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("missing"));
+}
+
+#[test]
+fn sync_remove_stale() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "stale.jpg", b"stale data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Get asset id before deleting
+    let search_output = dam()
+        .current_dir(&root)
+        .args(["search", "--format", "ids", "*"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&search_output.get_output().stdout);
+    let asset_id = stdout.trim().to_string();
+
+    std::fs::remove_file(&file).unwrap();
+
+    // --remove-stale requires --apply
+    dam()
+        .current_dir(&root)
+        .args(["sync", "--remove-stale", root.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--remove-stale requires --apply"));
+
+    // Apply with --remove-stale
+    dam()
+        .current_dir(&root)
+        .args(["sync", "--apply", "--remove-stale", root.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("stale removed"));
+
+    // Show should still work but location should be gone
+    let show_output = dam()
+        .current_dir(&root)
+        .args(["--json", "show", &asset_id])
+        .assert()
+        .success();
+    let show_stdout = String::from_utf8_lossy(&show_output.get_output().stdout);
+    let show_json: serde_json::Value = serde_json::from_str(&show_stdout).expect("valid JSON");
+    let locations = &show_json["variants"][0]["locations"];
+    assert_eq!(locations.as_array().unwrap().len(), 0, "location should be removed");
+}
+
+#[test]
+fn sync_detects_modified_recipe() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Create a NEF + XMP pair
+    create_test_file(&root, "DSC_001.nef", b"raw image data");
+    let xmp = create_test_file(&root, "DSC_001.xmp", b"<xmp>original</xmp>");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", "--include", "captureone", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Modify the XMP
+    std::fs::write(&xmp, b"<xmp>modified content</xmp>").unwrap();
+
+    dam()
+        .current_dir(&root)
+        .args(["sync", root.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("modified"));
+}
+
+#[test]
+fn sync_default_is_dry_run() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let sub = root.join("before");
+    std::fs::create_dir_all(&sub).unwrap();
+    let file = create_test_file(&sub, "moveme.jpg", b"dry run data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Move the file
+    let new_sub = root.join("after");
+    std::fs::create_dir_all(&new_sub).unwrap();
+    std::fs::rename(&file, new_sub.join("moveme.jpg")).unwrap();
+
+    // Sync without --apply (dry run)
+    dam()
+        .current_dir(&root)
+        .args(["sync", root.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("moved"));
+
+    // Show should still have the old path (catalog unchanged)
+    let search_output = dam()
+        .current_dir(&root)
+        .args(["search", "--format", "ids", "*"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&search_output.get_output().stdout);
+    let asset_id = stdout.trim();
+
+    dam()
+        .current_dir(&root)
+        .args(["--json", "show", asset_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("before/moveme.jpg"));
+}
+
+#[test]
+fn sync_json_output() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "json_test.jpg", b"json test data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "sync", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert!(json.get("unchanged").is_some());
+    assert!(json.get("moved").is_some());
+    assert!(json.get("new_files").is_some());
+    assert!(json.get("modified").is_some());
+    assert!(json.get("missing").is_some());
+    assert!(json.get("stale_removed").is_some());
+    assert!(json.get("errors").is_some());
+}
+
+#[test]
+fn sync_no_paths_errors() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    dam()
+        .current_dir(&root)
+        .args(["sync"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No paths specified"));
+}

@@ -166,6 +166,24 @@ enum Commands {
         skip: Vec<String>,
     },
 
+    /// Sync catalog with disk changes (moved/modified/missing files)
+    Sync {
+        /// Paths to files or directories to scan
+        paths: Vec<String>,
+
+        /// Use a specific volume (instead of auto-detecting from path)
+        #[arg(long, display_order = 10)]
+        volume: Option<String>,
+
+        /// Apply changes to catalog and sidecar files
+        #[arg(long, display_order = 20)]
+        apply: bool,
+
+        /// Remove catalog locations for missing files (requires --apply)
+        #[arg(long, display_order = 21)]
+        remove_stale: bool,
+    },
+
     /// Find duplicate files
     Duplicates {
         /// Output format: ids, short, full, json, or a custom template (e.g. '{hash}\t{filename}')
@@ -860,6 +878,104 @@ fn main() {
 
             if result.failed > 0 {
                 std::process::exit(1);
+            }
+
+            Ok(())
+        }
+        Commands::Sync { paths, volume, apply, remove_stale } => {
+            if paths.is_empty() {
+                anyhow::bail!("No paths specified for sync.");
+            }
+            if remove_stale && !apply {
+                anyhow::bail!("--remove-stale requires --apply.");
+            }
+
+            let catalog_root = dam::config::find_catalog_root()?;
+            let config = CatalogConfig::load(&catalog_root)?;
+            let registry = DeviceRegistry::new(&catalog_root);
+
+            let canonical_paths: Vec<PathBuf> = paths
+                .iter()
+                .map(|p| {
+                    std::fs::canonicalize(p)
+                        .unwrap_or_else(|_| PathBuf::from(p))
+                })
+                .collect();
+
+            let volume = if let Some(label) = &volume {
+                registry.resolve_volume(label)?
+            } else {
+                registry.find_volume_for_path(&canonical_paths[0])?
+            };
+
+            let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
+            let result = if cli.log {
+                use dam::asset_service::SyncStatus;
+                service.sync(
+                    &canonical_paths,
+                    &volume,
+                    apply,
+                    remove_stale,
+                    &config.import.exclude,
+                    |path, status, elapsed| {
+                        let label = match status {
+                            SyncStatus::Unchanged => "unchanged",
+                            SyncStatus::Moved => "moved",
+                            SyncStatus::New => "new",
+                            SyncStatus::Modified => "modified",
+                            SyncStatus::Missing => "missing",
+                        };
+                        let name = path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or_else(|| path.to_str().unwrap_or("?"));
+                        eprintln!("  {} — {} ({})", name, label, format_duration(elapsed));
+                    },
+                )?
+            } else {
+                service.sync(
+                    &canonical_paths,
+                    &volume,
+                    apply,
+                    remove_stale,
+                    &config.import.exclude,
+                    |_, _, _| {},
+                )?
+            };
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                for err in &result.errors {
+                    eprintln!("  {err}");
+                }
+
+                let mut parts: Vec<String> = Vec::new();
+                if result.unchanged > 0 {
+                    parts.push(format!("{} unchanged", result.unchanged));
+                }
+                if result.moved > 0 {
+                    parts.push(format!("{} moved", result.moved));
+                }
+                if result.new_files > 0 {
+                    parts.push(format!("{} new", result.new_files));
+                }
+                if result.modified > 0 {
+                    parts.push(format!("{} modified", result.modified));
+                }
+                if result.missing > 0 {
+                    parts.push(format!("{} missing", result.missing));
+                }
+                if result.stale_removed > 0 {
+                    parts.push(format!("{} stale removed", result.stale_removed));
+                }
+                if parts.is_empty() {
+                    println!("Sync: nothing to sync");
+                } else {
+                    println!("Sync complete: {}", parts.join(", "));
+                }
+                if result.new_files > 0 {
+                    println!("  Tip: run 'dam import' to import new files.");
+                }
             }
 
             Ok(())

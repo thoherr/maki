@@ -33,7 +33,7 @@ Core layers: CLI → Core Library (Asset Service, Content Store, Metadata Store,
 
 Core CLI is functional. See `specification.md` for full requirements.
 
-**Implemented commands**: `init`, `volume add/list`, `import`, `search`, `show`, `tag`, `edit`, `group`, `duplicates`, `generate-previews`, `rebuild-catalog`, `relocate`, `verify`, `stats`, `serve`
+**Implemented commands**: `init`, `volume add/list`, `import`, `search`, `show`, `tag`, `edit`, `group`, `duplicates`, `generate-previews`, `rebuild-catalog`, `relocate`, `verify`, `sync`, `stats`, `serve`
 
 **Import behavior**:
 - **Stem-based auto-grouping**: Files sharing the same filename stem in the same directory are grouped into one Asset during import. RAW files take priority as the primary variant (defining asset identity and EXIF data). Additional media files become extra variants on the same asset.
@@ -50,13 +50,15 @@ Core CLI is functional. See `specification.md` for full requirements.
 
 - **Verify command**: Re-hashes files on disk and compares against stored content hashes to detect corruption or bit rot. `dam verify [PATHS...] [--volume <label>] [--asset <id>]`. Without arguments, verifies all file locations on all online volumes. With paths, verifies specific files/directories. `--volume` limits to a specific volume; `--asset` limits to a specific asset. Updates `verified_at` timestamps on successful verification. Exits with code 1 if any mismatches are found. Recipe files that have been modified externally are reported as "modified" (not "FAILED") and do not trigger exit code 1 — their stored hash is updated to reflect the new content.
 
+- **Sync command**: Reconciles catalog with disk reality after external tools move, rename, or modify files. `dam sync <PATHS...> [--volume <label>] [--apply] [--remove-stale]`. Without `--apply`, runs in report-only mode (safe default). With `--apply`, updates catalog and sidecar files for moved files and modified recipes. `--remove-stale` (requires `--apply`) removes catalog location records for confirmed-missing files. Detects: unchanged files (hash matches at expected path), moved files (known hash at new path, old path gone), new files (unknown hash), modified recipes (same path, different hash), missing files (catalog location but file gone from disk). New files are reported but not auto-imported — user runs `dam import` separately. Supports `--json`, `--log`, `--time` flags.
+
 - **Stats command**: Shows catalog statistics. `dam stats [--types] [--volumes] [--tags] [--verified] [--all] [--limit N]`. Without flags, shows overview only (assets, variants, recipes, volumes, total size). `--types` adds asset type and format breakdown. `--volumes` adds per-volume details (assets, size, directories, verification). `--tags` shows tag usage frequencies. `--verified` shows verification health. `--all` enables all sections. `--limit N` controls top-N lists (default 20). Supports `--json` for structured output.
 
 - **Serve command**: `dam serve [--port <port>] [--bind <addr>]`. Starts a web UI server (default `127.0.0.1:8080`). Browse page with search/filter/sort/pagination and rating filter dropdown. Asset detail page with preview, metadata, editable tags, inline editable star rating, variants, and recipes. Uses htmx for partial page updates (tags and rating). Star ratings displayed on browse cards. `PUT /api/asset/{id}/rating` endpoint for inline editing. SQLite connections are opened per-request via `spawn_blocking`. Previews served via `tower-http::ServeDir`. Static assets (htmx.min.js, style.css) embedded at compile time.
 
 **Output formatting**:
-- **Global `--json` flag**: Available on all commands. Outputs structured JSON to stdout; human-readable messages go to stderr. All data types (`SearchRow`, `AssetDetails`, `ImportResult`, `VerifyResult`, `RelocateResult`, `DuplicateEntry`) derive `serde::Serialize`.
-- **Global `--log` / `-l` flag**: Per-file progress logging for multi-file commands (import, verify, generate-previews). Each file prints `filename — status (duration)` to stderr.
+- **Global `--json` flag**: Available on all commands. Outputs structured JSON to stdout; human-readable messages go to stderr. All data types (`SearchRow`, `AssetDetails`, `ImportResult`, `VerifyResult`, `SyncResult`, `RelocateResult`, `DuplicateEntry`) derive `serde::Serialize`.
+- **Global `--log` / `-l` flag**: Per-file progress logging for multi-file commands (import, verify, sync, generate-previews). Each file prints `filename — status (duration)` to stderr.
 - **Global `--debug` / `-d` flag**: Shows stderr output from external tools (ffmpeg, dcraw, dcraw_emu) for diagnosing preview generation issues. Prints the command line and stderr to eprintln.
 - **Global `--time` / `-t` flag**: Shows total elapsed time after command execution.
 - **Rating**: First-class `Option<u8>` field on `Asset` (persisted in sidecar YAML and SQLite `assets.rating` column). Extracted from XMP during import. Editable via `QueryEngine::set_rating()` and web UI inline stars. Filterable in CLI search (`rating:N` exact, `rating:N+` minimum) and web UI (dropdown). Displayed as stars in `dam show` output and web UI browse cards/asset detail.
