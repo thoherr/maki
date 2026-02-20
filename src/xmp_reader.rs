@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -114,6 +114,159 @@ fn update_rating_in_string(content: &str, rating_str: &str) -> String {
 
     // No rdf:Description found — can't inject, return unchanged
     content.to_string()
+}
+
+/// Update the `dc:subject` keywords in an XMP file on disk.
+///
+/// Applies delta operations: adds `tags_to_add` and removes `tags_to_remove`
+/// from the existing `dc:subject` / `rdf:Bag` keyword list.
+/// Preserves tags in the XMP that are not mentioned in either list.
+/// Returns `Ok(true)` if the file was modified, `Ok(false)` if no change was needed.
+pub fn update_tags(path: &Path, tags_to_add: &[String], tags_to_remove: &[String]) -> Result<bool> {
+    if tags_to_add.is_empty() && tags_to_remove.is_empty() {
+        return Ok(false);
+    }
+    let content = std::fs::read_to_string(path)?;
+    let modified = update_tags_in_string(&content, tags_to_add, tags_to_remove);
+    if modified == content {
+        return Ok(false);
+    }
+    std::fs::write(path, &modified)?;
+    Ok(true)
+}
+
+/// Apply tag add/remove operations to an XMP string, returning the modified string.
+fn update_tags_in_string(content: &str, tags_to_add: &[String], tags_to_remove: &[String]) -> String {
+    let remove_set: HashSet<&str> = tags_to_remove.iter().map(|s| s.as_str()).collect();
+
+    // Match existing dc:subject block with rdf:Bag
+    let subject_re =
+        Regex::new(r"(?s)([ \t]*)<dc:subject>\s*<rdf:Bag>(.*?)</rdf:Bag>\s*</dc:subject>")
+            .unwrap();
+    let li_re = Regex::new(r"<rdf:li>([^<]*)</rdf:li>").unwrap();
+
+    if let Some(caps) = subject_re.captures(content) {
+        let full_match = caps.get(0).unwrap();
+        let indent = caps.get(1).unwrap().as_str();
+        let bag_content = caps.get(2).unwrap().as_str();
+
+        // Parse existing tags
+        let mut tags: Vec<String> = li_re
+            .captures_iter(bag_content)
+            .map(|c| c.get(1).unwrap().as_str().to_string())
+            .collect();
+
+        // Apply removals
+        tags.retain(|t| !remove_set.contains(t.as_str()));
+
+        // Apply additions (deduplicated)
+        for tag in tags_to_add {
+            if !tags.iter().any(|t| t == tag) {
+                tags.push(tag.clone());
+            }
+        }
+
+        if tags.is_empty() {
+            // Remove the entire dc:subject block including the preceding newline
+            let start = full_match.start();
+            let end = full_match.end();
+            let trim_start = if content[..start].ends_with('\n') {
+                start - 1
+            } else {
+                start
+            };
+            return format!("{}{}", &content[..trim_start], &content[end..]);
+        }
+
+        // Rebuild with same indentation
+        let bag_indent = format!("{} ", indent);
+        let li_indent = format!("{}  ", indent);
+        let mut block = format!("{}<dc:subject>\n{}<rdf:Bag>\n", indent, bag_indent);
+        for tag in &tags {
+            block.push_str(&format!("{}<rdf:li>{}</rdf:li>\n", li_indent, xml_escape(tag)));
+        }
+        block.push_str(&format!("{}</rdf:Bag>\n{}</dc:subject>", bag_indent, indent));
+
+        return format!(
+            "{}{}{}",
+            &content[..full_match.start()],
+            block,
+            &content[full_match.end()..]
+        );
+    }
+
+    // No existing dc:subject — only proceed if we have tags to add
+    if tags_to_add.is_empty() {
+        return content.to_string();
+    }
+
+    // Ensure xmlns:dc namespace is declared
+    let mut content = content.to_string();
+    if !content.contains("xmlns:dc") {
+        let desc_re = Regex::new(r#"(<rdf:Description\b)"#).unwrap();
+        if desc_re.is_match(&content) {
+            content = desc_re
+                .replace(
+                    &content,
+                    r#"${1} xmlns:dc="http://purl.org/dc/elements/1.1/""#,
+                )
+                .into_owned();
+        }
+    }
+
+    // Try to inject before </rdf:Description>
+    let close_re = Regex::new(r"([ \t]*)</rdf:Description>").unwrap();
+    if let Some(caps) = close_re.captures(&content) {
+        let m = caps.get(0).unwrap();
+        let desc_indent = caps.get(1).unwrap().as_str();
+        let indent = format!("{} ", desc_indent);
+        let bag_indent = format!("{}  ", desc_indent);
+        let li_indent = format!("{}   ", desc_indent);
+
+        let mut block = format!("{}<dc:subject>\n{}<rdf:Bag>\n", indent, bag_indent);
+        for tag in tags_to_add {
+            block.push_str(&format!("{}<rdf:li>{}</rdf:li>\n", li_indent, xml_escape(tag)));
+        }
+        block.push_str(&format!(
+            "{}</rdf:Bag>\n{}</dc:subject>\n",
+            bag_indent, indent
+        ));
+
+        return format!("{}{}{}", &content[..m.start()], block, &content[m.start()..]);
+    }
+
+    // Try to handle self-closing rdf:Description: convert /> to > and append
+    let self_close_re =
+        Regex::new(r"(?s)([ \t]*)<rdf:Description\b([^>]*?)/>").unwrap();
+    if let Some(caps) = self_close_re.captures(&content) {
+        let m = caps.get(0).unwrap();
+        let desc_indent = caps.get(1).unwrap().as_str();
+        let attrs = caps.get(2).unwrap().as_str();
+        let indent = format!("{} ", desc_indent);
+        let bag_indent = format!("{}  ", desc_indent);
+        let li_indent = format!("{}   ", desc_indent);
+
+        let mut block = format!("{}<rdf:Description{}>\n", desc_indent, attrs);
+        block.push_str(&format!("{}<dc:subject>\n{}<rdf:Bag>\n", indent, bag_indent));
+        for tag in tags_to_add {
+            block.push_str(&format!("{}<rdf:li>{}</rdf:li>\n", li_indent, xml_escape(tag)));
+        }
+        block.push_str(&format!(
+            "{}</rdf:Bag>\n{}</dc:subject>\n{}</rdf:Description>",
+            bag_indent, indent, desc_indent
+        ));
+
+        return format!("{}{}{}", &content[..m.start()], block, &content[m.end()..]);
+    }
+
+    content
+}
+
+/// Escape special XML characters in a string.
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Parse XMP metadata from an XML string.
@@ -588,5 +741,322 @@ mod tests {
 
         let modified = update_rating(&path, Some(3)).unwrap();
         assert!(!modified);
+    }
+
+    // ── update_tags tests ────────────────────────────────────
+
+    #[test]
+    fn update_tags_add_to_existing() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>landscape</rdf:li>
+     <rdf:li>sunset</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_tags_in_string(
+            xmp,
+            &["ocean".to_string()],
+            &[],
+        );
+        assert!(result.contains("<rdf:li>landscape</rdf:li>"));
+        assert!(result.contains("<rdf:li>sunset</rdf:li>"));
+        assert!(result.contains("<rdf:li>ocean</rdf:li>"));
+    }
+
+    #[test]
+    fn update_tags_remove_from_existing() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>landscape</rdf:li>
+     <rdf:li>sunset</rdf:li>
+     <rdf:li>ocean</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_tags_in_string(
+            xmp,
+            &[],
+            &["sunset".to_string()],
+        );
+        assert!(result.contains("<rdf:li>landscape</rdf:li>"));
+        assert!(!result.contains("<rdf:li>sunset</rdf:li>"));
+        assert!(result.contains("<rdf:li>ocean</rdf:li>"));
+    }
+
+    #[test]
+    fn update_tags_add_and_remove() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>landscape</rdf:li>
+     <rdf:li>sunset</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_tags_in_string(
+            xmp,
+            &["mountains".to_string()],
+            &["sunset".to_string()],
+        );
+        assert!(result.contains("<rdf:li>landscape</rdf:li>"));
+        assert!(!result.contains("<rdf:li>sunset</rdf:li>"));
+        assert!(result.contains("<rdf:li>mountains</rdf:li>"));
+    }
+
+    #[test]
+    fn update_tags_remove_all_removes_block() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmp:Rating="3">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>landscape</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_tags_in_string(
+            xmp,
+            &[],
+            &["landscape".to_string()],
+        );
+        assert!(!result.contains("dc:subject"));
+        assert!(!result.contains("rdf:Bag"));
+        assert!(!result.contains("landscape"));
+        // Other content preserved
+        assert!(result.contains("xmp:Rating"));
+    }
+
+    #[test]
+    fn update_tags_inject_when_no_subject() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="3">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_tags_in_string(
+            xmp,
+            &["landscape".to_string(), "sunset".to_string()],
+            &[],
+        );
+        assert!(result.contains("<dc:subject>"));
+        assert!(result.contains("<rdf:li>landscape</rdf:li>"));
+        assert!(result.contains("<rdf:li>sunset</rdf:li>"));
+        assert!(result.contains("xmp:Rating"));
+    }
+
+    #[test]
+    fn update_tags_inject_adds_xmlns_dc() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="3">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_tags_in_string(
+            xmp,
+            &["portrait".to_string()],
+            &[],
+        );
+        assert!(result.contains("xmlns:dc"));
+        assert!(result.contains("<rdf:li>portrait</rdf:li>"));
+    }
+
+    #[test]
+    fn update_tags_inject_self_closing_description() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="3"/>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_tags_in_string(
+            xmp,
+            &["nature".to_string()],
+            &[],
+        );
+        assert!(result.contains("xmlns:dc"));
+        assert!(result.contains("<rdf:li>nature</rdf:li>"));
+        assert!(result.contains("</rdf:Description>"));
+        assert!(!result.contains("/>"));
+    }
+
+    #[test]
+    fn update_tags_no_change_add_existing() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>landscape</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_tags_in_string(
+            xmp,
+            &["landscape".to_string()],
+            &[],
+        );
+        // Should still contain the tag, and the content should round-trip
+        assert!(result.contains("<rdf:li>landscape</rdf:li>"));
+    }
+
+    #[test]
+    fn update_tags_remove_nonexistent_is_noop() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>landscape</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_tags_in_string(
+            xmp,
+            &[],
+            &["nonexistent".to_string()],
+        );
+        assert!(result.contains("<rdf:li>landscape</rdf:li>"));
+    }
+
+    #[test]
+    fn update_tags_preserves_other_content() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="4"
+    xmp:Label="Blue">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>landscape</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+   <dc:description>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">A beautiful sunset</rdf:li>
+    </rdf:Alt>
+   </dc:description>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_tags_in_string(
+            xmp,
+            &["ocean".to_string()],
+            &[],
+        );
+        assert!(result.contains(r#"xmp:Rating="4""#));
+        assert!(result.contains(r#"xmp:Label="Blue""#));
+        assert!(result.contains("A beautiful sunset"));
+        assert!(result.contains("<rdf:li>landscape</rdf:li>"));
+        assert!(result.contains("<rdf:li>ocean</rdf:li>"));
+    }
+
+    #[test]
+    fn update_tags_file_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.xmp");
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>landscape</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+        std::fs::write(&path, xmp).unwrap();
+
+        let modified = update_tags(&path, &["ocean".to_string()], &["landscape".to_string()]).unwrap();
+        assert!(modified);
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("<rdf:li>ocean</rdf:li>"));
+        assert!(!content.contains("<rdf:li>landscape</rdf:li>"));
+    }
+
+    #[test]
+    fn update_tags_xml_escapes_special_chars() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>existing</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_tags_in_string(
+            xmp,
+            &["black & white".to_string()],
+            &[],
+        );
+        assert!(result.contains("<rdf:li>black &amp; white</rdf:li>"));
     }
 }

@@ -428,6 +428,15 @@ impl QueryEngine {
         store.save(&asset)?;
         catalog.insert_asset(&asset)?;
 
+        if !changed.is_empty() {
+            let (to_add, to_remove) = if remove {
+                (Vec::new(), changed.clone())
+            } else {
+                (changed.clone(), Vec::new())
+            };
+            self.write_back_tags_to_xmp(&mut asset, &to_add, &to_remove, &catalog, &store);
+        }
+
         Ok(TagResult {
             changed,
             current_tags: asset.tags.clone(),
@@ -580,6 +589,96 @@ impl QueryEngine {
         if sidecar_dirty {
             if let Err(e) = store.save(asset) {
                 eprintln!("Warning: could not save sidecar after XMP write-back: {e}");
+            }
+        }
+    }
+
+    /// Write back tag add/remove operations to `.xmp` recipe files on disk.
+    ///
+    /// For each XMP recipe on an online volume, applies the same delta (add/remove)
+    /// to the `dc:subject` keyword list, re-hashes, and updates the recipe's content
+    /// hash in catalog and sidecar. Silently skips offline volumes and missing files.
+    fn write_back_tags_to_xmp(
+        &self,
+        asset: &mut Asset,
+        tags_to_add: &[String],
+        tags_to_remove: &[String],
+        catalog: &Catalog,
+        store: &MetadataStore,
+    ) {
+        let registry = DeviceRegistry::new(&self.catalog_root);
+        let volumes = match registry.list() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("Warning: could not load volumes for XMP tag write-back: {e}");
+                return;
+            }
+        };
+
+        let online: HashMap<uuid::Uuid, &std::path::Path> = volumes
+            .iter()
+            .filter(|v| v.is_online)
+            .map(|v| (v.id, v.mount_point.as_path()))
+            .collect();
+
+        let content_store = ContentStore::new(&self.catalog_root);
+        let mut sidecar_dirty = false;
+
+        for recipe in &mut asset.recipes {
+            let ext = recipe
+                .location
+                .relative_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if ext != "xmp" {
+                continue;
+            }
+
+            let mount_point = match online.get(&recipe.location.volume_id) {
+                Some(mp) => *mp,
+                None => continue,
+            };
+
+            let full_path = mount_point.join(&recipe.location.relative_path);
+            if !full_path.exists() {
+                continue;
+            }
+
+            match xmp_reader::update_tags(&full_path, tags_to_add, tags_to_remove) {
+                Ok(true) => {
+                    match content_store.hash_file(&full_path) {
+                        Ok(new_hash) => {
+                            if let Err(e) = catalog.update_recipe_content_hash(
+                                &recipe.id.to_string(),
+                                &new_hash,
+                            ) {
+                                eprintln!(
+                                    "Warning: could not update recipe hash in catalog: {e}"
+                                );
+                            }
+                            recipe.content_hash = new_hash;
+                            sidecar_dirty = true;
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: could not re-hash XMP file: {e}");
+                        }
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    eprintln!(
+                        "Warning: could not write tags to {}: {e}",
+                        full_path.display()
+                    );
+                }
+            }
+        }
+
+        if sidecar_dirty {
+            if let Err(e) = store.save(asset) {
+                eprintln!("Warning: could not save sidecar after XMP tag write-back: {e}");
             }
         }
     }
