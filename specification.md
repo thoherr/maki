@@ -33,7 +33,7 @@
   - Summary only reports non-zero stat categories
 - **`search`** — search assets by text, type, tag, or format via SQLite catalog
 - **`show`** — display full asset details including variants, locations, source metadata, and recipes
-- **`tag`** — add or remove tags on an asset (with `--remove` flag)
+- **`tag`** — add or remove tags on an asset (with `--remove` flag). **XMP write-back**: tag changes are written back to `.xmp` recipe files on disk using operation-level deltas — added tags are inserted into `dc:subject`/`rdf:Bag`, removed tags are deleted. Tags added independently in CaptureOne are preserved (not overwritten). If no `dc:subject` block exists, one is injected (with `xmlns:dc` namespace if needed). After writing, the file is re-hashed and the recipe's content hash is updated. Offline volumes and missing files are silently skipped.
 - **`edit`** — edit asset metadata from the CLI: `dam edit <asset-id> [--name <name>] [--description <text>] [--rating <1-5>] [--clear-name] [--clear-description] [--clear-rating]`. At least one flag is required. Sets or clears the asset's name, description, and rating. Updates both sidecar YAML and SQLite catalog. Supports `--json` for structured output.
 - **`group`** — manually group variants into one asset by content hash (merges donor assets, combines tags)
 - **`rebuild-catalog`** — drop and rebuild SQLite catalog from YAML sidecar files (including recipes)
