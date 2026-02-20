@@ -3,26 +3,106 @@
 {% block title %}Tags — DAM{% endblock %}
 
 {% block content %}
-<h1>Tags <span class="muted">({{ total_tags }})</span></h1>
+<h1>Tags <span class="muted" id="tag-count">({{ total_tags }})</span></h1>
 
 {% if tags.is_empty() %}
 <p class="muted">No tags yet.</p>
 {% else %}
-<table class="data-table">
-    <thead>
-        <tr>
-            <th>Tag</th>
-            <th style="text-align:right">Assets</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for t in tags %}
-        <tr>
-            <td><a href="/?tag={{ t.name }}">{{ t.name }}</a></td>
-            <td style="text-align:right">{{ t.count }}</td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
+<input type="text" id="tag-search" class="tag-search-input" placeholder="Filter tags…">
+
+<div class="tag-list-header">
+    <span class="tag-col-name sortable" data-sort="name" data-dir="asc">
+        Tag <span class="sort-arrow"></span>
+    </span>
+    <span class="tag-col-count sortable active" data-sort="count" data-dir="desc">
+        Assets <span class="sort-arrow">▼</span>
+    </span>
+</div>
+
+<div id="tag-list" class="tag-list-columns">
+    {% for t in tags %}
+    <div class="tag-entry" data-name="{{ t.name }}" data-count="{{ t.count }}">
+        <a href="/?tag={{ t.name }}">{{ t.name }}</a>
+        <span class="tag-count">{{ t.count }}</span>
+    </div>
+    {% endfor %}
+</div>
+
+<script>
+(function() {
+    var list = document.getElementById('tag-list');
+    var headers = document.querySelectorAll('.tag-list-header .sortable');
+    var searchInput = document.getElementById('tag-search');
+    var countSpan = document.getElementById('tag-count');
+    var totalTags = {{ total_tags }};
+
+    function sortTags(field, dir) {
+        var entries = Array.from(list.querySelectorAll('.tag-entry'));
+        entries.sort(function(a, b) {
+            var av, bv;
+            if (field === 'name') {
+                av = a.getAttribute('data-name').toLowerCase();
+                bv = b.getAttribute('data-name').toLowerCase();
+                if (av < bv) return dir === 'asc' ? -1 : 1;
+                if (av > bv) return dir === 'asc' ? 1 : -1;
+                return 0;
+            } else {
+                av = parseInt(a.getAttribute('data-count'), 10);
+                bv = parseInt(b.getAttribute('data-count'), 10);
+                return dir === 'asc' ? av - bv : bv - av;
+            }
+        });
+        for (var i = 0; i < entries.length; i++) {
+            list.appendChild(entries[i]);
+        }
+    }
+
+    headers.forEach(function(header) {
+        header.addEventListener('click', function() {
+            var sort = this.getAttribute('data-sort');
+            var dir = this.getAttribute('data-dir');
+            // If already active, toggle direction; otherwise activate with default
+            if (this.classList.contains('active')) {
+                dir = dir === 'asc' ? 'desc' : 'asc';
+            } else {
+                dir = sort === 'name' ? 'asc' : 'desc';
+            }
+            this.setAttribute('data-dir', dir);
+            // Update active state
+            headers.forEach(function(h) {
+                h.classList.remove('active');
+                h.querySelector('.sort-arrow').textContent = '';
+            });
+            this.classList.add('active');
+            this.querySelector('.sort-arrow').textContent = dir === 'asc' ? '\u25B2' : '\u25BC';
+            sortTags(sort, dir);
+        });
+    });
+
+    function filterTags(query) {
+        var entries = list.querySelectorAll('.tag-entry');
+        var q = query.toLowerCase();
+        var shown = 0;
+        for (var i = 0; i < entries.length; i++) {
+            var name = entries[i].getAttribute('data-name').toLowerCase();
+            if (q.length < 2 || name.indexOf(q) !== -1) {
+                entries[i].classList.remove('hidden');
+                shown++;
+            } else {
+                entries[i].classList.add('hidden');
+            }
+        }
+        if (q.length >= 2) {
+            countSpan.textContent = '(' + shown + ' of ' + totalTags + ')';
+        } else {
+            countSpan.textContent = '(' + totalTags + ')';
+        }
+    }
+
+    searchInput.addEventListener('input', function() {
+        filterTags(this.value);
+    });
+})();
+</script>
 {% endif %}
 {% endblock %}
