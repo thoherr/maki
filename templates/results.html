@@ -1,7 +1,7 @@
-{% macro page_url(p) %}?q={{ query }}&type={{ asset_type }}&tag={{ tag }}&format={{ format_filter }}&volume={{ volume }}&rating={{ rating }}&sort={{ sort }}&page={{ p }}{% endmacro %}
-{% macro api_url(p) %}/api/search?q={{ query }}&type={{ asset_type }}&tag={{ tag }}&format={{ format_filter }}&volume={{ volume }}&rating={{ rating }}&sort={{ sort }}&page={{ p }}{% endmacro %}
-{% macro sort_url(s) %}/api/search?q={{ query }}&type={{ asset_type }}&tag={{ tag }}&format={{ format_filter }}&volume={{ volume }}&rating={{ rating }}&sort={{ s }}&page=1{% endmacro %}
-{% macro sort_href(s) %}?q={{ query }}&type={{ asset_type }}&tag={{ tag }}&format={{ format_filter }}&volume={{ volume }}&rating={{ rating }}&sort={{ s }}&page=1{% endmacro %}
+{% macro page_url(p) %}?q={{ query|urlencode }}&type={{ asset_type|urlencode }}&tag={{ tag|urlencode }}&format={{ format_filter|urlencode }}&volume={{ volume|urlencode }}&rating={{ rating|urlencode }}&sort={{ sort }}&page={{ p }}{% endmacro %}
+{% macro api_url(p) %}/api/search?q={{ query|urlencode }}&type={{ asset_type|urlencode }}&tag={{ tag|urlencode }}&format={{ format_filter|urlencode }}&volume={{ volume|urlencode }}&rating={{ rating|urlencode }}&sort={{ sort }}&page={{ p }}{% endmacro %}
+{% macro sort_url(s) %}/api/search?q={{ query|urlencode }}&type={{ asset_type|urlencode }}&tag={{ tag|urlencode }}&format={{ format_filter|urlencode }}&volume={{ volume|urlencode }}&rating={{ rating|urlencode }}&sort={{ s }}&page=1{% endmacro %}
+{% macro sort_href(s) %}?q={{ query|urlencode }}&type={{ asset_type|urlencode }}&tag={{ tag|urlencode }}&format={{ format_filter|urlencode }}&volume={{ volume|urlencode }}&rating={{ rating|urlencode }}&sort={{ s }}&page=1{% endmacro %}
 {% if cards.is_empty() %}
 <div class="no-results">
     {% if query.is_empty() && asset_type.is_empty() && tag.is_empty() && format_filter.is_empty() && volume.is_empty() && rating.is_empty() %}
@@ -15,20 +15,20 @@
     <span class="results-count">{{ total }} asset{% if total != 1 %}s{% endif %}{% if !query.is_empty() %} matching &ldquo;{{ query }}&rdquo;{% endif %}</span>
 
     <div class="sort-controls">
-        {% if sort == "date_desc" %}
-        <a class="sort-btn active" href="{% call sort_href("date_asc") %}" hx-get="{% call sort_url("date_asc") %}" hx-target="#results" hx-push-url="true">Date<span class="sort-arrow">&#9660;</span></a>
-        {% else if sort == "date_asc" %}
-        <a class="sort-btn active" href="{% call sort_href("date_desc") %}" hx-get="{% call sort_url("date_desc") %}" hx-target="#results" hx-push-url="true">Date<span class="sort-arrow">&#9650;</span></a>
-        {% else %}
-        <a class="sort-btn" href="{% call sort_href("date_desc") %}" hx-get="{% call sort_url("date_desc") %}" hx-target="#results" hx-push-url="true">Date</a>
-        {% endif %}
-
         {% if sort == "name_asc" %}
         <a class="sort-btn active" href="{% call sort_href("name_desc") %}" hx-get="{% call sort_url("name_desc") %}" hx-target="#results" hx-push-url="true">Name<span class="sort-arrow">&#9650;</span></a>
         {% else if sort == "name_desc" %}
         <a class="sort-btn active" href="{% call sort_href("name_asc") %}" hx-get="{% call sort_url("name_asc") %}" hx-target="#results" hx-push-url="true">Name<span class="sort-arrow">&#9660;</span></a>
         {% else %}
         <a class="sort-btn" href="{% call sort_href("name_asc") %}" hx-get="{% call sort_url("name_asc") %}" hx-target="#results" hx-push-url="true">Name</a>
+        {% endif %}
+
+        {% if sort == "date_desc" %}
+        <a class="sort-btn active" href="{% call sort_href("date_asc") %}" hx-get="{% call sort_url("date_asc") %}" hx-target="#results" hx-push-url="true">Date<span class="sort-arrow">&#9660;</span></a>
+        {% else if sort == "date_asc" %}
+        <a class="sort-btn active" href="{% call sort_href("date_desc") %}" hx-get="{% call sort_url("date_desc") %}" hx-target="#results" hx-push-url="true">Date<span class="sort-arrow">&#9650;</span></a>
+        {% else %}
+        <a class="sort-btn" href="{% call sort_href("date_desc") %}" hx-get="{% call sort_url("date_desc") %}" hx-target="#results" hx-push-url="true">Date</a>
         {% endif %}
 
         {% if sort == "size_desc" %}
