@@ -221,6 +221,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 **Routes**:
 - `GET /` — browse page with search, filter dropdowns (type, tag, format, volume, rating), sort, pagination, thumbnail grid with star ratings
 - `GET /asset/{id}` — asset detail with preview, metadata, editable tags, inline editable star rating, variants, recipes
+- `GET /tags` — tags page with sortable columns (name/count), live text filter, multi-column layout
 - `GET /api/search` — results partial (htmx target) with pagination
 - `POST /api/asset/{id}/tags` — add tags, returns tags fragment
 - `DELETE /api/asset/{id}/tags/{tag}` — remove tag, returns tags fragment
