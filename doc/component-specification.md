@@ -238,7 +238,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 
 **Global flags**:
 - `--json` — output machine-readable JSON
-- `-l` / `--log` — log individual file progress (import, verify, sync, generate-previews)
+- `-l` / `--log` — log individual file progress (import, verify, sync, cleanup, generate-previews)
 - `-d` / `--debug` — show stderr output from external tools (ffmpeg, dcraw, dcraw_emu)
 - `-t` / `--time` — show elapsed time after command execution
 
@@ -255,6 +255,7 @@ dam group <variant-hashes...>                     # group variants into one asse
 dam relocate <id> <vol> [--remove-source] [--dry-run]  # copy/move asset
 dam verify [PATHS...] [--volume V] [--asset ID] [--include G] [--skip G]  # check file integrity
 dam sync <PATHS...> [--volume V] [--apply] [--remove-stale]  # reconcile catalog with disk
+dam cleanup [--volume V] [--list] [--apply]       # remove stale location records
 dam duplicates [--format F]                       # find duplicates
 dam generate-previews [PATHS...] [--asset ID] [--volume V] [--include G] [--skip G] [--force]  # generate thumbnails
 dam stats [--types] [--volumes] [--tags] [--verified] [--all] [--limit N]  # catalog statistics

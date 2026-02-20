@@ -241,6 +241,23 @@ pub struct SyncResult {
     pub errors: Vec<String>,
 }
 
+/// Status of a single file during cleanup.
+pub enum CleanupStatus {
+    Ok,
+    Stale,
+    Offline,
+}
+
+/// Result of a cleanup operation.
+#[derive(Debug, serde::Serialize)]
+pub struct CleanupResult {
+    pub checked: usize,
+    pub stale: usize,
+    pub removed: usize,
+    pub skipped_offline: usize,
+    pub errors: Vec<String>,
+}
+
 /// High-level operations that orchestrate the other components.
 pub struct AssetService {
     catalog_root: PathBuf,
@@ -1902,6 +1919,150 @@ impl AssetService {
             metadata_store.save(&asset)?;
         }
         Ok(())
+    }
+
+    /// Remove a recipe from the sidecar YAML by matching volume_id + relative_path.
+    fn remove_sidecar_recipe(
+        &self,
+        metadata_store: &MetadataStore,
+        catalog: &Catalog,
+        variant_hash: &str,
+        volume_id: Uuid,
+        relative_path: &str,
+    ) -> Result<()> {
+        let asset_id = match catalog.find_asset_id_by_variant(variant_hash)? {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+        let uuid: Uuid = asset_id.parse()?;
+        let mut asset = metadata_store.load(uuid)?;
+
+        let before = asset.recipes.len();
+        asset.recipes.retain(|r| {
+            !(r.location.volume_id == volume_id
+                && r.location.relative_path.to_string_lossy() == relative_path)
+        });
+
+        if asset.recipes.len() != before {
+            metadata_store.save(&asset)?;
+        }
+        Ok(())
+    }
+
+    /// Scan all file locations and recipes across online volumes, checking for files
+    /// that no longer exist on disk. Optionally remove stale records.
+    pub fn cleanup(
+        &self,
+        volume_filter: Option<&str>,
+        apply: bool,
+        on_file: impl Fn(&Path, CleanupStatus, Duration),
+    ) -> Result<CleanupResult> {
+        let registry = DeviceRegistry::new(&self.catalog_root);
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let metadata_store = MetadataStore::new(&self.catalog_root);
+
+        let mut result = CleanupResult {
+            checked: 0,
+            stale: 0,
+            removed: 0,
+            skipped_offline: 0,
+            errors: Vec::new(),
+        };
+
+        let volumes = if let Some(label) = volume_filter {
+            vec![registry.resolve_volume(label)?]
+        } else {
+            registry.list()?
+        };
+
+        for volume in &volumes {
+            if !volume.is_online {
+                result.skipped_offline += 1;
+                on_file(&volume.mount_point, CleanupStatus::Offline, Duration::ZERO);
+                continue;
+            }
+
+            let vol_id_str = volume.id.to_string();
+
+            // Check variant file locations
+            let locations = catalog.list_locations_for_volume_under_prefix(&vol_id_str, "")?;
+            for (content_hash, relative_path) in &locations {
+                let file_start = Instant::now();
+                let full_path = volume.mount_point.join(relative_path);
+
+                if full_path.exists() {
+                    result.checked += 1;
+                    on_file(&full_path, CleanupStatus::Ok, file_start.elapsed());
+                } else {
+                    result.stale += 1;
+                    on_file(&full_path, CleanupStatus::Stale, file_start.elapsed());
+                    if apply {
+                        if let Err(e) = catalog.delete_file_location(
+                            content_hash,
+                            &vol_id_str,
+                            relative_path,
+                        ) {
+                            result.errors.push(format!(
+                                "Failed to remove location {}: {e}",
+                                relative_path
+                            ));
+                        } else if let Err(e) = self.remove_sidecar_file_location(
+                            &metadata_store,
+                            &catalog,
+                            content_hash,
+                            volume.id,
+                            relative_path,
+                        ) {
+                            result.errors.push(format!(
+                                "Failed to update sidecar for {}: {e}",
+                                relative_path
+                            ));
+                        } else {
+                            result.removed += 1;
+                        }
+                    }
+                }
+            }
+
+            // Check recipe file locations
+            let recipes =
+                catalog.list_recipes_for_volume_under_prefix(&vol_id_str, "")?;
+            for (recipe_id, _content_hash, variant_hash, relative_path) in &recipes {
+                let file_start = Instant::now();
+                let full_path = volume.mount_point.join(relative_path);
+
+                if full_path.exists() {
+                    result.checked += 1;
+                    on_file(&full_path, CleanupStatus::Ok, file_start.elapsed());
+                } else {
+                    result.stale += 1;
+                    on_file(&full_path, CleanupStatus::Stale, file_start.elapsed());
+                    if apply {
+                        if let Err(e) = catalog.delete_recipe(recipe_id) {
+                            result.errors.push(format!(
+                                "Failed to remove recipe {}: {e}",
+                                relative_path
+                            ));
+                        } else if let Err(e) = self.remove_sidecar_recipe(
+                            &metadata_store,
+                            &catalog,
+                            variant_hash,
+                            volume.id,
+                            relative_path,
+                        ) {
+                            result.errors.push(format!(
+                                "Failed to update sidecar for recipe {}: {e}",
+                                relative_path
+                            ));
+                        } else {
+                            result.removed += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(result)
     }
 }
 

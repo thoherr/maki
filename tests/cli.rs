@@ -2094,3 +2094,286 @@ fn sync_no_paths_errors() {
         .failure()
         .stderr(predicate::str::contains("No paths specified"));
 }
+
+// ── Cleanup ─────────────────────────────────────────────────────────
+
+#[test]
+fn cleanup_no_stale() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "photo.jpg", b"photo data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .args(["cleanup"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 stale"));
+}
+
+#[test]
+fn cleanup_detects_stale() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "gone.jpg", b"gone data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    std::fs::remove_file(&file).unwrap();
+
+    dam()
+        .current_dir(&root)
+        .args(["cleanup"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 stale"));
+}
+
+#[test]
+fn cleanup_apply_removes_stale() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "remove_me.jpg", b"remove data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Get asset id
+    let search_output = dam()
+        .current_dir(&root)
+        .args(["search", "--format", "ids", "*"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&search_output.get_output().stdout);
+    let asset_id = stdout.trim().to_string();
+
+    std::fs::remove_file(&file).unwrap();
+
+    dam()
+        .current_dir(&root)
+        .args(["cleanup", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 removed"));
+
+    // Verify location is gone via show --json
+    let show_output = dam()
+        .current_dir(&root)
+        .args(["--json", "show", &asset_id])
+        .assert()
+        .success();
+    let show_stdout = String::from_utf8_lossy(&show_output.get_output().stdout);
+    let show_json: serde_json::Value = serde_json::from_str(&show_stdout).expect("valid JSON");
+    let locations = &show_json["variants"][0]["locations"];
+    assert_eq!(locations.as_array().unwrap().len(), 0, "location should be removed");
+}
+
+#[test]
+fn cleanup_default_is_report_only() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "keep_it.jpg", b"keep data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let search_output = dam()
+        .current_dir(&root)
+        .args(["search", "--format", "ids", "*"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&search_output.get_output().stdout);
+    let asset_id = stdout.trim().to_string();
+
+    std::fs::remove_file(&file).unwrap();
+
+    // Without --apply: reports stale but doesn't remove
+    dam()
+        .current_dir(&root)
+        .args(["cleanup"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 stale"))
+        .stdout(predicate::str::contains("Run with --apply"));
+
+    // Location should still be in the catalog
+    let show_output = dam()
+        .current_dir(&root)
+        .args(["--json", "show", &asset_id])
+        .assert()
+        .success();
+    let show_stdout = String::from_utf8_lossy(&show_output.get_output().stdout);
+    let show_json: serde_json::Value = serde_json::from_str(&show_stdout).expect("valid JSON");
+    let locations = &show_json["variants"][0]["locations"];
+    assert_eq!(locations.as_array().unwrap().len(), 1, "location should still exist");
+}
+
+#[test]
+fn cleanup_volume_filter() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Add a second volume
+    let dir2 = tempdir().unwrap();
+    let vol2_path = dir2.path().canonicalize().unwrap();
+    dam()
+        .current_dir(&root)
+        .args(["volume", "add", "vol2", vol2_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Import a file on the main volume
+    let file1 = create_test_file(&root, "on_vol1.jpg", b"vol1 data");
+    dam()
+        .current_dir(&root)
+        .args(["import", file1.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Import a file on volume 2
+    let file2 = create_test_file(&vol2_path, "on_vol2.jpg", b"vol2 data");
+    dam()
+        .current_dir(&root)
+        .args(["import", "--volume", "vol2", file2.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Delete both files
+    std::fs::remove_file(&file1).unwrap();
+    std::fs::remove_file(&file2).unwrap();
+
+    // Cleanup only vol2 — should only see 1 stale
+    dam()
+        .current_dir(&root)
+        .args(["cleanup", "--volume", "vol2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 stale"));
+}
+
+#[test]
+fn cleanup_json_output() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "json_cleanup.jpg", b"json cleanup data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "cleanup"])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert!(json.get("checked").is_some());
+    assert!(json.get("stale").is_some());
+    assert!(json.get("removed").is_some());
+    assert!(json.get("skipped_offline").is_some());
+    assert!(json.get("errors").is_some());
+}
+
+#[test]
+fn cleanup_stale_recipe() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Create a NEF + XMP pair
+    create_test_file(&root, "DSC_001.nef", b"raw image data for cleanup");
+    let xmp = create_test_file(&root, "DSC_001.xmp", b"<xmp>recipe data</xmp>");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Get asset id
+    let search_output = dam()
+        .current_dir(&root)
+        .args(["search", "--format", "ids", "*"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&search_output.get_output().stdout);
+    let asset_id = stdout.trim().to_string();
+
+    // Confirm recipe exists
+    let show_output = dam()
+        .current_dir(&root)
+        .args(["--json", "show", &asset_id])
+        .assert()
+        .success();
+    let show_stdout = String::from_utf8_lossy(&show_output.get_output().stdout);
+    let show_json: serde_json::Value = serde_json::from_str(&show_stdout).expect("valid JSON");
+    assert!(!show_json["recipes"].as_array().unwrap().is_empty(), "recipe should exist");
+
+    // Delete the XMP file
+    std::fs::remove_file(&xmp).unwrap();
+
+    // Cleanup --apply should remove the stale recipe
+    dam()
+        .current_dir(&root)
+        .args(["cleanup", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("stale"));
+
+    // Recipe should be gone
+    let show_output2 = dam()
+        .current_dir(&root)
+        .args(["--json", "show", &asset_id])
+        .assert()
+        .success();
+    let show_stdout2 = String::from_utf8_lossy(&show_output2.get_output().stdout);
+    let show_json2: serde_json::Value = serde_json::from_str(&show_stdout2).expect("valid JSON");
+    assert!(show_json2["recipes"].as_array().unwrap().is_empty(), "recipe should be removed");
+}
+
+#[test]
+fn cleanup_list_shows_only_stale() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "present.jpg", b"present data");
+    let gone = create_test_file(&root, "gone.jpg", b"gone data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    std::fs::remove_file(&gone).unwrap();
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["cleanup", "--list"])
+        .assert()
+        .success();
+
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    // Should list the stale file
+    assert!(stderr.contains("gone.jpg"), "should list stale file on stderr");
+    // Should NOT list the present file (--list filters to stale only)
+    assert!(!stderr.contains("present.jpg"), "should not list ok files on stderr");
+}

@@ -184,6 +184,21 @@ enum Commands {
         remove_stale: bool,
     },
 
+    /// Remove stale file location records (files no longer on disk)
+    Cleanup {
+        /// Limit to a specific volume
+        #[arg(long, display_order = 10)]
+        volume: Option<String>,
+
+        /// List stale entries
+        #[arg(long, display_order = 15)]
+        list: bool,
+
+        /// Apply changes (remove stale records from catalog and sidecar files)
+        #[arg(long, display_order = 20)]
+        apply: bool,
+    },
+
     /// Find duplicate files
     Duplicates {
         /// Output format: ids, short, full, json, or a custom template (e.g. '{hash}\t{filename}')
@@ -975,6 +990,82 @@ fn main() {
                 }
                 if result.new_files > 0 {
                     println!("  Tip: run 'dam import' to import new files.");
+                }
+            }
+
+            Ok(())
+        }
+        Commands::Cleanup { volume, list, apply } => {
+            let catalog_root = dam::config::find_catalog_root()?;
+            let config = CatalogConfig::load(&catalog_root)?;
+            let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
+
+            let show_log = cli.log;
+            let show_list = list;
+            let result = if show_log || show_list {
+                use dam::asset_service::CleanupStatus;
+                service.cleanup(
+                    volume.as_deref(),
+                    apply,
+                    |path, status, elapsed| {
+                        match status {
+                            CleanupStatus::Ok if show_log => {
+                                let name = path.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or_else(|| path.to_str().unwrap_or("?"));
+                                eprintln!("  {} — ok ({})", name, format_duration(elapsed));
+                            }
+                            CleanupStatus::Stale => {
+                                let name = path.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or_else(|| path.to_str().unwrap_or("?"));
+                                eprintln!("  {} — stale ({})", name, format_duration(elapsed));
+                            }
+                            CleanupStatus::Offline => {
+                                let name = path.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or_else(|| path.to_str().unwrap_or("?"));
+                                eprintln!("  {} — offline", name);
+                            }
+                            _ => {}
+                        }
+                    },
+                )?
+            } else {
+                service.cleanup(
+                    volume.as_deref(),
+                    apply,
+                    |_, _, _| {},
+                )?
+            };
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                for err in &result.errors {
+                    eprintln!("  {err}");
+                }
+
+                if result.skipped_offline > 0 {
+                    eprintln!(
+                        "  Skipped {} offline volume(s).",
+                        result.skipped_offline
+                    );
+                }
+
+                if apply {
+                    println!(
+                        "Cleanup complete: {} checked, {} stale, {} removed",
+                        result.checked, result.stale, result.removed
+                    );
+                } else {
+                    println!(
+                        "Cleanup complete: {} checked, {} stale",
+                        result.checked, result.stale
+                    );
+                    if result.stale > 0 {
+                        println!("  Run with --apply to remove stale location records.");
+                    }
                 }
             }
 

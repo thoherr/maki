@@ -774,6 +774,15 @@ impl Catalog {
         Ok(changed > 0)
     }
 
+    /// Delete a recipe record by ID. Returns true if a row was deleted.
+    pub fn delete_recipe(&self, recipe_id: &str) -> Result<bool> {
+        let changed = self.conn.execute(
+            "DELETE FROM recipes WHERE id = ?1",
+            rusqlite::params![recipe_id],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Update the volume and path for a recipe.
     pub fn update_recipe_location(
         &self,
