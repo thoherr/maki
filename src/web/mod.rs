@@ -79,6 +79,14 @@ fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/tags", axum::routing::get(routes::tags_api))
         .route("/api/stats", axum::routing::get(routes::stats_api))
+        .route(
+            "/api/batch/rating",
+            axum::routing::put(routes::batch_set_rating),
+        )
+        .route(
+            "/api/batch/tags",
+            axum::routing::post(routes::batch_tags),
+        )
         .route("/static/htmx.min.js", axum::routing::get(static_assets::htmx_js))
         .route("/static/style.css", axum::routing::get(static_assets::style_css))
         .nest_service("/preview", ServeDir::new(preview_dir))

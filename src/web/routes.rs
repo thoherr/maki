@@ -4,7 +4,7 @@ use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
-use axum::Form;
+use axum::{Form, Json};
 
 use crate::catalog::SearchSort;
 use crate::query::parse_search_query;
@@ -530,6 +530,109 @@ pub async fn set_description(
 
     match result {
         Ok(Ok(html)) => Html(html).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+// --- Batch operations ---
+
+#[derive(Debug, serde::Deserialize)]
+pub struct BatchRatingRequest {
+    pub asset_ids: Vec<String>,
+    pub rating: Option<u8>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct BatchTagRequest {
+    pub asset_ids: Vec<String>,
+    pub tags: Vec<String>,
+    pub remove: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct BatchResult {
+    pub succeeded: u32,
+    pub failed: u32,
+    pub errors: Vec<BatchError>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct BatchError {
+    pub asset_id: String,
+    pub error: String,
+}
+
+/// PUT /api/batch/rating — set rating on multiple assets.
+pub async fn batch_set_rating(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BatchRatingRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let engine = state.query_engine();
+        let rating = req.rating.filter(|&r| r > 0);
+        let mut succeeded = 0u32;
+        let mut errors = Vec::new();
+        for id in &req.asset_ids {
+            match engine.set_rating(id, rating) {
+                Ok(_) => succeeded += 1,
+                Err(e) => errors.push(BatchError {
+                    asset_id: id.clone(),
+                    error: format!("{e:#}"),
+                }),
+            }
+        }
+        let failed = errors.len() as u32;
+        Ok::<_, anyhow::Error>(BatchResult {
+            succeeded,
+            failed,
+            errors,
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(batch)) => Json(batch).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+/// POST /api/batch/tags — add or remove tags on multiple assets.
+pub async fn batch_tags(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BatchTagRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let engine = state.query_engine();
+        let mut succeeded = 0u32;
+        let mut errors = Vec::new();
+        for id in &req.asset_ids {
+            match engine.tag(id, &req.tags, req.remove) {
+                Ok(_) => succeeded += 1,
+                Err(e) => errors.push(BatchError {
+                    asset_id: id.clone(),
+                    error: format!("{e:#}"),
+                }),
+            }
+        }
+        let failed = errors.len() as u32;
+        Ok::<_, anyhow::Error>(BatchResult {
+            succeeded,
+            failed,
+            errors,
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(batch)) => Json(batch).into_response(),
         Ok(Err(e)) => {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
         }

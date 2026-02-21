@@ -77,7 +77,11 @@
 
 <div class="results-grid">
     {% for card in cards %}
-    <div class="asset-card">
+    <div class="asset-card" data-asset-id="{{ card.asset_id }}">
+        <label class="select-checkbox" onclick="event.stopPropagation()">
+            <input type="checkbox" class="asset-select-cb" value="{{ card.asset_id }}">
+            <span class="checkmark"></span>
+        </label>
         <a href="/asset/{{ card.asset_id }}">
             <img class="thumb"
                  src="{{ card.preview_url }}"

@@ -52,6 +52,27 @@
     {% include "results.html" %}
 </div>
 
+<div class="batch-toolbar" id="batch-toolbar">
+    <div class="batch-toolbar-inner">
+        <span class="batch-count" id="batch-count">0 selected</span>
+        <button class="batch-btn" id="batch-select-page">Select page</button>
+        <button class="batch-btn" id="batch-clear">Clear</button>
+        <span class="batch-sep"></span>
+        <input type="text" class="batch-tag-input" id="batch-tag-input" placeholder="tag name">
+        <button class="batch-btn batch-btn-primary" id="batch-add-tag">+ Tag</button>
+        <button class="batch-btn batch-btn-danger" id="batch-remove-tag">&minus; Tag</button>
+        <span class="batch-sep"></span>
+        <span class="batch-rating-group" id="batch-rating">
+            <span class="batch-star" data-value="1">&#9734;</span>
+            <span class="batch-star" data-value="2">&#9734;</span>
+            <span class="batch-star" data-value="3">&#9734;</span>
+            <span class="batch-star" data-value="4">&#9734;</span>
+            <span class="batch-star" data-value="5">&#9734;</span>
+            <span class="batch-rating-clear" id="batch-rating-clear" title="Clear rating">&times;</span>
+        </span>
+    </div>
+</div>
+
 <script>
 (function() {
     var allTags = [];
@@ -275,6 +296,246 @@
         if (event.persisted) {
             htmx.ajax('GET', window.location.href, {target: '#results', swap: 'innerHTML'});
         }
+    });
+})();
+
+// --- Batch selection ---
+(function() {
+    var selected = new Set();
+    var lastChecked = null;
+    var batchBusy = false;
+
+    var toolbar = document.getElementById('batch-toolbar');
+    var countEl = document.getElementById('batch-count');
+
+    function updateToolbar() {
+        var n = selected.size;
+        countEl.textContent = n + ' selected';
+        if (n > 0) {
+            toolbar.classList.add('visible');
+            document.body.classList.add('has-batch-toolbar');
+            document.body.classList.add('batch-active');
+        } else {
+            toolbar.classList.remove('visible');
+            document.body.classList.remove('has-batch-toolbar');
+            document.body.classList.remove('batch-active');
+        }
+        syncCheckboxes();
+    }
+
+    function syncCheckboxes() {
+        var boxes = document.querySelectorAll('.asset-select-cb');
+        boxes.forEach(function(cb) {
+            var id = cb.value;
+            cb.checked = selected.has(id);
+            var card = cb.closest('.asset-card');
+            if (card) {
+                if (selected.has(id)) {
+                    card.classList.add('selected');
+                } else {
+                    card.classList.remove('selected');
+                }
+            }
+        });
+    }
+
+    function clearSelection() {
+        selected.clear();
+        lastChecked = null;
+        updateToolbar();
+    }
+
+    function getVisibleIds() {
+        var ids = [];
+        document.querySelectorAll('.asset-select-cb').forEach(function(cb) {
+            ids.push(cb.value);
+        });
+        return ids;
+    }
+
+    // Checkbox change via event delegation
+    document.getElementById('results').addEventListener('change', function(e) {
+        if (!e.target.classList.contains('asset-select-cb')) return;
+        var cb = e.target;
+        var id = cb.value;
+
+        if (cb.checked) {
+            selected.add(id);
+        } else {
+            selected.delete(id);
+        }
+
+        // Shift-click range selection
+        if (e.target._shiftClick && lastChecked) {
+            var boxes = Array.from(document.querySelectorAll('.asset-select-cb'));
+            var start = boxes.indexOf(lastChecked);
+            var end = boxes.indexOf(cb);
+            if (start > -1 && end > -1) {
+                var lo = Math.min(start, end);
+                var hi = Math.max(start, end);
+                for (var i = lo; i <= hi; i++) {
+                    boxes[i].checked = true;
+                    selected.add(boxes[i].value);
+                }
+            }
+        }
+        lastChecked = cb;
+        updateToolbar();
+    });
+
+    // Intercept click to detect shift
+    document.getElementById('results').addEventListener('click', function(e) {
+        var cb = e.target.closest('.select-checkbox');
+        if (!cb) return;
+        var input = cb.querySelector('.asset-select-cb');
+        if (input) {
+            input._shiftClick = e.shiftKey;
+        }
+    }, true);
+
+    // Re-sync after htmx swaps results
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target && e.detail.target.id === 'results') {
+            syncCheckboxes();
+        }
+    });
+
+    // Select page
+    document.getElementById('batch-select-page').addEventListener('click', function() {
+        getVisibleIds().forEach(function(id) { selected.add(id); });
+        updateToolbar();
+    });
+
+    // Clear
+    document.getElementById('batch-clear').addEventListener('click', clearSelection);
+
+    // Escape key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && selected.size > 0) {
+            clearSelection();
+        }
+    });
+
+    function setButtonsBusy(busy) {
+        batchBusy = busy;
+        var btns = toolbar.querySelectorAll('.batch-btn, .batch-star, .batch-rating-clear');
+        btns.forEach(function(b) { b.disabled = busy; });
+    }
+
+    function refreshResults() {
+        htmx.ajax('GET', window.location.href, {target: '#results', swap: 'innerHTML'});
+    }
+
+    // Batch tag add
+    document.getElementById('batch-add-tag').addEventListener('click', function() {
+        var input = document.getElementById('batch-tag-input');
+        var tag = input.value.trim();
+        if (!tag || selected.size === 0 || batchBusy) return;
+        setButtonsBusy(true);
+        fetch('/api/batch/tags', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({asset_ids: Array.from(selected), tags: [tag], remove: false})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function() {
+            input.value = '';
+            clearSelection();
+            refreshResults();
+        })
+        .catch(function(err) { console.error('Batch tag error:', err); })
+        .finally(function() { setButtonsBusy(false); });
+    });
+
+    // Batch tag remove
+    document.getElementById('batch-remove-tag').addEventListener('click', function() {
+        var input = document.getElementById('batch-tag-input');
+        var tag = input.value.trim();
+        if (!tag || selected.size === 0 || batchBusy) return;
+        setButtonsBusy(true);
+        fetch('/api/batch/tags', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({asset_ids: Array.from(selected), tags: [tag], remove: true})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function() {
+            input.value = '';
+            clearSelection();
+            refreshResults();
+        })
+        .catch(function(err) { console.error('Batch tag error:', err); })
+        .finally(function() { setButtonsBusy(false); });
+    });
+
+    // Enter key in tag input triggers add
+    document.getElementById('batch-tag-input').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            document.getElementById('batch-add-tag').click();
+        }
+    });
+
+    // Batch rating stars
+    var batchStars = document.querySelectorAll('#batch-rating .batch-star');
+    batchStars.forEach(function(star) {
+        star.addEventListener('mouseenter', function() {
+            var val = parseInt(this.getAttribute('data-value'));
+            batchStars.forEach(function(s) {
+                var sv = parseInt(s.getAttribute('data-value'));
+                if (sv <= val) {
+                    s.classList.add('preview');
+                    s.innerHTML = '&#9733;';
+                } else {
+                    s.classList.remove('preview');
+                    s.innerHTML = '&#9734;';
+                }
+            });
+        });
+        star.addEventListener('mouseleave', function() {
+            batchStars.forEach(function(s) {
+                s.classList.remove('preview');
+                if (!s.classList.contains('active')) {
+                    s.innerHTML = '&#9734;';
+                }
+            });
+        });
+        star.addEventListener('click', function() {
+            if (selected.size === 0 || batchBusy) return;
+            var val = parseInt(this.getAttribute('data-value'));
+            setButtonsBusy(true);
+            fetch('/api/batch/rating', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({asset_ids: Array.from(selected), rating: val})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function() {
+                clearSelection();
+                refreshResults();
+            })
+            .catch(function(err) { console.error('Batch rating error:', err); })
+            .finally(function() { setButtonsBusy(false); });
+        });
+    });
+
+    // Batch rating clear
+    document.getElementById('batch-rating-clear').addEventListener('click', function() {
+        if (selected.size === 0 || batchBusy) return;
+        setButtonsBusy(true);
+        fetch('/api/batch/rating', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({asset_ids: Array.from(selected), rating: null})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function() {
+            clearSelection();
+            refreshResults();
+        })
+        .catch(function(err) { console.error('Batch rating error:', err); })
+        .finally(function() { setButtonsBusy(false); });
     });
 })();
 </script>

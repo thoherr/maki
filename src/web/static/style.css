@@ -103,12 +103,13 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
     gap: 1rem;
 }
 .asset-card {
+    position: relative;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     overflow: hidden;
     box-shadow: var(--shadow);
-    transition: box-shadow 0.15s;
+    transition: box-shadow 0.15s, border-color 0.15s;
 }
 .asset-card:hover {
     box-shadow: 0 2px 8px rgba(0,0,0,0.12);
@@ -869,3 +870,159 @@ details[open] summary { margin-bottom: 0.5rem; }
     margin-left: 0.5rem;
     flex-shrink: 0;
 }
+
+/* ===== Selection Checkboxes ===== */
+.select-checkbox {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    z-index: 10;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.select-checkbox input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+.select-checkbox .checkmark {
+    width: 22px;
+    height: 22px;
+    border: 2px solid #fff;
+    border-radius: 4px;
+    background: rgba(0,0,0,0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, border-color 0.15s;
+}
+.select-checkbox .checkmark::after {
+    content: '';
+    display: none;
+    width: 5px;
+    height: 10px;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+    margin-top: -2px;
+}
+.select-checkbox input:checked ~ .checkmark {
+    background: var(--primary);
+    border-color: var(--primary);
+}
+.select-checkbox input:checked ~ .checkmark::after {
+    display: block;
+}
+.asset-card:hover .select-checkbox,
+.asset-card.selected .select-checkbox,
+body.batch-active .select-checkbox {
+    opacity: 1;
+}
+.asset-card.selected {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.25);
+}
+
+/* ===== Batch Toolbar ===== */
+.batch-toolbar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--text);
+    color: #fff;
+    z-index: 1000;
+    transform: translateY(100%);
+    transition: transform 0.25s ease;
+    box-shadow: 0 -2px 12px rgba(0,0,0,0.2);
+}
+.batch-toolbar.visible {
+    transform: translateY(0);
+}
+.batch-toolbar-inner {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0.6rem 1.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+.batch-count {
+    font-weight: 600;
+    font-size: 0.9rem;
+    white-space: nowrap;
+    margin-right: 0.25rem;
+}
+.batch-sep {
+    width: 1px;
+    height: 1.5rem;
+    background: rgba(255,255,255,0.2);
+    margin: 0 0.25rem;
+}
+.batch-btn {
+    padding: 0.3rem 0.7rem;
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: var(--radius);
+    background: transparent;
+    color: #fff;
+    cursor: pointer;
+    font-size: 0.82rem;
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+.batch-btn:hover { background: rgba(255,255,255,0.1); }
+.batch-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.batch-btn-primary {
+    background: var(--primary);
+    border-color: var(--primary);
+}
+.batch-btn-primary:hover { background: var(--primary-hover); }
+.batch-btn-danger {
+    background: var(--danger);
+    border-color: var(--danger);
+}
+.batch-btn-danger:hover { background: #bb2d3b; }
+.batch-tag-input {
+    padding: 0.3rem 0.5rem;
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: var(--radius);
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+    font-size: 0.82rem;
+    width: 120px;
+}
+.batch-tag-input::placeholder { color: rgba(255,255,255,0.5); }
+.batch-rating-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+    font-size: 1.1rem;
+    line-height: 1;
+}
+.batch-rating-group .batch-star {
+    cursor: pointer;
+    user-select: none;
+    color: rgba(255,255,255,0.4);
+    transition: color 0.1s;
+}
+.batch-rating-group .batch-star:hover,
+.batch-rating-group .batch-star.preview {
+    color: #f5a623;
+}
+.batch-rating-group .batch-star.active {
+    color: #f5a623;
+}
+.batch-rating-clear {
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: rgba(255,255,255,0.5);
+    margin-left: 0.15rem;
+}
+.batch-rating-clear:hover { color: #fff; }
+body.has-batch-toolbar { padding-bottom: 60px; }
