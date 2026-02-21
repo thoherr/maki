@@ -302,7 +302,6 @@
 // --- Batch selection ---
 (function() {
     var selected = new Set();
-    var lastChecked = null;
     var batchBusy = false;
 
     var toolbar = document.getElementById('batch-toolbar');
@@ -341,7 +340,6 @@
 
     function clearSelection() {
         selected.clear();
-        lastChecked = null;
         updateToolbar();
     }
 
@@ -364,34 +362,8 @@
         } else {
             selected.delete(id);
         }
-
-        // Shift-click range selection
-        if (e.target._shiftClick && lastChecked) {
-            var boxes = Array.from(document.querySelectorAll('.asset-select-cb'));
-            var start = boxes.indexOf(lastChecked);
-            var end = boxes.indexOf(cb);
-            if (start > -1 && end > -1) {
-                var lo = Math.min(start, end);
-                var hi = Math.max(start, end);
-                for (var i = lo; i <= hi; i++) {
-                    boxes[i].checked = true;
-                    selected.add(boxes[i].value);
-                }
-            }
-        }
-        lastChecked = cb;
         updateToolbar();
     });
-
-    // Intercept click to detect shift
-    document.getElementById('results').addEventListener('click', function(e) {
-        var cb = e.target.closest('.select-checkbox');
-        if (!cb) return;
-        var input = cb.querySelector('.asset-select-cb');
-        if (input) {
-            input._shiftClick = e.shiftKey;
-        }
-    }, true);
 
     // Re-sync after htmx swaps results
     document.body.addEventListener('htmx:afterSwap', function(e) {
@@ -409,10 +381,20 @@
     // Clear
     document.getElementById('batch-clear').addEventListener('click', clearSelection);
 
-    // Escape key
+    // Keyboard shortcuts
     document.addEventListener('keydown', function(e) {
+        // Ignore when typing in an input/textarea
+        var tag = e.target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
         if (e.key === 'Escape' && selected.size > 0) {
             clearSelection();
+        }
+        // Cmd/Ctrl+A — select all on current page
+        if (e.key === 'a' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+            e.preventDefault();
+            getVisibleIds().forEach(function(id) { selected.add(id); });
+            updateToolbar();
         }
     });
 
