@@ -372,6 +372,72 @@ fn update_description_in_string(content: &str, description: Option<&str>) -> Str
     content
 }
 
+/// Update the `xmp:Label` value in an XMP file on disk.
+///
+/// Uses string-based find/replace to preserve all other XMP content byte-for-byte.
+/// Returns `Ok(true)` if the file was modified, `Ok(false)` if no change was needed.
+/// `None` removes the label attribute/element entirely (unlike rating which uses "0").
+pub fn update_label(path: &Path, label: Option<&str>) -> Result<bool> {
+    let content = std::fs::read_to_string(path)?;
+    let modified = update_label_in_string(&content, label);
+    if modified == content {
+        return Ok(false);
+    }
+    std::fs::write(path, &modified)?;
+    Ok(true)
+}
+
+/// Apply a label update to an XMP string, returning the modified string.
+fn update_label_in_string(content: &str, label: Option<&str>) -> String {
+    let label_str = label.unwrap_or("");
+
+    // Try attribute form: xmp:Label="..."
+    let attr_re = Regex::new(r#"\s*xmp:Label="[^"]*""#).unwrap();
+    if attr_re.is_match(content) {
+        if label_str.is_empty() {
+            // Remove the attribute (including leading whitespace)
+            return attr_re.replace(content, "").into_owned();
+        }
+        // Replace — use the version without leading \s* to preserve spacing
+        let replace_re = Regex::new(r#"xmp:Label="[^"]*""#).unwrap();
+        return replace_re
+            .replace(content, format!(r#"xmp:Label="{label_str}""#))
+            .into_owned();
+    }
+
+    // Try element form: <xmp:Label>...</xmp:Label>
+    let elem_re = Regex::new(r"[ \t]*<xmp:Label>[^<]*</xmp:Label>\n?").unwrap();
+    if elem_re.is_match(content) {
+        if label_str.is_empty() {
+            // Remove the element
+            return elem_re.replace(content, "").into_owned();
+        }
+        let replace_re = Regex::new(r"<xmp:Label>[^<]*</xmp:Label>").unwrap();
+        return replace_re
+            .replace(content, format!("<xmp:Label>{label_str}</xmp:Label>"))
+            .into_owned();
+    }
+
+    // Neither form found — inject attribute if label is non-empty
+    if label_str.is_empty() {
+        return content.to_string();
+    }
+
+    // Inject xmp:Label attribute into the first rdf:Description element
+    let desc_re = Regex::new(r"(<rdf:Description\b)").unwrap();
+    if desc_re.is_match(content) {
+        return desc_re
+            .replace(
+                content,
+                format!(r#"${{1}} xmp:Label="{label_str}""#),
+            )
+            .into_owned();
+    }
+
+    // No rdf:Description found — can't inject, return unchanged
+    content.to_string()
+}
+
 /// Escape special XML characters in a string.
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -1413,5 +1479,181 @@ mod tests {
 
         let result = update_description_in_string(xmp, None);
         assert_eq!(result, xmp);
+    }
+
+    // ── update_label tests ──────────────────────────────────
+
+    #[test]
+    fn update_label_attribute_form() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="3"
+    xmp:Label="Blue">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_label_in_string(xmp, Some("Red"));
+        assert!(result.contains(r#"xmp:Label="Red""#));
+        assert!(!result.contains(r#"xmp:Label="Blue""#));
+        assert!(result.contains(r#"xmp:Rating="3""#));
+    }
+
+    #[test]
+    fn update_label_element_form() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+   <xmp:Rating>2</xmp:Rating>
+   <xmp:Label>Green</xmp:Label>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_label_in_string(xmp, Some("Yellow"));
+        assert!(result.contains("<xmp:Label>Yellow</xmp:Label>"));
+        assert!(!result.contains("<xmp:Label>Green</xmp:Label>"));
+        assert!(result.contains("<xmp:Rating>2</xmp:Rating>"));
+    }
+
+    #[test]
+    fn update_label_clear_removes_attribute() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="4"
+    xmp:Label="Blue">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_label_in_string(xmp, None);
+        assert!(!result.contains("xmp:Label"));
+        assert!(result.contains(r#"xmp:Rating="4""#));
+    }
+
+    #[test]
+    fn update_label_clear_removes_element() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+   <xmp:Rating>2</xmp:Rating>
+   <xmp:Label>Green</xmp:Label>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_label_in_string(xmp, None);
+        assert!(!result.contains("xmp:Label"));
+        assert!(result.contains("<xmp:Rating>2</xmp:Rating>"));
+    }
+
+    #[test]
+    fn update_label_inject_when_missing() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="3">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_label_in_string(xmp, Some("Red"));
+        assert!(result.contains(r#"xmp:Label="Red""#));
+        assert!(result.contains(r#"xmp:Rating="3""#));
+    }
+
+    #[test]
+    fn update_label_no_inject_when_clearing() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="3">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_label_in_string(xmp, None);
+        assert!(!result.contains("xmp:Label"));
+        assert_eq!(result, xmp);
+    }
+
+    #[test]
+    fn update_label_file_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.xmp");
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Label="Blue">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+        std::fs::write(&path, xmp).unwrap();
+
+        let modified = update_label(&path, Some("Green")).unwrap();
+        assert!(modified);
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains(r#"xmp:Label="Green""#));
+    }
+
+    #[test]
+    fn update_label_no_change_returns_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.xmp");
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Label="Red">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+        std::fs::write(&path, xmp).unwrap();
+
+        let modified = update_label(&path, Some("Red")).unwrap();
+        assert!(!modified);
+    }
+
+    #[test]
+    fn update_label_preserves_other_content() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="4"
+    xmp:Label="Blue">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>landscape</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let result = update_label_in_string(xmp, Some("Purple"));
+        assert!(result.contains(r#"xmp:Label="Purple""#));
+        assert!(result.contains(r#"xmp:Rating="4""#));
+        assert!(result.contains("<rdf:li>landscape</rdf:li>"));
     }
 }

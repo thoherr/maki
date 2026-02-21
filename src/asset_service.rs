@@ -2434,6 +2434,15 @@ fn apply_xmp_data(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant_h
         }
     }
 
+    // Promote color label to asset level (conservative: only if not already set)
+    if asset.color_label.is_none() {
+        if let Some(label_str) = xmp.source_metadata.get("label") {
+            if let Ok(Some(canonical)) = Asset::validate_color_label(label_str) {
+                asset.color_label = Some(canonical);
+            }
+        }
+    }
+
     if let Some(variant) = asset.variants.iter_mut().find(|v| v.content_hash == variant_hash) {
         for (key, val) in &xmp.source_metadata {
             variant
@@ -2464,6 +2473,13 @@ fn reapply_xmp_data(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant
     if let Some(rating_str) = xmp.source_metadata.get("rating") {
         if let Ok(r) = rating_str.parse::<u8>() {
             asset.rating = Some(r);
+        }
+    }
+
+    // Overwrite color label on re-import (matches overwrite semantics)
+    if let Some(label_str) = xmp.source_metadata.get("label") {
+        if let Ok(Some(canonical)) = Asset::validate_color_label(label_str) {
+            asset.color_label = Some(canonical);
         }
     }
 

@@ -7,7 +7,7 @@
       hx-get="/"
       hx-target="#results"
       hx-push-url="true"
-      hx-vals='js:{"q": document.querySelector("[name=q]").value, "type": document.querySelector("[name=type]").value, "tag": getSelectedTags().join(","), "format": document.querySelector("[name=format]").value, "volume": (document.querySelector("[name=volume]") || {value:""}).value, "rating": getFilterRating(), "sort": new URLSearchParams(window.location.search).get("sort") || "date_desc", "page": "1"}'>
+      hx-vals='js:{"q": document.querySelector("[name=q]").value, "type": document.querySelector("[name=type]").value, "tag": getSelectedTags().join(","), "format": document.querySelector("[name=format]").value, "volume": (document.querySelector("[name=volume]") || {value:""}).value, "rating": getFilterRating(), "label": getFilterLabel(), "sort": new URLSearchParams(window.location.search).get("sort") || "date_desc", "page": "1"}'>
     <div class="search-row">
         <input type="text" name="q" placeholder="Search assets..." value="{{ query }}" autocomplete="off">
         <button type="submit">Search</button>
@@ -23,6 +23,15 @@
             <span class="star {% if rating == "5" && i <= 5 || rating == "4+" && i <= 4 || rating == "3+" && i <= 3 || rating == "2+" && i <= 2 || rating == "1+" && i <= 1 %}filled{% else %}empty{% endif %}" data-value="{{ i }}">{% if rating == "5" && i <= 5 || rating == "4+" && i <= 4 || rating == "3+" && i <= 3 || rating == "2+" && i <= 2 || rating == "1+" && i <= 1 %}&#9733;{% else %}&#9734;{% endif %}</span>
             {% endfor %}
             <span class="rating-filter-hint" id="rating-hint">{% if !rating.is_empty() %}{{ rating }}{% endif %}</span>
+        </div>
+        <div class="label-filter" id="label-filter">
+            <span class="label-dot-filter{% if label == "Red" %} active{% endif %}" data-label="Red" style="background: #e74c3c;" title="Red"></span>
+            <span class="label-dot-filter{% if label == "Orange" %} active{% endif %}" data-label="Orange" style="background: #e67e22;" title="Orange"></span>
+            <span class="label-dot-filter{% if label == "Yellow" %} active{% endif %}" data-label="Yellow" style="background: #f1c40f;" title="Yellow"></span>
+            <span class="label-dot-filter{% if label == "Green" %} active{% endif %}" data-label="Green" style="background: #27ae60;" title="Green"></span>
+            <span class="label-dot-filter{% if label == "Blue" %} active{% endif %}" data-label="Blue" style="background: #3498db;" title="Blue"></span>
+            <span class="label-dot-filter{% if label == "Pink" %} active{% endif %}" data-label="Pink" style="background: #e91e8e;" title="Pink"></span>
+            <span class="label-dot-filter{% if label == "Purple" %} active{% endif %}" data-label="Purple" style="background: #9b59b6;" title="Purple"></span>
         </div>
         <select name="type">
             <option value="">All types</option>
@@ -69,6 +78,17 @@
             <span class="batch-star" data-value="4">&#9734;</span>
             <span class="batch-star" data-value="5">&#9734;</span>
             <span class="batch-rating-clear" id="batch-rating-clear" title="Clear rating">&times;</span>
+        </span>
+        <span class="batch-sep"></span>
+        <span class="batch-label-group" id="batch-label">
+            <span class="batch-label-dot" data-label="Red" style="background:#e74c3c;" title="Red"></span>
+            <span class="batch-label-dot" data-label="Orange" style="background:#e67e22;" title="Orange"></span>
+            <span class="batch-label-dot" data-label="Yellow" style="background:#f1c40f;" title="Yellow"></span>
+            <span class="batch-label-dot" data-label="Green" style="background:#27ae60;" title="Green"></span>
+            <span class="batch-label-dot" data-label="Blue" style="background:#3498db;" title="Blue"></span>
+            <span class="batch-label-dot" data-label="Pink" style="background:#e91e8e;" title="Pink"></span>
+            <span class="batch-label-dot" data-label="Purple" style="background:#9b59b6;" title="Purple"></span>
+            <span class="batch-label-clear" id="batch-label-clear" title="Clear label">&times;</span>
         </span>
     </div>
 </div>
@@ -286,9 +306,45 @@
         setRatingFilter(params.get('rating') || '');
     });
 
+    // --- Label filter dots ---
+    var currentLabel = "{{ label }}";
+    var labelDots = document.querySelectorAll('#label-filter .label-dot-filter');
+
+    function getFilterLabel() {
+        return currentLabel;
+    }
+
+    function setLabelFilter(value) {
+        currentLabel = value;
+        labelDots.forEach(function(d) {
+            if (d.getAttribute('data-label') === value) {
+                d.classList.add('active');
+            } else {
+                d.classList.remove('active');
+            }
+        });
+    }
+
+    labelDots.forEach(function(d) {
+        d.style.cursor = 'pointer';
+        d.addEventListener('click', function() {
+            var lbl = this.getAttribute('data-label');
+            var newLabel = currentLabel === lbl ? '' : lbl;
+            setLabelFilter(newLabel);
+            triggerSearch();
+        });
+    });
+
+    // Handle popstate for label
+    window.addEventListener('popstate', function() {
+        var params = new URLSearchParams(window.location.search);
+        setLabelFilter(params.get('label') || '');
+    });
+
     // Expose for hx-vals
     window.getSelectedTags = getSelectedTags;
     window.getFilterRating = getFilterRating;
+    window.getFilterLabel = getFilterLabel;
 
     // Refresh results when page is restored from bfcache (e.g., back from asset detail)
     // so that changes made on the asset page (rating, tags) are reflected.
@@ -407,7 +463,7 @@
 
     function setButtonsBusy(busy) {
         batchBusy = busy;
-        var btns = toolbar.querySelectorAll('.batch-btn, .batch-star, .batch-rating-clear');
+        var btns = toolbar.querySelectorAll('.batch-btn, .batch-star, .batch-rating-clear, .batch-label-dot, .batch-label-clear');
         btns.forEach(function(b) { b.disabled = busy; });
     }
 
@@ -524,6 +580,46 @@
             refreshResults();
         })
         .catch(function(err) { console.error('Batch rating error:', err); })
+        .finally(function() { setButtonsBusy(false); });
+    });
+
+    // Batch label dots
+    var batchLabelDots = document.querySelectorAll('#batch-label .batch-label-dot');
+    batchLabelDots.forEach(function(dot) {
+        dot.addEventListener('click', function() {
+            if (selected.size === 0 || batchBusy) return;
+            var lbl = this.getAttribute('data-label');
+            setButtonsBusy(true);
+            fetch('/api/batch/label', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({asset_ids: Array.from(selected), label: lbl})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function() {
+                clearSelection();
+                refreshResults();
+            })
+            .catch(function(err) { console.error('Batch label error:', err); })
+            .finally(function() { setButtonsBusy(false); });
+        });
+    });
+
+    // Batch label clear
+    document.getElementById('batch-label-clear').addEventListener('click', function() {
+        if (selected.size === 0 || batchBusy) return;
+        setButtonsBusy(true);
+        fetch('/api/batch/label', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({asset_ids: Array.from(selected), label: null})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function() {
+            clearSelection();
+            refreshResults();
+        })
+        .catch(function(err) { console.error('Batch label error:', err); })
         .finally(function() { setButtonsBusy(false); });
     });
 })();

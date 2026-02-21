@@ -1,0 +1,54 @@
+<div class="label-picker">
+    <span class="label-dot{% if color_label.as_deref() == Some("Red") %} active{% endif %}"
+          style="background: #e74c3c;"
+          hx-put="/api/asset/{{ asset_id }}/label"
+          hx-target="#label"
+          hx-swap="innerHTML"
+          hx-vals='{"label": "{% if color_label.as_deref() == Some("Red") %}{% else %}Red{% endif %}"}'
+          title="{% if color_label.as_deref() == Some("Red") %}Clear label{% else %}Red{% endif %}"></span>
+    <span class="label-dot{% if color_label.as_deref() == Some("Orange") %} active{% endif %}"
+          style="background: #e67e22;"
+          hx-put="/api/asset/{{ asset_id }}/label"
+          hx-target="#label"
+          hx-swap="innerHTML"
+          hx-vals='{"label": "{% if color_label.as_deref() == Some("Orange") %}{% else %}Orange{% endif %}"}'
+          title="{% if color_label.as_deref() == Some("Orange") %}Clear label{% else %}Orange{% endif %}"></span>
+    <span class="label-dot{% if color_label.as_deref() == Some("Yellow") %} active{% endif %}"
+          style="background: #f1c40f;"
+          hx-put="/api/asset/{{ asset_id }}/label"
+          hx-target="#label"
+          hx-swap="innerHTML"
+          hx-vals='{"label": "{% if color_label.as_deref() == Some("Yellow") %}{% else %}Yellow{% endif %}"}'
+          title="{% if color_label.as_deref() == Some("Yellow") %}Clear label{% else %}Yellow{% endif %}"></span>
+    <span class="label-dot{% if color_label.as_deref() == Some("Green") %} active{% endif %}"
+          style="background: #27ae60;"
+          hx-put="/api/asset/{{ asset_id }}/label"
+          hx-target="#label"
+          hx-swap="innerHTML"
+          hx-vals='{"label": "{% if color_label.as_deref() == Some("Green") %}{% else %}Green{% endif %}"}'
+          title="{% if color_label.as_deref() == Some("Green") %}Clear label{% else %}Green{% endif %}"></span>
+    <span class="label-dot{% if color_label.as_deref() == Some("Blue") %} active{% endif %}"
+          style="background: #3498db;"
+          hx-put="/api/asset/{{ asset_id }}/label"
+          hx-target="#label"
+          hx-swap="innerHTML"
+          hx-vals='{"label": "{% if color_label.as_deref() == Some("Blue") %}{% else %}Blue{% endif %}"}'
+          title="{% if color_label.as_deref() == Some("Blue") %}Clear label{% else %}Blue{% endif %}"></span>
+    <span class="label-dot{% if color_label.as_deref() == Some("Pink") %} active{% endif %}"
+          style="background: #e91e8e;"
+          hx-put="/api/asset/{{ asset_id }}/label"
+          hx-target="#label"
+          hx-swap="innerHTML"
+          hx-vals='{"label": "{% if color_label.as_deref() == Some("Pink") %}{% else %}Pink{% endif %}"}'
+          title="{% if color_label.as_deref() == Some("Pink") %}Clear label{% else %}Pink{% endif %}"></span>
+    <span class="label-dot{% if color_label.as_deref() == Some("Purple") %} active{% endif %}"
+          style="background: #9b59b6;"
+          hx-put="/api/asset/{{ asset_id }}/label"
+          hx-target="#label"
+          hx-swap="innerHTML"
+          hx-vals='{"label": "{% if color_label.as_deref() == Some("Purple") %}{% else %}Purple{% endif %}"}'
+          title="{% if color_label.as_deref() == Some("Purple") %}Clear label{% else %}Purple{% endif %}"></span>
+    {% if color_label.is_some() %}
+    <span class="label-name">{{ color_label.as_deref().unwrap() }}</span>
+    {% endif %}
+</div>

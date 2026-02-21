@@ -34,6 +34,7 @@ pub struct ParsedSearch {
     pub stale_days: Option<u64>,
     pub missing: bool,
     pub volume_none: bool,
+    pub color_label: Option<String>,
 }
 
 impl ParsedSearch {
@@ -63,6 +64,7 @@ impl ParsedSearch {
                 .collect(),
             orphan: self.orphan,
             stale_days: self.stale_days,
+            color_label: self.color_label.as_deref(),
             ..Default::default()
         }
     }
@@ -133,6 +135,8 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
             }
         } else if token == "volume:none" {
             parsed.volume_none = true;
+        } else if let Some(value) = token.strip_prefix("label:") {
+            parsed.color_label = Some(value.to_string());
         } else {
             text_parts.push(token);
         }
@@ -195,6 +199,7 @@ pub struct EditFields {
     pub name: Option<Option<String>>,
     pub description: Option<Option<String>>,
     pub rating: Option<Option<u8>>,
+    pub color_label: Option<Option<String>>,
 }
 
 /// Result of an edit operation.
@@ -204,6 +209,7 @@ pub struct EditResult {
     pub name: Option<String>,
     pub description: Option<String>,
     pub rating: Option<u8>,
+    pub color_label: Option<String>,
 }
 
 /// Result of a tag add/remove operation.
@@ -468,6 +474,10 @@ impl QueryEngine {
         if let Some(rating) = &fields.rating {
             asset.rating = *rating;
         }
+        let label_changed = fields.color_label.is_some();
+        if let Some(label) = &fields.color_label {
+            asset.color_label = label.clone();
+        }
 
         store.save(&asset)?;
         catalog.insert_asset(&asset)?;
@@ -482,11 +492,17 @@ impl QueryEngine {
             self.write_back_description_to_xmp(&mut asset, desc.as_deref(), &catalog, &store);
         }
 
+        if label_changed {
+            let label = asset.color_label.clone();
+            self.write_back_label_to_xmp(&mut asset, label.as_deref(), &catalog, &store);
+        }
+
         Ok(EditResult {
             asset_id: full_id,
             name: asset.name,
             description: asset.description,
             rating: asset.rating,
+            color_label: asset.color_label,
         })
     }
 
@@ -692,6 +708,28 @@ impl QueryEngine {
         }
     }
 
+    /// Set the color label on an asset. Updates both sidecar YAML and SQLite catalog.
+    /// Also writes back the label to any `.xmp` recipe files on disk.
+    /// Returns the new label value.
+    pub fn set_color_label(&self, asset_id_prefix: &str, label: Option<String>) -> Result<Option<String>> {
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let full_id = catalog
+            .resolve_asset_id(asset_id_prefix)?
+            .ok_or_else(|| anyhow::anyhow!("No asset found matching '{asset_id_prefix}'"))?;
+
+        let uuid: uuid::Uuid = full_id.parse()?;
+        let store = MetadataStore::new(&self.catalog_root);
+        let mut asset = store.load(uuid)?;
+
+        asset.color_label = label.clone();
+        store.save(&asset)?;
+        catalog.update_asset_color_label(&full_id, label.as_deref())?;
+
+        self.write_back_label_to_xmp(&mut asset, label.as_deref(), &catalog, &store);
+
+        Ok(label)
+    }
+
     /// Set the description on an asset. Updates both sidecar YAML and SQLite catalog.
     /// Also writes back the description to any `.xmp` recipe files on disk.
     /// Returns the new description value.
@@ -803,6 +841,95 @@ impl QueryEngine {
         if sidecar_dirty {
             if let Err(e) = store.save(asset) {
                 eprintln!("Warning: could not save sidecar after XMP description write-back: {e}");
+            }
+        }
+    }
+
+    /// Write back a color label change to `.xmp` recipe files on disk.
+    ///
+    /// For each XMP recipe on an online volume, updates the `xmp:Label` value,
+    /// re-hashes the file, and updates the recipe's content hash in catalog and sidecar.
+    /// Silently skips offline volumes and missing files.
+    fn write_back_label_to_xmp(
+        &self,
+        asset: &mut Asset,
+        label: Option<&str>,
+        catalog: &Catalog,
+        store: &MetadataStore,
+    ) {
+        let registry = DeviceRegistry::new(&self.catalog_root);
+        let volumes = match registry.list() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("Warning: could not load volumes for XMP label write-back: {e}");
+                return;
+            }
+        };
+
+        let online: HashMap<uuid::Uuid, &std::path::Path> = volumes
+            .iter()
+            .filter(|v| v.is_online)
+            .map(|v| (v.id, v.mount_point.as_path()))
+            .collect();
+
+        let content_store = ContentStore::new(&self.catalog_root);
+        let mut sidecar_dirty = false;
+
+        for recipe in &mut asset.recipes {
+            let ext = recipe
+                .location
+                .relative_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if ext != "xmp" {
+                continue;
+            }
+
+            let mount_point = match online.get(&recipe.location.volume_id) {
+                Some(mp) => *mp,
+                None => continue,
+            };
+
+            let full_path = mount_point.join(&recipe.location.relative_path);
+            if !full_path.exists() {
+                continue;
+            }
+
+            match xmp_reader::update_label(&full_path, label) {
+                Ok(true) => {
+                    match content_store.hash_file(&full_path) {
+                        Ok(new_hash) => {
+                            if let Err(e) = catalog.update_recipe_content_hash(
+                                &recipe.id.to_string(),
+                                &new_hash,
+                            ) {
+                                eprintln!(
+                                    "Warning: could not update recipe hash in catalog: {e}"
+                                );
+                            }
+                            recipe.content_hash = new_hash;
+                            sidecar_dirty = true;
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: could not re-hash XMP file: {e}");
+                        }
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    eprintln!(
+                        "Warning: could not write label to {}: {e}",
+                        full_path.display()
+                    );
+                }
+            }
+        }
+
+        if sidecar_dirty {
+            if let Err(e) = store.save(asset) {
+                eprintln!("Warning: could not save sidecar after XMP label write-back: {e}");
             }
         }
     }
@@ -1158,5 +1285,20 @@ mod tests {
         assert_eq!(p.tag.as_deref(), Some("landscape"));
         assert!(!p.missing);
         assert!(!p.volume_none);
+    }
+
+    #[test]
+    fn parse_label_filter() {
+        let p = parse_search_query("label:Red");
+        assert_eq!(p.color_label.as_deref(), Some("Red"));
+        assert!(p.text.is_none());
+    }
+
+    #[test]
+    fn parse_label_with_other_filters() {
+        let p = parse_search_query("label:Blue tag:landscape sunset");
+        assert_eq!(p.color_label.as_deref(), Some("Blue"));
+        assert_eq!(p.tag.as_deref(), Some("landscape"));
+        assert_eq!(p.text.as_deref(), Some("sunset"));
     }
 }

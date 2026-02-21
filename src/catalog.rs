@@ -19,6 +19,7 @@ pub struct SearchRow {
     pub description: Option<String>,
     pub content_hash: String,
     pub rating: Option<u8>,
+    pub color_label: Option<String>,
 }
 
 /// Full asset details returned by `load_asset_details`.
@@ -31,6 +32,7 @@ pub struct AssetDetails {
     pub tags: Vec<String>,
     pub description: Option<String>,
     pub rating: Option<u8>,
+    pub color_label: Option<String>,
     pub variants: Vec<VariantDetails>,
     pub recipes: Vec<RecipeDetails>,
 }
@@ -255,6 +257,7 @@ pub struct SearchOptions<'a> {
     pub stale_days: Option<u64>,
     pub missing_asset_ids: Option<&'a [String]>,
     pub no_online_locations: Option<&'a [String]>,
+    pub color_label: Option<&'a str>,
     pub sort: SearchSort,
     pub page: u32,
     pub per_page: u32,
@@ -285,6 +288,7 @@ impl<'a> Default for SearchOptions<'a> {
             stale_days: None,
             missing_asset_ids: None,
             no_online_locations: None,
+            color_label: None,
             sort: SearchSort::DateDesc,
             page: 1,
             per_page: 60,
@@ -312,7 +316,41 @@ impl Catalog {
     pub fn open(catalog_root: &Path) -> Result<Self> {
         let db_path = catalog_root.join("catalog.db");
         let conn = Connection::open(&db_path)?;
+        let catalog = Self { conn };
+        catalog.run_migrations();
+        Ok(catalog)
+    }
+
+    /// Open without running migrations — for hot paths where migrations
+    /// have already been applied (e.g. per-request in the web server).
+    pub fn open_fast(catalog_root: &Path) -> Result<Self> {
+        let db_path = catalog_root.join("catalog.db");
+        let conn = Connection::open(&db_path)?;
         Ok(Self { conn })
+    }
+
+    /// Run lightweight schema migrations (ADD COLUMN + CREATE INDEX).
+    ///
+    /// Should be called once at startup (e.g. server init) so that existing
+    /// catalogs pick up new columns without requiring `dam init` or
+    /// `dam rebuild-catalog`. Each ALTER TABLE silently ignores
+    /// "duplicate column" errors.
+    pub fn run_migrations(&self) {
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN rating INTEGER");
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN color_label TEXT");
+        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN camera_model TEXT");
+        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN lens_model TEXT");
+        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN focal_length_mm REAL");
+        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN f_number REAL");
+        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN iso INTEGER");
+        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN image_width INTEGER");
+        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN image_height INTEGER");
+        let _ = self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_variants_camera ON variants(camera_model);
+             CREATE INDEX IF NOT EXISTS idx_variants_lens ON variants(lens_model);
+             CREATE INDEX IF NOT EXISTS idx_variants_iso ON variants(iso);
+             CREATE INDEX IF NOT EXISTS idx_variants_focal ON variants(focal_length_mm);",
+        );
     }
 
     /// Initialize the database schema.
@@ -365,6 +403,8 @@ impl Catalog {
         )?;
         // Migration: add rating column to existing catalogs (ignored if already present)
         let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN rating INTEGER");
+        // Migration: add color_label column to existing catalogs (ignored if already present)
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN color_label TEXT");
 
         // Migration: add indexed metadata columns to variants
         let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN camera_model TEXT");
@@ -402,8 +442,8 @@ impl Catalog {
     pub fn insert_asset(&self, asset: &Asset) -> Result<()> {
         let tags_json = serde_json::to_string(&asset.tags)?;
         self.conn.execute(
-            "INSERT OR REPLACE INTO assets (id, name, created_at, asset_type, tags, description, rating) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT OR REPLACE INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 asset.id.to_string(),
                 asset.name,
@@ -412,6 +452,7 @@ impl Catalog {
                 tags_json,
                 asset.description,
                 asset.rating.map(|r| r as i64),
+                asset.color_label,
             ],
         )?;
         Ok(())
@@ -422,6 +463,15 @@ impl Catalog {
         self.conn.execute(
             "UPDATE assets SET rating = ?1 WHERE id = ?2",
             rusqlite::params![rating.map(|r| r as i64), asset_id],
+        )?;
+        Ok(())
+    }
+
+    /// Update just the color label for an asset in the catalog.
+    pub fn update_asset_color_label(&self, asset_id: &str, color_label: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE assets SET color_label = ?1 WHERE id = ?2",
+            rusqlite::params![color_label, asset_id],
         )?;
         Ok(())
     }
@@ -600,7 +650,7 @@ impl Catalog {
     /// Load full asset details from the catalog (variants + locations).
     pub fn load_asset_details(&self, asset_id: &str) -> Result<Option<AssetDetails>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, asset_type, created_at, tags, description, rating \
+            "SELECT id, name, asset_type, created_at, tags, description, rating, color_label \
              FROM assets WHERE id = ?1",
         )?;
         let mut rows = stmt.query(rusqlite::params![asset_id])?;
@@ -617,6 +667,7 @@ impl Catalog {
         let description: Option<String> = row.get(5)?;
         let rating_val: Option<i64> = row.get(6)?;
         let rating = rating_val.map(|r| r as u8);
+        let color_label: Option<String> = row.get(7)?;
         let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
 
         // Load variants
@@ -697,6 +748,7 @@ impl Catalog {
             tags,
             description,
             rating,
+            color_label,
             variants,
             recipes,
         }))
@@ -1183,6 +1235,12 @@ impl Catalog {
             clauses.push("a.rating = ?".to_string());
             params.push(Box::new(exact as i64));
         }
+        if let Some(label) = opts.color_label {
+            if !label.is_empty() {
+                clauses.push("a.color_label = ?".to_string());
+                params.push(Box::new(label.to_string()));
+            }
+        }
 
         // Metadata column filters
         if let Some(camera) = opts.camera {
@@ -1299,7 +1357,7 @@ impl Catalog {
 
         let mut sql = String::from(
             "SELECT a.id, a.name, a.asset_type, a.created_at, v.original_filename, v.format, \
-             a.tags, a.description, v.content_hash, a.rating \
+             a.tags, a.description, v.content_hash, a.rating, a.color_label \
              FROM assets a JOIN variants v ON a.id = v.asset_id",
         );
 
@@ -1334,6 +1392,7 @@ impl Catalog {
                 description: row.get(7)?,
                 content_hash: row.get(8)?,
                 rating: rating_val.map(|r| r as u8),
+                color_label: row.get(10)?,
             })
         })?;
 

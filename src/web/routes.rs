@@ -13,8 +13,8 @@ use crate::device_registry::DeviceRegistry;
 
 use super::templates::{
     format_size, AssetCard, AssetPage, BrowsePage, DescriptionFragment, FormatOption,
-    PreviewFragment, RatingFragment, ResultsPartial, StatsPage, TagOption, TagPageEntry,
-    TagsFragment, TagsPage, VolumeOption,
+    LabelFragment, PreviewFragment, RatingFragment, ResultsPartial, StatsPage, TagOption,
+    TagPageEntry, TagsFragment, TagsPage, VolumeOption,
 };
 use super::AppState;
 
@@ -27,6 +27,7 @@ pub struct SearchParams {
     pub format: Option<String>,
     pub volume: Option<String>,
     pub rating: Option<String>,
+    pub label: Option<String>,
     pub sort: Option<String>,
     pub page: Option<u32>,
 }
@@ -49,10 +50,11 @@ pub async fn browse_page(
         let format = params.format.as_deref().unwrap_or("");
         let volume = params.volume.as_deref().unwrap_or("");
         let rating_str = params.rating.as_deref().unwrap_or("");
+        let label_str = params.label.as_deref().unwrap_or("");
         let sort_str = params.sort.as_deref().unwrap_or("date_desc");
         let page = params.page.unwrap_or(1).max(1);
 
-        let parsed = merge_search_params(query, asset_type, tag, format, rating_str);
+        let parsed = merge_search_params(query, asset_type, tag, format, rating_str, label_str);
         let mut opts = parsed.to_search_options();
         if !volume.is_empty() {
             opts.volume = Some(volume);
@@ -74,6 +76,7 @@ pub async fn browse_page(
                 format_filter: format.to_string(),
                 volume: volume.to_string(),
                 rating: rating_str.to_string(),
+                label: label_str.to_string(),
                 sort: sort_str.to_string(),
                 cards,
                 total,
@@ -107,6 +110,7 @@ pub async fn browse_page(
             format_filter: format.to_string(),
             volume: volume.to_string(),
             rating: rating_str.to_string(),
+            label: label_str.to_string(),
             sort: sort_str.to_string(),
             cards,
             total,
@@ -160,10 +164,11 @@ pub async fn search_api(
         let format = params.format.as_deref().unwrap_or("");
         let volume = params.volume.as_deref().unwrap_or("");
         let rating_str = params.rating.as_deref().unwrap_or("");
+        let label_str = params.label.as_deref().unwrap_or("");
         let sort_str = params.sort.as_deref().unwrap_or("date_desc");
         let page = params.page.unwrap_or(1).max(1);
 
-        let parsed = merge_search_params(query, asset_type, tag, format, rating_str);
+        let parsed = merge_search_params(query, asset_type, tag, format, rating_str, label_str);
         let mut opts = parsed.to_search_options();
         if !volume.is_empty() {
             opts.volume = Some(volume);
@@ -184,6 +189,7 @@ pub async fn search_api(
             format_filter: format.to_string(),
             volume: volume.to_string(),
             rating: rating_str.to_string(),
+            label: label_str.to_string(),
             sort: sort_str.to_string(),
             cards,
             total,
@@ -424,6 +430,7 @@ fn merge_search_params(
     tag: &str,
     format: &str,
     rating_str: &str,
+    label: &str,
 ) -> ParsedSearch {
     let mut parsed = parse_search_query(query);
 
@@ -447,6 +454,9 @@ fn merge_search_params(
             parsed.rating_exact = rating_exact;
             parsed.rating_min = None;
         }
+    }
+    if !label.is_empty() {
+        parsed.color_label = Some(label.to_string());
     }
 
     parsed
@@ -701,6 +711,98 @@ pub async fn generate_preview(
 
     match result {
         Ok(Ok(html)) => Html(html).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct LabelForm {
+    pub label: Option<String>,
+}
+
+/// PUT /api/asset/{id}/label — set color label, return label fragment.
+pub async fn set_label(
+    State(state): State<Arc<AppState>>,
+    Path(asset_id): Path<String>,
+    Form(form): Form<LabelForm>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let engine = state.query_engine();
+        // Treat empty string as "clear label"
+        let label_str = form.label.filter(|s| !s.trim().is_empty());
+        let validated = match label_str {
+            Some(ref s) => match crate::models::Asset::validate_color_label(s) {
+                Ok(canonical) => canonical,
+                Err(e) => return Err(anyhow::anyhow!(e)),
+            },
+            None => None,
+        };
+        let new_label = engine.set_color_label(&asset_id, validated)?;
+        let tmpl = LabelFragment {
+            asset_id,
+            color_label: new_label,
+        };
+        Ok::<_, anyhow::Error>(tmpl.render()?)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(html)) => Html(html).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct BatchLabelRequest {
+    pub asset_ids: Vec<String>,
+    pub label: Option<String>,
+}
+
+/// PUT /api/batch/label — set color label on multiple assets.
+pub async fn batch_set_label(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BatchLabelRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let engine = state.query_engine();
+        let label_str = req.label.filter(|s| !s.trim().is_empty());
+        let validated = match label_str {
+            Some(ref s) => match crate::models::Asset::validate_color_label(s) {
+                Ok(canonical) => canonical,
+                Err(e) => return Err(anyhow::anyhow!(e)),
+            },
+            None => None,
+        };
+        let mut succeeded = 0u32;
+        let mut errors = Vec::new();
+        for id in &req.asset_ids {
+            match engine.set_color_label(id, validated.clone()) {
+                Ok(_) => succeeded += 1,
+                Err(e) => errors.push(BatchError {
+                    asset_id: id.clone(),
+                    error: format!("{e:#}"),
+                }),
+            }
+        }
+        let failed = errors.len() as u32;
+        Ok::<_, anyhow::Error>(BatchResult {
+            succeeded,
+            failed,
+            errors,
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(batch)) => Json(batch).into_response(),
         Ok(Err(e)) => {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
         }

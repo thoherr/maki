@@ -122,6 +122,14 @@ enum Commands {
         /// Clear rating
         #[arg(long)]
         clear_rating: bool,
+
+        /// Set color label (Red, Orange, Yellow, Green, Blue, Pink, Purple)
+        #[arg(long)]
+        label: Option<String>,
+
+        /// Clear color label
+        #[arg(long)]
+        clear_label: bool,
     },
 
     /// Group variants into one asset
@@ -579,6 +587,7 @@ fn main() {
                         for row in &results {
                             let tags_str = row.tags.join(", ");
                             let desc = row.description.as_deref().unwrap_or("");
+                            let label = row.color_label.as_deref().unwrap_or("");
                             let values = format::search_row_values(
                                 &row.asset_id,
                                 row.name.as_deref(),
@@ -589,6 +598,7 @@ fn main() {
                                 &tags_str,
                                 desc,
                                 &row.content_hash,
+                                label,
                             );
                             println!("{}", format::render_template(tpl, &values));
                         }
@@ -620,6 +630,9 @@ fn main() {
                 if let Some(rating) = details.rating {
                     let stars: String = (1..=5).map(|i| if i <= rating { '\u{2605}' } else { '\u{2606}' }).collect();
                     println!("Rating: {stars} ({rating}/5)");
+                }
+                if let Some(label) = &details.color_label {
+                    println!("Label: {label}");
                 }
                 if let Some(desc) = &details.description {
                     println!("Description: {desc}");
@@ -701,12 +714,24 @@ fn main() {
             }
             Ok(())
         }
-        Commands::Edit { asset_id, name, clear_name, description, clear_description, rating, clear_rating } => {
+        Commands::Edit { asset_id, name, clear_name, description, clear_description, rating, clear_rating, label, clear_label } => {
             use dam::query::EditFields;
 
-            if name.is_none() && !clear_name && description.is_none() && !clear_description && rating.is_none() && !clear_rating {
-                anyhow::bail!("No edit flags provided. Use --name, --description, --rating, --clear-name, --clear-description, or --clear-rating.");
+            if name.is_none() && !clear_name && description.is_none() && !clear_description && rating.is_none() && !clear_rating && label.is_none() && !clear_label {
+                anyhow::bail!("No edit flags provided. Use --name, --description, --rating, --label, --clear-name, --clear-description, --clear-rating, or --clear-label.");
             }
+
+            // Validate label if provided
+            let label_field = if clear_label {
+                Some(None)
+            } else if let Some(ref l) = label {
+                match dam::models::Asset::validate_color_label(l) {
+                    Ok(canonical) => Some(canonical),
+                    Err(e) => anyhow::bail!(e),
+                }
+            } else {
+                None
+            };
 
             let fields = EditFields {
                 name: if clear_name {
@@ -724,6 +749,7 @@ fn main() {
                 } else {
                     rating.map(Some)
                 },
+                color_label: label_field,
             };
 
             let catalog_root = dam::config::find_catalog_root()?;
@@ -748,6 +774,11 @@ fn main() {
                     println!("Rating: {stars} ({r}/5)");
                 } else {
                     println!("Rating: (none)");
+                }
+                if let Some(l) = &result.color_label {
+                    println!("Label: {l}");
+                } else {
+                    println!("Label: (none)");
                 }
             }
             Ok(())

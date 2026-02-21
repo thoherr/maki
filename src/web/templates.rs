@@ -40,6 +40,7 @@ pub struct AssetCard {
     pub date: String,
     pub preview_url: String,
     pub rating: Option<u8>,
+    pub color_label: Option<String>,
 }
 
 impl AssetCard {
@@ -56,6 +57,7 @@ impl AssetCard {
             date: format_date(&row.created_at),
             preview_url: preview_url(&row.content_hash, preview_ext),
             rating: row.rating,
+            color_label: row.color_label.clone(),
         }
     }
 }
@@ -125,6 +127,7 @@ pub struct BrowsePage {
     pub format_filter: String,
     pub volume: String,
     pub rating: String,
+    pub label: String,
     pub sort: String,
     pub cards: Vec<AssetCard>,
     pub total: u64,
@@ -145,6 +148,7 @@ pub struct ResultsPartial {
     pub format_filter: String,
     pub volume: String,
     pub rating: String,
+    pub label: String,
     pub sort: String,
     pub cards: Vec<AssetCard>,
     pub total: u64,
@@ -162,6 +166,7 @@ pub struct AssetPage {
     pub created_at: String,
     pub description: Option<String>,
     pub rating: Option<u8>,
+    pub color_label: Option<String>,
     pub tags: Vec<String>,
     pub primary_preview_url: Option<String>,
     pub variants: Vec<VariantRow>,
@@ -228,6 +233,7 @@ impl AssetPage {
             created_at: format_date(&details.created_at),
             description: details.description,
             rating: details.rating,
+            color_label: details.color_label,
             tags: details.tags,
             primary_preview_url: preview,
             variants,
@@ -283,6 +289,13 @@ pub struct RatingFragment {
     pub rating: Option<u8>,
 }
 
+#[derive(Template)]
+#[template(path = "label_fragment.html")]
+pub struct LabelFragment {
+    pub asset_id: String,
+    pub color_label: Option<String>,
+}
+
 /// Custom askama filters for templates.
 mod filters {
     pub fn fmt_bytes(bytes: &u64) -> ::askama::Result<String> {
@@ -310,5 +323,19 @@ mod filters {
 
     pub fn version(_s: &str) -> ::askama::Result<String> {
         Ok(env!("CARGO_PKG_VERSION").to_string())
+    }
+
+    pub fn label_color(name: &str) -> ::askama::Result<String> {
+        Ok(match name {
+            "Red" => "#e74c3c",
+            "Orange" => "#e67e22",
+            "Yellow" => "#f1c40f",
+            "Green" => "#27ae60",
+            "Blue" => "#3498db",
+            "Pink" => "#e91e8e",
+            "Purple" => "#9b59b6",
+            _ => "#999",
+        }
+        .to_string())
     }
 }

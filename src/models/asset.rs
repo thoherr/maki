@@ -37,6 +37,8 @@ pub struct Asset {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rating: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_label: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variants: Vec<Variant>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -55,8 +57,33 @@ impl Asset {
             tags: Vec::new(),
             description: None,
             rating: None,
+            color_label: None,
             variants: Vec::new(),
             recipes: Vec::new(),
+        }
+    }
+
+    /// Validate and canonicalize a color label string.
+    ///
+    /// Accepts case-insensitive color names from the CaptureOne superset:
+    /// Red, Orange, Yellow, Green, Blue, Pink, Purple.
+    /// Returns the canonical title-case name, or an error for unknown colors.
+    pub fn validate_color_label(s: &str) -> Result<Option<String>, String> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Ok(None);
+        }
+        match s.to_lowercase().as_str() {
+            "red" => Ok(Some("Red".to_string())),
+            "orange" => Ok(Some("Orange".to_string())),
+            "yellow" => Ok(Some("Yellow".to_string())),
+            "green" => Ok(Some("Green".to_string())),
+            "blue" => Ok(Some("Blue".to_string())),
+            "pink" => Ok(Some("Pink".to_string())),
+            "purple" => Ok(Some("Purple".to_string())),
+            _ => Err(format!(
+                "Unknown color label '{s}'. Valid colors: Red, Orange, Yellow, Green, Blue, Pink, Purple"
+            )),
         }
     }
 }

@@ -104,6 +104,7 @@ pub fn search_row_values<'a>(
     tags: &'a str,
     description: &'a str,
     content_hash: &'a str,
+    label: &'a str,
 ) -> HashMap<&'a str, String> {
     let short_id = if asset_id.len() >= 8 {
         &asset_id[..8]
@@ -123,6 +124,7 @@ pub fn search_row_values<'a>(
     m.insert("tags", tags.to_string());
     m.insert("description", description.to_string());
     m.insert("hash", content_hash.to_string());
+    m.insert("label", label.to_string());
     m
 }
 
@@ -197,11 +199,13 @@ mod tests {
             "landscape, nature",
             "A sunset",
             "sha256:abc",
+            "Blue",
         );
         assert_eq!(m["short_id"], "12345678");
         assert_eq!(m["name"], "sunset photo");
         assert_eq!(m["filename"], "sunset.jpg");
         assert_eq!(m["tags"], "landscape, nature");
+        assert_eq!(m["label"], "Blue");
     }
 
     #[test]
@@ -216,6 +220,7 @@ mod tests {
             "",
             "",
             "sha256:xyz",
+            "",
         );
         assert_eq!(m["name"], "DSC_001.nef");
     }

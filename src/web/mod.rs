@@ -33,8 +33,9 @@ impl AppState {
     }
 
     /// Open a fresh catalog connection (each request gets its own).
+    /// Uses `open_fast` since migrations run once at server startup.
     pub fn catalog(&self) -> Result<Catalog> {
-        Catalog::open(&self.catalog_root)
+        Catalog::open_fast(&self.catalog_root)
     }
 
     /// Create a QueryEngine for this catalog.
@@ -74,6 +75,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::put(routes::set_description),
         )
         .route(
+            "/api/asset/{id}/label",
+            axum::routing::put(routes::set_label),
+        )
+        .route(
             "/api/asset/{id}/preview",
             axum::routing::post(routes::generate_preview),
         )
@@ -87,6 +92,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/api/batch/tags",
             axum::routing::post(routes::batch_tags),
         )
+        .route(
+            "/api/batch/label",
+            axum::routing::put(routes::batch_set_label),
+        )
         .route("/static/htmx.min.js", axum::routing::get(static_assets::htmx_js))
         .route("/static/style.css", axum::routing::get(static_assets::style_css))
         .nest_service("/preview", ServeDir::new(preview_dir))
@@ -97,8 +106,8 @@ fn build_router(state: Arc<AppState>) -> Router {
 pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config: PreviewConfig) -> Result<()> {
     let state = Arc::new(AppState::new(catalog_root, preview_config));
 
-    // Verify catalog is accessible
-    state.catalog()?;
+    // Verify catalog is accessible and run schema migrations once at startup
+    Catalog::open(&state.catalog_root)?;
 
     let app = build_router(state);
 

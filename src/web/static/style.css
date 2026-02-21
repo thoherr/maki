@@ -1034,3 +1034,97 @@ body.batch-active .select-checkbox {
 }
 .batch-rating-clear:hover { color: #fff; }
 body.has-batch-toolbar { padding-bottom: 60px; }
+
+/* ===== Color Labels ===== */
+
+/* Label picker on asset detail page */
+.label-section {
+    margin: 0.75rem 0;
+}
+.label-section strong {
+    display: block;
+    font-size: 0.95rem;
+    margin-bottom: 0.25rem;
+}
+.label-picker {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.label-dot {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: transform 0.1s, border-color 0.15s;
+}
+.label-dot:hover {
+    transform: scale(1.25);
+}
+.label-dot.active {
+    border-color: var(--text);
+    box-shadow: 0 0 0 2px var(--bg);
+}
+.label-name {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-left: 0.25rem;
+}
+
+/* Color dot on browse cards */
+.card-label-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    vertical-align: middle;
+    margin-left: 0.2rem;
+}
+
+/* Label filter on browse page */
+.label-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+.label-dot-filter {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: transform 0.1s, border-color 0.15s;
+}
+.label-dot-filter:hover {
+    transform: scale(1.25);
+}
+.label-dot-filter.active {
+    border-color: var(--text);
+    box-shadow: 0 0 0 1px var(--bg);
+}
+
+/* Batch label in toolbar */
+.batch-label-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+.batch-label-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: transform 0.1s;
+}
+.batch-label-dot:hover {
+    transform: scale(1.25);
+}
+.batch-label-clear {
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: rgba(255,255,255,0.5);
+    margin-left: 0.15rem;
+}
+.batch-label-clear:hover { color: #fff; }
