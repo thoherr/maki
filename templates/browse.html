@@ -55,8 +55,8 @@
 <div class="batch-toolbar" id="batch-toolbar">
     <div class="batch-toolbar-inner">
         <span class="batch-count" id="batch-count">0 selected</span>
-        <button class="batch-btn" id="batch-select-page">Select page <kbd>&#8984;A</kbd></button>
-        <button class="batch-btn" id="batch-clear">Clear <kbd>Esc</kbd></button>
+        <button class="batch-btn" id="batch-select-page">Select page <kbd class="shortcut-hint"><span class="mod-key"></span>A</kbd></button>
+        <button class="batch-btn" id="batch-clear">Clear <kbd class="shortcut-hint">Esc</kbd></button>
         <span class="batch-sep"></span>
         <input type="text" class="batch-tag-input" id="batch-tag-input" placeholder="tag name">
         <button class="batch-btn batch-btn-primary" id="batch-add-tag">+ Tag</button>
@@ -301,6 +301,12 @@
 
 // --- Batch selection ---
 (function() {
+    // Set modifier key label based on platform
+    var isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
+    document.querySelectorAll('.mod-key').forEach(function(el) {
+        el.textContent = isMac ? '\u2318' : 'Ctrl+';
+    });
+
     var selected = new Set();
     var batchBusy = false;
 
