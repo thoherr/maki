@@ -112,7 +112,7 @@ Implemented as `dam update-location <asset-id> --from <old-path> --to <new-path>
 
 ### Phase 2: Metadata Sync & Re-import Improvements — **PARTIALLY COMPLETE**
 
-#### 2.1 `dam refresh` Command — **IMPLEMENTED**
+#### 2.1 `dam refresh` Command — **IMPLEMENTED** (v0.4.5)
 
 Re-read metadata from sidecar files (XMP, COS) without a full import:
 
