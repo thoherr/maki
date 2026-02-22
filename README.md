@@ -89,8 +89,10 @@ dam serve
 | `missing:true` | `missing:true` | Assets with files missing from disk |
 | `stale:` | `stale:30` | Locations not verified in N days |
 | `volume:none` | `volume:none` | Assets with no locations on online volumes |
+| `collection:` | `collection:"My Favorites"` | Assets in a collection |
+| `path:` | `path:Capture/2026-02-22` | Assets with files under a path prefix |
 
-Remaining tokens are free-text search across name, filename, description, and metadata.
+Remaining tokens are free-text search across name, filename, description, and metadata. Values with spaces can be quoted: `tag:"Fools Theater"`, `path:"Photos/Family Trip"`.
 
 ## Configuration
 

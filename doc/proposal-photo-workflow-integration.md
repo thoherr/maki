@@ -240,6 +240,7 @@ Implemented as `dam collection` (alias `col`) with SQLite-backed storage and YAM
 | Saved searches | Done | v0.6.0 |
 | Collections | Done | v0.6.0 |
 | Collection filter dropdown (browse) | Done | v0.6.2 |
+| `path:` search filter | Done | v0.6.3 |
 | Quoted filter values | Done | v0.6.0 |
 | Watch mode | Not started | — |
 | Export command | Not started | — |

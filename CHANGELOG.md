@@ -2,6 +2,12 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v0.6.3
+
+### New Features
+- **`path:` search filter** — filter assets by file location path prefix (e.g., `path:Capture/2026-02-22`), with quoted value support for paths with spaces; works in CLI, web UI (dedicated input in filter row), and saved searches
+- **Grouped `--help` output** — CLI help now groups commands logically (Core, Organization, Maintenance, Output) for easier discovery
+
 ## v0.6.2
 
 ### New Features
