@@ -258,6 +258,7 @@ pub struct SearchOptions<'a> {
     pub missing_asset_ids: Option<&'a [String]>,
     pub no_online_locations: Option<&'a [String]>,
     pub color_label: Option<&'a str>,
+    pub path_prefix: Option<&'a str>,
     pub collection_asset_ids: Option<&'a [String]>,
     pub sort: SearchSort,
     pub page: u32,
@@ -290,6 +291,7 @@ impl<'a> Default for SearchOptions<'a> {
             missing_asset_ids: None,
             no_online_locations: None,
             color_label: None,
+            path_prefix: None,
             collection_asset_ids: None,
             sort: SearchSort::DateDesc,
             page: 1,
@@ -1281,6 +1283,13 @@ impl Catalog {
             if !label.is_empty() {
                 clauses.push("a.color_label = ?".to_string());
                 params.push(Box::new(label.to_string()));
+            }
+        }
+        if let Some(prefix) = opts.path_prefix {
+            if !prefix.is_empty() {
+                clauses.push("fl.relative_path LIKE ?".to_string());
+                params.push(Box::new(format!("{prefix}%")));
+                needs_fl_join = true;
             }
         }
 

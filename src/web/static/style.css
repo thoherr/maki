@@ -95,6 +95,14 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
 .filter-row select:first-of-type {
     margin-left: auto;
 }
+.path-filter-input {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    background: var(--bg-input);
+    width: 140px;
+}
 
 /* Saved searches row */
 .saved-searches-row {

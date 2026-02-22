@@ -7,7 +7,7 @@
       hx-get="/"
       hx-target="#results"
       hx-push-url="true"
-      hx-vals='js:{"q": document.querySelector("[name=q]").value, "type": document.querySelector("[name=type]").value, "tag": getSelectedTags().join(","), "format": document.querySelector("[name=format]").value, "volume": (document.querySelector("[name=volume]") || {value:""}).value, "collection": (document.querySelector("[name=collection]") || {value:""}).value, "rating": getFilterRating(), "label": getFilterLabel(), "sort": new URLSearchParams(window.location.search).get("sort") || "date_desc", "page": "1"}'>
+      hx-vals='js:{"q": document.querySelector("[name=q]").value, "type": document.querySelector("[name=type]").value, "tag": getSelectedTags().join(","), "format": document.querySelector("[name=format]").value, "volume": (document.querySelector("[name=volume]") || {value:""}).value, "collection": (document.querySelector("[name=collection]") || {value:""}).value, "path": (document.querySelector("[name=path]") || {value:""}).value, "rating": getFilterRating(), "label": getFilterLabel(), "sort": new URLSearchParams(window.location.search).get("sort") || "date_desc", "page": "1"}'>
     <div class="search-row">
         <input type="text" name="q" placeholder="Search assets..." value="{{ query }}" autocomplete="off">
         <button type="submit">Search</button>
@@ -62,6 +62,7 @@
             {% endfor %}
         </select>
         {% endif %}
+        <input type="text" name="path" placeholder="Path prefix..." value="{{ path }}" class="path-filter-input" autocomplete="off">
     </div>
 </form>
 
@@ -375,6 +376,13 @@
         if (colSel) colSel.value = params.get('collection') || '';
     });
 
+    // Handle popstate for path input
+    window.addEventListener('popstate', function() {
+        var params = new URLSearchParams(window.location.search);
+        var pathInput = document.querySelector('[name=path]');
+        if (pathInput) pathInput.value = params.get('path') || '';
+    });
+
     // Expose for hx-vals
     window.getSelectedTags = getSelectedTags;
     window.getFilterRating = getFilterRating;
@@ -416,6 +424,8 @@
             if (rating) parts.push('rating:' + rating);
             var lbl = params.get('label') || getFilterLabel();
             if (lbl) parts.push(qv('label:', lbl));
+            var pathVal = params.get('path') || (document.querySelector('[name=path]') || {value:''}).value;
+            if (pathVal) parts.push(qv('path:', pathVal));
             var queryStr = parts.join(' ');
             var sort = params.get('sort') || 'date_desc';
 

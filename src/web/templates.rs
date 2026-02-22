@@ -150,6 +150,7 @@ pub struct BrowsePage {
     pub all_volumes: Vec<VolumeOption>,
     pub all_collections: Vec<CollectionOption>,
     pub collection: String,
+    pub path: String,
     pub saved_searches: Vec<SavedSearchChip>,
 }
 

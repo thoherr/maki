@@ -29,6 +29,7 @@ pub struct SearchParams {
     pub rating: Option<String>,
     pub label: Option<String>,
     pub collection: Option<String>,
+    pub path: Option<String>,
     pub sort: Option<String>,
     pub page: Option<u32>,
 }
@@ -56,11 +57,15 @@ pub async fn browse_page(
         let page = params.page.unwrap_or(1).max(1);
 
         let collection_str = params.collection.as_deref().unwrap_or("");
+        let path_str = params.path.as_deref().unwrap_or("");
 
         let parsed = merge_search_params(query, asset_type, tag, format, rating_str, label_str);
         let mut opts = parsed.to_search_options();
         if !volume.is_empty() {
             opts.volume = Some(volume);
+        }
+        if !path_str.is_empty() {
+            opts.path_prefix = Some(path_str);
         }
 
         // Resolve collection filter
@@ -157,6 +162,7 @@ pub async fn browse_page(
             all_volumes,
             all_collections,
             collection: collection_str.to_string(),
+            path: path_str.to_string(),
             saved_searches,
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
@@ -207,11 +213,15 @@ pub async fn search_api(
         let page = params.page.unwrap_or(1).max(1);
 
         let collection_str = params.collection.as_deref().unwrap_or("");
+        let path_str = params.path.as_deref().unwrap_or("");
 
         let parsed = merge_search_params(query, asset_type, tag, format, rating_str, label_str);
         let mut opts = parsed.to_search_options();
         if !volume.is_empty() {
             opts.volume = Some(volume);
+        }
+        if !path_str.is_empty() {
+            opts.path_prefix = Some(path_str);
         }
 
         // Resolve collection filter

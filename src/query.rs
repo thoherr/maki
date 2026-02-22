@@ -36,6 +36,7 @@ pub struct ParsedSearch {
     pub volume_none: bool,
     pub color_label: Option<String>,
     pub collection: Option<String>,
+    pub path_prefix: Option<String>,
 }
 
 impl ParsedSearch {
@@ -66,6 +67,7 @@ impl ParsedSearch {
             orphan: self.orphan,
             stale_days: self.stale_days,
             color_label: self.color_label.as_deref(),
+            path_prefix: self.path_prefix.as_deref(),
             ..Default::default()
         }
     }
@@ -193,6 +195,8 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
             parsed.color_label = Some(value.to_string());
         } else if let Some(value) = token.strip_prefix("collection:") {
             parsed.collection = Some(value.to_string());
+        } else if let Some(value) = token.strip_prefix("path:") {
+            parsed.path_prefix = Some(value.to_string());
         } else {
             text_parts.push(token);
         }
@@ -1439,5 +1443,27 @@ mod tests {
         assert_eq!(p.color_label.as_deref(), Some("Blue"));
         assert_eq!(p.tag.as_deref(), Some("landscape"));
         assert_eq!(p.text.as_deref(), Some("sunset"));
+    }
+
+    #[test]
+    fn parse_path_filter() {
+        let p = parse_search_query("path:Capture/2026-02-22");
+        assert_eq!(p.path_prefix.as_deref(), Some("Capture/2026-02-22"));
+        assert!(p.text.is_none());
+    }
+
+    #[test]
+    fn parse_path_filter_quoted() {
+        let p = parse_search_query(r#"path:"Photos/My Trip""#);
+        assert_eq!(p.path_prefix.as_deref(), Some("Photos/My Trip"));
+    }
+
+    #[test]
+    fn parse_path_with_other_filters() {
+        let p = parse_search_query("path:Capture/2026 rating:3+ tag:landscape");
+        assert_eq!(p.path_prefix.as_deref(), Some("Capture/2026"));
+        assert_eq!(p.rating_min, Some(3));
+        assert_eq!(p.tag.as_deref(), Some("landscape"));
+        assert!(p.text.is_none());
     }
 }

@@ -3507,3 +3507,47 @@ fn collection_search_filter() {
         .stdout(predicate::str::contains("alpha_col"))
         .stdout(predicate::str::contains("1 result"));
 }
+
+#[test]
+fn search_path_filter() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Create files in different subdirectories
+    let file_a = create_test_file(&root, "Capture/2026-02-22/DSC_001.jpg", b"photo a");
+    let file_b = create_test_file(&root, "Capture/2026-02-22/DSC_002.jpg", b"photo b");
+    let file_c = create_test_file(&root, "Archive/old/sunset.jpg", b"photo c");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file_a.to_str().unwrap(), file_b.to_str().unwrap(), file_c.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // path: filter should match only files under Capture/2026-02-22
+    dam()
+        .current_dir(&root)
+        .args(["search", "path:Capture/2026-02-22"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DSC_001"))
+        .stdout(predicate::str::contains("DSC_002"))
+        .stdout(predicate::str::contains("2 result"));
+
+    // path: filter for Archive should match only the sunset file
+    dam()
+        .current_dir(&root)
+        .args(["search", "path:Archive/"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sunset"))
+        .stdout(predicate::str::contains("1 result"));
+
+    // path: with no match
+    dam()
+        .current_dir(&root)
+        .args(["search", "path:Nonexistent/"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No results found"));
+}
