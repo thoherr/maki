@@ -243,6 +243,26 @@ fn parse_float_range(value: &str, min: &mut Option<f64>, max: &mut Option<f64>) 
     }
 }
 
+/// Check if `short` is a prefix-match for `long` with a separator boundary.
+///
+/// Returns true if `short == long` (exact match) or if `long` starts with `short`
+/// and the character immediately following in `long` is non-alphanumeric.
+/// This prevents `DSC_001` from matching `DSC_0010` while allowing
+/// `DSC_001` to match `DSC_001-Edit` or `DSC_001_v2`.
+fn stem_prefix_matches(short: &str, long: &str) -> bool {
+    if short == long {
+        return true;
+    }
+    if !long.starts_with(short) {
+        return false;
+    }
+    // The character right after the prefix must be a non-alphanumeric separator
+    match long[short.len()..].chars().next() {
+        Some(c) => !c.is_alphanumeric(),
+        None => true,
+    }
+}
+
 /// Result of a group operation.
 #[derive(Debug)]
 pub struct GroupResult {
@@ -482,10 +502,15 @@ impl QueryEngine {
         })
     }
 
-    /// Auto-group assets by filename stem.
+    /// Auto-group assets by filename stem using fuzzy prefix matching.
     ///
-    /// Finds assets whose primary variant shares the same stem (case-insensitive),
-    /// picks the best target per group (RAW preferred, then oldest), and merges.
+    /// Two stems match if the shorter is a prefix of the longer and the next
+    /// character in the longer string is non-alphanumeric (a separator like
+    /// `-`, `_`, ` `, `(`, etc.). This handles the common case where export
+    /// tools append suffixes to the original filename:
+    /// `Z91_8561.ARW` → `Z91_8561-1-HighRes-(c)_2025_Name.tif`.
+    ///
+    /// Picks the best target per group (RAW preferred, then oldest) and merges.
     pub fn auto_group(&self, asset_ids: &[String], dry_run: bool) -> Result<AutoGroupResult> {
         let catalog = Catalog::open(&self.catalog_root)?;
 
@@ -500,14 +525,17 @@ impl QueryEngine {
         };
 
         // Load details for each asset and extract stem
-        let mut stem_map: HashMap<String, Vec<(String, crate::catalog::AssetDetails)>> =
-            HashMap::new();
+        struct StemEntry {
+            stem: String,
+            asset_id: String,
+            details: crate::catalog::AssetDetails,
+        }
+        let mut entries: Vec<StemEntry> = Vec::new();
         for id in &unique_ids {
             let details = match catalog.load_asset_details(id)? {
                 Some(d) => d,
                 None => continue,
             };
-            // Use primary variant's original_filename to extract stem
             let stem = if let Some(v) = details.variants.first() {
                 std::path::Path::new(&v.original_filename)
                     .file_stem()
@@ -519,15 +547,57 @@ impl QueryEngine {
             if stem.is_empty() {
                 continue;
             }
-            stem_map.entry(stem).or_default().push((id.clone(), details));
+            entries.push(StemEntry { stem, asset_id: id.clone(), details });
         }
 
-        // Filter to groups with >1 distinct asset
+        // Sort by stem length (shortest first) for prefix resolution
+        entries.sort_by_key(|e| e.stem.len());
+
+        // Resolve each stem to its root (shortest valid prefix-match)
+        let mut roots: Vec<String> = Vec::new();
+        let mut stem_to_root: HashMap<String, String> = HashMap::new();
+
+        for entry in &entries {
+            let stem = &entry.stem;
+            if stem_to_root.contains_key(stem) {
+                // Another asset with the same stem already resolved
+                continue;
+            }
+            let mut found_root = None;
+            for root in &roots {
+                if stem_prefix_matches(root, stem) {
+                    found_root = Some(root.clone());
+                    break; // first (shortest) root wins
+                }
+            }
+            match found_root {
+                Some(root) => {
+                    stem_to_root.insert(stem.clone(), root);
+                }
+                None => {
+                    roots.push(stem.clone());
+                    stem_to_root.insert(stem.clone(), stem.clone());
+                }
+            }
+        }
+
+        // Group assets by resolved root stem
+        let mut group_map: HashMap<String, Vec<(String, crate::catalog::AssetDetails)>> =
+            HashMap::new();
+        for entry in entries {
+            let root = stem_to_root.get(&entry.stem).unwrap();
+            group_map
+                .entry(root.clone())
+                .or_default()
+                .push((entry.asset_id, entry.details));
+        }
+
+        // Filter to groups with >1 distinct asset and merge
         let mut groups = Vec::new();
         let mut total_donors_merged = 0;
         let mut total_variants_moved = 0;
 
-        for (stem, mut entries) in stem_map {
+        for (root_stem, mut entries) in group_map {
             if entries.len() < 2 {
                 continue;
             }
@@ -548,7 +618,6 @@ impl QueryEngine {
             let donor_count = entries.len() - 1;
 
             if !dry_run {
-                // Collect all variant hashes across all assets in the group
                 let all_hashes: Vec<String> = entries
                     .iter()
                     .flat_map(|e| e.1.variants.iter().map(|v| v.content_hash.clone()))
@@ -557,7 +626,6 @@ impl QueryEngine {
                 total_variants_moved += result.variants_moved;
                 total_donors_merged += result.donors_removed;
             } else {
-                // In dry-run mode, count what would happen
                 let donor_variants: usize = entries[1..]
                     .iter()
                     .map(|e| e.1.variants.len())
@@ -567,7 +635,7 @@ impl QueryEngine {
             }
 
             groups.push(StemGroupEntry {
-                stem: stem.clone(),
+                stem: root_stem,
                 target_id,
                 asset_ids: all_ids,
                 donor_count,
@@ -1721,5 +1789,159 @@ mod tests {
 
         assert!(result.groups.is_empty());
         assert_eq!(result.total_donors_merged, 0);
+    }
+
+    // ── stem_prefix_matches tests ────────────────────────────────────
+
+    #[test]
+    fn stem_prefix_exact_match() {
+        assert!(stem_prefix_matches("DSC_001", "DSC_001"));
+    }
+
+    #[test]
+    fn stem_prefix_separator_dash() {
+        assert!(stem_prefix_matches("Z91_8561", "Z91_8561-1-HIGHRES"));
+    }
+
+    #[test]
+    fn stem_prefix_separator_underscore() {
+        assert!(stem_prefix_matches("DSC_001", "DSC_001_V2"));
+    }
+
+    #[test]
+    fn stem_prefix_separator_space() {
+        assert!(stem_prefix_matches("DSC_001", "DSC_001 (1)"));
+    }
+
+    #[test]
+    fn stem_prefix_separator_paren() {
+        assert!(stem_prefix_matches("IMG_1234", "IMG_1234(EDIT)"));
+    }
+
+    #[test]
+    fn stem_prefix_rejects_digit_continuation() {
+        // DSC_001 should NOT match DSC_0010 (different shot number)
+        assert!(!stem_prefix_matches("DSC_001", "DSC_0010"));
+    }
+
+    #[test]
+    fn stem_prefix_rejects_letter_continuation() {
+        assert!(!stem_prefix_matches("IMG", "IMAGES"));
+    }
+
+    #[test]
+    fn stem_prefix_no_match() {
+        assert!(!stem_prefix_matches("DSC_001", "IMG_001"));
+    }
+
+    // ── fuzzy auto_group tests ───────────────────────────────────────
+
+    /// Helper: create a single-variant asset in the catalog/sidecar.
+    fn create_asset_with_filename(
+        catalog: &Catalog,
+        store: &MetadataStore,
+        hash: &str,
+        filename: &str,
+        format: &str,
+    ) -> String {
+        let mut asset = Asset::new(AssetType::Image, hash);
+        let v = Variant {
+            content_hash: hash.to_string(),
+            asset_id: asset.id,
+            role: VariantRole::Original,
+            format: format.to_string(),
+            file_size: 1000,
+            original_filename: filename.to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        asset.variants.push(v.clone());
+        catalog.insert_asset(&asset).unwrap();
+        catalog.insert_variant(&v).unwrap();
+        store.save(&asset).unwrap();
+        asset.id.to_string()
+    }
+
+    #[test]
+    fn auto_group_fuzzy_prefix_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let catalog_root = dir.path();
+        let catalog = Catalog::open(catalog_root).unwrap();
+        catalog.initialize().unwrap();
+        let store = MetadataStore::new(catalog_root);
+
+        let id_raw = create_asset_with_filename(
+            &catalog, &store, "sha256:raw1", "Z91_8561.ARW", "arw",
+        );
+        let id_export = create_asset_with_filename(
+            &catalog, &store, "sha256:exp1",
+            "Z91_8561-1-HighRes-(c)_2025_Thomas Herrmann.TIF", "tif",
+        );
+
+        let engine = QueryEngine::new(catalog_root);
+        let result = engine
+            .auto_group(&[id_raw.clone(), id_export.clone()], false)
+            .unwrap();
+
+        assert_eq!(result.groups.len(), 1);
+        assert_eq!(result.total_donors_merged, 1);
+        // RAW asset should be the target
+        assert_eq!(result.groups[0].target_id, id_raw);
+    }
+
+    #[test]
+    fn auto_group_fuzzy_rejects_numeric_continuation() {
+        let dir = tempfile::tempdir().unwrap();
+        let catalog_root = dir.path();
+        let catalog = Catalog::open(catalog_root).unwrap();
+        catalog.initialize().unwrap();
+        let store = MetadataStore::new(catalog_root);
+
+        let id1 = create_asset_with_filename(
+            &catalog, &store, "sha256:f1", "DSC_001.ARW", "arw",
+        );
+        let id2 = create_asset_with_filename(
+            &catalog, &store, "sha256:f2", "DSC_0010.JPG", "jpg",
+        );
+
+        let engine = QueryEngine::new(catalog_root);
+        let result = engine
+            .auto_group(&[id1, id2], false)
+            .unwrap();
+
+        // Should NOT match — these are different shots
+        assert!(result.groups.is_empty());
+    }
+
+    #[test]
+    fn auto_group_fuzzy_chain_resolves_to_shortest_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let catalog_root = dir.path();
+        let catalog = Catalog::open(catalog_root).unwrap();
+        catalog.initialize().unwrap();
+        let store = MetadataStore::new(catalog_root);
+
+        let id_raw = create_asset_with_filename(
+            &catalog, &store, "sha256:c1", "Z91_8561.ARW", "arw",
+        );
+        let id_v1 = create_asset_with_filename(
+            &catalog, &store, "sha256:c2", "Z91_8561-1.JPG", "jpg",
+        );
+        let id_v2 = create_asset_with_filename(
+            &catalog, &store, "sha256:c3",
+            "Z91_8561-1-HighRes.TIF", "tif",
+        );
+
+        let engine = QueryEngine::new(catalog_root);
+        let result = engine
+            .auto_group(&[id_raw.clone(), id_v1.clone(), id_v2.clone()], false)
+            .unwrap();
+
+        // All three should be in one group
+        assert_eq!(result.groups.len(), 1);
+        assert_eq!(result.groups[0].asset_ids.len(), 3);
+        assert_eq!(result.total_donors_merged, 2);
+        // RAW asset should be the target
+        assert_eq!(result.groups[0].target_id, id_raw);
     }
 }

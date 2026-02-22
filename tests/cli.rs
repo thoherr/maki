@@ -3712,3 +3712,80 @@ fn auto_group_json_output() {
     assert_eq!(json["dry_run"], true);
     assert_eq!(json["groups"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn auto_group_fuzzy_prefix_merges_exports() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // RAW file with short name, export with appended suffix
+    let sub1 = root.join("raw");
+    let sub2 = root.join("export");
+    std::fs::create_dir_all(&sub1).unwrap();
+    std::fs::create_dir_all(&sub2).unwrap();
+    std::fs::write(sub1.join("Z91_8561.ARW"), b"raw-content-fuzzy").unwrap();
+    std::fs::write(
+        sub2.join("Z91_8561-1-HighRes-(c)_2025_Thomas.JPG"),
+        b"export-content-fuzzy",
+    )
+    .unwrap();
+
+    dam()
+        .current_dir(&root)
+        .args(["import", sub1.to_str().unwrap()])
+        .assert()
+        .success();
+    dam()
+        .current_dir(&root)
+        .args(["import", sub2.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Apply auto-group — fuzzy prefix should match
+    dam()
+        .current_dir(&root)
+        .args(["auto-group", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 stem group"))
+        .stdout(predicate::str::contains("merged"));
+
+    // Should be 1 unique asset
+    let output = dam()
+        .current_dir(&root)
+        .args(["search", "-q", ""])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let unique_ids: std::collections::HashSet<&str> = std::str::from_utf8(&output)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(unique_ids.len(), 1);
+}
+
+#[test]
+fn auto_group_fuzzy_rejects_numeric_continuation() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // DSC_001 and DSC_0010 are different shots — should NOT match
+    create_test_file(&root, "sub/DSC_001.ARW", b"raw-content-no-fuzzy-1");
+    create_test_file(&root, "sub/DSC_0010.JPG", b"jpg-content-no-fuzzy-2");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", root.join("sub").to_str().unwrap()])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .args(["auto-group"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("No groupable assets"));
+}
