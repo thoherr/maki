@@ -236,6 +236,10 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 - `PUT /api/batch/label` — batch set/clear color label for multiple assets
 - `GET /api/tags` — all tags as JSON (for autocomplete)
 - `GET /api/stats` — catalog stats as JSON
+- `GET /collections` — collections page listing all collections with "+ New Collection" button
+- `GET /api/collections` — list all collections as JSON
+- `POST /api/collections` — create a new collection (JSON: `{name, description?}`)
+- `POST /api/batch/collection` — batch add assets to a collection (JSON: `{asset_ids, collection}`)
 
 **Catalog extensions** (in `src/catalog.rs`):
 - `SearchOptions` / `SearchSort` / `SearchPage` — paginated search with volume filter and dynamic sort
