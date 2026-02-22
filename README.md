@@ -14,7 +14,7 @@ A command-line digital asset manager built in Rust, designed for large collectio
 - **Asset relocation** — copy or move assets between volumes with integrity verification
 - **Saved searches & collections** — save named search queries (smart albums) and curate static asset lists (collections)
 - **Flexible output** — JSON output on all commands, custom format templates for scripting
-- **Web UI** — browser-based interface for browsing, searching, and editing assets with saved search chips and collection management
+- **Web UI** — browser-based interface for browsing, searching, and editing assets with saved search chips, collection filter dropdown, and collection management
 
 ## Quick Start
 

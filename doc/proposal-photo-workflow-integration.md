@@ -182,7 +182,7 @@ Rating and label shortcuts operate on the focused card when no batch selection i
 #### 3.4 Saved Searches & Collections — **IMPLEMENTED** (v0.6.0)
 
 - **Saved searches** (`dam saved-search` / `dam ss`): Named queries stored in `searches.toml` at the catalog root. CLI: `save`, `list`, `run`, `delete` subcommands. Web UI: clickable chips on the browse page load saved searches into filter dropdowns; save button captures current search state; chips show rename (…) and delete (×) buttons on hover. API: `GET/POST /api/saved-searches`, `DELETE /api/saved-searches/{name}`.
-- **Collections** (`dam collection` / `dam col`): Manually curated asset ID lists backed by SQLite tables + `collections.yaml` for persistence across `rebuild-catalog`. CLI: `create`, `list`, `show`, `add`, `remove`, `delete` subcommands. Stdin piping: `dam search -q "rating:5" | xargs dam col add "Best"`. Search filter: `collection:<name>`. Web UI: `/collections` page, collection membership chips with × remove buttons on asset detail, context-sensitive batch toolbar ("+ Collection" / "− Collection" depending on collection page context). API: `GET/POST /api/collections`, `POST/DELETE /api/batch/collection`.
+- **Collections** (`dam collection` / `dam col`): Manually curated asset ID lists backed by SQLite tables + `collections.yaml` for persistence across `rebuild-catalog`. CLI: `create`, `list`, `show`, `add`, `remove`, `delete` subcommands. Stdin piping: `dam search -q "rating:5" | xargs dam col add "Best"`. Search filter: `collection:<name>`. Web UI: `/collections` page, collection membership chips with × remove buttons on asset detail, collection filter dropdown in browse filter row (v0.6.2, composable with all other filters), context-sensitive batch toolbar ("+ Collection" / "− Collection" synced from filter dropdown). API: `GET/POST /api/collections`, `POST/DELETE /api/batch/collection`.
 - **Quoted filter values**: Search parser supports double-quoted values for multi-word filters (`tag:"Fools Theater"`, `collection:"My Favorites"`).
 
 ---
@@ -239,6 +239,7 @@ Implemented as `dam collection` (alias `col`) with SQLite-backed storage and YAM
 | Keyboard navigation | Done | v0.4.5 |
 | Saved searches | Done | v0.6.0 |
 | Collections | Done | v0.6.0 |
+| Collection filter dropdown (browse) | Done | v0.6.2 |
 | Quoted filter values | Done | v0.6.0 |
 | Watch mode | Not started | — |
 | Export command | Not started | — |
