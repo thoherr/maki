@@ -443,16 +443,13 @@
     // Clear
     document.getElementById('batch-clear').addEventListener('click', clearSelection);
 
-    // Keyboard shortcuts
+    // Keyboard shortcuts (Cmd/Ctrl+A handled here; Escape handled by keyboard nav IIFE)
     document.addEventListener('keydown', function(e) {
         // Ignore when typing in a text input/textarea/select (but not checkboxes)
         var el = e.target;
         if (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
         if (el.tagName === 'INPUT' && el.type !== 'checkbox') return;
 
-        if (e.key === 'Escape' && selected.size > 0) {
-            clearSelection();
-        }
         // Cmd/Ctrl+A — select all on current page
         if (e.key === 'a' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
             e.preventDefault();
@@ -621,6 +618,230 @@
         })
         .catch(function(err) { console.error('Batch label error:', err); })
         .finally(function() { setButtonsBusy(false); });
+    });
+
+    // Expose for keyboard navigation integration
+    window.damBatch = {
+        selected: selected,
+        updateToolbar: updateToolbar,
+        clearSelection: clearSelection,
+        getVisibleIds: getVisibleIds,
+        refreshResults: refreshResults,
+        setButtonsBusy: setButtonsBusy,
+        isBusy: function() { return batchBusy; }
+    };
+})();
+
+// --- Keyboard navigation ---
+(function() {
+    var focusedIndex = -1;
+
+    function getCards() {
+        return Array.from(document.querySelectorAll('.asset-card'));
+    }
+
+    function getColCount() {
+        var grid = document.querySelector('.results-grid');
+        if (!grid) return 1;
+        return getComputedStyle(grid).gridTemplateColumns.split(' ').length;
+    }
+
+    function setFocus(index) {
+        var cards = getCards();
+        var old = document.querySelector('.asset-card.focused');
+        if (old) old.classList.remove('focused');
+        if (cards.length === 0) { focusedIndex = -1; return; }
+        focusedIndex = Math.max(0, Math.min(index, cards.length - 1));
+        cards[focusedIndex].classList.add('focused');
+        cards[focusedIndex].scrollIntoView({ block: 'nearest' });
+    }
+
+    function clearFocus() {
+        var old = document.querySelector('.asset-card.focused');
+        if (old) old.classList.remove('focused');
+        focusedIndex = -1;
+    }
+
+    function getFocusedId() {
+        var cards = getCards();
+        if (focusedIndex < 0 || focusedIndex >= cards.length) return null;
+        return cards[focusedIndex].getAttribute('data-asset-id');
+    }
+
+    function getTargetIds() {
+        if (window.damBatch && window.damBatch.selected.size > 0) {
+            return Array.from(window.damBatch.selected);
+        }
+        var id = getFocusedId();
+        return id ? [id] : [];
+    }
+
+    function refreshResults() {
+        htmx.ajax('GET', window.location.href, {target: '#results', swap: 'innerHTML'});
+    }
+
+    // Rating: 0 clears, 1-5 sets
+    function applyRating(rating) {
+        var ids = getTargetIds();
+        if (ids.length === 0) return;
+        if (window.damBatch && window.damBatch.isBusy()) return;
+        if (ids.length === 1 && window.damBatch.selected.size === 0) {
+            // Single-asset via focused card
+            fetch('/api/asset/' + ids[0] + '/rating', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: 'rating=' + rating
+            }).then(function() { refreshResults(); });
+        } else {
+            // Batch
+            window.damBatch.setButtonsBusy(true);
+            fetch('/api/batch/rating', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({asset_ids: ids, rating: rating || null})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function() {
+                window.damBatch.clearSelection();
+                refreshResults();
+            })
+            .catch(function(err) { console.error('Batch rating error:', err); })
+            .finally(function() { window.damBatch.setButtonsBusy(false); });
+        }
+    }
+
+    // Label: empty string clears, color name sets
+    var labelNumMap = {'1':'Red', '2':'Orange', '3':'Yellow', '4':'Green', '5':'Blue', '6':'Pink', '7':'Purple'};
+    var labelLetterMap = {'r':'Red', 'o':'Orange', 'y':'Yellow', 'g':'Green', 'b':'Blue', 'p':'Pink', 'u':'Purple'};
+
+    function applyLabel(label) {
+        var ids = getTargetIds();
+        if (ids.length === 0) return;
+        if (window.damBatch && window.damBatch.isBusy()) return;
+        if (ids.length === 1 && window.damBatch.selected.size === 0) {
+            // Single-asset via focused card
+            fetch('/api/asset/' + ids[0] + '/label', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: 'label=' + encodeURIComponent(label)
+            }).then(function() { refreshResults(); });
+        } else {
+            // Batch
+            window.damBatch.setButtonsBusy(true);
+            fetch('/api/batch/label', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({asset_ids: ids, label: label || null})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function() {
+                window.damBatch.clearSelection();
+                refreshResults();
+            })
+            .catch(function(err) { console.error('Batch label error:', err); })
+            .finally(function() { window.damBatch.setButtonsBusy(false); });
+        }
+    }
+
+    document.addEventListener('keydown', function(e) {
+        // Ignore when typing in a text input/textarea/select
+        var el = e.target;
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
+        if (el.tagName === 'INPUT' && el.type !== 'checkbox') return;
+
+        var cards = getCards();
+        if (cards.length === 0) return;
+
+        // Escape: clear selection first, then focus
+        if (e.key === 'Escape') {
+            if (window.damBatch && window.damBatch.selected.size > 0) {
+                window.damBatch.clearSelection();
+            } else if (focusedIndex >= 0) {
+                clearFocus();
+            }
+            return;
+        }
+
+        // Arrow keys
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (focusedIndex < 0) {
+                setFocus(0);
+                return;
+            }
+            var cols = getColCount();
+            if (e.key === 'ArrowLeft') setFocus(focusedIndex - 1);
+            else if (e.key === 'ArrowRight') setFocus(focusedIndex + 1);
+            else if (e.key === 'ArrowUp') setFocus(focusedIndex - cols);
+            else if (e.key === 'ArrowDown') setFocus(focusedIndex + cols);
+            return;
+        }
+
+        // Enter: open focused card
+        if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
+            var id = getFocusedId();
+            if (id) {
+                e.preventDefault();
+                window.location.href = '/asset/' + id;
+            }
+            return;
+        }
+
+        // Space: toggle selection of focused card
+        if (e.key === ' ') {
+            var focId = getFocusedId();
+            if (focId && window.damBatch) {
+                e.preventDefault();
+                if (window.damBatch.selected.has(focId)) {
+                    window.damBatch.selected.delete(focId);
+                } else {
+                    window.damBatch.selected.add(focId);
+                }
+                window.damBatch.updateToolbar();
+            }
+            return;
+        }
+
+        // Alt+0-7: color label
+        if (e.altKey && e.key >= '0' && e.key <= '7') {
+            e.preventDefault();
+            if (e.key === '0') {
+                applyLabel('');
+            } else {
+                applyLabel(labelNumMap[e.key] || '');
+            }
+            return;
+        }
+
+        // 0-5: rating (no modifier)
+        if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key >= '0' && e.key <= '5') {
+            applyRating(parseInt(e.key));
+            return;
+        }
+
+        // Letter keys for color label (no modifier)
+        if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+            var lower = e.key.toLowerCase();
+            if (labelLetterMap[lower]) {
+                applyLabel(labelLetterMap[lower]);
+                return;
+            }
+            if (lower === 'x') {
+                applyLabel('');
+                return;
+            }
+        }
+    });
+
+    // Re-apply focus after htmx swaps (pagination/sort)
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target && e.detail.target.id === 'results') {
+            var cards = getCards();
+            if (focusedIndex >= cards.length) focusedIndex = cards.length - 1;
+            if (focusedIndex >= 0 && cards.length > 0) {
+                cards[focusedIndex].classList.add('focused');
+            }
+        }
     });
 })();
 </script>

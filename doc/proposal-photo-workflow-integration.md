@@ -168,15 +168,16 @@ Implemented as `dam edit <asset-id> [--name <name>] [--description <text>] [--ra
 - ~~Inline-editable description field on asset detail page~~ — **done** (pencil icon, textarea, Save/Cancel, `PUT /api/asset/{id}/description`, XMP write-back)
 - Inline-editable asset name — not yet implemented in web UI (editable via CLI `dam edit --name`)
 
-#### 3.3 Keyboard Navigation
+#### 3.3 Keyboard Navigation — **IMPLEMENTED** (v0.4.5)
 
-- Arrow keys to move between assets in browse grid
-- Number keys (1–5) to rate the focused asset
+- Arrow keys (← → ↑ ↓) to move between assets in browse grid (column-aware)
+- Number keys (1–5) to rate focused asset or batch selection, 0 to clear rating
+- Alt/Option+1–7 to set color label, Alt+0 to clear; letter keys r/o/y/g/b/p/u/x for quick label
 - Enter to open asset detail
-- Escape to return to browse
-- Spacebar to toggle selection
+- Escape clears selection first, then focus
+- Spacebar to toggle selection of focused card
 
-This turns the web UI into a viable culling/review tool.
+Rating and label shortcuts operate on the focused card when no batch selection is active, or on all selected cards when batch selection is active. This turns the web UI into a viable culling/review tool matching CaptureOne's keyboard-driven workflow speed.
 
 #### 3.4 Saved Searches
 
@@ -236,19 +237,19 @@ Named, manually curated groups of assets (separate from tags). A "Project: Weddi
 | `dam refresh` | Done | v0.4.5 |
 | `dam import --dry-run` | Not started | — |
 | Web UI name editing | Not started | — |
-| Keyboard navigation | Not started | — |
+| Keyboard navigation | Done | v0.4.5 |
 | Saved searches / collections | Not started | — |
 | Watch mode | Not started | — |
 | Export command | Not started | — |
 
 ## Priority Recommendation
 
-**Phase 1** is complete. **Phase 4.2** (XMP write-back) was pulled forward and is complete for all metadata fields (rating, tags, description, color label). **Phase 3.1** (multi-select & batch operations) and **Phase 3.2** (description editing) are complete. Color labels (v0.4.4) round out the metadata feature set with CaptureOne-compatible 7-color support.
+**Phase 1** is complete. **Phase 4.2** (XMP write-back) was pulled forward and is complete for all metadata fields (rating, tags, description, color label). **Phase 3.1** (multi-select & batch operations), **Phase 3.2** (description editing), and **Phase 3.3** (keyboard navigation) are complete. Color labels (v0.4.4) round out the metadata feature set with CaptureOne-compatible 7-color support. Keyboard navigation (v0.4.5) closes the gap for keyboard-driven culling workflows.
 
 The most impactful next steps are:
 
-1. **Keyboard navigation (3.3)** — Arrow keys + number keys for rating would match the speed of CaptureOne's review workflow. Now that batch ops and color labels are in place, this is the main remaining gap for a competitive culling experience.
+1. **`dam import --dry-run` (2.2)** — Useful safety net for previewing import operations before committing.
 
-2. **`dam import --dry-run` (2.2)** — Useful safety net but lower priority than workflow speed improvements.
+2. **Web UI name editing** — Minor gap in web UI completeness.
 
-3. **Web UI name editing** — Minor gap in web UI completeness.
+3. **Saved searches / collections (3.4, 5)** — Would enable bookmarking filtered views for project workflows.
