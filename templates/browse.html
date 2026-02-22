@@ -107,7 +107,8 @@
         <select class="batch-collection-select" id="batch-collection-select">
             <option value="">Collection...</option>
         </select>
-        <button class="batch-btn" id="batch-add-collection">+ Collection</button>
+        <button class="batch-btn" id="batch-add-collection" style="display:none">+ Collection</button>
+        <button class="batch-btn batch-btn-danger" id="batch-remove-collection" style="display:none">&minus; Collection</button>
     </div>
 </div>
 
@@ -792,6 +793,60 @@
         .catch(function(err) { console.error('Batch collection error:', err); })
         .finally(function() { setButtonsBusy(false); });
     });
+
+    // Batch remove from collection
+    document.getElementById('batch-remove-collection').addEventListener('click', function() {
+        var colName = colSelect.value;
+        if (!colName || colName === '__new__' || selected.size === 0 || batchBusy) return;
+        setButtonsBusy(true);
+        fetch('/api/batch/collection', {
+            method: 'DELETE',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({asset_ids: Array.from(selected), collection: colName})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function() {
+            clearSelection();
+            refreshResults();
+            populateCollectionDropdown().then(function() {
+                // Re-select the collection if we're browsing it
+                var params = new URLSearchParams(window.location.search);
+                var browsing = params.get('collection') || '';
+                if (browsing) colSelect.value = browsing;
+            });
+        })
+        .catch(function(err) { console.error('Batch collection remove error:', err); })
+        .finally(function() { setButtonsBusy(false); });
+    });
+
+    // Show +Collection or −Collection depending on whether we're browsing a collection
+    var addColBtn = document.getElementById('batch-add-collection');
+    var removeColBtn = document.getElementById('batch-remove-collection');
+
+    function updateCollectionButtons() {
+        var params = new URLSearchParams(window.location.search);
+        var browsing = params.get('collection') || '';
+        if (browsing) {
+            addColBtn.style.display = 'none';
+            removeColBtn.style.display = '';
+            // Auto-select in dropdown once populated
+            var checkInterval = setInterval(function() {
+                for (var i = 0; i < colSelect.options.length; i++) {
+                    if (colSelect.options[i].value === browsing) {
+                        colSelect.value = browsing;
+                        clearInterval(checkInterval);
+                        return;
+                    }
+                }
+            }, 100);
+            setTimeout(function() { clearInterval(checkInterval); }, 3000);
+        } else {
+            addColBtn.style.display = '';
+            removeColBtn.style.display = 'none';
+        }
+    }
+    updateCollectionButtons();
+    window.addEventListener('popstate', updateCollectionButtons);
 
     // Expose for keyboard navigation integration
     window.damBatch = {

@@ -117,7 +117,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/batch/collection",
-            axum::routing::post(routes::batch_add_to_collection),
+            axum::routing::post(routes::batch_add_to_collection)
+                .delete(routes::batch_remove_from_collection),
         )
         .route("/static/htmx.min.js", axum::routing::get(static_assets::htmx_js))
         .route("/static/style.css", axum::routing::get(static_assets::style_css))

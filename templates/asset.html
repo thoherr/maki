@@ -48,12 +48,45 @@
         </details>
 
         {% if !collections.is_empty() %}
-        <div class="asset-collections">
+        <div class="asset-collections" id="asset-collections">
             <span class="collections-label">Collections:</span>
             {% for c in collections %}
-            <a href="/?collection={{ c.name }}" class="collection-chip">{{ c.name }}</a>
+            <span class="collection-chip-wrap">
+                <a href="/?collection={{ c.name }}" class="collection-chip">{{ c.name }}</a>
+                <button class="collection-remove" data-collection="{{ c.name }}" title="Remove from collection">&times;</button>
+            </span>
             {% endfor %}
         </div>
+        <script>
+        (function() {
+            document.getElementById('asset-collections').addEventListener('click', function(e) {
+                var btn = e.target.closest('.collection-remove');
+                if (!btn) return;
+                e.preventDefault();
+                var colName = btn.getAttribute('data-collection');
+                var assetId = '{{ asset_id }}';
+                fetch('/api/batch/collection', {
+                    method: 'DELETE',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({asset_ids: [assetId], collection: colName})
+                })
+                .then(function(r) {
+                    if (!r.ok) throw new Error('Failed');
+                    return r.json();
+                })
+                .then(function() {
+                    var wrap = btn.closest('.collection-chip-wrap');
+                    if (wrap) wrap.remove();
+                    // Hide the whole section if no chips remain
+                    var remaining = document.querySelectorAll('#asset-collections .collection-chip-wrap');
+                    if (remaining.length === 0) {
+                        document.getElementById('asset-collections').style.display = 'none';
+                    }
+                })
+                .catch(function(err) { console.error('Remove from collection error:', err); });
+            });
+        })();
+        </script>
         {% endif %}
 
         {% if !variants.is_empty() %}

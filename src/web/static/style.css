@@ -1275,3 +1275,31 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     color: #fff;
     border-color: var(--primary);
 }
+.collection-chip-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+}
+.collection-chip-wrap .collection-chip {
+    border-radius: 1rem 0 0 1rem;
+    padding-right: 0.3rem;
+}
+.collection-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-left: none;
+    border-radius: 0 1rem 1rem 0;
+    background: var(--bg-card);
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    padding: 0.2rem 0.35rem;
+    cursor: pointer;
+    line-height: 1;
+}
+.collection-remove:hover {
+    background: var(--danger, #e74c3c);
+    color: #fff;
+    border-color: var(--danger, #e74c3c);
+}

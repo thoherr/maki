@@ -1085,6 +1085,35 @@ pub struct BatchCollectionRequest {
     pub collection: String,
 }
 
+/// DELETE /api/batch/collection — remove assets from a collection.
+pub async fn batch_remove_from_collection(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BatchCollectionRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+        let col_store = crate::collection::CollectionStore::new(catalog.conn());
+        let removed = col_store.remove_assets(&req.collection, &req.asset_ids)?;
+        // Persist to YAML
+        let yaml = col_store.export_all()?;
+        crate::collection::save_yaml(&state.catalog_root, &yaml)?;
+        Ok::<_, anyhow::Error>(serde_json::json!({
+            "removed": removed,
+            "collection": req.collection,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
 /// POST /api/batch/collection — add assets to a collection.
 pub async fn batch_add_to_collection(
     State(state): State<Arc<AppState>>,
