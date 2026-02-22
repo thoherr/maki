@@ -9,7 +9,16 @@ use dam::metadata_store::MetadataStore;
 use dam::query::QueryEngine;
 
 #[derive(Parser)]
-#[command(name = "dam", about = "Digital Asset Manager", version)]
+#[command(name = "dam", about = "Digital Asset Manager", version,
+    after_help = "\
+Quick Reference:
+  Setup:      init, volume
+  Ingest:     import, tag, edit, group
+  Organize:   collection (col), saved-search (ss)
+  Retrieve:   search, show, duplicates, stats, serve
+  Maintain:   verify, sync, refresh, cleanup, relocate,
+              update-location, generate-previews, rebuild-catalog"
+)]
 struct Cli {
     /// Output machine-readable JSON (valid JSON on stdout, messages on stderr)
     #[arg(long, global = true, display_order = 30)]
@@ -33,14 +42,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    // --- Setup ---
+
     /// Initialize a new catalog in the current directory
+    #[command(display_order = 1)]
     Init,
 
     /// Manage storage volumes
-    #[command(subcommand)]
+    #[command(subcommand, display_order = 2)]
     Volume(VolumeCommands),
 
+    // --- Ingest & Edit ---
+
     /// Import files into the catalog
+    #[command(display_order = 10)]
     Import {
         /// Paths to files or directories to import
         paths: Vec<String>,
@@ -62,30 +77,8 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// Search assets
-    Search {
-        /// Free-text keywords and optional filters (type:image, tag:landscape, format:jpg,
-        /// rating:3+, camera:fuji, lens:56mm, iso:100-800, focal:35-70, f:1.4-2.8,
-        /// width:4000+, height:2000+, meta:key=value, orphan:true, missing:true,
-        /// stale:30, volume:none)
-        query: String,
-
-        /// Output format: ids, short, full, json, or a custom template (e.g. '{id}\t{name}')
-        #[arg(long)]
-        format: Option<String>,
-
-        /// Shorthand for --format=ids (one asset ID per line, for scripting)
-        #[arg(short = 'q', long = "quiet")]
-        quiet: bool,
-    },
-
-    /// Show asset details
-    Show {
-        /// Asset ID
-        asset_id: String,
-    },
-
     /// Add or remove tags on an asset
+    #[command(display_order = 11)]
     Tag {
         /// Asset ID
         asset_id: String,
@@ -99,6 +92,7 @@ enum Commands {
     },
 
     /// Edit asset metadata (name, description, rating)
+    #[command(display_order = 12)]
     Edit {
         /// Asset ID (or unique prefix)
         asset_id: String,
@@ -137,29 +131,101 @@ enum Commands {
     },
 
     /// Group variants into one asset
+    #[command(display_order = 13)]
     Group {
         /// Content hashes of variants to group
         variant_hashes: Vec<String>,
     },
 
-    /// Copy or move asset files to another volume
-    Relocate {
-        /// Asset ID
-        asset_id: String,
+    // --- Organize ---
 
-        /// Target volume label or ID
-        volume: String,
+    /// Manage collections (static albums)
+    #[command(subcommand, alias = "col", display_order = 20)]
+    Collection(CollectionCommands),
 
-        /// Delete source files after successful copy and verification
+    /// Manage saved searches (smart albums)
+    #[command(subcommand, alias = "ss", display_order = 21)]
+    SavedSearch(SavedSearchCommands),
+
+    // --- Retrieve ---
+
+    /// Search assets
+    #[command(display_order = 30)]
+    Search {
+        /// Free-text keywords and optional filters (type:image, tag:landscape, format:jpg,
+        /// rating:3+, camera:fuji, lens:56mm, iso:100-800, focal:35-70, f:1.4-2.8,
+        /// width:4000+, height:2000+, meta:key=value, orphan:true, missing:true,
+        /// stale:30, volume:none)
+        query: String,
+
+        /// Output format: ids, short, full, json, or a custom template (e.g. '{id}\t{name}')
         #[arg(long)]
-        remove_source: bool,
+        format: Option<String>,
 
-        /// Show what would happen without making changes
-        #[arg(long)]
-        dry_run: bool,
+        /// Shorthand for --format=ids (one asset ID per line, for scripting)
+        #[arg(short = 'q', long = "quiet")]
+        quiet: bool,
     },
 
+    /// Show asset details
+    #[command(display_order = 31)]
+    Show {
+        /// Asset ID
+        asset_id: String,
+    },
+
+    /// Find duplicate files
+    #[command(display_order = 32)]
+    Duplicates {
+        /// Output format: ids, short, full, json, or a custom template (e.g. '{hash}\t{filename}')
+        #[arg(long)]
+        format: Option<String>,
+    },
+
+    /// Show catalog statistics
+    #[command(display_order = 33)]
+    Stats {
+        /// Show asset type and format breakdown
+        #[arg(long)]
+        types: bool,
+
+        /// Show per-volume details
+        #[arg(long)]
+        volumes: bool,
+
+        /// Show tag usage statistics
+        #[arg(long)]
+        tags: bool,
+
+        /// Show verification health
+        #[arg(long)]
+        verified: bool,
+
+        /// Show all sections
+        #[arg(long)]
+        all: bool,
+
+        /// Max entries for top-N lists (default: 20)
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+
+    /// Start the web UI server
+    #[command(display_order = 34)]
+    Serve {
+        /// Port to listen on (default: 8080, or from dam.toml [serve] port)
+        #[arg(long, display_order = 10)]
+        port: Option<u16>,
+
+        /// Address to bind to (default: 127.0.0.1, or from dam.toml [serve] bind)
+        #[arg(long, display_order = 11)]
+        bind: Option<String>,
+    },
+
+    // --- Maintenance ---
+
     /// Check file integrity
+    #[command(display_order = 40)]
     Verify {
         /// Files or directories to verify
         paths: Vec<String>,
@@ -182,6 +248,7 @@ enum Commands {
     },
 
     /// Sync catalog with disk changes (moved/modified/missing files)
+    #[command(display_order = 41)]
     Sync {
         /// Paths to files or directories to scan
         paths: Vec<String>,
@@ -200,6 +267,7 @@ enum Commands {
     },
 
     /// Re-read metadata from changed sidecar/recipe files
+    #[command(display_order = 42)]
     Refresh {
         /// Paths to files or directories to scan
         paths: Vec<String>,
@@ -218,6 +286,7 @@ enum Commands {
     },
 
     /// Remove stale file location records (files no longer on disk)
+    #[command(display_order = 43)]
     Cleanup {
         /// Limit to a specific volume
         #[arg(long, display_order = 10)]
@@ -232,8 +301,26 @@ enum Commands {
         apply: bool,
     },
 
+    /// Copy or move asset files to another volume
+    #[command(display_order = 44)]
+    Relocate {
+        /// Asset ID
+        asset_id: String,
+
+        /// Target volume label or ID
+        volume: String,
+
+        /// Delete source files after successful copy and verification
+        #[arg(long)]
+        remove_source: bool,
+
+        /// Show what would happen without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Update a file's catalog path after it was moved on disk
-    #[command(name = "update-location")]
+    #[command(name = "update-location", display_order = 45)]
     UpdateLocation {
         /// Asset ID (or unique prefix)
         asset_id: String,
@@ -251,14 +338,8 @@ enum Commands {
         volume: Option<String>,
     },
 
-    /// Find duplicate files
-    Duplicates {
-        /// Output format: ids, short, full, json, or a custom template (e.g. '{hash}\t{filename}')
-        #[arg(long)]
-        format: Option<String>,
-    },
-
     /// Generate or regenerate preview thumbnails
+    #[command(display_order = 46)]
     GeneratePreviews {
         /// Files or directories to generate previews for
         paths: Vec<String>,
@@ -285,53 +366,8 @@ enum Commands {
     },
 
     /// Rebuild SQLite catalog from sidecar files
+    #[command(display_order = 47)]
     RebuildCatalog,
-
-    /// Start the web UI server
-    Serve {
-        /// Port to listen on (default: 8080, or from dam.toml [serve] port)
-        #[arg(long, display_order = 10)]
-        port: Option<u16>,
-
-        /// Address to bind to (default: 127.0.0.1, or from dam.toml [serve] bind)
-        #[arg(long, display_order = 11)]
-        bind: Option<String>,
-    },
-
-    /// Manage saved searches (smart albums)
-    #[command(subcommand, alias = "ss")]
-    SavedSearch(SavedSearchCommands),
-
-    /// Manage collections (static albums)
-    #[command(subcommand, alias = "col")]
-    Collection(CollectionCommands),
-
-    /// Show catalog statistics
-    Stats {
-        /// Show asset type and format breakdown
-        #[arg(long)]
-        types: bool,
-
-        /// Show per-volume details
-        #[arg(long)]
-        volumes: bool,
-
-        /// Show tag usage statistics
-        #[arg(long)]
-        tags: bool,
-
-        /// Show verification health
-        #[arg(long)]
-        verified: bool,
-
-        /// Show all sections
-        #[arg(long)]
-        all: bool,
-
-        /// Max entries for top-N lists (default: 20)
-        #[arg(long, default_value_t = 20)]
-        limit: usize,
-    },
 }
 
 #[derive(Subcommand)]
