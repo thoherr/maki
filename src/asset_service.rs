@@ -294,6 +294,23 @@ pub struct RefreshResult {
     pub errors: Vec<String>,
 }
 
+/// Status of a single asset during fix-roles.
+pub enum FixRolesStatus {
+    AlreadyCorrect,
+    Fixed,
+}
+
+/// Result of a fix-roles operation.
+#[derive(Debug, serde::Serialize)]
+pub struct FixRolesResult {
+    pub checked: usize,
+    pub fixed: usize,
+    pub variants_fixed: usize,
+    pub already_correct: usize,
+    pub dry_run: bool,
+    pub errors: Vec<String>,
+}
+
 /// High-level operations that orchestrate the other components.
 pub struct AssetService {
     catalog_root: PathBuf,
@@ -523,10 +540,20 @@ impl AssetService {
                     let asset = group_asset.as_mut().unwrap();
                     let exif_data = crate::exif_reader::extract(file_path);
 
+                    // If the primary variant is RAW and this file is not, it's a derivative
+                    let primary_is_raw = asset.variants.first()
+                        .map(|v| is_raw_extension(&v.format))
+                        .unwrap_or(false);
+                    let role = if primary_is_raw && !is_raw_extension(ext) {
+                        VariantRole::Export
+                    } else {
+                        VariantRole::Original
+                    };
+
                     let variant = Variant {
                         content_hash: content_hash.clone(),
                         asset_id: asset.id,
-                        role: VariantRole::Original,
+                        role,
                         format: ext.to_lowercase(),
                         file_size,
                         original_filename: filename,
@@ -2565,6 +2592,151 @@ impl AssetService {
 
         Ok(result)
     }
+
+    /// Fix variant roles: re-role non-RAW variants to Export in assets that have a RAW variant.
+    pub fn fix_roles(
+        &self,
+        paths: &[PathBuf],
+        volume_filter: Option<&str>,
+        asset_filter: Option<&str>,
+        apply: bool,
+        on_asset: impl Fn(&str, FixRolesStatus),
+    ) -> Result<FixRolesResult> {
+        let metadata_store = MetadataStore::new(&self.catalog_root);
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let registry = DeviceRegistry::new(&self.catalog_root);
+
+        let mut result = FixRolesResult {
+            checked: 0,
+            fixed: 0,
+            variants_fixed: 0,
+            already_correct: 0,
+            dry_run: !apply,
+            errors: Vec::new(),
+        };
+
+        // Resolve asset list
+        let assets = if let Some(asset_id) = asset_filter {
+            let full_id = catalog
+                .resolve_asset_id(asset_id)?
+                .ok_or_else(|| anyhow::anyhow!("No asset found matching '{asset_id}'"))?;
+            let uuid: Uuid = full_id.parse()?;
+            vec![metadata_store.load(uuid)?]
+        } else if !paths.is_empty() {
+            // Path mode: resolve files, find their assets
+            let files = resolve_files(paths, &[]);
+            let volumes = registry.list()?;
+            let content_store = ContentStore::new(&self.catalog_root);
+            let mut asset_ids: HashSet<String> = HashSet::new();
+
+            for file_path in &files {
+                if !volumes.iter().any(|v| file_path.starts_with(&v.mount_point)) {
+                    continue;
+                }
+                let hash = match content_store.hash_file(file_path) {
+                    Ok(h) => h,
+                    Err(_) => continue,
+                };
+                if let Some(aid) = catalog.find_asset_id_by_variant(&hash)? {
+                    asset_ids.insert(aid);
+                }
+            }
+
+            let mut assets = Vec::new();
+            for aid in &asset_ids {
+                let uuid: Uuid = aid.parse()?;
+                assets.push(metadata_store.load(uuid)?);
+            }
+            assets
+        } else {
+            // Catalog mode: load all assets
+            let summaries = metadata_store.list()?;
+            let mut assets = Vec::new();
+            for s in &summaries {
+                assets.push(metadata_store.load(s.id)?);
+            }
+            assets
+        };
+
+        // Optional volume filter: keep only assets with at least one variant location on that volume
+        let volume_filter_resolved = match volume_filter {
+            Some(label) => Some(registry.resolve_volume(label)?),
+            None => None,
+        };
+
+        for mut asset in assets {
+            // Volume filter: skip assets without a location on the target volume
+            if let Some(ref vol) = volume_filter_resolved {
+                let has_location = asset.variants.iter().any(|v| {
+                    v.locations.iter().any(|loc| loc.volume_id == vol.id)
+                });
+                if !has_location {
+                    continue;
+                }
+            }
+
+            result.checked += 1;
+
+            // Skip single-variant assets
+            if asset.variants.len() < 2 {
+                result.already_correct += 1;
+                on_asset(
+                    asset.name.as_deref().unwrap_or(&asset.id.to_string()),
+                    FixRolesStatus::AlreadyCorrect,
+                );
+                continue;
+            }
+
+            // Check if any variant is RAW
+            let has_raw = asset.variants.iter().any(|v| is_raw_extension(&v.format));
+            if !has_raw {
+                result.already_correct += 1;
+                on_asset(
+                    asset.name.as_deref().unwrap_or(&asset.id.to_string()),
+                    FixRolesStatus::AlreadyCorrect,
+                );
+                continue;
+            }
+
+            // Find non-RAW variants with role == Original
+            let fixable: Vec<usize> = asset
+                .variants
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| !is_raw_extension(&v.format) && v.role == VariantRole::Original)
+                .map(|(i, _)| i)
+                .collect();
+
+            if fixable.is_empty() {
+                result.already_correct += 1;
+                on_asset(
+                    asset.name.as_deref().unwrap_or(&asset.id.to_string()),
+                    FixRolesStatus::AlreadyCorrect,
+                );
+                continue;
+            }
+
+            if apply {
+                for &idx in &fixable {
+                    asset.variants[idx].role = VariantRole::Export;
+                    catalog.update_variant_role(
+                        &asset.variants[idx].content_hash,
+                        "export",
+                    )?;
+                }
+                metadata_store.save(&asset)?;
+            }
+
+            result.fixed += 1;
+            result.variants_fixed += fixable.len();
+            on_asset(
+                asset.name.as_deref().unwrap_or(&asset.id.to_string()),
+                FixRolesStatus::Fixed,
+            );
+        }
+
+        Ok(result)
+    }
 }
 
 /// Compute directory prefixes from scanned paths relative to the volume mount point.
@@ -3207,7 +3379,45 @@ mod tests {
         // RAW should be first (defines the asset)
         assert_eq!(asset.variants[0].format, "nef");
         assert_eq!(asset.variants[1].format, "jpg");
+        // RAW is original, JPG is a derivative → export
+        assert_eq!(asset.variants[0].role, VariantRole::Original);
+        assert_eq!(asset.variants[1].role, VariantRole::Export);
         assert_eq!(asset.name.as_deref(), Some("DSC_4521"));
+    }
+
+    #[test]
+    fn import_two_jpgs_both_original() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photos = vol_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("photo.jpg"), "jpeg content").unwrap();
+        std::fs::write(photos.join("photo.png"), "png content").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), false, &crate::config::PreviewConfig::default());
+        let result = service
+            .import(&[photos.clone()], &volume, &default_filter())
+            .unwrap();
+
+        assert_eq!(result.imported, 2);
+
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        assert_eq!(summaries.len(), 1);
+
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert_eq!(asset.variants.len(), 2);
+        // No RAW present → both variants stay Original
+        assert_eq!(asset.variants[0].role, VariantRole::Original);
+        assert_eq!(asset.variants[1].role, VariantRole::Original);
     }
 
     #[test]
@@ -3889,5 +4099,132 @@ mod tests {
         assert!(is_excluded_name(".DS_Store", &[".DS_Store".to_string()]));
         assert!(!is_excluded_name("photo.jpg", &["*.tmp".to_string()]));
         assert!(!is_excluded_name("photo.jpg", &[]));
+    }
+
+    #[test]
+    fn fix_roles_corrects_raw_jpg_pair() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photos = vol_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("DSC_001.nef"), "raw file content").unwrap();
+        std::fs::write(photos.join("DSC_001.jpg"), "jpeg file content").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), false, &crate::config::PreviewConfig::default());
+        service.import(&[photos.clone()], &volume, &default_filter()).unwrap();
+
+        // Manually set the JPG variant back to Original (simulating pre-fix import)
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let mut asset = metadata_store.load(summaries[0].id).unwrap();
+        let jpg_idx = asset.variants.iter().position(|v| v.format == "jpg").unwrap();
+        asset.variants[jpg_idx].role = VariantRole::Original;
+        metadata_store.save(&asset).unwrap();
+        let catalog = crate::catalog::Catalog::open(catalog_dir.path()).unwrap();
+        catalog.update_variant_role(&asset.variants[jpg_idx].content_hash, "original").unwrap();
+
+        // Run fix_roles with apply
+        let result = service.fix_roles(&[], None, None, true, |_, _| {}).unwrap();
+        assert_eq!(result.checked, 1);
+        assert_eq!(result.fixed, 1);
+        assert_eq!(result.variants_fixed, 1);
+        assert_eq!(result.already_correct, 0);
+        assert!(!result.dry_run);
+
+        // Verify the JPG variant is now Export in sidecar
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        let jpg = asset.variants.iter().find(|v| v.format == "jpg").unwrap();
+        assert_eq!(jpg.role, VariantRole::Export);
+        // RAW should still be Original
+        let raw = asset.variants.iter().find(|v| v.format == "nef").unwrap();
+        assert_eq!(raw.role, VariantRole::Original);
+    }
+
+    #[test]
+    fn fix_roles_skips_non_raw_groups() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photos = vol_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("photo.jpg"), "jpeg content").unwrap();
+        std::fs::write(photos.join("photo.png"), "png content").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), false, &crate::config::PreviewConfig::default());
+        service.import(&[photos.clone()], &volume, &default_filter()).unwrap();
+
+        // Both should be Original (no RAW)
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert!(asset.variants.iter().all(|v| v.role == VariantRole::Original));
+
+        // Run fix_roles — should not change anything
+        let result = service.fix_roles(&[], None, None, true, |_, _| {}).unwrap();
+        assert_eq!(result.checked, 1);
+        assert_eq!(result.fixed, 0);
+        assert_eq!(result.variants_fixed, 0);
+        assert_eq!(result.already_correct, 1);
+
+        // Verify roles unchanged
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert!(asset.variants.iter().all(|v| v.role == VariantRole::Original));
+    }
+
+    #[test]
+    fn fix_roles_dry_run_does_not_modify() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photos = vol_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("DSC_002.nef"), "raw data here").unwrap();
+        std::fs::write(photos.join("DSC_002.jpg"), "jpeg data here").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), false, &crate::config::PreviewConfig::default());
+        service.import(&[photos.clone()], &volume, &default_filter()).unwrap();
+
+        // Manually set the JPG variant back to Original
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let mut asset = metadata_store.load(summaries[0].id).unwrap();
+        let jpg_idx = asset.variants.iter().position(|v| v.format == "jpg").unwrap();
+        asset.variants[jpg_idx].role = VariantRole::Original;
+        metadata_store.save(&asset).unwrap();
+        let catalog = crate::catalog::Catalog::open(catalog_dir.path()).unwrap();
+        catalog.update_variant_role(&asset.variants[jpg_idx].content_hash, "original").unwrap();
+
+        // Run fix_roles with dry run (apply=false)
+        let result = service.fix_roles(&[], None, None, false, |_, _| {}).unwrap();
+        assert_eq!(result.fixed, 1);
+        assert_eq!(result.variants_fixed, 1);
+        assert!(result.dry_run);
+
+        // Verify roles are NOT changed in sidecar
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        let jpg = asset.variants.iter().find(|v| v.format == "jpg").unwrap();
+        assert_eq!(jpg.role, VariantRole::Original, "dry run should not modify sidecar");
     }
 }

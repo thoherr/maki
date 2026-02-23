@@ -17,7 +17,8 @@ Quick Reference:
   Organize:   collection (col), saved-search (ss)
   Retrieve:   search, show, duplicates, stats, serve
   Maintain:   verify, sync, refresh, cleanup, relocate,
-              update-location, generate-previews, rebuild-catalog"
+              update-location, generate-previews, fix-roles,
+              rebuild-catalog"
 )]
 struct Cli {
     /// Output machine-readable JSON (valid JSON on stdout, messages on stderr)
@@ -375,8 +376,27 @@ enum Commands {
         force: bool,
     },
 
-    /// Rebuild SQLite catalog from sidecar files
+    /// Fix variant roles (re-role non-RAW variants to Export in RAW+non-RAW groups)
     #[command(display_order = 47)]
+    FixRoles {
+        /// Files or directories to scope the fix
+        paths: Vec<String>,
+
+        /// Limit to a specific volume
+        #[arg(long, display_order = 10)]
+        volume: Option<String>,
+
+        /// Fix only a specific asset
+        #[arg(long, display_order = 11)]
+        asset: Option<String>,
+
+        /// Apply changes (default: report-only dry run)
+        #[arg(long, display_order = 20)]
+        apply: bool,
+    },
+
+    /// Rebuild SQLite catalog from sidecar files
+    #[command(display_order = 48)]
     RebuildCatalog,
 }
 
@@ -1759,6 +1779,61 @@ fn main() {
                     generated, skipped, failed
                 );
             }
+            Ok(())
+        }
+        Commands::FixRoles { paths, volume, asset, apply } => {
+            let catalog_root = dam::config::find_catalog_root()?;
+            let config = CatalogConfig::load(&catalog_root)?;
+            let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
+
+            let canonical_paths: Vec<PathBuf> = paths
+                .iter()
+                .map(|p| {
+                    std::fs::canonicalize(p)
+                        .unwrap_or_else(|_| PathBuf::from(p))
+                })
+                .collect();
+
+            let show_log = cli.log;
+            let result = service.fix_roles(
+                &canonical_paths,
+                volume.as_deref(),
+                asset.as_deref(),
+                apply,
+                |name, status| {
+                    if show_log {
+                        let label = match status {
+                            dam::asset_service::FixRolesStatus::AlreadyCorrect => "ok",
+                            dam::asset_service::FixRolesStatus::Fixed => {
+                                if apply { "fixed" } else { "would fix" }
+                            }
+                        };
+                        eprintln!("  {} — {}", name, label);
+                    }
+                },
+            )?;
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                for err in &result.errors {
+                    eprintln!("  {err}");
+                }
+
+                if !apply && result.fixed > 0 {
+                    eprint!("Dry run — ");
+                }
+
+                println!(
+                    "Fix-roles: {} checked, {} fixed ({} variant(s)), {} already correct",
+                    result.checked, result.fixed, result.variants_fixed, result.already_correct
+                );
+
+                if !apply && result.fixed > 0 {
+                    println!("  Run with --apply to make changes.");
+                }
+            }
+
             Ok(())
         }
         Commands::RebuildCatalog => {
