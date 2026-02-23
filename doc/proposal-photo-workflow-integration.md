@@ -187,29 +187,15 @@ Rating and label shortcuts operate on the focused card when no batch selection i
 
 ---
 
-### Phase 4: Advanced Integration (Future)
+### Phase 4: Advanced Integration — **COMPLETE** (remaining items carried forward)
 
-These are longer-term ideas, listed for completeness.
-
-#### 4.1 Watch Mode
-
-```
-dam watch [PATHS...] [--volume <label>]
-```
-
-File system watcher (via `notify` crate) that auto-imports/syncs when files change. Useful for monitoring a CaptureOne session's output folder during an active editing session.
+#### ~~4.1 Watch Mode~~ — Carried forward to [proposal-future-enhancements.md](proposal-future-enhancements.md)
 
 #### ~~4.2 XMP Write-Back~~ — **IMPLEMENTED** (v0.4.1–v0.4.4)
 
 Rating (v0.4.1), tags (v0.4.2), description (v0.4.3), and color label (v0.4.4) are written back to `.xmp` recipe files on disk whenever changed via CLI or web UI. Uses string-based find/replace to preserve XMP structure. Re-hashes files and updates catalog after modification. Enables bidirectional sync with CaptureOne.
 
-#### 4.3 Export Command
-
-```
-dam export <query> --target <path> [--format <preset>] [--include-sidecars]
-```
-
-Export matching assets to a directory, optionally with sidecars. Useful for preparing files for delivery or for feeding into another tool.
+#### ~~4.3 Export Command~~ — Carried forward to [proposal-future-enhancements.md](proposal-future-enhancements.md)
 
 #### ~~4.4 Collections~~ — **IMPLEMENTED** (v0.6.0)
 
@@ -242,14 +228,11 @@ Implemented as `dam collection` (alias `col`) with SQLite-backed storage and YAM
 | Collection filter dropdown (browse) | Done | v0.6.2 |
 | `path:` search filter | Done | v0.6.3 |
 | Quoted filter values | Done | v0.6.0 |
-| Watch mode | Not started | — |
-| Export command | Not started | — |
+| Watch mode | Carried forward | [future-enhancements](proposal-future-enhancements.md) |
+| Export command | Carried forward | [future-enhancements](proposal-future-enhancements.md) |
 
-## Priority Recommendation
+## Conclusion
 
-**Phases 1–3** are complete. **Phase 4.2** (XMP write-back) and **Phase 4.4** (Collections) were pulled forward and are complete. All identified gaps (1–6) are resolved.
+**All phases are complete.** Phases 1–3 were implemented as planned; Phase 4.2 (XMP write-back) and Phase 4.4 (Collections) were pulled forward and completed. All six identified gaps are resolved as of v0.7.1.
 
-The remaining Phase 4 items are longer-term enhancements:
-
-1. **Watch mode (4.1)** — File system watcher for auto-import/sync during active editing sessions.
-2. **Export command (4.3)** — Batch export of matching assets with optional sidecars for delivery or tool handoff.
+The two remaining longer-term items (Watch mode and Export command) have been carried forward to [proposal-future-enhancements.md](proposal-future-enhancements.md).
