@@ -9,12 +9,12 @@ A command-line digital asset manager built in Rust, designed for large collectio
 - **Variant grouping** — automatically groups related files (RAW + JPEG + XMP) into a single asset by filename stem
 - **Recipe management** — tracks processing sidecars from CaptureOne, Lightroom/XMP, RawTherapee, DxO, and ON1
 - **EXIF/XMP extraction** — camera metadata, keywords, ratings, color labels, and descriptions extracted at import
-- **Preview generation** — thumbnails for images (via `image` crate), RAW files (via dcraw/LibRaw), videos (via ffmpeg), and info cards for audio/documents
+- **Bidirectional XMP sync** — rating, tag, description, and label changes written back to `.xmp` recipe files
+- **Preview generation** — thumbnails for images, RAW files (via dcraw/LibRaw), videos (via ffmpeg), and info cards for audio/documents
 - **Integrity verification** — detect bit rot and corruption by re-hashing files against stored checksums
-- **Asset relocation** — copy or move assets between volumes with integrity verification
-- **Saved searches & collections** — save named search queries (smart albums) and curate static asset lists (collections)
-- **Flexible output** — JSON output on all commands, custom format templates for scripting
-- **Web UI** — browser-based interface for browsing, searching, and editing assets with saved search chips, collection filter dropdown, and collection management
+- **Saved searches & collections** — smart albums (dynamic queries) and static albums (curated lists)
+- **Web UI** — browser-based interface with search, inline editing, batch operations, and keyboard navigation
+- **Flexible output** — JSON on all commands, custom format templates, quiet mode for scripting
 
 ## Quick Start
 
@@ -31,7 +31,7 @@ dam volume add "Photos 2024" /Volumes/PhotosDrive
 dam import /Volumes/PhotosDrive/Photos/
 
 # Search and browse
-dam search "tag:landscape"
+dam search "tag:landscape rating:4+"
 dam stats --all
 
 # Start the web UI
@@ -41,94 +41,13 @@ dam serve
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `dam init` | Initialize a new catalog in the current directory |
-| `dam volume add/list` | Register and list storage volumes |
-| `dam import <paths...>` | Import files with auto-grouping and metadata extraction |
-| `dam search <query>` | Search by text, tags, type, format, rating, camera, location health, and more |
-| `dam show <id>` | Display full asset details |
-| `dam edit <id> [flags]` | Edit name, description, rating, color label |
-| `dam tag <id> <tags...>` | Add or remove tags |
-| `dam group <hashes...>` | Manually group variants into one asset |
-| `dam auto-group [query]` | Auto-group assets by filename stem (fuzzy prefix matching) |
-| `dam duplicates` | Find files with identical content across locations |
-| `dam generate-previews` | Generate or regenerate preview thumbnails |
-| `dam relocate <id> <volume>` | Copy or move an asset to another volume |
-| `dam verify` | Re-hash files to detect corruption |
-| `dam sync <paths...>` | Reconcile catalog with moved/modified/missing files |
-| `dam refresh` | Re-read metadata from changed sidecar/recipe files (`--media` for embedded XMP) |
-| `dam cleanup` | Remove stale locations, orphaned assets, and orphaned previews |
-| `dam stats` | Show catalog statistics |
-| `dam fix-roles` | Fix variant roles in RAW+non-RAW asset groups |
-| `dam rebuild-catalog` | Rebuild SQLite index from sidecar files |
-| `dam saved-search` (alias `ss`) | Save, list, run, and delete named searches |
-| `dam collection` (alias `col`) | Create, list, show, add to, remove from, and delete collections |
-| `dam serve` | Start the web UI server |
+22 commands covering setup, import, search, editing, maintenance, and more:
 
-**Global flags**: `--json` (machine-readable output), `-l`/`--log` (per-file progress for import, verify, sync, refresh, cleanup, generate-previews; request logging for serve), `-d`/`--debug` (external tool stderr), `-t`/`--time` (elapsed time). See `dam --help` and `dam <command> --help` for full usage.
+`init` · `volume add/list` · `import` · `search` · `show` · `edit` · `tag` · `group` · `auto-group` · `duplicates` · `generate-previews` · `relocate` · `verify` · `sync` · `refresh` · `cleanup` · `stats` · `fix-roles` · `rebuild-catalog` · `saved-search` · `collection` · `serve`
 
-### Search filters
+**Global flags**: `--json`, `--log`, `--debug`, `--time`. Run `dam --help` or `dam <command> --help` for usage.
 
-`dam search` supports prefix filters that can be combined freely:
-
-| Filter | Example | Description |
-|--------|---------|-------------|
-| `type:` | `type:image` | Asset type (image, video, audio, document, other) |
-| `tag:` | `tag:landscape` | Tag name |
-| `format:` | `format:jpg` | File format |
-| `rating:` | `rating:3+` or `rating:5` | Minimum or exact rating |
-| `label:` | `label:Red` | Color label (Red, Orange, Yellow, Green, Blue, Pink, Purple) |
-| `camera:` | `camera:fuji` | Camera model (partial match) |
-| `lens:` | `lens:56mm` | Lens model (partial match) |
-| `iso:` | `iso:100-800` | ISO range, exact, or minimum |
-| `focal:` | `focal:35-70` | Focal length range |
-| `f:` | `f:1.4-2.8` | Aperture range |
-| `width:` | `width:4000+` | Minimum image width |
-| `height:` | `height:2000+` | Minimum image height |
-| `meta:` | `meta:label=Red` | Source metadata key=value |
-| `orphan:true` | `orphan:true` | Assets with no file locations |
-| `missing:true` | `missing:true` | Assets with files missing from disk |
-| `stale:` | `stale:30` | Locations not verified in N days |
-| `volume:none` | `volume:none` | Assets with no locations on online volumes |
-| `collection:` | `collection:"My Favorites"` | Assets in a collection |
-| `path:` | `path:Capture/2026-02-22` | Assets with files under a path prefix (`~`, `./`, `../`, absolute paths auto-normalized) |
-
-Remaining tokens are free-text search across name, filename, description, and metadata. Values with spaces can be quoted: `tag:"Fools Theater"`, `path:"Photos/Family Trip"`.
-
-## Configuration
-
-All settings live in `dam.toml` at the catalog root (created by `dam init`). Every section and field is optional — an empty file or a missing section uses the defaults shown below.
-
-```toml
-# Default volume for import when auto-detection is ambiguous
-# default_volume = "550e8400-e29b-41d4-a716-446655440000"
-
-[preview]
-max_edge = 800        # Maximum pixel size of the longest edge (default: 800)
-format = "jpeg"       # Preview format: "jpeg" or "webp" (default: "jpeg")
-quality = 85          # JPEG quality 1–100 (default: 85; ignored for webp)
-
-[serve]
-port = 8080           # Web UI port (default: 8080, overridden by --port)
-bind = "127.0.0.1"    # Web UI bind address (default: "127.0.0.1", overridden by --bind)
-
-[import]
-exclude = [           # Filename patterns to skip during import (glob syntax)
-  "Thumbs.db",
-  ".DS_Store",
-  "*.tmp",
-]
-auto_tags = [         # Tags automatically applied to every newly imported asset
-  "inbox",
-]
-```
-
-**Notes:**
-- CLI flags (`--port`, `--bind`) override the corresponding `dam.toml` values.
-- `exclude` patterns match filenames only (not paths) using glob syntax (`*`, `?`, `[...]`).
-- `auto_tags` are merged with any tags extracted from XMP sidecars (no duplicates).
-- Changing `format` or `max_edge` affects newly generated previews; existing previews are not regenerated automatically (use `dam generate-previews --force`).
+See the [Command Reference](doc/manual/reference/01-setup-commands.md) for detailed documentation of every command, or the [Search Filters Reference](doc/manual/reference/06-search-filters.md) for the 18+ filter types available in `dam search`.
 
 ## Architecture
 
@@ -148,6 +67,8 @@ The full **[User Manual](doc/manual/index.md)** covers:
 - **[User Guide](doc/manual/user-guide/01-overview.md)** — workflow-oriented guides from setup through maintenance
 - **[Reference Guide](doc/manual/reference/00-cli-conventions.md)** — man-page style docs for every command, filter, and config option
 - **[Developer Guide](doc/manual/developer/01-rest-api.md)** — REST API, module reference, and build/test instructions
+
+Configuration is documented in the [Configuration Reference](doc/manual/reference/08-configuration.md). All settings live in `dam.toml` at the catalog root; every field is optional with sensible defaults.
 
 ## Optional External Tools
 
