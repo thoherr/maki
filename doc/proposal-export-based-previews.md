@@ -102,10 +102,10 @@ This uses the existing preview generator, variant roles, and image handling. No 
 
 ## Summary
 
-| Phase | Change | Scope |
-|-------|--------|-------|
-| 1 | Prefer export/processed variant previews for display | Small |
-| 2 | `generate-previews --upgrade` to regenerate from better sources | Medium |
-| 3 | Auto-upgrade preview on import/group when export is added | Small |
+| Phase | Change | Scope | Status |
+|-------|--------|-------|--------|
+| 1 | Prefer export/processed variant previews for display | Small | **IMPLEMENTED** |
+| 2 | `generate-previews --upgrade` to regenerate from better sources | Medium | **IMPLEMENTED** |
+| 3 | Auto-upgrade preview on import/group when export is added | Small | **IMPLEMENTED** |
 
-Phase 1 alone delivers the main value: if you've imported exports alongside your RAW files, the DAM immediately shows the processed result. Phases 2 and 3 handle the workflow where exports arrive later.
+All three phases are implemented. The key insight for Phase 3 is that since import already generates previews for every variant and Phase 1's display logic selects the best variant's preview, no additional code is needed for import or group/auto-group — the export variant's preview is automatically preferred once it exists.

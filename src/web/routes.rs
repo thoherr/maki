@@ -286,9 +286,11 @@ pub async fn asset_page(
         let details = engine.show(&asset_id)?;
 
         let preview_gen = state.preview_generator();
-        let preview_url = details.variants.first().and_then(|primary| {
-            if preview_gen.has_preview(&primary.content_hash) {
-                Some(super::templates::preview_url(&primary.content_hash, &preview_ext))
+        let best = crate::models::variant::best_preview_index_details(&details.variants);
+        let preview_url = best.and_then(|i| {
+            let v = &details.variants[i];
+            if preview_gen.has_preview(&v.content_hash) {
+                Some(super::templates::preview_url(&v.content_hash, &preview_ext))
             } else {
                 None
             }

@@ -2,6 +2,12 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v1.1.0
+
+### New Features
+- **Export-based preview selection** — previews now prefer Export > Processed > Original variants for display. RAW+JPEG assets show the processed JPEG preview instead of the flat dcraw rendering. Affects `dam show`, web UI asset detail page, and `generate-previews` catalog mode.
+- **`generate-previews --upgrade`** — regenerate previews for assets where a better variant (export/processed) exists than the one currently previewed. Useful after importing exports alongside existing RAW files.
+
 ## v1.0.0
 
 First stable release. All planned features are implemented, all tests pass, documentation is complete. Ready for production use.

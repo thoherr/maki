@@ -374,6 +374,10 @@ enum Commands {
         /// Force regeneration even if previews already exist
         #[arg(long, display_order = 20)]
         force: bool,
+
+        /// Regenerate previews for assets where a better variant (export/processed) exists
+        #[arg(long, display_order = 21)]
+        upgrade: bool,
     },
 
     /// Fix variant roles (re-role non-RAW variants to Export in RAW+non-RAW groups)
@@ -822,10 +826,11 @@ fn main() {
                     println!("Description: {desc}");
                 }
 
-                // Show preview status for the primary variant
-                if let Some(primary) = details.variants.first() {
-                    let preview_path = preview_gen.preview_path(&primary.content_hash);
-                    if preview_gen.has_preview(&primary.content_hash) {
+                // Show preview status for the best preview variant
+                if let Some(idx) = dam::models::variant::best_preview_index_details(&details.variants) {
+                    let v = &details.variants[idx];
+                    let preview_path = preview_gen.preview_path(&v.content_hash);
+                    if preview_gen.has_preview(&v.content_hash) {
                         println!("Preview: {}", preview_path.display());
                     } else {
                         println!("Preview: (none)");
@@ -1588,7 +1593,7 @@ fn main() {
             }
             Ok(())
         }
-        Commands::GeneratePreviews { paths, asset, volume, include, skip, force } => {
+        Commands::GeneratePreviews { paths, asset, volume, include, skip, force, upgrade } => {
             use dam::asset_service::FileTypeFilter;
 
             let catalog_root = dam::config::find_catalog_root()?;
@@ -1619,6 +1624,7 @@ fn main() {
             let mut generated = 0usize;
             let mut skipped = 0usize;
             let mut failed = 0usize;
+            let mut upgraded = 0usize;
 
             // Canonicalize input paths
             let canonical_paths: Vec<PathBuf> = paths
@@ -1706,8 +1712,15 @@ fn main() {
                 };
 
                 for asset_data in &assets {
-                    // Use the primary (first) variant
-                    if let Some(variant) = asset_data.variants.first() {
+                    // Select the best variant for preview generation
+                    let idx = dam::models::variant::best_preview_index(&asset_data.variants).unwrap_or(0);
+                    if let Some(variant) = asset_data.variants.get(idx) {
+                        // In --upgrade mode, skip assets where the best variant is already the first
+                        if upgrade && idx == 0 {
+                            skipped += 1;
+                            continue;
+                        }
+
                         // Apply format filter
                         let ext = &variant.format;
                         if !ext.is_empty() && !filter.is_importable(ext) {
@@ -1735,7 +1748,7 @@ fn main() {
 
                         if let Some(path) = source_path {
                             let file_start = std::time::Instant::now();
-                            let result = if force {
+                            let result = if force || upgrade {
                                 preview_gen.regenerate(&variant.content_hash, &path, &variant.format)
                             } else {
                                 preview_gen.generate(&variant.content_hash, &path, &variant.format)
@@ -1747,7 +1760,8 @@ fn main() {
                             match result {
                                 Ok(Some(_)) => {
                                     generated += 1;
-                                    if cli.log { eprintln!("  {} — generated ({})", name, format_duration(file_elapsed)); }
+                                    if upgrade { upgraded += 1; }
+                                    if cli.log { eprintln!("  {} — {} ({})", name, if upgrade { "upgraded" } else { "generated" }, format_duration(file_elapsed)); }
                                 }
                                 Ok(None) => {
                                     skipped += 1;
@@ -1768,16 +1782,27 @@ fn main() {
             }
 
             if cli.json {
-                println!("{}", serde_json::json!({
+                let mut result = serde_json::json!({
                     "generated": generated,
                     "skipped": skipped,
                     "failed": failed,
-                }));
+                });
+                if upgrade {
+                    result["upgraded"] = serde_json::json!(upgraded);
+                }
+                println!("{result}");
             } else {
-                println!(
-                    "Generated {} preview(s), {} skipped, {} failed",
-                    generated, skipped, failed
-                );
+                if upgrade && upgraded > 0 {
+                    println!(
+                        "Generated {} preview(s) ({} upgraded), {} skipped, {} failed",
+                        generated, upgraded, skipped, failed
+                    );
+                } else {
+                    println!(
+                        "Generated {} preview(s), {} skipped, {} failed",
+                        generated, skipped, failed
+                    );
+                }
             }
             Ok(())
         }
