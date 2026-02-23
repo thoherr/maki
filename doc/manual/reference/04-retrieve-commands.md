@@ -1,0 +1,432 @@
+# Retrieve Commands
+
+Commands for finding assets, inspecting details, and browsing the catalog.
+
+---
+
+## dam search
+
+### NAME
+
+dam-search -- search for assets using filters and free-text keywords
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] search <QUERY> [--format <FMT>] [-q]
+```
+
+### DESCRIPTION
+
+Searches the catalog for assets matching the given query. The query string supports both free-text keywords (matched against filenames and metadata) and structured filter prefixes.
+
+**Filter syntax**: `prefix:value`. Values containing spaces must be double-quoted: `tag:"Fools Theater"`.
+
+**Available filters**:
+
+| Filter | Description | Examples |
+|--------|-------------|----------|
+| `type:` | Asset type | `type:image`, `type:video`, `type:audio` |
+| `tag:` | Tag name | `tag:landscape`, `tag:"golden hour"` |
+| `format:` | File format | `format:jpg`, `format:nef`, `format:mp4` |
+| `rating:` | Star rating (exact) | `rating:5` |
+| `rating:N+` | Star rating (minimum) | `rating:3+` |
+| `label:` | Color label | `label:Red`, `label:Green` |
+| `camera:` | Camera model (partial match) | `camera:fuji`, `camera:"Canon EOS R5"` |
+| `lens:` | Lens model (partial match) | `lens:56mm`, `lens:"RF 50mm f/1.2"` |
+| `iso:` | ISO value or range | `iso:100`, `iso:100-800` |
+| `focal:` | Focal length or range (mm) | `focal:50`, `focal:35-70` |
+| `f:` | Aperture or range | `f:1.4`, `f:1.4-2.8` |
+| `width:` | Minimum width (pixels) | `width:4000`, `width:4000+` |
+| `height:` | Minimum height (pixels) | `height:2000`, `height:2000+` |
+| `meta:` | Source metadata key=value | `meta:Copyright=2026` |
+| `path:` | File location path prefix | `path:Capture/2026-02`, `path:/Volumes/Photos/2026` |
+| `collection:` | Collection membership | `collection:Favorites`, `collection:"My Picks"` |
+| `orphan:true` | Assets with zero file locations | `orphan:true` |
+| `missing:true` | Assets with files missing on disk | `missing:true` |
+| `stale:N` | Not verified in N days | `stale:30`, `stale:90` |
+| `volume:none` | Assets not on any online volume | `volume:none` |
+
+Filters can be freely combined. Free-text tokens that do not match a filter prefix are joined as a text search against filenames and metadata.
+
+**Path normalization**: The `path:` filter automatically normalizes paths. `~` expands to `$HOME`, `./` and `../` resolve relative to the current working directory, and absolute paths matching a registered volume's mount point are stripped to volume-relative form with the volume filter implicitly applied (e.g., `path:/Volumes/Photos/Capture/2026` becomes `path:Capture/2026` scoped to the Photos volume).
+
+**Output formats**: The `--format` flag controls output. Presets: `ids` (one UUID per line), `short` (default: abbreviated ID, name, type, format, date), `full` (adds tags, description, rating, label), `json` (JSON array). Custom templates use `{placeholder}` substitution with escape sequences (`\t`, `\n`).
+
+Available placeholders: `{id}`, `{name}`, `{filename}`, `{type}`, `{format}`, `{tags}`, `{description}`, `{rating}`, `{label}`, `{date}`, `{size}`.
+
+The result count header (e.g., "Found 42 assets") is suppressed when an explicit `--format` is given.
+
+### ARGUMENTS
+
+**QUERY** (required)
+: Search query string with optional filter prefixes and free-text keywords.
+
+### OPTIONS
+
+**--format \<FMT\>**
+: Output format preset or custom template.
+
+**-q** / **--quiet**
+: Shorthand for `--format=ids`. Prints one asset ID per line with no header, ideal for piping.
+
+`--json` (global flag) is equivalent to `--format json`.
+
+### EXAMPLES
+
+Search by tag and minimum rating:
+
+```bash
+dam search "tag:landscape rating:4+"
+```
+
+Find all videos:
+
+```bash
+dam search "type:video"
+```
+
+Search with camera and aperture filters:
+
+```bash
+dam search 'camera:"Canon EOS R5" f:1.4-2.8'
+```
+
+Get IDs for scripting:
+
+```bash
+dam search -q "tag:travel label:Green"
+```
+
+Custom format template:
+
+```bash
+dam search "rating:5" --format '{id}\t{name}\t{label}'
+```
+
+Search within a path and pipe to a collection:
+
+```bash
+dam search -q "path:Capture/2026-02-22 rating:4+" | xargs dam col add "Feb Selects"
+```
+
+Find assets with files missing on disk:
+
+```bash
+dam search "missing:true"
+```
+
+Find orphaned assets (no file locations):
+
+```bash
+dam search "orphan:true"
+```
+
+### SEE ALSO
+
+[show](#dam-show) -- display full details for a specific asset.
+[saved-search](03-organize-commands.md#dam-saved-search-save) -- save and re-run searches.
+[CLI Conventions](00-cli-conventions.md) -- output conventions, scripting patterns.
+
+---
+
+## dam show
+
+### NAME
+
+dam-show -- display full details for an asset
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] show <ASSET_ID>
+```
+
+### DESCRIPTION
+
+Displays comprehensive details for a single asset, including:
+
+- Asset metadata: ID, name, description, type, tags, rating (as stars), color label, creation date.
+- Variants: content hash, role (original/export/processed/sidecar), format, file size, original filename, file locations (volume + path), source metadata (camera, lens, ISO, etc.), and preview status.
+- Recipes: content hash, format (XMP, COS, etc.), original filename, and file locations.
+
+Asset IDs support unique prefix matching (see [CLI Conventions](00-cli-conventions.md#asset-id-matching)).
+
+The display logic for previews prefers Export > Processed > Original variant previews (skipping Sidecar). Within the same role, standard image formats are preferred over RAW, with file size as a tiebreaker.
+
+### ARGUMENTS
+
+**ASSET_ID** (required)
+: The asset ID or a unique prefix of it.
+
+### OPTIONS
+
+This command only accepts [global flags](00-cli-conventions.md#global-flags).
+
+`--json` outputs an `AssetDetails` object with full asset, variant, and recipe information.
+
+### EXAMPLES
+
+Show an asset by full ID:
+
+```bash
+dam show a1b2c3d4-e5f6-7890-abcd-ef1234567890
+```
+
+Show an asset by prefix:
+
+```bash
+dam show a1b2c
+```
+
+Show as JSON and extract variant filenames:
+
+```bash
+dam show a1b2c --json | jq '.variants[].original_filename'
+```
+
+Show as JSON and list file locations:
+
+```bash
+dam show a1b2c --json | jq '.variants[].file_locations[]'
+```
+
+### SEE ALSO
+
+[search](#dam-search) -- find assets to inspect.
+[edit](02-ingest-commands.md#dam-edit) -- modify the fields shown here.
+[tag](02-ingest-commands.md#dam-tag) -- add or remove tags.
+
+---
+
+## dam duplicates
+
+### NAME
+
+dam-duplicates -- find files with identical content at multiple locations
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] duplicates [--format <FMT>]
+```
+
+### DESCRIPTION
+
+Finds variants whose content hash appears at more than one file location. This detects files that exist on multiple volumes or at multiple paths, helping identify redundant copies or verify backup coverage.
+
+Each result shows the content hash, filename, and all locations where the identical file exists.
+
+### ARGUMENTS
+
+None.
+
+### OPTIONS
+
+**--format \<FMT\>**
+: Output format. Same presets as `dam search`: `ids`, `short` (default), `full`, `json`. Custom templates support all search placeholders plus `{locations}` for listing duplicate file locations.
+
+`--json` outputs an array of `DuplicateEntry` objects.
+
+### EXAMPLES
+
+Find all duplicates:
+
+```bash
+dam duplicates
+```
+
+Show duplicates with location details:
+
+```bash
+dam duplicates --format full
+```
+
+List duplicates as JSON:
+
+```bash
+dam duplicates --json | jq '.[].locations'
+```
+
+Custom format showing hash and locations:
+
+```bash
+dam duplicates --format '{hash}\t{filename}\t{locations}'
+```
+
+### SEE ALSO
+
+[verify](05-maintain-commands.md#dam-verify) -- verify file integrity on disk.
+[cleanup](05-maintain-commands.md#dam-cleanup) -- remove stale location records.
+
+---
+
+## dam stats
+
+### NAME
+
+dam-stats -- show catalog statistics
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] stats [OPTIONS]
+```
+
+### DESCRIPTION
+
+Displays summary statistics about the catalog. Without any section flags, shows a compact overview: total assets, variants, recipes, volumes, and total file size.
+
+Additional sections can be enabled with flags to show breakdowns by type, format, volume, tag usage, and verification health. `--all` enables all sections.
+
+### ARGUMENTS
+
+None.
+
+### OPTIONS
+
+**--types**
+: Show asset type breakdown (image, video, audio, etc.) and format distribution.
+
+**--volumes**
+: Show per-volume details: asset count, total size, directory count, and verification status.
+
+**--tags**
+: Show tag usage frequencies (most-used tags first).
+
+**--verified**
+: Show verification health: how many files have been verified, when, and how many are overdue.
+
+**--all**
+: Enable all sections (equivalent to `--types --volumes --tags --verified`).
+
+**--limit \<N\>**
+: Maximum number of entries for top-N lists (default: 20). Applies to format breakdown, tag list, etc.
+
+`--json` outputs a structured JSON object with all requested sections.
+
+### EXAMPLES
+
+Quick overview:
+
+```bash
+dam stats
+```
+
+Full statistics:
+
+```bash
+dam stats --all
+```
+
+Show only tag frequencies:
+
+```bash
+dam stats --tags --limit 50
+```
+
+Show volume details as JSON:
+
+```bash
+dam stats --volumes --json | jq '.volumes[] | {label, assets, size}'
+```
+
+Show verification health:
+
+```bash
+dam stats --verified
+```
+
+### SEE ALSO
+
+[search](#dam-search) -- find specific assets matching criteria.
+[verify](05-maintain-commands.md#dam-verify) -- run verification checks.
+[volume list](01-setup-commands.md#dam-volume-list) -- list volumes with online/offline status.
+
+---
+
+## dam serve
+
+### NAME
+
+dam-serve -- start the web UI server
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] serve [--port <PORT>] [--bind <ADDR>]
+```
+
+### DESCRIPTION
+
+Starts a local web server that provides a browser-based interface for browsing, searching, and editing assets. The web UI offers a rich interactive experience including:
+
+- **Browse page**: Grid of asset thumbnails with a two-row search bar. Row 1: full-width text input. Row 2: tag filter, star rating filter, color label dots, type/format/volume/collection dropdowns, and path prefix input. All filters auto-search with 300ms debounce on text inputs and immediate trigger on dropdowns, stars, labels, and tags.
+- **Asset detail page**: Full preview, editable metadata (inline name, description, star rating, color label, tags), variant list, recipe list, and collection membership chips.
+- **Tags page** (`/tags`): Sortable tag list with counts, live text filter, and multi-column layout.
+- **Collections page** (`/collections`): List of all collections with creation button.
+- **Batch operations**: Checkbox selection on browse cards with a fixed bottom toolbar for batch tagging, rating, labeling, and auto-grouping.
+- **Keyboard navigation**: Arrow keys navigate between cards, Enter opens details, Space toggles selection, 1-5 sets rating, 0 clears rating, Alt+1-7 sets label, single letters (r/o/y/g/b/p/u) set label by color initial, x clears label.
+- **Saved search chips**: Clickable chips on the browse page load saved searches into the filter UI.
+
+The server defaults to `127.0.0.1:8080`. These can be overridden by CLI flags or the `[serve]` section in `dam.toml`. CLI flags take precedence over configuration.
+
+SQLite connections are opened per-request. Previews are served as static files. Static assets (htmx.min.js, style.css) are embedded at compile time.
+
+### ARGUMENTS
+
+None.
+
+### OPTIONS
+
+**--port \<PORT\>**
+: Port to listen on. Default: 8080, or the value from `dam.toml` `[serve]` section.
+
+**--bind \<ADDR\>**
+: Address to bind to. Default: `127.0.0.1`, or the value from `dam.toml` `[serve]` section.
+
+`--log` (global flag) enables per-request logging to stderr in the format `METHOD /path -> STATUS (duration)`.
+
+### EXAMPLES
+
+Start the web UI with defaults:
+
+```bash
+dam serve
+# Listening on http://127.0.0.1:8080
+```
+
+Start on a custom port:
+
+```bash
+dam serve --port 9090
+```
+
+Bind to all interfaces (for LAN access):
+
+```bash
+dam serve --bind 0.0.0.0 --port 8080
+```
+
+Start with request logging:
+
+```bash
+dam serve --log
+```
+
+Start with all diagnostics:
+
+```bash
+dam serve --log --time
+```
+
+### SEE ALSO
+
+[search](#dam-search) -- CLI equivalent of the web UI browse page.
+[show](#dam-show) -- CLI equivalent of the web UI asset detail page.
+[CLI Conventions](00-cli-conventions.md) -- `dam.toml` configuration reference.
+
+---
+
+Previous: [Organize Commands](03-organize-commands.md) -- `collection`, `saved-search`.
+Next: [Maintain Commands](05-maintain-commands.md) -- `verify`, `sync`, `refresh`, `cleanup`, `relocate`, `update-location`, `generate-previews`, `fix-roles`, `rebuild-catalog`.

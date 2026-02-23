@@ -141,6 +141,14 @@ Assets live on **media volumes** (external drives, NAS) while the catalog stays 
 
 See [`doc/architecture-overview.md`](doc/architecture-overview.md) for the system design and [`doc/component-specification.md`](doc/component-specification.md) for detailed component specs.
 
+## Documentation
+
+The full **[User Manual](doc/manual/index.md)** covers:
+
+- **[User Guide](doc/manual/user-guide/01-overview.md)** — workflow-oriented guides from setup through maintenance
+- **[Reference Guide](doc/manual/reference/00-cli-conventions.md)** — man-page style docs for every command, filter, and config option
+- **[Developer Guide](doc/manual/developer/01-rest-api.md)** — REST API, module reference, and build/test instructions
+
 ## Optional External Tools
 
 - **dcraw** or **LibRaw** (dcraw_emu) — RAW file preview extraction
