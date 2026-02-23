@@ -41,10 +41,13 @@ pub struct AssetCard {
     pub preview_url: String,
     pub rating: Option<u8>,
     pub color_label: Option<String>,
+    pub variant_count: u32,
 }
 
 impl AssetCard {
     pub fn from_row(row: &SearchRow, preview_ext: &str) -> Self {
+        // Use primary_format (Original RAW) when available, otherwise fall back to best variant format
+        let format = row.primary_format.as_deref().unwrap_or(&row.format).to_string();
         Self {
             asset_id: row.asset_id.clone(),
             display_name: row
@@ -53,11 +56,12 @@ impl AssetCard {
                 .unwrap_or(&row.original_filename)
                 .to_string(),
             asset_type: row.asset_type.clone(),
-            format: row.format.clone(),
+            format,
             date: format_date(&row.created_at),
             preview_url: preview_url(&row.content_hash, preview_ext),
             rating: row.rating,
             color_label: row.color_label.clone(),
+            variant_count: row.variant_count,
         }
     }
 }

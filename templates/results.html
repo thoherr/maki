@@ -93,6 +93,7 @@
                 <div class="card-meta">
                     <span class="badge">{{ card.asset_type }}</span>
                     <span class="badge">{{ card.format }}</span>
+                    {% if card.variant_count > 1 %}<span class="badge badge-count">{{ card.variant_count }}v</span>{% endif %}
                     <span>{{ card.date }}</span>
                 </div>
                 {% if card.rating.is_some() && card.rating.unwrap() > 0 %}

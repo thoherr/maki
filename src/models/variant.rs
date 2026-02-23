@@ -81,6 +81,23 @@ pub fn compute_best_variant_hash(variants: &[Variant]) -> Option<String> {
     best_preview_index(variants).map(|i| variants[i].content_hash.clone())
 }
 
+/// Return the "primary" format for display — the identity format of the asset.
+/// Prefers: Original+RAW first, then Original+any, then falls back to best variant.
+pub fn compute_primary_format(variants: &[Variant]) -> Option<String> {
+    // First: any Original variant that is RAW
+    if let Some(v) = variants.iter().find(|v| {
+        v.role == VariantRole::Original && crate::asset_service::is_raw_extension(&v.format)
+    }) {
+        return Some(v.format.clone());
+    }
+    // Second: any Original variant
+    if let Some(v) = variants.iter().find(|v| v.role == VariantRole::Original) {
+        return Some(v.format.clone());
+    }
+    // Fallback: best variant's format
+    best_preview_index(variants).map(|i| variants[i].format.clone())
+}
+
 /// Return the index of the best preview variant from catalog `VariantDetails` (role is a String).
 pub fn best_preview_index_details(variants: &[VariantDetails]) -> Option<usize> {
     if variants.is_empty() {
@@ -177,5 +194,37 @@ mod tests {
             make_variant(VariantRole::Export, "jpg", 10_000_000),
         ];
         assert_eq!(best_preview_index(&variants), Some(1));
+    }
+
+    #[test]
+    fn primary_format_prefers_raw_original() {
+        let variants = vec![
+            make_variant(VariantRole::Original, "nef", 25_000_000),
+            make_variant(VariantRole::Export, "jpg", 5_000_000),
+        ];
+        assert_eq!(compute_primary_format(&variants).as_deref(), Some("nef"));
+    }
+
+    #[test]
+    fn primary_format_falls_back_to_original() {
+        let variants = vec![
+            make_variant(VariantRole::Original, "jpg", 5_000_000),
+            make_variant(VariantRole::Export, "tiff", 50_000_000),
+        ];
+        assert_eq!(compute_primary_format(&variants).as_deref(), Some("jpg"));
+    }
+
+    #[test]
+    fn primary_format_falls_back_to_best_variant() {
+        let variants = vec![
+            make_variant(VariantRole::Export, "jpg", 5_000_000),
+        ];
+        assert_eq!(compute_primary_format(&variants).as_deref(), Some("jpg"));
+    }
+
+    #[test]
+    fn primary_format_empty_returns_none() {
+        let empty: Vec<Variant> = vec![];
+        assert_eq!(compute_primary_format(&empty), None);
     }
 }

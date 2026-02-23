@@ -2885,8 +2885,7 @@ impl AssetService {
                     )?;
                 }
                 metadata_store.save(&asset)?;
-                let best_hash = crate::models::variant::compute_best_variant_hash(&asset.variants);
-                catalog.update_best_variant_hash(&asset.id.to_string(), best_hash.as_deref())?;
+                catalog.update_denormalized_variant_columns(&asset)?;
             }
 
             result.fixed += 1;

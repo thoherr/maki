@@ -742,7 +742,7 @@ fn main() {
                             let short_id = &row.asset_id[..8];
                             println!(
                                 "{}  {} [{}] ({}) — {}",
-                                short_id, display_name, row.asset_type, row.format, row.created_at
+                                short_id, display_name, row.asset_type, row.display_format(), row.created_at
                             );
                         }
                         if !explicit_format {
@@ -764,7 +764,7 @@ fn main() {
                             let desc = row.description.as_deref().unwrap_or("");
                             println!(
                                 "{}  {} [{}] ({}) — {}{} {}",
-                                short_id, display_name, row.asset_type, row.format,
+                                short_id, display_name, row.asset_type, row.display_format(),
                                 row.created_at, tags, desc
                             );
                         }
@@ -785,7 +785,7 @@ fn main() {
                                 row.name.as_deref(),
                                 &row.original_filename,
                                 &row.asset_type,
-                                &row.format,
+                                row.display_format(),
                                 &row.created_at,
                                 &tags_str,
                                 desc,
@@ -2045,7 +2045,7 @@ fn main() {
                                 for row in &results {
                                     let display_name = row.name.as_deref().unwrap_or(&row.original_filename);
                                     let short_id = &row.asset_id[..8];
-                                    println!("  {}  {} [{}] ({})", short_id, display_name, row.asset_type, row.format);
+                                    println!("  {}  {} [{}] ({})", short_id, display_name, row.asset_type, row.display_format());
                                 }
                                 if !explicit_format {
                                     println!("\n{} asset(s)", results.len());
@@ -2063,7 +2063,7 @@ fn main() {
                                     } else {
                                         format!(" tags:{}", row.tags.join(","))
                                     };
-                                    println!("  {}  {} [{}] ({}){}", short_id, display_name, row.asset_type, row.format, tags);
+                                    println!("  {}  {} [{}] ({}){}", short_id, display_name, row.asset_type, row.display_format(), tags);
                                 }
                                 if !explicit_format {
                                     println!("\n{} asset(s)", results.len());
@@ -2082,7 +2082,7 @@ fn main() {
                                         row.name.as_deref(),
                                         &row.original_filename,
                                         &row.asset_type,
-                                        &row.format,
+                                        row.display_format(),
                                         &row.created_at,
                                         &tags_str,
                                         desc,
@@ -2246,7 +2246,7 @@ fn main() {
                                     let short_id = &row.asset_id[..8];
                                     println!(
                                         "{}  {} [{}] ({}) — {}",
-                                        short_id, display_name, row.asset_type, row.format, row.created_at
+                                        short_id, display_name, row.asset_type, row.display_format(), row.created_at
                                     );
                                 }
                                 if !explicit_format {
@@ -2268,7 +2268,7 @@ fn main() {
                                     let desc = row.description.as_deref().unwrap_or("");
                                     println!(
                                         "{}  {} [{}] ({}) — {}{} {}",
-                                        short_id, display_name, row.asset_type, row.format,
+                                        short_id, display_name, row.asset_type, row.display_format(),
                                         row.created_at, tags, desc
                                     );
                                 }
@@ -2289,7 +2289,7 @@ fn main() {
                                         row.name.as_deref(),
                                         &row.original_filename,
                                         &row.asset_type,
-                                        &row.format,
+                                        row.display_format(),
                                         &row.created_at,
                                         &tags_str,
                                         desc,

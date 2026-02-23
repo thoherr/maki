@@ -20,6 +20,17 @@ pub struct SearchRow {
     pub content_hash: String,
     pub rating: Option<u8>,
     pub color_label: Option<String>,
+    /// The "identity" format of the asset (Original RAW > Original any > best variant).
+    pub primary_format: Option<String>,
+    /// Number of variants belonging to this asset.
+    pub variant_count: u32,
+}
+
+impl SearchRow {
+    /// The format to display in UI/CLI — primary_format if available, else best variant format.
+    pub fn display_format(&self) -> &str {
+        self.primary_format.as_deref().unwrap_or(&self.format)
+    }
 }
 
 /// Full asset details returned by `load_asset_details`.
@@ -378,6 +389,24 @@ impl Catalog {
                 DESC LIMIT 1
             ) WHERE best_variant_hash IS NULL",
         );
+        // primary_variant_format + variant_count denormalization
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN primary_variant_format TEXT");
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN variant_count INTEGER NOT NULL DEFAULT 0");
+        // Backfill primary_variant_format (prefer Original+RAW, then Original+any, then best variant)
+        let _ = self.conn.execute_batch(
+            "UPDATE assets SET primary_variant_format = COALESCE(
+                (SELECT format FROM variants WHERE asset_id = assets.id AND role = 'original'
+                 AND LOWER(format) IN ('raw','cr2','cr3','nef','arw','orf','rw2','dng','raf','pef','srw')
+                 LIMIT 1),
+                (SELECT format FROM variants WHERE asset_id = assets.id AND role = 'original' LIMIT 1),
+                (SELECT format FROM variants WHERE content_hash = assets.best_variant_hash)
+            ) WHERE primary_variant_format IS NULL",
+        );
+        let _ = self.conn.execute_batch(
+            "UPDATE assets SET variant_count = (
+                SELECT COUNT(*) FROM variants WHERE asset_id = assets.id
+            ) WHERE variant_count = 0",
+        );
         // Collection tables
         let _ = crate::collection::CollectionStore::initialize(&self.conn);
     }
@@ -392,7 +421,9 @@ impl Catalog {
                 asset_type TEXT NOT NULL,
                 tags TEXT NOT NULL DEFAULT '[]',
                 description TEXT,
-                best_variant_hash TEXT
+                best_variant_hash TEXT,
+                primary_variant_format TEXT,
+                variant_count INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS variants (
@@ -453,8 +484,10 @@ impl Catalog {
              CREATE INDEX IF NOT EXISTS idx_variants_asset_id ON variants(asset_id);",
         )?;
 
-        // Migration: best_variant_hash denormalization
+        // Migration: denormalized asset columns
         let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN best_variant_hash TEXT");
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN primary_variant_format TEXT");
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN variant_count INTEGER NOT NULL DEFAULT 0");
 
         // Collection tables
         crate::collection::CollectionStore::initialize(&self.conn)?;
@@ -486,6 +519,22 @@ impl Catalog {
             ) WHERE best_variant_hash IS NULL",
         );
 
+        // Backfill primary_variant_format + variant_count
+        let _ = self.conn.execute_batch(
+            "UPDATE assets SET primary_variant_format = COALESCE(
+                (SELECT format FROM variants WHERE asset_id = assets.id AND role = 'original'
+                 AND LOWER(format) IN ('raw','cr2','cr3','nef','arw','orf','rw2','dng','raf','pef','srw')
+                 LIMIT 1),
+                (SELECT format FROM variants WHERE asset_id = assets.id AND role = 'original' LIMIT 1),
+                (SELECT format FROM variants WHERE content_hash = assets.best_variant_hash)
+            ) WHERE primary_variant_format IS NULL",
+        );
+        let _ = self.conn.execute_batch(
+            "UPDATE assets SET variant_count = (
+                SELECT COUNT(*) FROM variants WHERE asset_id = assets.id
+            ) WHERE variant_count = 0",
+        );
+
         Ok(())
     }
 
@@ -493,9 +542,11 @@ impl Catalog {
     pub fn insert_asset(&self, asset: &Asset) -> Result<()> {
         let tags_json = serde_json::to_string(&asset.tags)?;
         let best_hash = crate::models::variant::compute_best_variant_hash(&asset.variants);
+        let primary_format = crate::models::variant::compute_primary_format(&asset.variants);
+        let variant_count = asset.variants.len() as i64;
         self.conn.execute(
-            "INSERT OR REPLACE INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT OR REPLACE INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 asset.id.to_string(),
                 asset.name,
@@ -506,6 +557,8 @@ impl Catalog {
                 asset.rating.map(|r| r as i64),
                 asset.color_label,
                 best_hash,
+                primary_format,
+                variant_count,
             ],
         )?;
         Ok(())
@@ -529,11 +582,23 @@ impl Catalog {
         Ok(())
     }
 
-    /// Update the denormalized best_variant_hash for an asset.
+    /// Update denormalized variant columns for an asset.
     pub fn update_best_variant_hash(&self, asset_id: &str, hash: Option<&str>) -> Result<()> {
         self.conn.execute(
             "UPDATE assets SET best_variant_hash = ?1 WHERE id = ?2",
             rusqlite::params![hash, asset_id],
+        )?;
+        Ok(())
+    }
+
+    /// Update all denormalized variant columns from an asset's variants.
+    pub fn update_denormalized_variant_columns(&self, asset: &Asset) -> Result<()> {
+        let best_hash = crate::models::variant::compute_best_variant_hash(&asset.variants);
+        let primary_format = crate::models::variant::compute_primary_format(&asset.variants);
+        let variant_count = asset.variants.len() as i64;
+        self.conn.execute(
+            "UPDATE assets SET best_variant_hash = ?1, primary_variant_format = ?2, variant_count = ?3 WHERE id = ?4",
+            rusqlite::params![best_hash, primary_format, variant_count, asset.id.to_string()],
         )?;
         Ok(())
     }
@@ -1522,7 +1587,8 @@ impl Catalog {
 
         let mut sql = String::from(
             "SELECT a.id, a.name, a.asset_type, a.created_at, bv.original_filename, bv.format, \
-             a.tags, a.description, bv.content_hash, a.rating, a.color_label \
+             a.tags, a.description, bv.content_hash, a.rating, a.color_label, \
+             a.primary_variant_format, a.variant_count \
              FROM assets a \
              JOIN variants bv ON bv.content_hash = a.best_variant_hash",
         );
@@ -1555,6 +1621,7 @@ impl Catalog {
             let tags_json: String = row.get(6)?;
             let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
             let rating_val: Option<i64> = row.get(9)?;
+            let variant_count_val: i64 = row.get(12)?;
             Ok(SearchRow {
                 asset_id: row.get(0)?,
                 name: row.get(1)?,
@@ -1567,6 +1634,8 @@ impl Catalog {
                 content_hash: row.get(8)?,
                 rating: rating_val.map(|r| r as u8),
                 color_label: row.get(10)?,
+                primary_format: row.get(11)?,
+                variant_count: variant_count_val as u32,
             })
         })?;
 
