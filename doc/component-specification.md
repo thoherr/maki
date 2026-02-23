@@ -15,6 +15,9 @@ The central entity. Represents a logical asset (e.g. "photo of sunset at beach, 
 | description | String | Free-text description (optional) |
 | rating | Option<u8> | User/XMP rating 1–5, or unset |
 | color_label | Option<String> | Color label: Red, Orange, Yellow, Green, Blue, Pink, Purple, or unset |
+| best_variant_hash | String | Denormalized: content hash of the best display variant (Export > Processed > Original, image formats preferred, size tiebreak). Computed at write time. |
+| primary_variant_format | String | Denormalized: identity format of the asset (Original+RAW first, then Original+any, then best variant). Computed at write time. |
+| variant_count | u32 | Denormalized: number of variants belonging to this asset. Computed at write time. |
 
 An asset groups one or more **variants**.
 
@@ -225,7 +228,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 **Module**: `src/web/` — axum server with askama templates and htmx interactivity.
 
 **Architecture**:
-- `AppState` holds the catalog root path and preview config. Schema migrations run once at server startup via `Catalog::open()`. Each request opens a fresh connection via `Catalog::open_fast()` (skips migrations) through `tokio::task::spawn_blocking` (since `rusqlite::Connection` is not `Send`).
+- `AppState` holds the catalog root path, preview config, and `log_requests` flag. Schema migrations run once at server startup via `Catalog::open()`. Each request opens a fresh connection via `Catalog::open_fast()` (skips migrations) through `tokio::task::spawn_blocking` (since `rusqlite::Connection` is not `Send`). When `--log` is enabled, a middleware layer logs each request's method, URI, status, and duration to stderr.
 - Static assets (htmx.min.js, style.css) are embedded at compile time via `include_bytes!`/`include_str!`.
 - Preview images are served directly from the catalog's `previews/` directory via `tower-http::ServeDir`.
 
@@ -332,7 +335,7 @@ After each write, the file is re-hashed and the recipe's `content_hash` is updat
 
 **Global flags**:
 - `--json` — output machine-readable JSON
-- `-l` / `--log` — log individual file progress (import, verify, sync, refresh, cleanup, generate-previews)
+- `-l` / `--log` — log individual file progress (import, verify, sync, refresh, cleanup, generate-previews); per-request logging for `serve`
 - `-d` / `--debug` — show stderr output from external tools (ffmpeg, dcraw, dcraw_emu)
 - `-t` / `--time` — show elapsed time after command execution
 
@@ -361,7 +364,7 @@ dam fix-roles [PATHS...] [--volume V] [--asset ID] [--apply]  # fix variant role
 dam saved-search save|list|run|delete             # manage saved searches (alias: ss)
 dam collection create|list|show|add|remove|delete # manage collections (alias: col)
 dam rebuild-catalog                               # rebuild SQLite from sidecars
-dam serve [--port P] [--bind ADDR]                # start web UI server
+dam serve [--port P] [--bind ADDR] [--log]         # start web UI server (--log for request logging)
 ```
 
 ## Catalog Directory Structure

@@ -66,7 +66,7 @@ dam serve
 | `dam collection` (alias `col`) | Create, list, show, add to, remove from, and delete collections |
 | `dam serve` | Start the web UI server |
 
-**Global flags**: `--json` (machine-readable output), `-l`/`--log` (per-file progress for import, verify, sync, refresh, cleanup, generate-previews), `-d`/`--debug` (external tool stderr), `-t`/`--time` (elapsed time). See `dam --help` and `dam <command> --help` for full usage.
+**Global flags**: `--json` (machine-readable output), `-l`/`--log` (per-file progress for import, verify, sync, refresh, cleanup, generate-previews; request logging for serve), `-d`/`--debug` (external tool stderr), `-t`/`--time` (elapsed time). See `dam --help` and `dam <command> --help` for full usage.
 
 ### Search filters
 
