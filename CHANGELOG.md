@@ -2,6 +2,14 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v1.3.0
+
+### New Features
+- **Comprehensive user manual** — 21 markdown files in `doc/manual/` covering every command, filter, and configuration option, organized into User Guide (7 workflow chapters), Reference Guide (10 man-page style command docs), and Developer Guide (3 pages: REST API, module reference, build/test)
+- **9 Mermaid diagrams** — ER diagrams, architecture layers, round-trip workflow, XMP sync sequence, import pipeline, auto-group algorithm, maintenance cycle, data model, and module dependency graph
+- **7 web UI screenshots** — browse page, saved search chips, asset detail, batch toolbar, tags page, collections page, and catalog structure
+- **README Documentation section** — links to all three guide sections
+
 ## v1.2.0
 
 ### Enhancements
