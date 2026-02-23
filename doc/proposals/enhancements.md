@@ -2,7 +2,7 @@
 
 Ideas for new functionality, UI/UX improvements, and workflow additions, organized by impact and implementation scope.
 
-Watch mode and export are specified separately in [`doc/proposal-future-enhancements.md`](../proposal-future-enhancements.md).
+Watch mode and export are specified separately in [`proposal-future-enhancements.md`](proposal-future-enhancements.md).
 
 ---
 
@@ -274,4 +274,4 @@ Ranked by impact-to-effort ratio, building on existing infrastructure:
 
 Items 1, 4, and 6 are pure frontend work. Items 2, 3, and 5 touch both CLI and web UI. Items 3 and 15 would benefit from being designed together (hierarchical tags + AI suggestions).
 
-Watch mode and export are specified in [`doc/proposal-future-enhancements.md`](../proposal-future-enhancements.md) and would slot in around priority 5-7.
+Watch mode and export are specified in [`proposal-future-enhancements.md`](proposal-future-enhancements.md) and would slot in around priority 5-7.
