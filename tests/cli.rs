@@ -3552,6 +3552,52 @@ fn search_path_filter() {
         .stdout(predicate::str::contains("No results found"));
 }
 
+#[test]
+fn search_path_absolute_normalizes_to_relative() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Create files in a subdirectory
+    let file_a = create_test_file(&root, "photos/DSC_001.jpg", b"abs path photo a");
+    let file_b = create_test_file(&root, "photos/DSC_002.jpg", b"abs path photo b");
+    let file_c = create_test_file(&root, "other/sunset.jpg", b"abs path photo c");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file_a.to_str().unwrap(), file_b.to_str().unwrap(), file_c.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Search with absolute path should find the same results as relative
+    let abs_path = format!("path:{}/photos", root.display());
+    dam()
+        .current_dir(&root)
+        .args(["search", &abs_path])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DSC_001"))
+        .stdout(predicate::str::contains("DSC_002"))
+        .stdout(predicate::str::contains("2 result"));
+
+    // Verify relative path works identically
+    dam()
+        .current_dir(&root)
+        .args(["search", "path:photos"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DSC_001"))
+        .stdout(predicate::str::contains("DSC_002"))
+        .stdout(predicate::str::contains("2 result"));
+
+    // Bogus absolute path should return nothing
+    dam()
+        .current_dir(&root)
+        .args(["search", "path:/nonexistent/volume/photos"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No results found"));
+}
+
 // ── auto-group tests ─────────────────────────────────────────
 
 #[test]

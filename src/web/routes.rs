@@ -7,7 +7,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::{Form, Json};
 
 use crate::catalog::SearchSort;
-use crate::query::parse_search_query;
+use crate::query::{normalize_path_for_search, parse_search_query};
 
 use crate::device_registry::DeviceRegistry;
 
@@ -59,13 +59,27 @@ pub async fn browse_page(
         let collection_str = params.collection.as_deref().unwrap_or("");
         let path_str = params.path.as_deref().unwrap_or("");
 
+        // Normalize absolute path → volume-relative + implicit volume filter
+        let (normalized_path, path_volume_id) = if !path_str.is_empty() {
+            let registry = DeviceRegistry::new(&state.catalog_root);
+            let vols = registry.list().unwrap_or_default();
+            normalize_path_for_search(path_str, &vols)
+        } else {
+            (String::new(), None)
+        };
+
         let parsed = merge_search_params(query, asset_type, tag, format, rating_str, label_str);
         let mut opts = parsed.to_search_options();
         if !volume.is_empty() {
             opts.volume = Some(volume);
         }
-        if !path_str.is_empty() {
-            opts.path_prefix = Some(path_str);
+        if let Some(ref vid) = path_volume_id {
+            if opts.volume.is_none() {
+                opts.volume = Some(vid);
+            }
+        }
+        if !normalized_path.is_empty() {
+            opts.path_prefix = Some(&normalized_path);
         }
 
         // Resolve collection filter
@@ -217,13 +231,27 @@ pub async fn search_api(
         let collection_str = params.collection.as_deref().unwrap_or("");
         let path_str = params.path.as_deref().unwrap_or("");
 
+        // Normalize absolute path → volume-relative + implicit volume filter
+        let (normalized_path, path_volume_id) = if !path_str.is_empty() {
+            let registry = DeviceRegistry::new(&state.catalog_root);
+            let vols = registry.list().unwrap_or_default();
+            normalize_path_for_search(path_str, &vols)
+        } else {
+            (String::new(), None)
+        };
+
         let parsed = merge_search_params(query, asset_type, tag, format, rating_str, label_str);
         let mut opts = parsed.to_search_options();
         if !volume.is_empty() {
             opts.volume = Some(volume);
         }
-        if !path_str.is_empty() {
-            opts.path_prefix = Some(path_str);
+        if let Some(ref vid) = path_volume_id {
+            if opts.volume.is_none() {
+                opts.volume = Some(vid);
+            }
+        }
+        if !normalized_path.is_empty() {
+            opts.path_prefix = Some(&normalized_path);
         }
 
         // Resolve collection filter

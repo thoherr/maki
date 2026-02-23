@@ -7,6 +7,7 @@ use crate::catalog::{AssetDetails, Catalog, SearchOptions, SearchRow};
 use crate::content_store::ContentStore;
 use crate::device_registry::DeviceRegistry;
 use crate::metadata_store::MetadataStore;
+use crate::models::volume::Volume;
 use crate::models::Asset;
 use crate::xmp_reader;
 
@@ -318,6 +319,42 @@ pub struct TagResult {
     pub current_tags: Vec<String>,
 }
 
+/// If `path` is absolute and matches a volume mount point, returns
+/// (volume-relative path, Some(volume_id)). Otherwise returns (path, None).
+///
+/// Uses longest mount-point prefix match (same logic as `DeviceRegistry::find_volume_for_path()`).
+pub fn normalize_path_for_search(path: &str, volumes: &[Volume]) -> (String, Option<String>) {
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() {
+        return (path.to_string(), None);
+    }
+
+    let mut best: Option<&Volume> = None;
+    let mut best_len = 0;
+
+    for v in volumes {
+        if p.starts_with(&v.mount_point) {
+            let len = v.mount_point.as_os_str().len();
+            if len > best_len {
+                best = Some(v);
+                best_len = len;
+            }
+        }
+    }
+
+    match best {
+        Some(vol) => {
+            let relative = p
+                .strip_prefix(&vol.mount_point)
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            (relative, Some(vol.id.to_string()))
+        }
+        None => (path.to_string(), None),
+    }
+}
+
 /// Search and filter assets via the SQLite catalog.
 pub struct QueryEngine {
     catalog_root: std::path::PathBuf,
@@ -337,11 +374,32 @@ impl QueryEngine {
     /// `height:2000+`, `meta:key=value`.
     /// Remaining tokens are joined as free-text search against name/filename/description/metadata.
     pub fn search(&self, query: &str) -> Result<Vec<SearchRow>> {
-        let parsed = parse_search_query(query);
+        let mut parsed = parse_search_query(query);
+
+        // Normalize absolute path: /Volumes/X/subdir → subdir + volume filter
+        let path_volume_id: Option<String>;
+        if parsed.path_prefix.is_some() {
+            let registry = DeviceRegistry::new(&self.catalog_root);
+            let volumes = registry.list()?;
+            let (normalized, vol_id) = normalize_path_for_search(
+                parsed.path_prefix.as_deref().unwrap(),
+                &volumes,
+            );
+            parsed.path_prefix = Some(normalized);
+            path_volume_id = vol_id;
+        } else {
+            path_volume_id = None;
+        }
+
         let mut opts = SearchOptions {
             per_page: u32::MAX,
             ..parsed.to_search_options()
         };
+
+        if let Some(ref vid) = path_volume_id {
+            opts.volume = Some(vid);
+        }
+
         let catalog = Catalog::open(&self.catalog_root)?;
 
         // Pre-compute missing asset IDs if needed (requires disk I/O)
@@ -1957,5 +2015,53 @@ mod tests {
         assert_eq!(result.total_donors_merged, 2);
         // RAW asset should be the target
         assert_eq!(result.groups[0].target_id, id_raw);
+    }
+
+    // ── normalize_path_for_search tests ────────────────────────────
+
+    use crate::models::volume::{Volume, VolumeType};
+
+    fn make_volume(label: &str, mount: &str) -> Volume {
+        Volume {
+            id: uuid::Uuid::new_v4(),
+            label: label.to_string(),
+            mount_point: std::path::PathBuf::from(mount),
+            volume_type: VolumeType::External,
+            is_online: true,
+        }
+    }
+
+    #[test]
+    fn normalize_absolute_path_matching_volume() {
+        let vol = make_volume("Photos", "/Volumes/Photos");
+        let (rel, vid) = normalize_path_for_search("/Volumes/Photos/Capture/2026", &[vol.clone()]);
+        assert_eq!(rel, "Capture/2026");
+        assert_eq!(vid, Some(vol.id.to_string()));
+    }
+
+    #[test]
+    fn normalize_absolute_path_no_match() {
+        let vol = make_volume("Photos", "/Volumes/Photos");
+        let (rel, vid) = normalize_path_for_search("/mnt/other/data", &[vol]);
+        assert_eq!(rel, "/mnt/other/data");
+        assert!(vid.is_none());
+    }
+
+    #[test]
+    fn normalize_relative_path_unchanged() {
+        let vol = make_volume("Photos", "/Volumes/Photos");
+        let (rel, vid) = normalize_path_for_search("Capture/2026", &[vol]);
+        assert_eq!(rel, "Capture/2026");
+        assert!(vid.is_none());
+    }
+
+    #[test]
+    fn normalize_picks_longest_mount_point() {
+        let vol_parent = make_volume("Root", "/Volumes");
+        let vol_child = make_volume("Photos", "/Volumes/Photos");
+        let volumes = vec![vol_parent, vol_child.clone()];
+        let (rel, vid) = normalize_path_for_search("/Volumes/Photos/Capture/2026", &volumes);
+        assert_eq!(rel, "Capture/2026");
+        assert_eq!(vid, Some(vol_child.id.to_string()));
     }
 }
