@@ -2,6 +2,11 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v1.4.0
+
+### New Features
+- **Volume purpose** — volumes can now be assigned a logical purpose (`working`, `archive`, `backup`, `cloud`) describing their role in the storage hierarchy. `dam volume add --purpose <purpose>` sets purpose at registration, `dam volume set-purpose <volume> <purpose>` changes it later. Purpose is shown in `dam volume list` and included in `--json` output. This metadata lays the groundwork for smart duplicate analysis and backup coverage reporting (see storage workflow proposal).
+
 ## v1.3.2
 
 ### New Features
