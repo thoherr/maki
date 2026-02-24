@@ -319,7 +319,7 @@ dam organizes recognized file extensions into groups. Some are enabled by defaul
 
 | Group | Extensions | Default |
 |---|---|---|
-| `images` | jpg, jpeg, png, gif, bmp, tiff, tif, webp, heic, heif, svg, ico, psd, xcf, raw, cr2, cr3, nef, arw, orf, rw2, dng, raf, pef, srw | On |
+| `images` | jpg, jpeg, png, gif, bmp, tiff, tif, webp, heic, heif, svg, ico, psd, xcf, raw, cr2, cr3, crw, nef, nrw, arw, sr2, srf, orf, rw2, dng, raf, pef, srw, mrw, 3fr, fff, iiq, erf, kdc, dcr, mef, mos, rwl, bay, x3f | On |
 | `video` | mp4, mov, avi, mkv, wmv, flv, webm, m4v, mpg, mpeg, 3gp, mts, m2ts | On |
 | `audio` | mp3, wav, flac, aac, ogg, wma, m4a, aiff, alac | On |
 | `xmp` | xmp | On |

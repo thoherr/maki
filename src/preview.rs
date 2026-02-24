@@ -114,8 +114,10 @@ impl PreviewGenerator {
                 self.generate_image(&dest, source_path)
             }
             // RAW camera formats
-            "raw" | "cr2" | "cr3" | "nef" | "arw" | "orf" | "rw2" | "dng" | "raf" | "pef"
-            | "srw" => self.generate_raw(&dest, source_path),
+            "raw" | "cr2" | "cr3" | "crw" | "nef" | "nrw" | "arw" | "sr2" | "srf"
+            | "orf" | "rw2" | "dng" | "raf" | "pef" | "srw" | "mrw"
+            | "3fr" | "fff" | "iiq" | "erf" | "kdc" | "dcr"
+            | "mef" | "mos" | "rwl" | "bay" | "x3f" => self.generate_raw(&dest, source_path),
             // Video formats
             "mp4" | "mov" | "avi" | "mkv" | "wmv" | "flv" | "webm" | "m4v" | "mpg" | "mpeg"
             | "3gp" | "mts" | "m2ts" => self.generate_video(&dest, source_path),
@@ -347,14 +349,30 @@ impl InfoCardData {
                 | "raw"
                 | "cr2"
                 | "cr3"
+                | "crw"
                 | "nef"
+                | "nrw"
                 | "arw"
+                | "sr2"
+                | "srf"
                 | "orf"
                 | "rw2"
                 | "dng"
                 | "raf"
                 | "pef"
                 | "srw"
+                | "mrw"
+                | "3fr"
+                | "fff"
+                | "iiq"
+                | "erf"
+                | "kdc"
+                | "dcr"
+                | "mef"
+                | "mos"
+                | "rwl"
+                | "bay"
+                | "x3f"
         ) {
             FormatCategory::Image
         } else if matches!(

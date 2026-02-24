@@ -20,7 +20,9 @@ const GROUPS: &[(&str, &[&str], bool)] = &[
         &[
             "jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "webp", "heic", "heif", "svg",
             "ico", "psd", "xcf", // standard image formats
-            "raw", "cr2", "cr3", "nef", "arw", "orf", "rw2", "dng", "raf", "pef", "srw", // RAW
+            "raw", "cr2", "cr3", "crw", "nef", "nrw", "arw", "sr2", "srf", "orf", "rw2",
+            "dng", "raf", "pef", "srw", "mrw", "3fr", "fff", "iiq", "erf", "kdc", "dcr",
+            "mef", "mos", "rwl", "bay", "x3f", // RAW
         ],
         true,
     ),
@@ -3289,8 +3291,10 @@ fn determine_asset_type(ext: &str) -> AssetType {
     match ext.to_lowercase().as_str() {
         // Images
         "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp" | "heic" | "heif"
-        | "raw" | "cr2" | "cr3" | "nef" | "arw" | "orf" | "rw2" | "dng" | "raf" | "pef"
-        | "srw" | "svg" | "ico" | "psd" | "xcf" => AssetType::Image,
+        | "raw" | "cr2" | "cr3" | "crw" | "nef" | "nrw" | "arw" | "sr2" | "srf" | "orf"
+        | "rw2" | "dng" | "raf" | "pef" | "srw" | "mrw" | "3fr" | "fff" | "iiq" | "erf"
+        | "kdc" | "dcr" | "mef" | "mos" | "rwl" | "bay" | "x3f"
+        | "svg" | "ico" | "psd" | "xcf" => AssetType::Image,
         // Video
         "mp4" | "mov" | "avi" | "mkv" | "wmv" | "flv" | "webm" | "m4v" | "mpg" | "mpeg"
         | "3gp" | "mts" | "m2ts" => AssetType::Video,
@@ -3309,7 +3313,10 @@ fn determine_asset_type(ext: &str) -> AssetType {
 pub fn is_raw_extension(ext: &str) -> bool {
     matches!(
         ext.to_lowercase().as_str(),
-        "raw" | "cr2" | "cr3" | "nef" | "arw" | "orf" | "rw2" | "dng" | "raf" | "pef" | "srw"
+        "raw" | "cr2" | "cr3" | "crw" | "nef" | "nrw" | "arw" | "sr2" | "srf"
+            | "orf" | "rw2" | "dng" | "raf" | "pef" | "srw" | "mrw"
+            | "3fr" | "fff" | "iiq" | "erf" | "kdc" | "dcr"
+            | "mef" | "mos" | "rwl" | "bay" | "x3f"
     )
 }
 
@@ -3442,6 +3449,12 @@ mod tests {
         assert_eq!(determine_asset_type("jpg"), AssetType::Image);
         assert_eq!(determine_asset_type("CR2"), AssetType::Image);
         assert_eq!(determine_asset_type("PNG"), AssetType::Image);
+        // Newly added RAW formats
+        assert_eq!(determine_asset_type("nrw"), AssetType::Image);
+        assert_eq!(determine_asset_type("crw"), AssetType::Image);
+        assert_eq!(determine_asset_type("3fr"), AssetType::Image);
+        assert_eq!(determine_asset_type("iiq"), AssetType::Image);
+        assert_eq!(determine_asset_type("x3f"), AssetType::Image);
     }
 
     #[test]
@@ -3463,6 +3476,13 @@ mod tests {
         assert!(f.is_importable("jpg"));
         assert!(f.is_importable("nef"));
         assert!(f.is_importable("PNG"));
+        // Newly added RAW formats
+        assert!(f.is_importable("nrw"));
+        assert!(f.is_importable("crw"));
+        assert!(f.is_importable("3fr"));
+        assert!(f.is_importable("iiq"));
+        assert!(f.is_importable("mrw"));
+        assert!(f.is_importable("x3f"));
         // Video
         assert!(f.is_importable("mp4"));
         // Audio
@@ -3534,11 +3554,35 @@ mod tests {
 
     #[test]
     fn is_raw_extension_works() {
+        // Original set
         assert!(is_raw_extension("nef"));
         assert!(is_raw_extension("CR2"));
         assert!(is_raw_extension("dng"));
+        assert!(is_raw_extension("arw"));
+        assert!(is_raw_extension("raf"));
+        // Newly added formats
+        assert!(is_raw_extension("nrw"));
+        assert!(is_raw_extension("NRW"));
+        assert!(is_raw_extension("crw"));
+        assert!(is_raw_extension("mrw"));
+        assert!(is_raw_extension("sr2"));
+        assert!(is_raw_extension("srf"));
+        assert!(is_raw_extension("3fr"));
+        assert!(is_raw_extension("fff"));
+        assert!(is_raw_extension("iiq"));
+        assert!(is_raw_extension("erf"));
+        assert!(is_raw_extension("kdc"));
+        assert!(is_raw_extension("dcr"));
+        assert!(is_raw_extension("mef"));
+        assert!(is_raw_extension("mos"));
+        assert!(is_raw_extension("rwl"));
+        assert!(is_raw_extension("bay"));
+        assert!(is_raw_extension("x3f"));
+        // Non-RAW
         assert!(!is_raw_extension("jpg"));
         assert!(!is_raw_extension("xmp"));
+        assert!(!is_raw_extension("png"));
+        assert!(!is_raw_extension("tiff"));
     }
 
     #[test]
