@@ -350,14 +350,12 @@ Implementation: `copies:N` is a pure SQL filter on a COUNT of `file_locations` g
 - `src/catalog.rs` — `build_search_where()` adds scalar subquery on location count (self-contained, no outer JOIN needed)
 - `doc/manual/reference/06-search-filters.md` — documented new filter
 
-### Phase 4: `dam dedup` Command
+### Phase 4: `dam dedup` Command ✅ *v1.4.1*
 
-**Files to modify:**
-- `src/asset_service.rs` — add `dedup()` method with resolution heuristic and file deletion
-- `src/main.rs` — add `dedup` subcommand with flags
-- `doc/manual/reference/05-maintain-commands.md` — document command
-
-**Estimated scope:** ~300 lines. Reuses `cleanup` patterns (report-only default, `--apply`, file deletion, location record removal).
+**Files modified:**
+- `src/asset_service.rs` — added `DedupResult`, `DedupStatus`, and `dedup()` method with resolution heuristic (prefer prefix, verified_at, path length, alphabetical) and file deletion
+- `src/main.rs` — added `dedup` subcommand with `--volume`, `--prefer`, `--min-copies`, `--apply` flags
+- `doc/manual/reference/05-maintain-commands.md` — documented command
 
 ### Phase 5: `dam backup-status` Command
 
@@ -439,8 +437,8 @@ dam backup-status --min-copies 2 "rating:3+"
 | Volume purpose | Semantic context for duplicate analysis | Small | ✅ v1.4.0 |
 | Enhanced duplicates | Distinguish unwanted from wanted copies | Small | ✅ v1.4.0 |
 | `copies:N` filter | Find under-backed-up assets in search | Small | ✅ v1.4.0 |
-| `dam dedup` | Clean up same-volume duplicates safely | Medium | Planned |
+| `dam dedup` | Clean up same-volume duplicates safely | Medium | ✅ v1.4.1 |
 | `dam backup-status` | At-a-glance backup health overview | Medium | Planned |
 | Web UI integration | Visual backup dashboard | Medium | Planned |
 
-Phases 1–3 shipped in v1.4.0. Each remaining phase is independently useful and can be released separately.
+Phases 1–3 shipped in v1.4.0, Phase 4 in v1.4.1. Each remaining phase is independently useful and can be released separately.

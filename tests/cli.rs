@@ -5639,3 +5639,197 @@ fn search_copies_filter() {
     assert!(filenames.contains(&"single.jpg"));
     assert!(filenames.contains(&"multi_orig.jpg"));
 }
+
+// ── dam dedup ──────────────────────────────────────────────────────
+
+#[test]
+fn dedup_report_mode() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let content = b"dedup report content";
+    let file1 = create_test_file(&root, "original.jpg", content);
+    let file2 = create_test_file(&root, "subdir/copy.jpg", content);
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file1.to_str().unwrap()])
+        .assert()
+        .success();
+    dam()
+        .current_dir(&root)
+        .args(["import", file2.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Report mode (no --apply)
+    dam()
+        .current_dir(&root)
+        .args(["dedup"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 duplicate groups"))
+        .stdout(predicate::str::contains("1 redundant locations"))
+        .stdout(predicate::str::contains("reclaimable"))
+        .stdout(predicate::str::contains("Run with --apply"));
+
+    // Both files should still exist
+    assert!(file1.exists());
+    assert!(file2.exists());
+}
+
+#[test]
+fn dedup_apply() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let content = b"dedup apply content";
+    let file1 = create_test_file(&root, "keep.jpg", content);
+    let file2 = create_test_file(&root, "subdir/remove.jpg", content);
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file1.to_str().unwrap()])
+        .assert()
+        .success();
+    dam()
+        .current_dir(&root)
+        .args(["import", file2.to_str().unwrap()])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .args(["dedup", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 duplicate groups"))
+        .stdout(predicate::str::contains("1 locations removed"))
+        .stdout(predicate::str::contains("1 files deleted"));
+
+    // One file should remain, one should be gone
+    let remaining = file1.exists() as usize + file2.exists() as usize;
+    assert_eq!(remaining, 1, "exactly one copy should remain");
+
+    // Duplicates should now be empty
+    dam()
+        .current_dir(&root)
+        .args(["duplicates", "--same-volume"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No same-volume duplicates found"));
+}
+
+#[test]
+fn dedup_prefer_flag() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let content = b"dedup prefer content";
+    let file1 = create_test_file(&root, "Originals/photo.jpg", content);
+    let file2 = create_test_file(&root, "Selects/photo.jpg", content);
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file1.to_str().unwrap()])
+        .assert()
+        .success();
+    dam()
+        .current_dir(&root)
+        .args(["import", file2.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Prefer Selects path — so the Selects copy should be kept
+    dam()
+        .current_dir(&root)
+        .args(["dedup", "--prefer", "Selects", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 files deleted"));
+
+    // Selects copy should remain, Originals should be deleted
+    assert!(file2.exists(), "preferred location should be kept");
+    assert!(!file1.exists(), "non-preferred location should be removed");
+}
+
+#[test]
+fn dedup_min_copies() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let content = b"dedup min copies content";
+    let file1 = create_test_file(&root, "copy_a.jpg", content);
+    let file2 = create_test_file(&root, "copy_b.jpg", content);
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file1.to_str().unwrap()])
+        .assert()
+        .success();
+    dam()
+        .current_dir(&root)
+        .args(["import", file2.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // With min-copies=2, nothing should be removed (only 2 locations total)
+    dam()
+        .current_dir(&root)
+        .args(["dedup", "--min-copies", "2", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 files deleted"));
+
+    // Both files should still exist
+    assert!(file1.exists());
+    assert!(file2.exists());
+}
+
+#[test]
+fn dedup_volume_filter() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Set up a second volume
+    let dir2 = tempdir().unwrap();
+    let vol2_path = dir2.path().canonicalize().unwrap();
+    dam()
+        .current_dir(&root)
+        .args(["volume", "add", "vol2", vol2_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Create same-volume dups on vol2 only
+    let content = b"dedup volume filter content";
+    let file_v2a = create_test_file(&vol2_path, "a.jpg", content);
+    let file_v2b = create_test_file(&vol2_path, "subdir/b.jpg", content);
+
+    dam()
+        .current_dir(&root)
+        .args(["import", "--volume", "vol2", file_v2a.to_str().unwrap()])
+        .assert()
+        .success();
+    dam()
+        .current_dir(&root)
+        .args(["import", "--volume", "vol2", file_v2b.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Dedup only test-vol — should find nothing (dups are on vol2)
+    dam()
+        .current_dir(&root)
+        .args(["dedup", "--volume", "test-vol"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 duplicate groups"));
+
+    // Dedup vol2 — should find the duplicates
+    dam()
+        .current_dir(&root)
+        .args(["dedup", "--volume", "vol2", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 duplicate groups"))
+        .stdout(predicate::str::contains("1 files deleted"));
+}

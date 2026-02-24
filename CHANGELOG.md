@@ -2,6 +2,11 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v1.4.1
+
+### New Commands
+- **`dam dedup`** — remove same-volume duplicate file locations. Identifies variants with 2+ copies on the same volume, keeps the "best" copy (by `--prefer` path prefix, verification recency, path length), and removes the rest. `--min-copies N` ensures at least N total copies survive across all volumes. Report-only by default; `--apply` to delete files and remove location records. Supports `--volume`, `--json`, `--log`, `--time`.
+
 ## v1.4.0
 
 ### New Features

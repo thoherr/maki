@@ -362,6 +362,97 @@ dam cleanup --apply --json | jq '{stale: .stale_locations, orphans: .orphaned_as
 
 ---
 
+## dam dedup
+
+### NAME
+
+dam-dedup -- remove same-volume duplicate file locations
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] dedup [OPTIONS]
+```
+
+### DESCRIPTION
+
+Identifies variants with 2+ file locations on the **same** volume and removes the redundant copies. This targets accidental duplicates (e.g. files copied into multiple directories on the same drive) while leaving cross-volume copies untouched (those are intentional backups).
+
+For each set of same-volume duplicate locations, a resolution heuristic selects which copy to **keep**:
+
+1. If `--prefer` is given, prefer locations whose relative path starts with the specified prefix.
+2. Prefer more recently verified files (by `verified_at` timestamp; never-verified sorts oldest).
+3. Prefer shorter relative paths (closer to the volume root).
+4. Tiebreak: first alphabetically (deterministic).
+
+Before removing a location, the command checks that the variant's total location count across **all** volumes won't drop below `--min-copies`.
+
+Without `--apply`, runs in **report-only mode** (safe default): shows what would be removed without making any changes.
+
+### ARGUMENTS
+
+None.
+
+### OPTIONS
+
+**--volume \<LABEL\>**
+: Limit deduplication to a specific volume. When omitted, processes same-volume duplicates on all volumes.
+
+**--prefer \<PATH_PREFIX\>**
+: Prefer keeping locations whose relative path starts with this prefix. Useful for keeping files in a curated directory (e.g. `Selects/`) while removing copies elsewhere.
+
+**--min-copies \<N\>** (default: 1)
+: Minimum total locations to preserve per variant across all volumes. Prevents removing a location if it would leave fewer than N copies total. Set to 2 to ensure at least one backup copy survives.
+
+**--apply**
+: Apply changes: delete physical files from disk and remove location records from catalog and sidecar YAML.
+
+`--json` outputs a `DedupResult` with `duplicates_found`, `locations_to_remove`, `locations_removed`, `files_deleted`, `bytes_freed`, `dry_run`, and `errors`.
+
+`--log` prints per-location status to stderr (keep, remove, skipped).
+
+`--time` shows elapsed wall-clock time.
+
+### EXAMPLES
+
+Preview what dedup would remove:
+
+```bash
+dam dedup
+```
+
+Remove same-volume duplicates across all volumes:
+
+```bash
+dam dedup --apply --log
+```
+
+Dedup a specific volume, preferring files under `Selects/`:
+
+```bash
+dam dedup --volume "Photos" --prefer "Selects" --apply
+```
+
+Ensure at least 2 copies survive per variant:
+
+```bash
+dam dedup --min-copies 2 --apply
+```
+
+JSON output for scripting:
+
+```bash
+dam --json dedup --apply | jq '{groups: .duplicates_found, removed: .locations_removed, freed: .bytes_freed}'
+```
+
+### SEE ALSO
+
+[duplicates](04-retrieve-commands.md#dam-duplicates) -- find duplicates without removing them.
+[cleanup](#dam-cleanup) -- remove stale locations for files that no longer exist on disk.
+[verify](#dam-verify) -- update `verified_at` timestamps used by the dedup heuristic.
+
+---
+
 ## dam relocate
 
 ### NAME

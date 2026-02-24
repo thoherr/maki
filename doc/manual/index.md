@@ -41,4 +41,4 @@ Technical documentation for integrators and contributors.
 
 ---
 
-**Version**: v1.4.0 | **Source**: [GitHub](../../README.md) | **License**: See repository
+**Version**: v1.4.1 | **Source**: [GitHub](../../README.md) | **License**: See repository

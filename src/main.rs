@@ -16,7 +16,7 @@ Quick Reference:
   Ingest:     import, tag, edit, group, auto-group
   Organize:   collection (col), saved-search (ss)
   Retrieve:   search, show, duplicates, stats, serve
-  Maintain:   verify, sync, refresh, cleanup, relocate,
+  Maintain:   verify, sync, refresh, cleanup, dedup, relocate,
               update-location, generate-previews, fix-roles,
               fix-dates, rebuild-catalog"
 )]
@@ -332,8 +332,28 @@ enum Commands {
         apply: bool,
     },
 
-    /// Copy or move asset files to another volume
+    /// Remove same-volume duplicate file locations
     #[command(display_order = 44)]
+    Dedup {
+        /// Limit to a specific volume
+        #[arg(long, display_order = 10)]
+        volume: Option<String>,
+
+        /// Prefer locations matching this path prefix
+        #[arg(long, display_order = 11)]
+        prefer: Option<String>,
+
+        /// Minimum total copies to preserve per variant (default: 1)
+        #[arg(long, display_order = 12, default_value = "1")]
+        min_copies: usize,
+
+        /// Apply changes (delete files and remove location records)
+        #[arg(long, display_order = 20)]
+        apply: bool,
+    },
+
+    /// Copy or move asset files to another volume
+    #[command(display_order = 45)]
     Relocate {
         /// Asset ID
         asset_id: String,
@@ -351,7 +371,7 @@ enum Commands {
     },
 
     /// Update a file's catalog path after it was moved on disk
-    #[command(name = "update-location", display_order = 45)]
+    #[command(name = "update-location", display_order = 46)]
     UpdateLocation {
         /// Asset ID (or unique prefix)
         asset_id: String,
@@ -370,7 +390,7 @@ enum Commands {
     },
 
     /// Generate or regenerate preview thumbnails
-    #[command(display_order = 46)]
+    #[command(display_order = 47)]
     GeneratePreviews {
         /// Files or directories to generate previews for
         paths: Vec<String>,
@@ -401,7 +421,7 @@ enum Commands {
     },
 
     /// Fix variant roles (re-role non-RAW variants to Export in RAW+non-RAW groups)
-    #[command(display_order = 47)]
+    #[command(display_order = 48)]
     FixRoles {
         /// Files or directories to scope the fix
         paths: Vec<String>,
@@ -420,7 +440,7 @@ enum Commands {
     },
 
     /// Fix asset dates from variant EXIF metadata and file modification times
-    #[command(display_order = 48)]
+    #[command(display_order = 49)]
     FixDates {
         /// Limit to a specific volume
         #[arg(long, display_order = 10)]
@@ -436,7 +456,7 @@ enum Commands {
     },
 
     /// Re-attach recipe files that were imported as standalone assets
-    #[command(display_order = 49)]
+    #[command(display_order = 50)]
     FixRecipes {
         /// Limit to a specific volume
         #[arg(long, display_order = 10)]
@@ -452,7 +472,7 @@ enum Commands {
     },
 
     /// Rebuild SQLite catalog from sidecar files
-    #[command(display_order = 50)]
+    #[command(display_order = 51)]
     RebuildCatalog,
 }
 
@@ -1666,6 +1686,73 @@ fn main() {
                     println!("Cleanup complete: {}", parts.join(", "));
                     if result.stale > 0 || result.orphaned_assets > 0 || result.orphaned_previews > 0 {
                         println!("  Run with --apply to remove stale records, orphaned assets, and previews.");
+                    }
+                }
+            }
+
+            Ok(())
+        }
+        Commands::Dedup { volume, prefer, min_copies, apply } => {
+            let catalog_root = dam::config::find_catalog_root()?;
+            let config = CatalogConfig::load(&catalog_root)?;
+            let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
+
+            let show_log = cli.log;
+            let result = if show_log {
+                use dam::asset_service::DedupStatus;
+                service.dedup(
+                    volume.as_deref(),
+                    prefer.as_deref(),
+                    min_copies,
+                    apply,
+                    |filename, path, status, vol_label| {
+                        match status {
+                            DedupStatus::Keep => {
+                                eprintln!("  {} — keep ({}, {})", filename, path, vol_label);
+                            }
+                            DedupStatus::Remove => {
+                                eprintln!("  {} — remove ({}, {})", filename, path, vol_label);
+                            }
+                            DedupStatus::Skipped => {
+                                eprintln!("  {} — skipped, min-copies ({}, {})", filename, path, vol_label);
+                            }
+                        }
+                    },
+                )?
+            } else {
+                service.dedup(
+                    volume.as_deref(),
+                    prefer.as_deref(),
+                    min_copies,
+                    apply,
+                    |_, _, _, _| {},
+                )?
+            };
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                for err in &result.errors {
+                    eprintln!("  {err}");
+                }
+
+                if apply {
+                    println!(
+                        "Dedup: {} duplicate groups, {} locations removed, {} files deleted ({})",
+                        result.duplicates_found,
+                        result.locations_removed,
+                        result.files_deleted,
+                        format_size(result.bytes_freed),
+                    );
+                } else {
+                    println!(
+                        "Dedup: {} duplicate groups, {} redundant locations ({} reclaimable)",
+                        result.duplicates_found,
+                        result.locations_to_remove,
+                        format_size(result.bytes_freed),
+                    );
+                    if result.locations_to_remove > 0 {
+                        println!("  Run with --apply to remove redundant files.");
                     }
                 }
             }
