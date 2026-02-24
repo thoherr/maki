@@ -763,6 +763,7 @@ details[open] summary { margin-bottom: 0.5rem; }
 /* Volumes table */
 .badge-online { background: #d1fae5; color: #065f46; }
 .badge-offline { background: #fee2e2; color: #991b1b; }
+.badge-purpose { background: #e0e7ff; color: #3730a3; margin-left: 4px; }
 .volumes-table td { vertical-align: middle; }
 .fmt-chip {
     display: inline-block;

@@ -142,6 +142,8 @@ pub struct VolumeStats {
     pub label: String,
     pub volume_id: String,
     pub is_online: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
     pub assets: u64,
     pub variants: u64,
     pub recipes: u64,
@@ -203,6 +205,8 @@ pub struct VolumeVerificationStats {
     pub label: String,
     pub volume_id: String,
     pub is_online: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
     pub locations: u64,
     pub verified: u64,
     pub coverage_pct: f64,
@@ -2083,7 +2087,7 @@ impl Catalog {
     /// Build full CatalogStats with optional sections.
     pub fn build_stats(
         &self,
-        volumes_info: &[(String, String, bool)], // (label, volume_id, is_online)
+        volumes_info: &[(String, String, bool, Option<String>)], // (label, volume_id, is_online, purpose)
         show_types: bool,
         show_volumes: bool,
         show_tags: bool,
@@ -2157,11 +2161,11 @@ impl Catalog {
             let vol_stats: Vec<VolumeStats> = raw
                 .into_iter()
                 .map(|r| {
-                    let is_online = volumes_info
+                    let vol_info = volumes_info
                         .iter()
-                        .find(|v| v.1 == r.volume_id)
-                        .map(|v| v.2)
-                        .unwrap_or(false);
+                        .find(|v| v.1 == r.volume_id);
+                    let is_online = vol_info.map(|v| v.2).unwrap_or(false);
+                    let purpose = vol_info.and_then(|v| v.3.clone());
                     let verification_pct = if r.total_locations > 0 {
                         (r.verified_count as f64 / r.total_locations as f64) * 100.0
                     } else {
@@ -2171,6 +2175,7 @@ impl Catalog {
                         label: r.label,
                         volume_id: r.volume_id,
                         is_online,
+                        purpose,
                         assets: r.assets,
                         variants: r.variants,
                         recipes: r.recipes,
@@ -2233,11 +2238,11 @@ impl Catalog {
             let per_volume: Vec<VolumeVerificationStats> = per_volume_raw
                 .into_iter()
                 .map(|(label, vid, total, verified, oldest)| {
-                    let is_online = volumes_info
+                    let vol_info = volumes_info
                         .iter()
-                        .find(|v| v.1 == vid)
-                        .map(|v| v.2)
-                        .unwrap_or(false);
+                        .find(|v| v.1 == vid);
+                    let is_online = vol_info.map(|v| v.2).unwrap_or(false);
+                    let purpose = vol_info.and_then(|v| v.3.clone());
                     let cov = if total > 0 {
                         (verified as f64 / total as f64) * 100.0
                     } else {
@@ -2247,6 +2252,7 @@ impl Catalog {
                         label,
                         volume_id: vid,
                         is_online,
+                        purpose,
                         locations: total,
                         verified,
                         coverage_pct: cov,

@@ -145,6 +145,11 @@
                     {% else %}
                     <span class="badge badge-offline">offline</span>
                     {% endif %}
+                    {% match vol.purpose %}
+                    {% when Some with (p) %}
+                    <span class="badge badge-purpose">{{ p }}</span>
+                    {% when None %}
+                    {% endmatch %}
                 </td>
                 <td>{{ vol.assets }}</td>
                 <td>{{ vol.variants }}</td>
@@ -257,6 +262,11 @@
                     {% else %}
                     <span class="badge badge-offline">offline</span>
                     {% endif %}
+                    {% match pv.purpose %}
+                    {% when Some with (p) %}
+                    <span class="badge badge-purpose">{{ p }}</span>
+                    {% when None %}
+                    {% endmatch %}
                 </td>
                 <td>
                     <div class="inline-bar">

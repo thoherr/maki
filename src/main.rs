@@ -2225,9 +2225,9 @@ fn main() {
             let registry = DeviceRegistry::new(&catalog_root);
             let vol_list = registry.list()?;
 
-            let volumes_info: Vec<(String, String, bool)> = vol_list
+            let volumes_info: Vec<(String, String, bool, Option<String>)> = vol_list
                 .iter()
-                .map(|v| (v.label.clone(), v.id.to_string(), v.is_online))
+                .map(|v| (v.label.clone(), v.id.to_string(), v.is_online, v.purpose.as_ref().map(|p| p.as_str().to_string())))
                 .collect();
 
             let show_types = types || all;
@@ -2696,7 +2696,11 @@ fn print_stats_human(stats: &dam::catalog::CatalogStats) {
         println!("\nVolumes");
         for v in volumes {
             let status = if v.is_online { "online" } else { "offline" };
-            println!("  {} [{}]", v.label, status);
+            if let Some(purpose) = &v.purpose {
+                println!("  {} [{}] [{}]", v.label, status, purpose);
+            } else {
+                println!("  {} [{}]", v.label, status);
+            }
             println!("    Assets: {}  Variants: {}  Recipes: {}", v.assets, v.variants, v.recipes);
             println!("    Size: {}  Directories: {}", format_size(v.size), v.directories);
             if !v.formats.is_empty() {
@@ -2738,9 +2742,10 @@ fn print_stats_human(stats: &dam::catalog::CatalogStats) {
             println!("\n  Per Volume");
             for pv in &v.per_volume {
                 let status = if pv.is_online { "online" } else { "offline" };
+                let purpose_tag = pv.purpose.as_ref().map(|p| format!(" [{}]", p)).unwrap_or_default();
                 println!(
-                    "    {} [{}]: {}/{} ({:.1}%)",
-                    pv.label, status, pv.verified, pv.locations, pv.coverage_pct
+                    "    {} [{}]{}: {}/{} ({:.1}%)",
+                    pv.label, status, purpose_tag, pv.verified, pv.locations, pv.coverage_pct
                 );
             }
         }

@@ -496,9 +496,9 @@ pub async fn stats_page(State(state): State<Arc<AppState>>) -> Response {
         let catalog = state.catalog()?;
         let registry = DeviceRegistry::new(&state.catalog_root);
         let vol_list = registry.list()?;
-        let volumes_info: Vec<(String, String, bool)> = vol_list
+        let volumes_info: Vec<(String, String, bool, Option<String>)> = vol_list
             .iter()
-            .map(|v| (v.label.clone(), v.id.to_string(), v.is_online))
+            .map(|v| (v.label.clone(), v.id.to_string(), v.is_online, v.purpose.as_ref().map(|p| p.as_str().to_string())))
             .collect();
 
         let stats = catalog.build_stats(&volumes_info, true, true, true, true, 20)?;
