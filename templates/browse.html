@@ -19,7 +19,8 @@
         </div>
         <div class="rating-filter-stars" id="rating-stars">
             {% for i in 1..=5u8 %}
-            <span class="star {% if rating == "5" && i <= 5 || rating == "4+" && i <= 4 || rating == "3+" && i <= 3 || rating == "2+" && i <= 2 || rating == "1+" && i <= 1 %}filled{% else %}empty{% endif %}" data-value="{{ i }}">{% if rating == "5" && i <= 5 || rating == "4+" && i <= 4 || rating == "3+" && i <= 3 || rating == "2+" && i <= 2 || rating == "1+" && i <= 1 %}&#9733;{% else %}&#9734;{% endif %}</span>
+            {% let filled = rating == "5" && i <= 5 || rating == "4+" && i <= 4 || rating == "4" && i <= 4 || rating == "3+" && i <= 3 || rating == "3" && i <= 3 || rating == "2+" && i <= 2 || rating == "2" && i <= 2 || rating == "1+" && i <= 1 || rating == "1" && i <= 1 %}
+            <span class="star {% if filled %}filled{% else %}empty{% endif %}" data-value="{{ i }}">{% if filled %}&#9733;{% else %}&#9734;{% endif %}</span>
             {% endfor %}
             <span class="rating-filter-hint" id="rating-hint">{% if !rating.is_empty() %}{{ rating }}{% endif %}</span>
         </div>
@@ -386,14 +387,10 @@
 
     function setRatingFilter(value) {
         currentRating = value;
+        // Parse the threshold: "3" → 3, "3+" → 3, "5" → 5, "" → 0
+        var threshold = parseInt(value) || 0;
         ratingStars.forEach(function(s, idx) {
-            var starVal = idx + 1;
-            var active = false;
-            if (value === '5' && starVal <= 5) active = true;
-            else if (value === '4+' && starVal <= 4) active = true;
-            else if (value === '3+' && starVal <= 3) active = true;
-            else if (value === '2+' && starVal <= 2) active = true;
-            else if (value === '1+' && starVal <= 1) active = true;
+            var active = threshold > 0 && (idx + 1) <= threshold;
             s.className = 'star ' + (active ? 'filled' : 'empty');
             s.innerHTML = active ? '&#9733;' : '&#9734;';
         });
@@ -404,12 +401,21 @@
         s.style.cursor = 'pointer';
         s.addEventListener('click', function() {
             var val = parseInt(this.getAttribute('data-value'));
+            var exact = String(val);
+            var plus = val + '+';
             var newRating;
             if (val === 5) {
+                // 5 and 5+ are identical, so two-state toggle
                 newRating = currentRating === '5' ? '' : '5';
             } else {
-                var plus = val + '+';
-                newRating = currentRating === plus ? '' : plus;
+                // Three-state cycle: exact → plus → clear
+                if (currentRating === exact) {
+                    newRating = plus;
+                } else if (currentRating === plus) {
+                    newRating = '';
+                } else {
+                    newRating = exact;
+                }
             }
             setRatingFilter(newRating);
             triggerSearch();
