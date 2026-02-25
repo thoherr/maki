@@ -206,6 +206,18 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/api/saved-searches/{name}",
             axum::routing::delete(routes::delete_saved_search),
         )
+        .route(
+            "/api/saved-searches/{name}/favorite",
+            axum::routing::put(routes::toggle_saved_search_favorite),
+        )
+        .route(
+            "/api/saved-searches/{name}/rename",
+            axum::routing::put(routes::rename_saved_search),
+        )
+        .route(
+            "/saved-searches",
+            axum::routing::get(routes::saved_searches_page),
+        )
         .route("/collections", axum::routing::get(routes::collections_page))
         .route(
             "/api/collections",

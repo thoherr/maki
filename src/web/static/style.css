@@ -173,17 +173,6 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
     margin-bottom: 0.75rem;
     min-height: 1.75rem;
 }
-.saved-search-chip-wrap {
-    display: inline-flex;
-    align-items: center;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 1rem;
-    transition: border-color 0.15s;
-}
-.saved-search-chip-wrap:hover {
-    border-color: var(--primary);
-}
 .saved-search-chip {
     display: inline-block;
     padding: 0.25rem 0.6rem;
@@ -191,30 +180,27 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
     color: var(--text);
     text-decoration: none;
     white-space: nowrap;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    transition: border-color 0.15s;
 }
 .saved-search-chip:hover {
     color: var(--primary);
+    border-color: var(--primary);
+    text-decoration: none;
 }
-.saved-search-actions {
-    display: none;
-    align-items: center;
-    gap: 0.1rem;
-    padding-right: 0.3rem;
-}
-.saved-search-chip-wrap:hover .saved-search-actions {
-    display: inline-flex;
-}
-.ss-rename, .ss-delete {
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: 0.75rem;
+.ss-manage-link {
+    font-size: 0.8rem;
     color: var(--text-muted);
-    padding: 0 0.15rem;
-    line-height: 1;
+    text-decoration: none;
+    white-space: nowrap;
+    margin-left: 0.25rem;
 }
-.ss-rename:hover { color: var(--primary); }
-.ss-delete:hover { color: var(--danger); }
+.ss-manage-link:hover {
+    color: var(--primary);
+    text-decoration: underline;
+}
 .save-search-btn {
     padding: 0.2rem 0.5rem;
     font-size: 0.8rem;
@@ -1656,3 +1642,71 @@ body.has-batch-toolbar { padding-bottom: 60px; }
 
 /* Preload images (hidden) */
 .lightbox-preload { display: none; }
+
+/* ===== Saved Searches Management Page ===== */
+.ss-page-header { margin-bottom: 1rem; }
+.ss-page-header h1 { margin: 0; }
+.ss-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+.ss-table th {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 2px solid var(--border);
+    font-weight: 600;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.ss-table td {
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+}
+.ss-table tr:hover td {
+    background: var(--badge-bg);
+}
+.ss-col-fav { width: 40px; text-align: center; }
+.ss-col-name { white-space: nowrap; }
+.ss-col-query code {
+    font-size: 0.82rem;
+    background: var(--badge-bg);
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+}
+.ss-col-sort { white-space: nowrap; color: var(--text-muted); font-size: 0.85rem; }
+.ss-col-actions { white-space: nowrap; width: 140px; }
+.ss-fav-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1.2rem;
+    color: var(--text-muted);
+    padding: 0.1rem;
+    line-height: 1;
+    transition: color 0.15s;
+}
+.ss-fav-btn:hover { color: #f1c40f; }
+.ss-fav-btn.active { color: #f1c40f; }
+.ss-action-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    padding: 0.2rem 0.5rem;
+    margin-right: 0.25rem;
+    transition: color 0.15s, border-color 0.15s;
+}
+.ss-action-btn:hover {
+    color: var(--primary);
+    border-color: var(--primary);
+}
+.ss-action-delete:hover {
+    color: var(--danger);
+    border-color: var(--danger);
+}

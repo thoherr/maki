@@ -14,8 +14,8 @@ use crate::device_registry::DeviceRegistry;
 use super::templates::{
     format_size, AssetCard, AssetPage, BackupPage, BrowsePage, CollectionOption,
     DescriptionFragment, FormatOption, LabelFragment, NameFragment, PreviewFragment,
-    RatingFragment, ResultsPartial, SavedSearchChip, StatsPage, TagOption, TagPageEntry,
-    TagsFragment, TagsPage, VolumeOption,
+    RatingFragment, ResultsPartial, SavedSearchChip, SavedSearchEntry, SavedSearchesPage,
+    StatsPage, TagOption, TagPageEntry, TagsFragment, TagsPage, VolumeOption,
 };
 use super::AppState;
 
@@ -143,6 +143,7 @@ pub async fn browse_page(
             .unwrap_or_default()
             .searches
             .into_iter()
+            .filter(|ss| ss.favorite)
             .map(|ss| {
                 let url_params = ss.to_url_params();
                 SavedSearchChip {
@@ -1017,6 +1018,8 @@ pub struct CreateSavedSearchRequest {
     pub name: String,
     pub query: String,
     pub sort: Option<String>,
+    #[serde(default)]
+    pub favorite: bool,
 }
 
 /// POST /api/saved-searches — create or update a saved search.
@@ -1031,6 +1034,7 @@ pub async fn create_saved_search(
             name: req.name.clone(),
             query: req.query,
             sort: req.sort,
+            favorite: req.favorite,
         };
         if let Some(existing) = file.searches.iter_mut().find(|s| s.name == req.name) {
             *existing = entry;
@@ -1264,6 +1268,130 @@ pub async fn batch_auto_group(
         Ok(Ok(json)) => Json(json).into_response(),
         Ok(Err(e)) => {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+// --- Saved searches management ---
+
+/// GET /saved-searches — saved searches management page.
+pub async fn saved_searches_page(State(state): State<Arc<AppState>>) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let file = crate::saved_search::load(&state.catalog_root)?;
+        let searches: Vec<SavedSearchEntry> = file
+            .searches
+            .into_iter()
+            .map(|ss| {
+                let url_params = ss.to_url_params();
+                let sort = ss.sort.as_deref().unwrap_or("date_desc").to_string();
+                SavedSearchEntry {
+                    name: ss.name,
+                    query: ss.query,
+                    sort,
+                    favorite: ss.favorite,
+                    url_params,
+                }
+            })
+            .collect();
+        let tmpl = SavedSearchesPage { searches };
+        Ok::<_, anyhow::Error>(tmpl.render()?)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(html)) => Html(html).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct FavoriteRequest {
+    pub favorite: bool,
+}
+
+/// PUT /api/saved-searches/{name}/favorite — toggle favorite status.
+pub async fn toggle_saved_search_favorite(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<FavoriteRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut file = crate::saved_search::load(&state.catalog_root)?;
+        let entry = file
+            .searches
+            .iter_mut()
+            .find(|s| s.name == name)
+            .ok_or_else(|| anyhow::anyhow!("No saved search named '{name}'"))?;
+        entry.favorite = req.favorite;
+        crate::saved_search::save(&state.catalog_root, &file)?;
+        Ok::<_, anyhow::Error>(serde_json::json!({"status": "updated", "name": name, "favorite": req.favorite}))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => {
+            let msg = format!("{e:#}");
+            if msg.contains("No saved search") {
+                (StatusCode::NOT_FOUND, msg).into_response()
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
+            }
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RenameRequest {
+    pub new_name: String,
+}
+
+/// PUT /api/saved-searches/{name}/rename — rename a saved search.
+pub async fn rename_saved_search(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<RenameRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let new_name = req.new_name.trim().to_string();
+        if new_name.is_empty() {
+            anyhow::bail!("Name cannot be empty");
+        }
+        let mut file = crate::saved_search::load(&state.catalog_root)?;
+        // Check for name collision
+        if file.searches.iter().any(|s| s.name == new_name) {
+            anyhow::bail!("A saved search named '{new_name}' already exists");
+        }
+        let entry = file
+            .searches
+            .iter_mut()
+            .find(|s| s.name == name)
+            .ok_or_else(|| anyhow::anyhow!("No saved search named '{name}'"))?;
+        entry.name = new_name.clone();
+        crate::saved_search::save(&state.catalog_root, &file)?;
+        Ok::<_, anyhow::Error>(serde_json::json!({"status": "renamed", "old_name": name, "new_name": new_name}))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => {
+            let msg = format!("{e:#}");
+            if msg.contains("No saved search") {
+                (StatusCode::NOT_FOUND, msg).into_response()
+            } else if msg.contains("already exists") {
+                (StatusCode::CONFLICT, msg).into_response()
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
+            }
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
     }

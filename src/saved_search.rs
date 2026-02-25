@@ -15,6 +15,13 @@ pub struct SavedSearch {
     /// Sort order (e.g. "date_desc", "name_asc"). Omitted = default (date_desc).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sort: Option<String>,
+    /// Whether this search appears as a chip on the browse page.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub favorite: bool,
+}
+
+fn is_false(v: &bool) -> bool {
+    !v
 }
 
 impl SavedSearch {
@@ -123,11 +130,13 @@ mod tests {
                     name: "Landscapes".to_string(),
                     query: "type:image tag:landscape rating:4+".to_string(),
                     sort: Some("name_asc".to_string()),
+                    favorite: false,
                 },
                 SavedSearch {
                     name: "Unrated".to_string(),
                     query: "rating:0".to_string(),
                     sort: None,
+                    favorite: false,
                 },
             ],
         };
@@ -149,6 +158,7 @@ mod tests {
             name: "Test".to_string(),
             query: "type:image tag:landscape rating:4+".to_string(),
             sort: Some("name_asc".to_string()),
+            favorite: false,
         };
         let params = ss.to_url_params();
         assert!(params.contains("type=image"));
@@ -163,6 +173,7 @@ mod tests {
             name: "Test".to_string(),
             query: "sunset beach type:image".to_string(),
             sort: None,
+            favorite: false,
         };
         let params = ss.to_url_params();
         assert!(params.contains("q=sunset%20beach"));
@@ -185,6 +196,7 @@ mod tests {
                 name: "Test".to_string(),
                 query: "type:image".to_string(),
                 sort: None,
+                favorite: false,
             }],
         };
         save(dir.path(), &file).unwrap();
@@ -201,15 +213,55 @@ mod tests {
                     name: "A".to_string(),
                     query: "".to_string(),
                     sort: None,
+                    favorite: false,
                 },
                 SavedSearch {
                     name: "B".to_string(),
                     query: "type:video".to_string(),
                     sort: None,
+                    favorite: false,
                 },
             ],
         };
         assert_eq!(find_by_name(&file, "B").unwrap().query, "type:video");
         assert!(find_by_name(&file, "C").is_none());
+    }
+
+    #[test]
+    fn favorite_default_false() {
+        let toml_str = r#"
+[[search]]
+name = "Legacy"
+query = "type:image"
+"#;
+        let file: SavedSearchFile = toml::from_str(toml_str).unwrap();
+        assert_eq!(file.searches.len(), 1);
+        assert!(!file.searches[0].favorite);
+    }
+
+    #[test]
+    fn favorite_roundtrip() {
+        let file = SavedSearchFile {
+            searches: vec![
+                SavedSearch {
+                    name: "Fav".to_string(),
+                    query: "type:image".to_string(),
+                    sort: None,
+                    favorite: true,
+                },
+                SavedSearch {
+                    name: "NotFav".to_string(),
+                    query: "type:video".to_string(),
+                    sort: None,
+                    favorite: false,
+                },
+            ],
+        };
+        let toml_str = toml::to_string_pretty(&file).unwrap();
+        // favorite = true is serialized, favorite = false is skipped
+        assert!(toml_str.contains("favorite = true"));
+        assert!(!toml_str.contains("favorite = false"));
+        let parsed: SavedSearchFile = toml::from_str(&toml_str).unwrap();
+        assert_eq!(file, parsed);
     }
 }

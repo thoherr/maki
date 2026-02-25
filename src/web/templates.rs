@@ -133,6 +133,21 @@ pub struct SavedSearchChip {
     pub url_params: String,
 }
 
+/// A saved search entry for the management page.
+pub struct SavedSearchEntry {
+    pub name: String,
+    pub query: String,
+    pub sort: String,
+    pub favorite: bool,
+    pub url_params: String,
+}
+
+#[derive(Template)]
+#[template(path = "saved_searches.html")]
+pub struct SavedSearchesPage {
+    pub searches: Vec<SavedSearchEntry>,
+}
+
 #[derive(Template)]
 #[template(path = "browse.html")]
 pub struct BrowsePage {

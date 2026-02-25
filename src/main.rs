@@ -544,6 +544,10 @@ enum SavedSearchCommands {
         /// Sort order (e.g. date_desc, name_asc, size_desc)
         #[arg(long)]
         sort: Option<String>,
+
+        /// Mark as favorite (shown as chip on browse page)
+        #[arg(long)]
+        favorite: bool,
     },
 
     /// List all saved searches
@@ -2814,13 +2818,14 @@ fn main() {
         Commands::SavedSearch(cmd) => {
             let catalog_root = dam::config::find_catalog_root()?;
             match cmd {
-                SavedSearchCommands::Save { name, query, sort } => {
+                SavedSearchCommands::Save { name, query, sort, favorite } => {
                     let mut file = dam::saved_search::load(&catalog_root)?;
                     // Replace existing entry with same name, or append
                     let entry = dam::saved_search::SavedSearch {
                         name: name.clone(),
                         query,
                         sort,
+                        favorite,
                     };
                     if let Some(existing) = file.searches.iter_mut().find(|s| s.name == name) {
                         *existing = entry;
@@ -2847,7 +2852,8 @@ fn main() {
                     } else {
                         for ss in &file.searches {
                             let sort_info = ss.sort.as_deref().unwrap_or("date_desc");
-                            println!("  {} — {} (sort: {})", ss.name, ss.query, sort_info);
+                            let fav = if ss.favorite { " [*]" } else { "" };
+                            println!("  {}{} — {} (sort: {})", ss.name, fav, ss.query, sort_info);
                         }
                     }
                     Ok(())
