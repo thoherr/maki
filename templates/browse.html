@@ -82,6 +82,56 @@
     {% include "results.html" %}
 </div>
 
+<div class="lightbox" id="lightbox">
+    <div class="lightbox-top-bar">
+        <span class="lightbox-counter" id="lb-counter"></span>
+        <span class="lightbox-title" id="lb-title"></span>
+        <button class="lightbox-btn" id="lb-info-toggle" title="Toggle info (i)">&#8505;</button>
+        <a class="lightbox-btn" id="lb-detail-link" title="Open detail page">&#8599; Detail</a>
+        <button class="lightbox-btn" id="lb-close" title="Close (Esc)">&times;</button>
+    </div>
+    <div class="lightbox-main">
+        <button class="lightbox-nav" id="lb-prev" title="Previous (&#8592;)">&lsaquo;</button>
+        <div class="lightbox-img-wrap" id="lb-img-wrap">
+            <img class="lightbox-img" id="lb-img" src="" alt="">
+        </div>
+        <button class="lightbox-nav" id="lb-next" title="Next (&#8594;)">&rsaquo;</button>
+    </div>
+    <div class="lightbox-info" id="lb-info">
+        <button class="lightbox-info-close" id="lb-info-close" title="Close panel">&times;</button>
+        <h3>Details</h3>
+        <table class="lightbox-meta-table">
+            <tr><th>Type</th><td id="lb-meta-type"></td></tr>
+            <tr><th>Format</th><td id="lb-meta-format"></td></tr>
+            <tr><th>Date</th><td id="lb-meta-date"></td></tr>
+            <tr><th>Variants</th><td id="lb-meta-variants"></td></tr>
+        </table>
+        <h3>Rating</h3>
+        <div class="lightbox-stars" id="lb-stars">
+            <span class="star empty" data-value="1">&#9734;</span>
+            <span class="star empty" data-value="2">&#9734;</span>
+            <span class="star empty" data-value="3">&#9734;</span>
+            <span class="star empty" data-value="4">&#9734;</span>
+            <span class="star empty" data-value="5">&#9734;</span>
+            <span class="star-clear" title="Clear rating">&times;</span>
+        </div>
+        <h3>Label</h3>
+        <div class="lightbox-labels" id="lb-labels">
+            <span class="lb-dot" data-label="Red" style="background:#e74c3c;" title="Red"></span>
+            <span class="lb-dot" data-label="Orange" style="background:#e67e22;" title="Orange"></span>
+            <span class="lb-dot" data-label="Yellow" style="background:#f1c40f;" title="Yellow"></span>
+            <span class="lb-dot" data-label="Green" style="background:#27ae60;" title="Green"></span>
+            <span class="lb-dot" data-label="Blue" style="background:#3498db;" title="Blue"></span>
+            <span class="lb-dot" data-label="Pink" style="background:#e91e8e;" title="Pink"></span>
+            <span class="lb-dot" data-label="Purple" style="background:#9b59b6;" title="Purple"></span>
+            <span class="lb-name" id="lb-label-name"></span>
+            <span class="lb-clear" title="Clear label">&times;</span>
+        </div>
+    </div>
+    <img class="lightbox-preload" id="lb-preload-prev">
+    <img class="lightbox-preload" id="lb-preload-next">
+</div>
+
 <div class="batch-toolbar" id="batch-toolbar">
     <div class="batch-toolbar-inner">
         <span class="batch-count" id="batch-count">0 selected</span>
@@ -948,6 +998,313 @@
     };
 })();
 
+// --- Grid density ---
+(function() {
+    var stored = localStorage.getItem('dam-grid-density');
+    if (stored && stored !== 'normal') {
+        document.documentElement.setAttribute('data-density', stored);
+    }
+
+    function setActive() {
+        var current = document.documentElement.getAttribute('data-density') || 'normal';
+        document.querySelectorAll('.density-btn').forEach(function(b) {
+            b.classList.toggle('active', b.getAttribute('data-density') === current);
+        });
+    }
+    setActive();
+
+    document.getElementById('results').addEventListener('click', function(e) {
+        var btn = e.target.closest('.density-btn');
+        if (!btn) return;
+        var d = btn.getAttribute('data-density');
+        if (d === 'normal') {
+            document.documentElement.removeAttribute('data-density');
+        } else {
+            document.documentElement.setAttribute('data-density', d);
+        }
+        localStorage.setItem('dam-grid-density', d);
+        setActive();
+    });
+
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target && e.detail.target.id === 'results') setActive();
+    });
+})();
+
+// --- Lightbox ---
+(function() {
+    var currentIndex = -1;
+    var isOpen = false;
+    var infoVisible = false;
+
+    var overlay = document.getElementById('lightbox');
+    var img = document.getElementById('lb-img');
+    var counter = document.getElementById('lb-counter');
+    var title = document.getElementById('lb-title');
+    var detailLink = document.getElementById('lb-detail-link');
+    var infoPanel = document.getElementById('lb-info');
+    var preloadPrev = document.getElementById('lb-preload-prev');
+    var preloadNext = document.getElementById('lb-preload-next');
+
+    var labelColors = {Red:'#e74c3c', Orange:'#e67e22', Yellow:'#f1c40f', Green:'#27ae60', Blue:'#3498db', Pink:'#e91e8e', Purple:'#9b59b6'};
+    var labelNumMap = {'1':'Red','2':'Orange','3':'Yellow','4':'Green','5':'Blue','6':'Pink','7':'Purple'};
+    var labelLetterMap = {r:'Red',o:'Orange',y:'Yellow',g:'Green',b:'Blue',p:'Pink',u:'Purple'};
+
+    function getCards() {
+        return Array.from(document.querySelectorAll('.asset-card'));
+    }
+
+    function open(index) {
+        var cards = getCards();
+        if (cards.length === 0) return;
+        currentIndex = Math.max(0, Math.min(index, cards.length - 1));
+        isOpen = true;
+        overlay.classList.add('open');
+        document.body.style.overflow = 'hidden';
+        render();
+    }
+
+    function close() {
+        isOpen = false;
+        overlay.classList.remove('open');
+        document.body.style.overflow = '';
+    }
+
+    function render() {
+        var cards = getCards();
+        if (currentIndex < 0 || currentIndex >= cards.length) return;
+        var card = cards[currentIndex];
+
+        var src = card.getAttribute('data-preview');
+        var name = card.getAttribute('data-name');
+        var assetId = card.getAttribute('data-asset-id');
+        var type = card.getAttribute('data-type');
+        var format = card.getAttribute('data-format');
+        var date = card.getAttribute('data-date');
+        var rating = parseInt(card.getAttribute('data-rating') || '0');
+        var label = card.getAttribute('data-label') || '';
+        var variants = card.getAttribute('data-variants');
+
+        img.src = src;
+        img.alt = name;
+        counter.textContent = (currentIndex + 1) + ' / ' + cards.length;
+        title.textContent = name;
+        detailLink.href = '/asset/' + assetId;
+
+        // Metadata
+        document.getElementById('lb-meta-type').textContent = type;
+        document.getElementById('lb-meta-format').textContent = format;
+        document.getElementById('lb-meta-date').textContent = date;
+        document.getElementById('lb-meta-variants').textContent = variants;
+
+        // Rating stars
+        renderStars(rating);
+
+        // Label dots
+        renderLabels(label);
+
+        // Preload adjacent
+        if (currentIndex > 0) {
+            preloadPrev.src = cards[currentIndex - 1].getAttribute('data-preview');
+        }
+        if (currentIndex < cards.length - 1) {
+            preloadNext.src = cards[currentIndex + 1].getAttribute('data-preview');
+        }
+    }
+
+    function renderStars(rating) {
+        var stars = document.querySelectorAll('#lb-stars .star');
+        stars.forEach(function(s) {
+            var v = parseInt(s.getAttribute('data-value'));
+            if (v <= rating) {
+                s.className = 'star filled';
+                s.innerHTML = '&#9733;';
+            } else {
+                s.className = 'star empty';
+                s.innerHTML = '&#9734;';
+            }
+        });
+    }
+
+    function renderLabels(label) {
+        var dots = document.querySelectorAll('#lb-labels .lb-dot');
+        dots.forEach(function(d) {
+            d.classList.toggle('active', d.getAttribute('data-label') === label);
+        });
+        document.getElementById('lb-label-name').textContent = label || '';
+    }
+
+    function navigate(delta) {
+        var cards = getCards();
+        var next = currentIndex + delta;
+        if (next < 0 || next >= cards.length) return;
+        currentIndex = next;
+        render();
+    }
+
+    function applyRating(rating) {
+        var cards = getCards();
+        if (currentIndex < 0 || currentIndex >= cards.length) return;
+        var card = cards[currentIndex];
+        var assetId = card.getAttribute('data-asset-id');
+        fetch('/api/asset/' + assetId + '/rating', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'rating=' + rating
+        }).then(function() {
+            card.setAttribute('data-rating', String(rating));
+            renderStars(rating);
+            if (window.damBatch) window.damBatch.refreshResults();
+        });
+    }
+
+    function applyLabel(label) {
+        var cards = getCards();
+        if (currentIndex < 0 || currentIndex >= cards.length) return;
+        var card = cards[currentIndex];
+        var assetId = card.getAttribute('data-asset-id');
+        fetch('/api/asset/' + assetId + '/label', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({label: label})
+        }).then(function() {
+            card.setAttribute('data-label', label);
+            renderLabels(label);
+            if (window.damBatch) window.damBatch.refreshResults();
+        });
+    }
+
+    // Click on thumbnail opens lightbox (event delegation)
+    document.getElementById('results').addEventListener('click', function(e) {
+        var link = e.target.closest('.asset-card a');
+        if (!link) return;
+        var card = link.closest('.asset-card');
+        if (!card) return;
+        // Don't intercept checkbox clicks
+        if (e.target.closest('.select-checkbox')) return;
+        e.preventDefault();
+        var cards = getCards();
+        var idx = cards.indexOf(card);
+        if (idx >= 0) open(idx);
+    });
+
+    // Close on button or clicking empty area around image
+    document.getElementById('lb-close').addEventListener('click', close);
+    document.getElementById('lb-img-wrap').addEventListener('click', function(e) {
+        if (e.target === this) close();  // only if clicking the wrapper, not the image
+    });
+
+    // Nav arrows
+    document.getElementById('lb-prev').addEventListener('click', function() { navigate(-1); });
+    document.getElementById('lb-next').addEventListener('click', function() { navigate(1); });
+
+    // Info toggle + close
+    function toggleInfo() {
+        infoVisible = !infoVisible;
+        overlay.classList.toggle('info-open', infoVisible);
+    }
+    function closeInfo() {
+        infoVisible = false;
+        overlay.classList.remove('info-open');
+    }
+    document.getElementById('lb-info-toggle').addEventListener('click', toggleInfo);
+    document.getElementById('lb-info-close').addEventListener('click', closeInfo);
+
+    // Rating stars in info panel
+    document.querySelectorAll('#lb-stars .star').forEach(function(s) {
+        s.addEventListener('click', function() {
+            applyRating(parseInt(this.getAttribute('data-value')));
+        });
+    });
+    document.querySelector('#lb-stars .star-clear').addEventListener('click', function() {
+        applyRating(0);
+    });
+
+    // Label dots in info panel
+    document.querySelectorAll('#lb-labels .lb-dot').forEach(function(d) {
+        d.addEventListener('click', function() {
+            var lbl = this.getAttribute('data-label');
+            var cards = getCards();
+            var current = cards[currentIndex] ? cards[currentIndex].getAttribute('data-label') : '';
+            applyLabel(current === lbl ? '' : lbl);
+        });
+    });
+    document.querySelector('#lb-labels .lb-clear').addEventListener('click', function() {
+        applyLabel('');
+    });
+
+    // Keyboard: capture phase to intercept before keyboard nav
+    document.addEventListener('keydown', function(e) {
+        if (!isOpen) return;
+
+        var el = e.target;
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
+        if (el.tagName === 'INPUT' && el.type !== 'checkbox') return;
+
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            close();
+            return;
+        }
+        if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            navigate(-1);
+            return;
+        }
+        if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            navigate(1);
+            return;
+        }
+        if (e.key === 'i' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            toggleInfo();
+            return;
+        }
+
+        // Alt+0-7: label
+        if (e.altKey && e.key >= '0' && e.key <= '7') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (e.key === '0') applyLabel('');
+            else applyLabel(labelNumMap[e.key] || '');
+            return;
+        }
+
+        // 0-5: rating
+        if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key >= '0' && e.key <= '5') {
+            e.stopImmediatePropagation();
+            applyRating(parseInt(e.key));
+            return;
+        }
+
+        // Letter label shortcuts
+        if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+            var lower = e.key.toLowerCase();
+            if (labelLetterMap[lower]) {
+                e.stopImmediatePropagation();
+                applyLabel(labelLetterMap[lower]);
+                return;
+            }
+            if (lower === 'x') {
+                e.stopImmediatePropagation();
+                applyLabel('');
+                return;
+            }
+        }
+    }, true);  // useCapture
+
+    window.damLightbox = {
+        isOpen: function() { return isOpen; },
+        open: open,
+        close: close
+    };
+})();
+
 // --- Keyboard navigation ---
 (function() {
     var focusedIndex = -1;
@@ -1060,6 +1417,9 @@
     }
 
     document.addEventListener('keydown', function(e) {
+        // Don't handle keys while lightbox is open (it captures its own)
+        if (window.damLightbox && window.damLightbox.isOpen()) return;
+
         // Ignore when typing in a text input/textarea/select
         var el = e.target;
         if (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
@@ -1093,12 +1453,11 @@
             return;
         }
 
-        // Enter: open focused card
+        // Enter: open lightbox for focused card
         if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
-            var id = getFocusedId();
-            if (id) {
+            if (focusedIndex >= 0 && window.damLightbox) {
                 e.preventDefault();
-                window.location.href = '/asset/' + id;
+                window.damLightbox.open(focusedIndex);
             }
             return;
         }

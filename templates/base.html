@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}DAM{% endblock %}</title>
+    <script>var t=localStorage.getItem('dam-theme');if(t)document.documentElement.setAttribute('data-theme',t);</script>
     <link rel="stylesheet" href="/static/style.css">
     <script src="/static/htmx.min.js"></script>
 </head>
@@ -17,10 +18,36 @@
             <a href="/stats">Stats</a>
             <a href="/backup">Backup</a>
         </div>
+        <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">
+            <span class="theme-icon-light">&#9788;</span>
+            <span class="theme-icon-dark">&#9790;</span>
+        </button>
         <span class="nav-version">v{{ ""|version }} &copy; 2026 Thomas Herrmann</span>
     </nav>
     <div class="container">
         {% block content %}{% endblock %}
     </div>
+<script>
+(function(){
+    var btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    function getEffective() {
+        return document.documentElement.getAttribute('data-theme') ||
+               (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    }
+    function updateIcon() {
+        var dark = getEffective() === 'dark';
+        btn.querySelector('.theme-icon-light').style.display = dark ? 'none' : 'inline';
+        btn.querySelector('.theme-icon-dark').style.display = dark ? 'inline' : 'none';
+    }
+    btn.addEventListener('click', function() {
+        var next = getEffective() === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('dam-theme', next);
+        updateIcon();
+    });
+    updateIcon();
+})();
+</script>
 </body>
 </html>

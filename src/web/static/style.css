@@ -15,6 +15,65 @@
     --tag-text: #fff;
     --radius: 6px;
     --shadow: 0 1px 3px rgba(0,0,0,0.08);
+    --nav-bg: #212529;
+}
+
+/* Dark theme — explicit toggle */
+[data-theme="dark"] {
+    --bg: #1a1b2e;
+    --bg-card: #252640;
+    --bg-input: #2d2e4a;
+    --border: #3a3d56;
+    --text: #e1e4eb;
+    --text-muted: #9399a8;
+    --primary: #5b9cf6;
+    --primary-hover: #4a8be5;
+    --danger: #e5566d;
+    --badge-bg: #33365a;
+    --tag-bg: #3a6bca;
+    --tag-text: #e1e4eb;
+    --shadow: 0 1px 3px rgba(0,0,0,0.25);
+    --nav-bg: #13142a;
+    color-scheme: dark;
+}
+[data-theme="dark"] .badge-online { background: #065f46; color: #d1fae5; }
+[data-theme="dark"] .badge-offline { background: #991b1b; color: #fee2e2; }
+[data-theme="dark"] .badge-purpose { background: #3730a3; color: #e0e7ff; }
+[data-theme="dark"] .badge-at-risk { background: #991b1b; color: #fee2e2; }
+[data-theme="dark"] .at-risk-hint { background: #3b1219; border-color: #7f1d1d; }
+[data-theme="dark"] .verify-hero { background: var(--bg-card); }
+[data-theme="dark"] .star.empty,
+[data-theme="dark"] .rating-filter-stars .star.empty { color: #555; }
+[data-theme="dark"] img.thumb { background: #1e1f36; }
+
+/* Dark theme — system preference (only when no explicit toggle) */
+@media (prefers-color-scheme: dark) {
+    html:not([data-theme]) {
+        --bg: #1a1b2e;
+        --bg-card: #252640;
+        --bg-input: #2d2e4a;
+        --border: #3a3d56;
+        --text: #e1e4eb;
+        --text-muted: #9399a8;
+        --primary: #5b9cf6;
+        --primary-hover: #4a8be5;
+        --danger: #e5566d;
+        --badge-bg: #33365a;
+        --tag-bg: #3a6bca;
+        --tag-text: #e1e4eb;
+        --shadow: 0 1px 3px rgba(0,0,0,0.25);
+        --nav-bg: #13142a;
+        color-scheme: dark;
+    }
+    html:not([data-theme]) .badge-online { background: #065f46; color: #d1fae5; }
+    html:not([data-theme]) .badge-offline { background: #991b1b; color: #fee2e2; }
+    html:not([data-theme]) .badge-purpose { background: #3730a3; color: #e0e7ff; }
+    html:not([data-theme]) .badge-at-risk { background: #991b1b; color: #fee2e2; }
+    html:not([data-theme]) .at-risk-hint { background: #3b1219; border-color: #7f1d1d; }
+    html:not([data-theme]) .verify-hero { background: var(--bg-card); }
+    html:not([data-theme]) .star.empty,
+    html:not([data-theme]) .rating-filter-stars .star.empty { color: #555; }
+    html:not([data-theme]) img.thumb { background: #1e1f36; }
 }
 
 body {
@@ -31,7 +90,7 @@ a:hover { text-decoration: underline; }
 
 /* Nav */
 nav {
-    background: var(--text);
+    background: var(--nav-bg);
     color: #fff;
     padding: 0.5rem 1.5rem;
     display: flex;
@@ -43,6 +102,18 @@ nav a:hover { text-decoration: none; opacity: 0.85; }
 nav .brand { font-size: 1.1rem; letter-spacing: 0.5px; }
 nav .nav-links { display: flex; gap: 1rem; font-size: 0.9rem; }
 nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-weight: normal; }
+.theme-toggle {
+    background: none;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: var(--radius);
+    color: #fff;
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 0.2rem 0.5rem;
+    line-height: 1;
+    transition: background 0.15s;
+}
+.theme-toggle:hover { background: rgba(255,255,255,0.1); }
 
 /* Layout */
 .container { max-width: 1400px; margin: 0 auto; padding: 1rem 1.5rem; }
@@ -163,9 +234,27 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
 /* Results grid */
 .results-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 1rem;
+    grid-template-columns: repeat(auto-fill, minmax(var(--grid-min, 200px), 1fr));
+    gap: var(--grid-gap, 1rem);
 }
+
+/* Grid density: compact */
+[data-density="compact"] { --grid-min: 120px; --grid-gap: 0.5rem; }
+[data-density="compact"] .asset-card .card-body { padding: 0.25rem 0.5rem; }
+[data-density="compact"] .asset-card .card-title { font-size: 0.75rem; }
+[data-density="compact"] .asset-card .card-meta { display: none; }
+[data-density="compact"] .asset-card .card-stars { display: none; }
+
+/* Grid density: large */
+[data-density="large"] { --grid-min: 300px; }
+[data-density="large"] .asset-card .card-title {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+[data-density="large"] .asset-card .card-body { padding: 0.6rem 0.9rem; }
 .asset-card {
     position: relative;
     background: var(--bg-card);
@@ -306,6 +395,34 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
 .sort-btn .sort-arrow {
     font-size: 0.65em;
     margin-left: 0.1rem;
+}
+
+/* Density controls */
+.density-controls {
+    display: inline-flex;
+    gap: 0.2rem;
+    margin-left: 0.25rem;
+}
+.density-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 26px;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.7rem;
+    padding: 0;
+    transition: background 0.15s, color 0.15s;
+}
+.density-btn:hover { color: var(--text); background: var(--badge-bg); }
+.density-btn.active {
+    color: var(--primary);
+    border-color: var(--border);
+    background: var(--bg-card);
 }
 
 /* Top pagination */
@@ -1010,7 +1127,7 @@ body.batch-active .select-checkbox {
     bottom: 0;
     left: 0;
     right: 0;
-    background: var(--text);
+    background: var(--nav-bg);
     color: #fff;
     z-index: 1000;
     transform: translateY(100%);
@@ -1343,3 +1460,199 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     margin-left: 0.5rem;
     vertical-align: middle;
 }
+
+/* ===== Lightbox ===== */
+.lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: none;
+    flex-direction: column;
+    background: rgba(0,0,0,0.92);
+}
+.lightbox.open { display: flex; }
+.lightbox-top-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+    color: #fff;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 2;
+}
+.lightbox-counter {
+    font-size: 0.85rem;
+    opacity: 0.7;
+    font-variant-numeric: tabular-nums;
+}
+.lightbox-title {
+    flex: 1;
+    font-size: 0.95rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.lightbox-btn {
+    background: none;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 4px;
+    color: #fff;
+    cursor: pointer;
+    font-size: 1.1rem;
+    padding: 0.25rem 0.5rem;
+    opacity: 0.8;
+    transition: opacity 0.15s, background 0.15s;
+    line-height: 1;
+    text-decoration: none;
+}
+.lightbox-btn:hover { opacity: 1; background: rgba(255,255,255,0.1); text-decoration: none; }
+.lightbox-main {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    min-height: 0;
+}
+.lightbox-img-wrap {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    min-height: 0;
+}
+.lightbox-img {
+    max-width: 100%;
+    max-height: calc(100vh - 60px);
+    object-fit: contain;
+    user-select: none;
+}
+.lightbox.info-open .lightbox-img {
+    max-width: calc(100% - 100px);
+}
+.lightbox-nav {
+    flex-shrink: 0;
+    width: 60px;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: #fff;
+    font-size: 2.5rem;
+    cursor: pointer;
+    opacity: 0.4;
+    transition: opacity 0.15s, background 0.15s;
+    line-height: 1;
+}
+.lightbox-nav:hover { opacity: 1; background: rgba(255,255,255,0.05); }
+
+/* Info panel */
+.lightbox-info {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 320px;
+    background: rgba(15,16,30,0.97);
+    color: #e1e4eb;
+    overflow-y: auto;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    z-index: 2001;
+    padding: 3.5rem 1.25rem 1.25rem;
+}
+.lightbox.info-open .lightbox-info {
+    transform: translateX(0);
+}
+.lightbox-info-close {
+    position: absolute;
+    top: 0.6rem;
+    right: 0.6rem;
+    background: none;
+    border: none;
+    color: #9399a8;
+    font-size: 1.3rem;
+    cursor: pointer;
+    padding: 0.2rem 0.4rem;
+    line-height: 1;
+}
+.lightbox-info-close:hover { color: #fff; }
+.lightbox-info h3 {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #9399a8;
+    margin: 1.25rem 0 0.5rem;
+}
+.lightbox-info h3:first-child { margin-top: 0; }
+.lightbox-meta-table {
+    width: 100%;
+    font-size: 0.85rem;
+    border-collapse: collapse;
+}
+.lightbox-meta-table th {
+    text-align: left;
+    padding: 0.25rem 0.75rem 0.25rem 0;
+    color: #9399a8;
+    font-weight: 400;
+    white-space: nowrap;
+}
+.lightbox-meta-table td {
+    padding: 0.25rem 0;
+}
+
+/* Lightbox rating stars */
+.lightbox-stars {
+    display: inline-flex;
+    gap: 0.2rem;
+    font-size: 1.3rem;
+}
+.lightbox-stars .star { cursor: pointer; user-select: none; }
+.lightbox-stars .star.filled { color: #f5a623; }
+.lightbox-stars .star.empty { color: #555; }
+.lightbox-stars .star:hover { transform: scale(1.2); }
+.lightbox-stars .star-clear {
+    font-size: 0.85rem;
+    color: #9399a8;
+    cursor: pointer;
+    margin-left: 0.25rem;
+}
+.lightbox-stars .star-clear:hover { color: #fff; }
+
+/* Lightbox label dots */
+.lightbox-labels {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.lightbox-labels .lb-dot {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: transform 0.1s, border-color 0.15s;
+}
+.lightbox-labels .lb-dot:hover { transform: scale(1.25); }
+.lightbox-labels .lb-dot.active {
+    border-color: #fff;
+    box-shadow: 0 0 0 2px rgba(0,0,0,0.3);
+}
+.lightbox-labels .lb-name {
+    font-size: 0.85rem;
+    color: #9399a8;
+    margin-left: 0.25rem;
+}
+.lightbox-labels .lb-clear {
+    font-size: 0.85rem;
+    color: #9399a8;
+    cursor: pointer;
+    margin-left: 0.15rem;
+}
+.lightbox-labels .lb-clear:hover { color: #fff; }
+
+/* Preload images (hidden) */
+.lightbox-preload { display: none; }
