@@ -243,6 +243,26 @@ This removes all file location and recipe records on that volume from the catalo
 
 See the [volume remove reference](../reference/01-setup-commands.md#dam-volume-remove) for details.
 
+### Combining volumes
+
+If you initially registered year-based subdirectories as separate volumes (e.g., `media_2024`, `media_2025` under `/Volumes/Media`) and now want to consolidate them into a single disk-level volume, use `volume combine`:
+
+```bash
+# First register the parent directory as a volume
+dam volume add "Media" /Volumes/Media
+
+# Preview what combining would do
+dam volume combine "media_2024" "Media"
+# Would combine 'media_2024' into 'Media': 4832 locations, 312 recipes (3210 assets, prefix 'media_2024/')
+
+# Execute the combination
+dam volume combine "media_2024" "Media" --apply
+```
+
+The source volume's mount point must be a subdirectory of the target's. All file paths are automatically rewritten with the appropriate prefix (e.g., `photo.jpg` becomes `media_2024/photo.jpg`). After combining, the source volume is removed. You can repeat this for each year-volume to consolidate into one.
+
+See the [volume combine reference](../reference/01-setup-commands.md#dam-volume-combine) for details.
+
 
 ## Configuration (dam.toml)
 

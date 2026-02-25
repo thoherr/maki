@@ -205,6 +205,8 @@ Commands that modify or delete data use conservative defaults:
 | `auto-group` | Report-only (no changes) | `--apply` |
 | `fix-roles` | Report-only (no changes) | `--apply` |
 | `fix-dates` | Report-only (no changes) | `--apply` |
+| `volume remove` | Report-only (no changes) | `--apply` |
+| `volume combine` | Report-only (no changes) | `--apply` |
 | `import` | Imports immediately | `--dry-run` to preview |
 | `relocate` | Copies immediately | `--dry-run` to preview |
 
@@ -217,7 +219,7 @@ Quick reference of all dam commands, organized by workflow stage:
 
 | Category | Commands | Purpose |
 |----------|----------|---------|
-| **Setup** | `init`, `volume add`, `volume list` | Create catalog, register storage volumes |
+| **Setup** | `init`, `volume add`, `volume list`, `volume combine`, `volume remove` | Create catalog, register and manage storage volumes |
 | **Ingest** | `import`, `tag`, `edit`, `group`, `auto-group` | Bring files in, apply metadata, merge variants |
 | **Organize** | `collection` (`col`), `saved-search` (`ss`) | Curate static and smart albums |
 | **Retrieve** | `search`, `show`, `duplicates`, `stats`, `serve` | Find assets, inspect details, browse in web UI |
@@ -227,4 +229,4 @@ Commands with aliases are shown with the alias in parentheses. For example, `dam
 
 ---
 
-Next: [Setup Commands](01-setup-commands.md) -- `init`, `volume add`, `volume list`.
+Next: [Setup Commands](01-setup-commands.md) -- `init`, `volume add`, `volume list`, `volume combine`, `volume remove`.

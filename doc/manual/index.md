@@ -21,7 +21,7 @@ Workflow-oriented guides that walk you through common tasks.
 Man-page style documentation for every command, filter, and configuration option.
 
 - [CLI Conventions](reference/00-cli-conventions.md) — Global flags, scripting patterns, exit codes
-- [Setup Commands](reference/01-setup-commands.md) — `init`, `volume add`, `volume list`
+- [Setup Commands](reference/01-setup-commands.md) — `init`, `volume add`, `volume list`, `volume combine`, `volume remove`
 - [Ingest Commands](reference/02-ingest-commands.md) — `import`, `tag`, `edit`, `group`, `auto-group`
 - [Organize Commands](reference/03-organize-commands.md) — `collection`, `saved-search`
 - [Retrieve Commands](reference/04-retrieve-commands.md) — `search`, `show`, `duplicates`, `stats`, `serve`

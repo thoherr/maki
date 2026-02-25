@@ -23,7 +23,7 @@
 ### implemented
 
 - **`init`** — initialize a new catalog in the current directory (creates metadata dir, SQLite schema, volume registry, config)
-- **`volume add/list`** — register storage volumes and list them with online/offline status
+- **`volume add/list/combine/remove`** — register storage volumes, list them with online/offline status, combine child volumes into a parent, or remove a volume and its data
 - **`import`** — hash files (SHA-256), extract EXIF metadata, create assets/variants, write YAML sidecars, insert into SQLite catalog. `dam import <paths...> [--volume V] [--include G] [--skip G] [--dry-run]`. `--dry-run` reports what would be imported without writing to catalog, sidecar, or disk (files are still hashed for dedup detection).
   - Stem-based auto-grouping: files sharing the same filename stem in the same directory are grouped into one asset (e.g. `DSC_4521.nef` + `DSC_4521.jpg` → 1 asset, 2 variants)
   - RAW files take priority as the primary variant (defining asset identity via deterministic UUID and EXIF-based `created_at`)

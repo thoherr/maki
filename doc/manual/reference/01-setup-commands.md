@@ -331,4 +331,82 @@ dam volume remove "Old Drive" --json
 
 ---
 
+## dam volume combine
+
+### NAME
+
+dam-volume-combine -- merge a source volume into a target volume by rewriting paths
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] volume combine <SOURCE> <TARGET> [--apply]
+```
+
+### DESCRIPTION
+
+Combines a source volume into a target volume. All file location and recipe records on the source volume are moved to the target volume, with their relative paths rewritten to include the directory prefix that differentiates the two mount points.
+
+The source volume's mount point must be a subdirectory of the target volume's mount point. For example, if the target is `/Volumes/Media` and the source is `/Volumes/Media/media_2024`, the computed prefix is `media_2024/` and all paths are prepended accordingly.
+
+This is useful when you have multiple volumes registered as subdirectories of the same physical disk (e.g., year-based volumes `media_2024`, `media_2025` under `/Volumes/Media`). Since they all go online and offline together, maintaining separate volumes adds complexity without benefit. Combining them into a single disk-level volume simplifies `volume list`, web UI dropdowns, and `backup-status` reporting.
+
+By default, runs in **report-only mode** -- shows what would be combined without making changes. Use `--apply` to execute the combination.
+
+In apply mode, the operation proceeds in phases:
+
+1. **Sidecars**: Loads each affected asset's YAML sidecar, rewrites matching variant locations and recipe locations (changes volume ID and prepends path prefix), and saves.
+2. **Catalog**: Ensures the target volume exists in the SQLite catalog, then bulk-updates all `file_locations` and `recipes` rows in a single SQL statement each.
+3. **Cleanup**: Removes the source volume from `volumes.yaml` and the SQLite `volumes` table.
+
+Sidecars are updated first (source of truth). If the process crashes between sidecar and catalog updates, `dam rebuild-catalog` reconstructs the correct state from sidecars.
+
+### ARGUMENTS
+
+**SOURCE** (required)
+: Label or UUID of the volume to merge away. This volume is removed after combining.
+
+**TARGET** (required)
+: Label or UUID of the volume that receives all locations and recipes.
+
+### OPTIONS
+
+`--apply`
+: Execute the combination. Without this flag, only a report is printed.
+
+This command also accepts [global flags](00-cli-conventions.md#global-flags). `--json` outputs a `VolumeCombineResult` object with fields: `source_label`, `source_id`, `target_label`, `target_id`, `path_prefix`, `locations`, `locations_moved`, `recipes`, `recipes_moved`, `assets_affected`, `apply`, `errors`. `--log` prints per-asset progress to stderr.
+
+### EXAMPLES
+
+Preview what combining would do:
+
+```bash
+dam volume combine "media_2024" "Media"
+# Would combine 'media_2024' into 'Media': 4832 locations, 312 recipes (3210 assets, prefix 'media_2024/')
+#   Run with --apply to combine.
+```
+
+Execute the combination:
+
+```bash
+dam volume combine "media_2024" "Media" --apply
+# Volume 'media_2024' combined into 'Media': 4832 locations moved, 312 recipes moved (3210 assets, prefix 'media_2024/')
+```
+
+Combine multiple year-volumes into a single disk volume:
+
+```bash
+for year in media_2010 media_2011 media_2012 media_2013 media_2014 media_2015; do
+  dam volume combine "$year" "Media" --apply
+done
+```
+
+### SEE ALSO
+
+[volume list](#dam-volume-list) -- list volumes and verify the result.
+[volume remove](#dam-volume-remove) -- remove a volume and delete its data (rather than merging).
+[rebuild-catalog](05-maintain-commands.md#dam-rebuild-catalog) -- reconstruct SQLite from sidecars if needed after a crash.
+
+---
+
 Next: [Ingest Commands](02-ingest-commands.md) -- `import`, `tag`, `edit`, `group`, `auto-group`.
