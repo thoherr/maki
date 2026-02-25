@@ -284,6 +284,23 @@ pub struct CleanupResult {
     pub errors: Vec<String>,
 }
 
+/// Result of a volume remove operation.
+#[derive(Debug, serde::Serialize)]
+pub struct VolumeRemoveResult {
+    pub volume_label: String,
+    pub volume_id: String,
+    pub locations: usize,
+    pub locations_removed: usize,
+    pub recipes: usize,
+    pub recipes_removed: usize,
+    pub orphaned_assets: usize,
+    pub removed_assets: usize,
+    pub orphaned_previews: usize,
+    pub removed_previews: usize,
+    pub apply: bool,
+    pub errors: Vec<String>,
+}
+
 /// Status of a single recipe during refresh.
 pub enum RefreshStatus {
     Unchanged,
@@ -2552,6 +2569,215 @@ impl AssetService {
                         }
                     }
                 }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Remove a volume and all its associated data (locations, recipes, orphaned assets/previews).
+    /// Report-only by default; `--apply` executes removal.
+    pub fn remove_volume(
+        &self,
+        label: &str,
+        apply: bool,
+        on_file: impl Fn(&Path, CleanupStatus, Duration),
+    ) -> Result<VolumeRemoveResult> {
+        let registry = DeviceRegistry::new(&self.catalog_root);
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let metadata_store = MetadataStore::new(&self.catalog_root);
+
+        let volume = registry.resolve_volume(label)?;
+        let vol_id_str = volume.id.to_string();
+
+        let mut result = VolumeRemoveResult {
+            volume_label: volume.label.clone(),
+            volume_id: vol_id_str.clone(),
+            locations: 0,
+            locations_removed: 0,
+            recipes: 0,
+            recipes_removed: 0,
+            orphaned_assets: 0,
+            removed_assets: 0,
+            orphaned_previews: 0,
+            removed_previews: 0,
+            apply,
+            errors: Vec::new(),
+        };
+
+        // Gather all locations and recipes on this volume
+        let locations = catalog.list_locations_for_volume_under_prefix(&vol_id_str, "")?;
+        let recipes = catalog.list_recipes_for_volume_under_prefix(&vol_id_str, "")?;
+        result.locations = locations.len();
+        result.recipes = recipes.len();
+
+        // Build stale list for report-mode orphan prediction
+        let stale_locations: Vec<(String, String, String)> = locations
+            .iter()
+            .map(|(hash, path)| (hash.clone(), vol_id_str.clone(), path.clone()))
+            .collect();
+
+        if apply {
+            // Remove all file locations on this volume
+            for (content_hash, relative_path) in &locations {
+                let file_start = Instant::now();
+                if let Err(e) = catalog.delete_file_location(
+                    content_hash,
+                    &vol_id_str,
+                    relative_path,
+                ) {
+                    result.errors.push(format!(
+                        "Failed to remove location {}: {e}", relative_path
+                    ));
+                } else if let Err(e) = self.remove_sidecar_file_location(
+                    &metadata_store,
+                    &catalog,
+                    content_hash,
+                    volume.id,
+                    relative_path,
+                ) {
+                    result.errors.push(format!(
+                        "Failed to update sidecar for {}: {e}", relative_path
+                    ));
+                } else {
+                    result.locations_removed += 1;
+                    on_file(
+                        &PathBuf::from(relative_path),
+                        CleanupStatus::Stale,
+                        file_start.elapsed(),
+                    );
+                }
+            }
+
+            // Remove all recipes on this volume
+            for (recipe_id, _content_hash, variant_hash, relative_path) in &recipes {
+                let file_start = Instant::now();
+                if let Err(e) = catalog.delete_recipe(recipe_id) {
+                    result.errors.push(format!(
+                        "Failed to remove recipe {}: {e}", relative_path
+                    ));
+                } else if let Err(e) = self.remove_sidecar_recipe(
+                    &metadata_store,
+                    &catalog,
+                    variant_hash,
+                    volume.id,
+                    relative_path,
+                ) {
+                    result.errors.push(format!(
+                        "Failed to update sidecar for recipe {}: {e}", relative_path
+                    ));
+                } else {
+                    result.recipes_removed += 1;
+                    on_file(
+                        &PathBuf::from(relative_path),
+                        CleanupStatus::Stale,
+                        file_start.elapsed(),
+                    );
+                }
+            }
+        }
+
+        // Orphaned assets
+        let orphaned_ids = if apply {
+            catalog.list_orphaned_asset_ids()?
+        } else {
+            catalog.list_would_be_orphaned_asset_ids(&stale_locations)?
+        };
+        result.orphaned_assets = orphaned_ids.len();
+
+        if apply {
+            for asset_id in &orphaned_ids {
+                let file_start = Instant::now();
+                let asset_id_path = PathBuf::from(asset_id);
+
+                if let Err(e) = catalog.delete_recipes_for_asset(asset_id) {
+                    result.errors.push(format!(
+                        "Failed to delete recipes for orphaned asset {asset_id}: {e}"
+                    ));
+                    continue;
+                }
+                if let Err(e) = catalog.delete_file_locations_for_asset(asset_id) {
+                    result.errors.push(format!(
+                        "Failed to delete locations for orphaned asset {asset_id}: {e}"
+                    ));
+                    continue;
+                }
+                if let Err(e) = catalog.delete_variants_for_asset(asset_id) {
+                    result.errors.push(format!(
+                        "Failed to delete variants for orphaned asset {asset_id}: {e}"
+                    ));
+                    continue;
+                }
+                if let Err(e) = catalog.delete_asset(asset_id) {
+                    result.errors.push(format!(
+                        "Failed to delete orphaned asset {asset_id}: {e}"
+                    ));
+                    continue;
+                }
+                if let Ok(uuid) = uuid::Uuid::parse_str(asset_id) {
+                    if let Err(e) = metadata_store.delete(uuid) {
+                        result.errors.push(format!(
+                            "Failed to delete sidecar for orphaned asset {asset_id}: {e}"
+                        ));
+                    }
+                }
+                result.removed_assets += 1;
+                on_file(&asset_id_path, CleanupStatus::OrphanedAsset, file_start.elapsed());
+            }
+        }
+
+        // Orphaned previews
+        let preview_dir = self.catalog_root.join("previews");
+        if preview_dir.is_dir() {
+            let variant_hashes = catalog.list_all_variant_hashes()?;
+
+            if let Ok(shard_entries) = std::fs::read_dir(&preview_dir) {
+                for shard_entry in shard_entries.flatten() {
+                    if !shard_entry.path().is_dir() {
+                        continue;
+                    }
+                    if let Ok(file_entries) = std::fs::read_dir(shard_entry.path()) {
+                        for file_entry in file_entries.flatten() {
+                            let path = file_entry.path();
+                            if !path.is_file() {
+                                continue;
+                            }
+                            let stem = path.file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("");
+                            if stem.is_empty() {
+                                continue;
+                            }
+                            let content_hash = format!("sha256:{stem}");
+
+                            if !variant_hashes.contains(&content_hash) {
+                                result.orphaned_previews += 1;
+                                if apply {
+                                    let file_start = Instant::now();
+                                    if let Err(e) = std::fs::remove_file(&path) {
+                                        result.errors.push(format!(
+                                            "Failed to remove orphaned preview {}: {e}",
+                                            path.display()
+                                        ));
+                                    } else {
+                                        result.removed_previews += 1;
+                                        on_file(&path, CleanupStatus::OrphanedPreview, file_start.elapsed());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Finally, remove the volume itself
+        if apply {
+            if let Err(e) = catalog.delete_volume(&vol_id_str) {
+                result.errors.push(format!("Failed to delete volume from catalog: {e}"));
+            }
+            if let Err(e) = registry.remove(label) {
+                result.errors.push(format!("Failed to remove volume from registry: {e}"));
             }
         }
 

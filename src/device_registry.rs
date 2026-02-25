@@ -146,6 +146,27 @@ impl DeviceRegistry {
         )
     }
 
+    /// Remove a volume by label or UUID. Returns the removed volume.
+    pub fn remove(&self, label_or_id: &str) -> Result<Volume> {
+        let mut volumes = self.load()?;
+
+        let idx = volumes.iter().position(|v| {
+            v.label == label_or_id
+                || uuid::Uuid::parse_str(label_or_id)
+                    .map(|u| v.id == u)
+                    .unwrap_or(false)
+        });
+
+        match idx {
+            Some(i) => {
+                let removed = volumes.remove(i);
+                self.save(&volumes)?;
+                Ok(removed)
+            }
+            None => anyhow::bail!("No volume found matching '{}'", label_or_id),
+        }
+    }
+
     /// Check which mount points are currently available.
     pub fn detect_online(&self) -> Result<()> {
         anyhow::bail!("not yet implemented")

@@ -529,6 +529,16 @@ enum VolumeCommands {
         /// Purpose (working, archive, backup, cloud) or "none" to clear
         purpose: String,
     },
+
+    /// Remove a volume and all its locations, recipes, and orphaned assets
+    Remove {
+        /// Volume label or UUID
+        volume: String,
+
+        /// Actually remove (default is report-only)
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -745,6 +755,85 @@ fn main() {
                     println!("Volume '{}' purpose set to: {}", vol.label, p);
                 } else {
                     println!("Volume '{}' purpose cleared.", vol.label);
+                }
+                Ok(())
+            }
+            VolumeCommands::Remove { volume, apply } => {
+                let catalog_root = dam::config::find_catalog_root()?;
+                let config = CatalogConfig::load(&catalog_root)?;
+                let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
+
+                let show_log = cli.log;
+                let result = if show_log {
+                    use dam::asset_service::CleanupStatus;
+                    service.remove_volume(
+                        &volume,
+                        apply,
+                        |path, status, elapsed| {
+                            match status {
+                                CleanupStatus::Stale => {
+                                    let name = path.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or_else(|| path.to_str().unwrap_or("?"));
+                                    eprintln!("  {} — removed ({})", name, format_duration(elapsed));
+                                }
+                                CleanupStatus::OrphanedAsset => {
+                                    let name = path.to_str().unwrap_or("?");
+                                    eprintln!("  {} — orphaned asset removed ({})", name, format_duration(elapsed));
+                                }
+                                CleanupStatus::OrphanedPreview => {
+                                    let name = path.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or_else(|| path.to_str().unwrap_or("?"));
+                                    eprintln!("  {} — orphaned preview removed ({})", name, format_duration(elapsed));
+                                }
+                                _ => {}
+                            }
+                        },
+                    )?
+                } else {
+                    service.remove_volume(
+                        &volume,
+                        apply,
+                        |_, _, _| {},
+                    )?
+                };
+
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else {
+                    for err in &result.errors {
+                        eprintln!("  {err}");
+                    }
+
+                    if apply {
+                        let mut parts = vec![
+                            format!("{} locations removed", result.locations_removed),
+                            format!("{} recipes removed", result.recipes_removed),
+                        ];
+                        if result.removed_assets > 0 {
+                            parts.push(format!("{} orphaned assets removed", result.removed_assets));
+                        }
+                        if result.removed_previews > 0 {
+                            parts.push(format!("{} orphaned previews removed", result.removed_previews));
+                        }
+                        println!("Volume '{}' removed: {}", result.volume_label, parts.join(", "));
+                    } else {
+                        let mut parts = vec![
+                            format!("{} locations", result.locations),
+                            format!("{} recipes", result.recipes),
+                        ];
+                        if result.orphaned_assets > 0 {
+                            parts.push(format!("{} orphaned assets", result.orphaned_assets));
+                        }
+                        if result.orphaned_previews > 0 {
+                            parts.push(format!("{} orphaned previews", result.orphaned_previews));
+                        }
+                        println!("Volume '{}' would remove: {}", result.volume_label, parts.join(", "));
+                        if result.locations > 0 || result.recipes > 0 {
+                            println!("  Run with --apply to remove.");
+                        }
+                    }
                 }
                 Ok(())
             }

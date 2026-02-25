@@ -819,6 +819,35 @@ impl Catalog {
         Ok(())
     }
 
+    /// Delete a volume row from the catalog.
+    pub fn delete_volume(&self, volume_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM volumes WHERE id = ?1",
+            rusqlite::params![volume_id],
+        )?;
+        Ok(())
+    }
+
+    /// Count file_location rows on a given volume.
+    pub fn count_locations_for_volume(&self, volume_id: &str) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM file_locations WHERE volume_id = ?1",
+            rusqlite::params![volume_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// Count recipe rows on a given volume.
+    pub fn count_recipes_for_volume(&self, volume_id: &str) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM recipes WHERE volume_id = ?1",
+            rusqlite::params![volume_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
     /// Check if a variant with the given content hash already exists.
     pub fn has_variant(&self, content_hash: &str) -> Result<bool> {
         let count: i64 = self.conn.query_row(

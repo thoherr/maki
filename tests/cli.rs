@@ -1406,6 +1406,151 @@ fn volume_purpose_in_list_json() {
 }
 
 #[test]
+fn volume_remove_report_only() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "photo.jpg", b"volume-remove-report");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Report-only (no --apply)
+    dam()
+        .current_dir(&root)
+        .args(["volume", "remove", "test-vol"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would remove"))
+        .stdout(predicate::str::contains("1 locations"));
+
+    // Volume should still exist
+    dam()
+        .current_dir(&root)
+        .args(["volume", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("test-vol"));
+
+    // Catalog should still have the asset
+    dam()
+        .current_dir(&root)
+        .args(["stats"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Assets:    1"));
+}
+
+#[test]
+fn volume_remove_apply() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "photo.jpg", b"volume-remove-apply");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Apply removal
+    dam()
+        .current_dir(&root)
+        .args(["volume", "remove", "test-vol", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed"));
+
+    // Volume should be gone
+    dam()
+        .current_dir(&root)
+        .args(["volume", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No volumes"));
+
+    // Asset should be gone (orphaned)
+    dam()
+        .current_dir(&root)
+        .args(["stats"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Assets:    0"));
+}
+
+#[test]
+fn volume_remove_empty() {
+    let dir = tempdir().unwrap();
+    let canonical = dir.path().canonicalize().unwrap();
+    dam().current_dir(&canonical).arg("init").assert().success();
+    dam()
+        .current_dir(&canonical)
+        .args(["volume", "add", "empty-vol", canonical.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Remove empty volume
+    dam()
+        .current_dir(&canonical)
+        .args(["volume", "remove", "empty-vol", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 locations removed"));
+
+    // Volume should be gone
+    dam()
+        .current_dir(&canonical)
+        .args(["volume", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No volumes"));
+}
+
+#[test]
+fn volume_remove_unknown() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    dam()
+        .current_dir(&root)
+        .args(["volume", "remove", "nonexistent"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No volume found"));
+}
+
+#[test]
+fn volume_remove_json() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "photo.jpg", b"volume-remove-json");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "volume", "remove", "test-vol"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert_eq!(parsed["volume_label"].as_str(), Some("test-vol"));
+    assert_eq!(parsed["locations"].as_u64(), Some(1));
+    assert_eq!(parsed["apply"].as_bool(), Some(false));
+    assert!(parsed["orphaned_assets"].as_u64().unwrap() >= 1);
+}
+
+#[test]
 fn import_json_outputs_result() {
     let dir = tempdir().unwrap();
     let root = init_catalog(dir.path());
