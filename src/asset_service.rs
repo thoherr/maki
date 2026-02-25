@@ -301,6 +301,23 @@ pub struct VolumeRemoveResult {
     pub errors: Vec<String>,
 }
 
+/// Result of a volume combine operation.
+#[derive(Debug, serde::Serialize)]
+pub struct VolumeCombineResult {
+    pub source_label: String,
+    pub source_id: String,
+    pub target_label: String,
+    pub target_id: String,
+    pub path_prefix: String,
+    pub locations: usize,
+    pub locations_moved: usize,
+    pub recipes: usize,
+    pub recipes_moved: usize,
+    pub assets_affected: usize,
+    pub apply: bool,
+    pub errors: Vec<String>,
+}
+
 /// Status of a single recipe during refresh.
 pub enum RefreshStatus {
     Unchanged,
@@ -2779,6 +2796,176 @@ impl AssetService {
             if let Err(e) = registry.remove(label) {
                 result.errors.push(format!("Failed to remove volume from registry: {e}"));
             }
+        }
+
+        Ok(result)
+    }
+
+    /// Combine a source volume into a target volume, rewriting paths.
+    ///
+    /// The source must be a subdirectory of the target (same physical disk,
+    /// deeper mount point). All file_locations and recipes are moved from source
+    /// to target with a computed path prefix. In apply mode, sidecars are
+    /// updated first (source of truth), then SQLite bulk update, then the
+    /// source volume is removed.
+    pub fn combine_volume(
+        &self,
+        source_label: &str,
+        target_label: &str,
+        apply: bool,
+        on_asset: impl Fn(&str, Duration),
+    ) -> Result<VolumeCombineResult> {
+        let registry = DeviceRegistry::new(&self.catalog_root);
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let metadata_store = MetadataStore::new(&self.catalog_root);
+
+        let source = registry.resolve_volume(source_label)?;
+        let target = registry.resolve_volume(target_label)?;
+
+        let source_id = source.id.to_string();
+        let target_id = target.id.to_string();
+
+        if source.id == target.id {
+            bail!(
+                "Source and target are the same volume ('{}').",
+                source.label
+            );
+        }
+
+        // Compute path prefix: source mount must be under target mount
+        let prefix = source
+            .mount_point
+            .strip_prefix(&target.mount_point)
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "Source volume '{}' ({}) is not a subdirectory of target volume '{}' ({}). \
+                     Cannot compute path prefix.",
+                    source.label,
+                    source.mount_point.display(),
+                    target.label,
+                    target.mount_point.display(),
+                )
+            })?;
+
+        let prefix_str = if prefix.as_os_str().is_empty() {
+            String::new()
+        } else {
+            let mut p = prefix.to_string_lossy().to_string();
+            if !p.ends_with('/') {
+                p.push('/');
+            }
+            p
+        };
+
+        // Count locations and recipes
+        let locations = catalog.list_locations_for_volume_under_prefix(&source_id, "")?;
+        let recipes = catalog.list_recipes_for_volume_under_prefix(&source_id, "")?;
+        let asset_ids = catalog.list_asset_ids_on_volume(&source_id)?;
+
+        let mut result = VolumeCombineResult {
+            source_label: source.label.clone(),
+            source_id: source_id.clone(),
+            target_label: target.label.clone(),
+            target_id: target_id.clone(),
+            path_prefix: prefix_str.clone(),
+            locations: locations.len(),
+            locations_moved: 0,
+            recipes: recipes.len(),
+            recipes_moved: 0,
+            assets_affected: asset_ids.len(),
+            apply,
+            errors: Vec::new(),
+        };
+
+        if !apply {
+            return Ok(result);
+        }
+
+        // --- Apply mode ---
+
+        // 1. Update sidecars (source of truth)
+        for asset_id_str in &asset_ids {
+            let asset_start = Instant::now();
+            let uuid = match asset_id_str.parse::<Uuid>() {
+                Ok(u) => u,
+                Err(e) => {
+                    result
+                        .errors
+                        .push(format!("Invalid asset UUID {asset_id_str}: {e}"));
+                    continue;
+                }
+            };
+            match metadata_store.load(uuid) {
+                Ok(mut asset) => {
+                    let mut changed = false;
+
+                    // Rewrite variant locations
+                    for variant in &mut asset.variants {
+                        for loc in &mut variant.locations {
+                            if loc.volume_id == source.id {
+                                loc.volume_id = target.id;
+                                let old_path = loc.relative_path.to_string_lossy().to_string();
+                                loc.relative_path =
+                                    PathBuf::from(format!("{prefix_str}{old_path}"));
+                                changed = true;
+                            }
+                        }
+                    }
+
+                    // Rewrite recipe locations
+                    for recipe in &mut asset.recipes {
+                        if recipe.location.volume_id == source.id {
+                            recipe.location.volume_id = target.id;
+                            let old_path =
+                                recipe.location.relative_path.to_string_lossy().to_string();
+                            recipe.location.relative_path =
+                                PathBuf::from(format!("{prefix_str}{old_path}"));
+                            changed = true;
+                        }
+                    }
+
+                    if changed {
+                        if let Err(e) = metadata_store.save(&asset) {
+                            result.errors.push(format!(
+                                "Failed to save sidecar for asset {asset_id_str}: {e}"
+                            ));
+                        }
+                    }
+                    on_asset(asset_id_str, asset_start.elapsed());
+                }
+                Err(e) => {
+                    result
+                        .errors
+                        .push(format!("Failed to load sidecar for asset {asset_id_str}: {e}"));
+                }
+            }
+        }
+
+        // 2. Ensure target volume exists in catalog (it may not if nothing was imported onto it)
+        catalog.ensure_volume(&target)?;
+
+        // 3. Bulk SQL update
+        match catalog.bulk_move_file_locations(&source_id, &target_id, &prefix_str) {
+            Ok(n) => result.locations_moved = n,
+            Err(e) => result
+                .errors
+                .push(format!("Failed to move file locations: {e}")),
+        }
+        match catalog.bulk_move_recipes(&source_id, &target_id, &prefix_str) {
+            Ok(n) => result.recipes_moved = n,
+            Err(e) => result.errors.push(format!("Failed to move recipes: {e}")),
+        }
+
+        // 4. Remove source volume
+        if let Err(e) = catalog.delete_volume(&source_id) {
+            result
+                .errors
+                .push(format!("Failed to delete volume from catalog: {e}"));
+        }
+        if let Err(e) = registry.remove(source_label) {
+            result
+                .errors
+                .push(format!("Failed to remove volume from registry: {e}"));
         }
 
         Ok(result)

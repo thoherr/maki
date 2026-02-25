@@ -894,6 +894,59 @@ impl Catalog {
         Ok(count as usize)
     }
 
+    /// List distinct asset IDs that have file_locations or recipes on a given volume.
+    pub fn list_asset_ids_on_volume(&self, volume_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT v.asset_id FROM file_locations fl \
+             JOIN variants v ON v.content_hash = fl.content_hash \
+             WHERE fl.volume_id = ?1 \
+             UNION \
+             SELECT DISTINCT v.asset_id FROM recipes r \
+             JOIN variants v ON v.content_hash = r.variant_hash \
+             WHERE r.volume_id = ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![volume_id], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// Bulk-move all file_locations from one volume to another, prepending a path prefix.
+    /// Returns the number of rows updated.
+    pub fn bulk_move_file_locations(
+        &self,
+        source_volume_id: &str,
+        target_volume_id: &str,
+        prefix: &str,
+    ) -> Result<usize> {
+        let changed = self.conn.execute(
+            "UPDATE file_locations SET volume_id = ?1, relative_path = ?2 || relative_path \
+             WHERE volume_id = ?3",
+            rusqlite::params![target_volume_id, prefix, source_volume_id],
+        )?;
+        Ok(changed)
+    }
+
+    /// Bulk-move all recipes from one volume to another, prepending a path prefix.
+    /// Returns the number of rows updated.
+    pub fn bulk_move_recipes(
+        &self,
+        source_volume_id: &str,
+        target_volume_id: &str,
+        prefix: &str,
+    ) -> Result<usize> {
+        let changed = self.conn.execute(
+            "UPDATE recipes SET volume_id = ?1, relative_path = ?2 || relative_path \
+             WHERE volume_id = ?3",
+            rusqlite::params![target_volume_id, prefix, source_volume_id],
+        )?;
+        Ok(changed)
+    }
+
     /// Check if a variant with the given content hash already exists.
     pub fn has_variant(&self, content_hash: &str) -> Result<bool> {
         let count: i64 = self.conn.query_row(

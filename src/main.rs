@@ -539,6 +539,19 @@ enum VolumeCommands {
         #[arg(long)]
         apply: bool,
     },
+
+    /// Combine a source volume into a target volume, rewriting paths
+    Combine {
+        /// Source volume label or UUID (will be removed)
+        source: String,
+
+        /// Target volume label or UUID (receives locations/recipes)
+        target: String,
+
+        /// Actually combine (default is report-only)
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -832,6 +845,57 @@ fn main() {
                         println!("Volume '{}' would remove: {}", result.volume_label, parts.join(", "));
                         if result.locations > 0 || result.recipes > 0 {
                             println!("  Run with --apply to remove.");
+                        }
+                    }
+                }
+                Ok(())
+            }
+            VolumeCommands::Combine { source, target, apply } => {
+                let catalog_root = dam::config::find_catalog_root()?;
+                let config = CatalogConfig::load(&catalog_root)?;
+                let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
+
+                let show_log = cli.log;
+                let result = service.combine_volume(
+                    &source,
+                    &target,
+                    apply,
+                    |asset_id, elapsed| {
+                        if show_log {
+                            eprintln!("  {} — updated ({})", asset_id, format_duration(elapsed));
+                        }
+                    },
+                )?;
+
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else {
+                    for err in &result.errors {
+                        eprintln!("  {err}");
+                    }
+
+                    if apply {
+                        println!(
+                            "Volume '{}' combined into '{}': {} locations moved, {} recipes moved ({} assets, prefix '{}')",
+                            result.source_label,
+                            result.target_label,
+                            result.locations_moved,
+                            result.recipes_moved,
+                            result.assets_affected,
+                            result.path_prefix,
+                        );
+                    } else {
+                        println!(
+                            "Would combine '{}' into '{}': {} locations, {} recipes ({} assets, prefix '{}')",
+                            result.source_label,
+                            result.target_label,
+                            result.locations,
+                            result.recipes,
+                            result.assets_affected,
+                            result.path_prefix,
+                        );
+                        if result.locations > 0 || result.recipes > 0 {
+                            println!("  Run with --apply to combine.");
                         }
                     }
                 }

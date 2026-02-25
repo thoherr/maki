@@ -6188,3 +6188,248 @@ fn backup_status_purpose_coverage() {
         .stdout(predicate::str::contains("Coverage by volume purpose:"))
         .stdout(predicate::str::contains("Working"));
 }
+
+// ── Volume combine ──────────────────────────────────────────────────
+
+#[test]
+fn volume_combine_report_only() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+
+    // Init catalog at root
+    dam().current_dir(&root).arg("init").assert().success();
+
+    // Create parent volume at root, child volume at root/sub
+    let sub = root.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    dam()
+        .current_dir(&root)
+        .args(["volume", "add", "parent-vol", root.to_str().unwrap()])
+        .assert()
+        .success();
+    dam()
+        .current_dir(&root)
+        .args(["volume", "add", "child-vol", sub.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Import a file on the child volume
+    let file = create_test_file(&sub, "photo.jpg", b"combine-report-content");
+    dam()
+        .current_dir(&root)
+        .args(["import", "--volume", "child-vol", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Report-only (no --apply)
+    dam()
+        .current_dir(&root)
+        .args(["volume", "combine", "child-vol", "parent-vol"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Would combine"))
+        .stdout(predicate::str::contains("1 locations"))
+        .stdout(predicate::str::contains("prefix 'sub/'"));
+
+    // Volume should still exist
+    dam()
+        .current_dir(&root)
+        .args(["volume", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("child-vol"));
+
+    // Asset should still exist
+    dam()
+        .current_dir(&root)
+        .args(["stats"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Assets:    1"));
+}
+
+#[test]
+fn volume_combine_apply() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+
+    dam().current_dir(&root).arg("init").assert().success();
+
+    let sub = root.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    dam()
+        .current_dir(&root)
+        .args(["volume", "add", "parent-vol", root.to_str().unwrap()])
+        .assert()
+        .success();
+    dam()
+        .current_dir(&root)
+        .args(["volume", "add", "child-vol", sub.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let file = create_test_file(&sub, "photo.jpg", b"combine-apply-content");
+    dam()
+        .current_dir(&root)
+        .args(["import", "--volume", "child-vol", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Apply combine
+    dam()
+        .current_dir(&root)
+        .args(["volume", "combine", "child-vol", "parent-vol", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("combined into"))
+        .stdout(predicate::str::contains("1 locations moved"));
+
+    // Child volume should be gone
+    dam()
+        .current_dir(&root)
+        .args(["volume", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("child-vol").not());
+
+    // Asset should still exist
+    dam()
+        .current_dir(&root)
+        .args(["stats"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Assets:    1"));
+
+    // Verify path was rewritten: search for asset, then show it
+    let output = dam()
+        .current_dir(&root)
+        .args(["search", "photo"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let short_id = stdout.split_whitespace().next().expect("search returned an ID");
+
+    dam()
+        .current_dir(&root)
+        .args(["show", "--json", short_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sub/photo.jpg"));
+}
+
+#[test]
+fn volume_combine_with_recipes() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+
+    dam().current_dir(&root).arg("init").assert().success();
+
+    let sub = root.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    dam()
+        .current_dir(&root)
+        .args(["volume", "add", "parent-vol", root.to_str().unwrap()])
+        .assert()
+        .success();
+    dam()
+        .current_dir(&root)
+        .args(["volume", "add", "child-vol", sub.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Create a jpg and an xmp recipe
+    let _jpg = create_test_file(&sub, "photo.jpg", b"combine-recipe-jpg");
+    let _xmp = create_test_file(
+        &sub,
+        "photo.xmp",
+        b"<x:xmpmeta><rdf:RDF><rdf:Description xmp:Rating=\"3\"/></rdf:RDF></x:xmpmeta>",
+    );
+
+    dam()
+        .current_dir(&root)
+        .args([
+            "import",
+            "--volume",
+            "child-vol",
+            "--include",
+            "xmp",
+            sub.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Combine with --apply
+    dam()
+        .current_dir(&root)
+        .args(["volume", "combine", "child-vol", "parent-vol", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 recipes moved"));
+
+    // Verify paths were rewritten
+    let output = dam()
+        .current_dir(&root)
+        .args(["search", "photo"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let short_id = stdout.split_whitespace().next().expect("search returned an ID");
+
+    let show_output = dam()
+        .current_dir(&root)
+        .args(["show", "--json", short_id])
+        .output()
+        .unwrap();
+    let show_stdout = String::from_utf8_lossy(&show_output.stdout);
+    assert!(show_stdout.contains("sub/photo.jpg"), "variant path should be rewritten");
+    assert!(show_stdout.contains("sub/photo.xmp"), "recipe path should be rewritten");
+}
+
+#[test]
+fn volume_combine_same_volume_error() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    dam()
+        .current_dir(&root)
+        .args(["volume", "combine", "test-vol", "test-vol"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("same volume"));
+}
+
+#[test]
+fn volume_combine_not_subdirectory_error() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+
+    dam().current_dir(&root).arg("init").assert().success();
+
+    // Create two sibling directories as separate volumes
+    let vol_a = root.join("vol_a");
+    let vol_b = root.join("vol_b");
+    std::fs::create_dir_all(&vol_a).unwrap();
+    std::fs::create_dir_all(&vol_b).unwrap();
+
+    dam()
+        .current_dir(&root)
+        .args(["volume", "add", "vol-a", vol_a.to_str().unwrap()])
+        .assert()
+        .success();
+    dam()
+        .current_dir(&root)
+        .args(["volume", "add", "vol-b", vol_b.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Neither is a subdirectory of the other
+    dam()
+        .current_dir(&root)
+        .args(["volume", "combine", "vol-a", "vol-b"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not a subdirectory"));
+}
