@@ -168,7 +168,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 **Responsibility**: search and filter assets via the SQLite catalog.
 
 **Query capabilities**:
-- Filter by: tags, date range, asset type, format, rating (`rating:N` exact, `rating:N+` minimum), color label (`label:Red`), camera model, lens, ISO, focal length, aperture, dimensions, volume, online/offline status
+- Filter by: tags, date range, asset type, format, rating (`rating:N` exact, `rating:N+` minimum), color label (`label:Red`), date (`date:2026-02-25` prefix match, `dateFrom:` inclusive lower bound, `dateUntil:` inclusive upper bound), camera model, lens, ISO, focal length, aperture, dimensions, volume, online/offline status
 - Location health filters: `orphan:true` (no file locations), `missing:true` (files missing from disk), `stale:N` (not verified in N days), `volume:none` (no locations on online volumes)
 - Full-text search over name, filename, description, and source metadata
 - Sort by: date, name, file size, import date
@@ -233,7 +233,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 - Preview images are served directly from the catalog's `previews/` directory via `tower-http::ServeDir`.
 
 **Routes**:
-- `GET /` — browse page with search, filter dropdowns (type, tag, format, volume, collection, rating), color label filter dots, sort, pagination, grid density controls (compact/normal/large), thumbnail grid with star ratings and color label dots. Lightbox overlay on card click (prev/next navigation, info panel with rating/label editing). Batch operations toolbar with tag, rating, and label editing. Dark mode toggle in nav bar (persisted in localStorage, follows OS preference). Favorite saved searches shown as chips with "Manage..." link to `/saved-searches`.
+- `GET /` — browse page with search, filter dropdowns (type, tag, format, volume, collection, rating), color label filter dots, sort, pagination, grid density controls (compact/normal/large), thumbnail grid with star ratings and color label dots. Grid/Calendar view toggle (calendar shows year-at-a-glance heatmap with per-day asset counts, year navigation, day-click filtering). Lightbox overlay on card click (prev/next navigation, info panel with rating/label editing). Batch operations toolbar with tag, rating, and label editing. Dark mode toggle in nav bar (persisted in localStorage, follows OS preference). Favorite saved searches shown as chips with "Manage..." link to `/saved-searches`.
 - `GET /asset/{id}` — asset detail with preview, metadata, editable tags, inline editable star rating, inline color label picker (7 color dots), variants, recipes
 - `GET /tags` — tags page with sortable columns (name/count), live text filter, multi-column layout
 - `GET /api/search` — results partial (htmx target) with pagination
@@ -260,11 +260,14 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 - `DELETE /api/saved-searches/{name}` — delete a saved search
 - `PUT /api/saved-searches/{name}/favorite` — toggle favorite status (JSON: `{favorite: bool}`)
 - `PUT /api/saved-searches/{name}/rename` — rename a saved search (JSON: `{new_name}`)
+- `GET /api/calendar` — calendar heatmap data as JSON (`{year, counts, years}`), respects all search filter params
 - `GET /saved-searches` — saved searches management page (table with favorite toggle, rename, delete)
 
 **Catalog extensions** (in `src/catalog.rs`):
-- `SearchOptions` / `SearchSort` / `SearchPage` — paginated search with volume filter and dynamic sort
+- `SearchOptions` / `SearchSort` / `SearchPage` — paginated search with volume filter, date filters, and dynamic sort
 - `search_paginated()` / `search_count()` — paginated search queries
+- `calendar_counts(year, opts)` — per-day asset counts for a given year, respecting all search filters
+- `calendar_years()` — distinct years that have assets
 - `list_all_tags()` — unique tags with counts
 - `list_all_formats()` — distinct variant formats
 - `list_volumes()` — volume IDs and labels

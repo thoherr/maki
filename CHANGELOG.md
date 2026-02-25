@@ -2,6 +2,17 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v1.5.3
+
+### New Features
+- **Calendar heatmap view** — the browse page now has a Grid/Calendar view toggle. The calendar view shows a GitHub-style year-at-a-glance heatmap with day cells colored by asset count (quartile-based 5-level scale). Navigate between years with arrow buttons and year chips. Click any day to filter the grid to that date. All existing search filters (tag, rating, label, type, format, volume, collection, path) apply to the calendar aggregation. Includes full dark mode support and `localStorage` persistence for view mode.
+- **Date search filters** — three new query filters for filtering assets by creation date:
+  - `date:2026-02-25` — prefix match (day, month, or year granularity)
+  - `dateFrom:2026-01-15` — inclusive lower bound
+  - `dateUntil:2026-02-28` — inclusive upper bound (converted to exclusive internally)
+  - All three compose with each other and all existing filters. Available in CLI, web UI (via query input), and saved searches.
+- **Calendar API endpoint** — `GET /api/calendar?year=2026` returns JSON with per-day asset counts and available years, respecting all search filter parameters.
+
 ## v1.5.2
 
 ### New Features

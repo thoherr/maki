@@ -105,6 +105,27 @@ Below the search bar, results appear as a grid of thumbnail cards. Each card sho
 
 Click a card to open the [asset detail page](#asset-detail-page).
 
+### View mode toggle
+
+Next to the density controls, two view mode buttons switch between **Grid** and **Calendar** views:
+
+- **Grid** (default): the standard thumbnail grid described above
+- **Calendar**: a year-at-a-glance heatmap showing when assets were created
+
+Your view mode preference is saved in the browser and preserved across reloads.
+
+### Calendar heatmap view
+
+The calendar view displays a GitHub-style heatmap with 12 months laid out in a responsive grid (4 columns on wide screens, adapting down to 2 on narrow ones). Each day cell is colored by the number of assets created on that date, using a quartile-based 5-level color scale from empty (no assets) through increasingly intense shades.
+
+**Year navigation**: Arrow buttons and clickable year chips above the calendar let you browse between years. Only years that contain assets appear as chips.
+
+**Filter integration**: All browse filters (text search, tag, rating, label, type, format, volume, collection, path) apply to the calendar aggregation. For example, adding `tag:landscape` shows only landscape photos in the heatmap, letting you see which dates had landscape shots.
+
+**Day click**: Click any day cell to filter the browse grid to that date. The view switches back to grid mode with `date:YYYY-MM-DD` added to the search query, showing only assets from that day. You can then clear the date filter from the search input to return to unfiltered browsing.
+
+**Legend**: A color scale legend at the bottom of the calendar shows the meaning of each intensity level.
+
 ### Grid density
 
 Next to the sort controls, three grid density buttons let you adjust the thumbnail size:

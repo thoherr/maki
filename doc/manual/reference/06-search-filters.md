@@ -302,6 +302,67 @@ dam search "path:/Volumes/Photos/Capture/2026"    # auto-normalized
 
 ---
 
+## date
+
+**Syntax:** `date:<prefix>`
+
+**Values:** `YYYY-MM-DD` (day), `YYYY-MM` (month), or `YYYY` (year)
+
+**Description:** Prefix match on the asset's creation date. Matches any asset whose `created_at` timestamp starts with the given prefix. This gives you day, month, or year granularity in a single filter.
+
+**Examples:**
+
+```
+dam search "date:2026-02-25"       # assets created on Feb 25, 2026
+dam search "date:2026-02"          # assets created in February 2026
+dam search "date:2026"             # assets created in 2026
+dam search "date:2026-02 tag:landscape"
+```
+
+**SQL behavior:** `WHERE a.created_at LIKE 'prefix%'`. Pure assets-table filter, no JOIN required. Uses the index on `assets.created_at`.
+
+---
+
+## dateFrom
+
+**Syntax:** `dateFrom:<date>`
+
+**Values:** `YYYY-MM-DD` (or any date prefix)
+
+**Description:** Inclusive lower bound on the asset's creation date. Commonly used with `dateUntil:` to define a date range.
+
+**Examples:**
+
+```
+dam search "dateFrom:2026-01-01"                        # from Jan 1, 2026 onward
+dam search "dateFrom:2026-01-01 dateUntil:2026-03-31"   # Q1 2026
+dam search "dateFrom:2025-06-01 rating:4+"
+```
+
+**SQL behavior:** `WHERE a.created_at >= ?`. String comparison is correct for RFC 3339 timestamps. Pure assets-table filter, no JOIN required.
+
+---
+
+## dateUntil
+
+**Syntax:** `dateUntil:<date>`
+
+**Values:** `YYYY-MM-DD`, `YYYY-MM`, or `YYYY`
+
+**Description:** Inclusive upper bound on the asset's creation date. Internally converted to an exclusive next-day/month/year boundary for correct range semantics.
+
+**Examples:**
+
+```
+dam search "dateUntil:2026-02-28"                       # up to and including Feb 28
+dam search "dateFrom:2026-01-01 dateUntil:2026-12-31"   # full year 2026
+dam search "dateUntil:2025-12-31 type:video"            # all videos before 2026
+```
+
+**SQL behavior:** Converts the inclusive bound to exclusive: `"2026-02-28"` → `a.created_at < "2026-03-01"`. Pure assets-table filter, no JOIN required.
+
+---
+
 ## collection
 
 **Syntax:** `collection:<name>` or `collection:"<multi-word name>"`
@@ -455,6 +516,12 @@ dam search "copies:1 format:nef"
 
 # Well-backed-up 5-star images
 dam search "copies:2+ rating:5 type:image"
+
+# Assets from a specific date range
+dam search "dateFrom:2026-01-01 dateUntil:2026-03-31 tag:landscape"
+
+# Everything shot in February 2026
+dam search "date:2026-02"
 ```
 
 ---
@@ -503,6 +570,9 @@ dam search "camera:fuji"
 | `volume:` | dropdown only | yes (dropdown) | yes |
 | `volume:none` | yes | no | yes |
 | `copies:` | yes | no | yes |
+| `date:` | yes | yes (query input) | yes |
+| `dateFrom:` | yes | yes (query input) | yes |
+| `dateUntil:` | yes | yes (query input) | yes |
 | `orphan:true` | yes | no | yes |
 | `missing:true` | yes | no | yes |
 | `stale:` | yes | no | yes |

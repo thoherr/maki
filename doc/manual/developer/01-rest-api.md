@@ -463,6 +463,51 @@ curl -X POST http://localhost:8080/api/batch/auto-group \
 
 ## Data APIs
 
+### `GET /api/calendar` -- Calendar Heatmap Data
+
+Returns per-day asset counts for a given year, respecting all search filters. Used by the browse page calendar heatmap view.
+
+| Parameter    | Type   | Default        | Description                                      |
+|--------------|--------|----------------|--------------------------------------------------|
+| `year`       | i32    | current year   | Year to aggregate                                |
+| `q`          | string | `""`           | Free-text search query (supports filter syntax)  |
+| `type`       | string | `""`           | Asset type filter                                |
+| `tag`        | string | `""`           | Tag filter                                       |
+| `format`     | string | `""`           | File format filter                               |
+| `volume`     | string | `""`           | Volume ID filter                                 |
+| `rating`     | string | `""`           | Rating filter                                    |
+| `label`      | string | `""`           | Color label filter                               |
+| `collection` | string | `""`           | Collection name filter                           |
+| `path`       | string | `""`           | Path prefix filter                               |
+
+**Response**: `application/json`
+
+```json
+{
+  "year": 2026,
+  "counts": {
+    "2026-01-15": 23,
+    "2026-01-16": 8,
+    "2026-02-25": 14
+  },
+  "years": [2024, 2025, 2026]
+}
+```
+
+| Field    | Type              | Description                                    |
+|----------|-------------------|------------------------------------------------|
+| `year`   | i32               | The requested year                             |
+| `counts` | object            | Map of `"YYYY-MM-DD"` → asset count (days with 0 assets are omitted) |
+| `years`  | i32[]             | All distinct years that have assets in the catalog |
+
+```bash
+# Get 2026 calendar data
+curl http://localhost:8080/api/calendar?year=2026
+
+# With filters
+curl "http://localhost:8080/api/calendar?year=2026&tag=landscape&rating=4%2B"
+```
+
 ### `GET /api/tags` -- List All Tags
 
 Returns all tags with their usage counts as a JSON array of `[name, count]` tuples.

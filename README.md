@@ -47,7 +47,7 @@ dam serve
 
 **Global flags**: `--json`, `--log`, `--debug`, `--time`. Run `dam --help` or `dam <command> --help` for usage.
 
-See the [Command Reference](doc/manual/reference/01-setup-commands.md) for detailed documentation of every command, or the [Search Filters Reference](doc/manual/reference/06-search-filters.md) for the 18+ filter types available in `dam search`.
+See the [Command Reference](doc/manual/reference/01-setup-commands.md) for detailed documentation of every command, or the [Search Filters Reference](doc/manual/reference/06-search-filters.md) for the 20+ filter types available in `dam search`.
 
 ## Architecture
 
