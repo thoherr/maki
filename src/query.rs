@@ -40,6 +40,9 @@ pub struct ParsedSearch {
     pub path_prefix: Option<String>,
     pub copies_exact: Option<u64>,
     pub copies_min: Option<u64>,
+    pub date_prefix: Option<String>,
+    pub date_from: Option<String>,
+    pub date_until: Option<String>,
 }
 
 impl ParsedSearch {
@@ -73,6 +76,9 @@ impl ParsedSearch {
             path_prefix: self.path_prefix.as_deref(),
             copies_exact: self.copies_exact,
             copies_min: self.copies_min,
+            date_prefix: self.date_prefix.as_deref(),
+            date_from: self.date_from.as_deref(),
+            date_until: self.date_until.as_deref(),
             ..Default::default()
         }
     }
@@ -208,6 +214,12 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
             } else {
                 parsed.copies_exact = value.parse().ok();
             }
+        } else if let Some(value) = token.strip_prefix("date:") {
+            parsed.date_prefix = Some(value.to_string());
+        } else if let Some(value) = token.strip_prefix("dateFrom:") {
+            parsed.date_from = Some(value.to_string());
+        } else if let Some(value) = token.strip_prefix("dateUntil:") {
+            parsed.date_until = Some(value.to_string());
         } else {
             text_parts.push(token);
         }
@@ -1815,6 +1827,48 @@ mod tests {
         let p = parse_search_query("copies:3+ rating:4+ tag:landscape");
         assert_eq!(p.copies_min, Some(3));
         assert_eq!(p.rating_min, Some(4));
+        assert_eq!(p.tag.as_deref(), Some("landscape"));
+    }
+
+    // ── date filter parse tests ─────────────────────────────────────
+
+    #[test]
+    fn parse_date_prefix_day() {
+        let p = parse_search_query("date:2026-02-25");
+        assert_eq!(p.date_prefix.as_deref(), Some("2026-02-25"));
+        assert!(p.text.is_none());
+    }
+
+    #[test]
+    fn parse_date_prefix_month() {
+        let p = parse_search_query("date:2026-02");
+        assert_eq!(p.date_prefix.as_deref(), Some("2026-02"));
+    }
+
+    #[test]
+    fn parse_date_prefix_year() {
+        let p = parse_search_query("date:2026");
+        assert_eq!(p.date_prefix.as_deref(), Some("2026"));
+    }
+
+    #[test]
+    fn parse_date_from() {
+        let p = parse_search_query("dateFrom:2026-01-15");
+        assert_eq!(p.date_from.as_deref(), Some("2026-01-15"));
+        assert!(p.text.is_none());
+    }
+
+    #[test]
+    fn parse_date_until() {
+        let p = parse_search_query("dateUntil:2026-02-28");
+        assert_eq!(p.date_until.as_deref(), Some("2026-02-28"));
+    }
+
+    #[test]
+    fn parse_date_range_combined() {
+        let p = parse_search_query("dateFrom:2026-01-01 dateUntil:2026-12-31 tag:landscape");
+        assert_eq!(p.date_from.as_deref(), Some("2026-01-01"));
+        assert_eq!(p.date_until.as_deref(), Some("2026-12-31"));
         assert_eq!(p.tag.as_deref(), Some("landscape"));
     }
 

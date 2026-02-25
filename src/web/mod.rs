@@ -233,6 +233,7 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/api/batch/auto-group",
             axum::routing::post(routes::batch_auto_group),
         )
+        .route("/api/calendar", axum::routing::get(routes::calendar_api))
         .route("/static/htmx.min.js", axum::routing::get(static_assets::htmx_js))
         .route("/static/style.css", axum::routing::get(static_assets::style_css))
         .nest_service("/preview", ServeDir::new(preview_dir))

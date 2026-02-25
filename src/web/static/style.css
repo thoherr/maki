@@ -1710,3 +1710,160 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     color: var(--danger);
     border-color: var(--danger);
 }
+
+/* ── Calendar heatmap ───────────────────────────────────── */
+:root {
+    --cal-empty: #ebedf0;
+    --cal-l1: #9be9a8;
+    --cal-l2: #40c463;
+    --cal-l3: #30a14e;
+    --cal-l4: #216e39;
+}
+[data-theme="dark"] {
+    --cal-empty: #2d333b;
+    --cal-l1: #0e4429;
+    --cal-l2: #006d32;
+    --cal-l3: #26a641;
+    --cal-l4: #39d353;
+}
+@media (prefers-color-scheme: dark) {
+    html:not([data-theme]) {
+        --cal-empty: #2d333b;
+        --cal-l1: #0e4429;
+        --cal-l2: #006d32;
+        --cal-l3: #26a641;
+        --cal-l4: #39d353;
+    }
+}
+
+#calendar-container { display: none; }
+[data-view="calendar"] #calendar-container { display: block; }
+[data-view="calendar"] .results-grid,
+[data-view="calendar"] .pagination,
+[data-view="calendar"] .results-bar .sort-controls,
+[data-view="calendar"] .results-bar .top-pagination,
+[data-view="calendar"] .results-bar .results-page { display: none; }
+
+.calendar-year-nav {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+.calendar-year-nav button {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.9rem;
+    color: var(--text);
+}
+.calendar-year-nav button:hover { border-color: var(--primary); color: var(--primary); }
+.calendar-year-chip {
+    padding: 0.2rem 0.5rem;
+    border-radius: var(--radius);
+    font-size: 0.8rem;
+    cursor: pointer;
+    color: var(--text-muted);
+    border: 1px solid transparent;
+    background: none;
+}
+.calendar-year-chip:hover { color: var(--primary); border-color: var(--border); }
+.calendar-year-chip.active {
+    background: var(--primary);
+    color: #fff;
+    font-weight: 600;
+}
+
+.calendar-months {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.25rem;
+}
+@media (max-width: 1000px) { .calendar-months { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 700px) { .calendar-months { grid-template-columns: repeat(2, 1fr); } }
+
+.calendar-month {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.6rem;
+    box-shadow: var(--shadow);
+}
+.calendar-month-label {
+    font-weight: 600;
+    font-size: 0.85rem;
+    margin-bottom: 0.4rem;
+    color: var(--text);
+}
+.calendar-day-headers {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+    margin-bottom: 2px;
+}
+.calendar-day-header {
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    text-align: center;
+    line-height: 1;
+}
+.calendar-days {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+}
+.calendar-day {
+    aspect-ratio: 1;
+    border-radius: 2px;
+    cursor: pointer;
+    position: relative;
+    min-width: 0;
+}
+.calendar-day:hover { outline: 1px solid var(--primary); outline-offset: -1px; }
+.calendar-day.empty { background: transparent; cursor: default; }
+.calendar-day.empty:hover { outline: none; }
+.calendar-day.level-0 { background: var(--cal-empty); }
+.calendar-day.level-1 { background: var(--cal-l1); }
+.calendar-day.level-2 { background: var(--cal-l2); }
+.calendar-day.level-3 { background: var(--cal-l3); }
+.calendar-day.level-4 { background: var(--cal-l4); }
+
+.calendar-day[title] { cursor: pointer; }
+
+.calendar-legend {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-top: 1rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+.calendar-legend-box {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    display: inline-block;
+}
+
+/* View toggle buttons */
+.view-controls {
+    display: flex;
+    gap: 2px;
+    margin-left: 0.5rem;
+}
+.view-btn {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    padding: 4px 6px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    transition: color 0.15s, border-color 0.15s;
+}
+.view-btn:hover { color: var(--primary); border-color: var(--primary); }
+.view-btn.active { color: var(--primary); border-color: var(--primary); background: var(--bg-card); }

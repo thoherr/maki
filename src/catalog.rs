@@ -341,6 +341,9 @@ pub struct SearchOptions<'a> {
     pub collection_asset_ids: Option<&'a [String]>,
     pub copies_exact: Option<u64>,
     pub copies_min: Option<u64>,
+    pub date_prefix: Option<&'a str>,
+    pub date_from: Option<&'a str>,
+    pub date_until: Option<&'a str>,
     pub sort: SearchSort,
     pub page: u32,
     pub per_page: u32,
@@ -376,6 +379,9 @@ impl<'a> Default for SearchOptions<'a> {
             collection_asset_ids: None,
             copies_exact: None,
             copies_min: None,
+            date_prefix: None,
+            date_from: None,
+            date_until: None,
             sort: SearchSort::DateDesc,
             page: 1,
             per_page: 60,
@@ -391,6 +397,46 @@ pub struct SearchPage {
     pub page: u32,
     pub per_page: u32,
     pub total_pages: u32,
+}
+
+/// Convert an inclusive date bound to an exclusive upper bound.
+///
+/// - `"2026-02-25"` → `"2026-02-26"` (next day)
+/// - `"2026-02"` → `"2026-03"` (next month)
+/// - `"2026"` → `"2027"` (next year)
+/// Falls back to appending a high character if parsing fails.
+fn next_date_bound(s: &str) -> String {
+    match s.len() {
+        // Year: "2026" → "2027"
+        4 => {
+            if let Ok(y) = s.parse::<i32>() {
+                return format!("{:04}", y + 1);
+            }
+        }
+        // Month: "2026-02" → "2026-03"
+        7 => {
+            let parts: Vec<&str> = s.splitn(2, '-').collect();
+            if parts.len() == 2 {
+                if let (Ok(y), Ok(m)) = (parts[0].parse::<i32>(), parts[1].parse::<u32>()) {
+                    if m >= 12 {
+                        return format!("{:04}-01", y + 1);
+                    } else {
+                        return format!("{:04}-{:02}", y, m + 1);
+                    }
+                }
+            }
+        }
+        // Day: "2026-02-25" → "2026-02-26"
+        10 => {
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                let next = date + chrono::Duration::days(1);
+                return next.format("%Y-%m-%d").to_string();
+            }
+        }
+        _ => {}
+    }
+    // Fallback: append a char higher than any valid timestamp character
+    format!("{s}\x7f")
 }
 
 /// SQLite-backed local catalog for fast queries. This is a derived cache,
@@ -1916,6 +1962,28 @@ impl Catalog {
             ));
         }
 
+        // Date filters — uses string comparison on RFC3339 created_at
+        if let Some(prefix) = opts.date_prefix {
+            if !prefix.is_empty() {
+                clauses.push("a.created_at LIKE ?".to_string());
+                params.push(Box::new(format!("{prefix}%")));
+            }
+        }
+        if let Some(from) = opts.date_from {
+            if !from.is_empty() {
+                clauses.push("a.created_at >= ?".to_string());
+                params.push(Box::new(from.to_string()));
+            }
+        }
+        if let Some(until) = opts.date_until {
+            if !until.is_empty() {
+                // Convert inclusive upper bound to exclusive next-day
+                let exclusive = next_date_bound(until);
+                clauses.push("a.created_at < ?".to_string());
+                params.push(Box::new(exclusive));
+            }
+        }
+
         let where_clause = if clauses.is_empty() {
             " WHERE 1=1".to_string()
         } else {
@@ -2019,6 +2087,66 @@ impl Catalog {
             params.iter().map(|p| p.as_ref()).collect();
         let count: u64 = self.conn.query_row(&sql, param_refs.as_slice(), |r| r.get(0))?;
         Ok(count)
+    }
+
+    /// Get asset counts per day for a given year, respecting search filters.
+    ///
+    /// Returns a map of `"YYYY-MM-DD"` → count. Reuses `build_search_where()`
+    /// for filter consistency, then adds a year constraint and groups by day.
+    pub fn calendar_counts(&self, year: i32, opts: &SearchOptions) -> Result<HashMap<String, u64>> {
+        let (where_clause, mut params, needs_fl_join, needs_v_join) = Self::build_search_where(opts);
+
+        let mut sql = String::from(
+            "SELECT substr(a.created_at, 1, 10) as day, COUNT(DISTINCT a.id) \
+             FROM assets a \
+             JOIN variants bv ON bv.content_hash = a.best_variant_hash",
+        );
+
+        if needs_v_join {
+            sql.push_str(" JOIN variants v ON v.asset_id = a.id");
+        }
+        if needs_fl_join {
+            sql.push_str(" JOIN file_locations fl ON v.content_hash = fl.content_hash");
+        }
+
+        sql.push_str(&where_clause);
+
+        // Add year constraint
+        sql.push_str(" AND a.created_at >= ? AND a.created_at < ?");
+        params.push(Box::new(format!("{year:04}-01-01")));
+        params.push(Box::new(format!("{:04}-01-01", year + 1)));
+
+        sql.push_str(" GROUP BY day");
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(param_refs.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+        })?;
+
+        let mut counts = HashMap::new();
+        for row in rows {
+            let (day, count) = row?;
+            counts.insert(day, count);
+        }
+        Ok(counts)
+    }
+
+    /// Get all distinct years that have assets.
+    pub fn calendar_years(&self) -> Result<Vec<i32>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT CAST(substr(created_at, 1, 4) AS INTEGER) \
+             FROM assets \
+             WHERE created_at IS NOT NULL \
+             ORDER BY 1",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, i32>(0))?;
+        let mut years = Vec::new();
+        for row in rows {
+            years.push(row?);
+        }
+        Ok(years)
     }
 
     /// List all unique tags with their usage counts, sorted by count descending.
@@ -4901,5 +5029,102 @@ mod tests {
             .unwrap();
         assert_eq!(ids.len(), 1);
         assert_eq!(ids[0], asset.id.to_string());
+    }
+
+    // ── next_date_bound tests ─────────────────────────────────────
+
+    #[test]
+    fn next_date_bound_day() {
+        assert_eq!(next_date_bound("2026-02-25"), "2026-02-26");
+        assert_eq!(next_date_bound("2026-02-28"), "2026-03-01");
+        assert_eq!(next_date_bound("2026-12-31"), "2027-01-01");
+    }
+
+    #[test]
+    fn next_date_bound_month() {
+        assert_eq!(next_date_bound("2026-02"), "2026-03");
+        assert_eq!(next_date_bound("2026-12"), "2027-01");
+    }
+
+    #[test]
+    fn next_date_bound_year() {
+        assert_eq!(next_date_bound("2026"), "2027");
+    }
+
+    // ── calendar_counts / calendar_years tests ────────────────────
+
+    #[test]
+    fn calendar_years_returns_distinct_years() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let mut a1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:cal1");
+        a1.created_at = chrono::NaiveDate::from_ymd_opt(2024, 6, 15).unwrap().and_hms_opt(12, 0, 0).unwrap().and_utc();
+        let v1 = crate::models::Variant {
+            content_hash: "sha256:cal1".to_string(),
+            asset_id: a1.id,
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 1000,
+            original_filename: "a.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        a1.variants.push(v1.clone());
+        catalog.insert_asset(&a1).unwrap();
+        catalog.insert_variant(&v1).unwrap();
+
+        let mut a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:cal2");
+        a2.created_at = chrono::NaiveDate::from_ymd_opt(2026, 1, 10).unwrap().and_hms_opt(12, 0, 0).unwrap().and_utc();
+        let v2 = crate::models::Variant {
+            content_hash: "sha256:cal2".to_string(),
+            asset_id: a2.id,
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 1000,
+            original_filename: "b.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        a2.variants.push(v2.clone());
+        catalog.insert_asset(&a2).unwrap();
+        catalog.insert_variant(&v2).unwrap();
+
+        let years = catalog.calendar_years().unwrap();
+        assert_eq!(years, vec![2024, 2026]);
+    }
+
+    #[test]
+    fn calendar_counts_groups_by_day() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        // Two assets on the same day
+        for (hash, hr) in [("sha256:cc1", 10), ("sha256:cc2", 14)] {
+            let mut a = crate::models::Asset::new(crate::models::AssetType::Image, hash);
+            a.created_at = chrono::NaiveDate::from_ymd_opt(2026, 3, 5).unwrap().and_hms_opt(hr, 0, 0).unwrap().and_utc();
+            let v = crate::models::Variant {
+                content_hash: hash.to_string(),
+                asset_id: a.id,
+                role: crate::models::VariantRole::Original,
+                format: "jpg".to_string(),
+                file_size: 1000,
+                original_filename: "x.jpg".to_string(),
+                source_metadata: Default::default(),
+                locations: vec![],
+            };
+            a.variants.push(v.clone());
+            catalog.insert_asset(&a).unwrap();
+            catalog.insert_variant(&v).unwrap();
+        }
+
+        let opts = SearchOptions::default();
+        let counts = catalog.calendar_counts(2026, &opts).unwrap();
+        assert_eq!(counts.get("2026-03-05"), Some(&2));
+        assert_eq!(counts.len(), 1);
+
+        // Different year returns empty
+        let counts2 = catalog.calendar_counts(2025, &opts).unwrap();
+        assert!(counts2.is_empty());
     }
 }

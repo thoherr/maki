@@ -78,6 +78,8 @@
     {% include "results.html" %}
 </div>
 
+<div id="calendar-container"></div>
+
 <div class="lightbox" id="lightbox">
     <div class="lightbox-top-bar">
         <span class="lightbox-counter" id="lb-counter"></span>
@@ -1487,6 +1489,210 @@
             }
         }
     });
+})();
+</script>
+
+<script>
+/* ── Calendar heatmap IIFE ────────────────────────────── */
+window.damCalendar = (function() {
+    var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var DAYS = ['M','T','W','T','F','S','S'];
+    var currentYear = new Date().getFullYear();
+    var container = document.getElementById('calendar-container');
+
+    function getLevel(count, q1, q2, q3) {
+        if (!count) return 0;
+        if (count <= q1) return 1;
+        if (count <= q2) return 2;
+        if (count <= q3) return 3;
+        return 4;
+    }
+
+    function computeQuartiles(counts) {
+        var vals = Object.values(counts).filter(function(v) { return v > 0; });
+        if (vals.length === 0) return [1, 2, 3];
+        vals.sort(function(a, b) { return a - b; });
+        var q1 = vals[Math.floor(vals.length * 0.25)] || 1;
+        var q2 = vals[Math.floor(vals.length * 0.5)] || q1 + 1;
+        var q3 = vals[Math.floor(vals.length * 0.75)] || q2 + 1;
+        if (q1 === q2) q2 = q1 + 1;
+        if (q2 === q3) q3 = q2 + 1;
+        return [q1, q2, q3];
+    }
+
+    function render(year, counts, years) {
+        currentYear = year;
+        var quarts = computeQuartiles(counts);
+        var html = '';
+
+        // Year navigation
+        html += '<div class="calendar-year-nav">';
+        html += '<button class="cal-prev" title="Previous year">&lsaquo;</button>';
+        for (var i = 0; i < years.length; i++) {
+            var active = years[i] === year ? ' active' : '';
+            html += '<span class="calendar-year-chip' + active + '" data-year="' + years[i] + '">' + years[i] + '</span>';
+        }
+        html += '<button class="cal-next" title="Next year">&rsaquo;</button>';
+        html += '</div>';
+
+        // Months grid
+        html += '<div class="calendar-months">';
+        for (var m = 0; m < 12; m++) {
+            html += '<div class="calendar-month">';
+            html += '<div class="calendar-month-label">' + MONTHS[m] + '</div>';
+            html += '<div class="calendar-day-headers">';
+            for (var d = 0; d < 7; d++) html += '<span class="calendar-day-header">' + DAYS[d] + '</span>';
+            html += '</div>';
+            html += '<div class="calendar-days">';
+
+            // First day of month (0=Sun, convert to Mon-start: Mon=0..Sun=6)
+            var firstDay = new Date(year, m, 1).getDay();
+            var startOffset = (firstDay + 6) % 7; // Mon-based
+            for (var s = 0; s < startOffset; s++) html += '<span class="calendar-day empty"></span>';
+
+            var daysInMonth = new Date(year, m + 1, 0).getDate();
+            for (var day = 1; day <= daysInMonth; day++) {
+                var dateStr = year + '-' + String(m + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+                var count = counts[dateStr] || 0;
+                var lvl = getLevel(count, quarts[0], quarts[1], quarts[2]);
+                var title = dateStr + ': ' + count + ' asset' + (count !== 1 ? 's' : '');
+                html += '<span class="calendar-day level-' + lvl + '" data-date="' + dateStr + '" title="' + title + '"></span>';
+            }
+
+            html += '</div></div>';
+        }
+        html += '</div>';
+
+        // Legend
+        html += '<div class="calendar-legend"><span>Less</span>';
+        for (var l = 0; l <= 4; l++) html += '<span class="calendar-legend-box level-' + l + '" style="background:var(--cal-' + (l === 0 ? 'empty' : 'l' + l) + ')"></span>';
+        html += '<span>More</span></div>';
+
+        container.innerHTML = html;
+
+        // Wire year nav events
+        container.querySelector('.cal-prev').addEventListener('click', function() {
+            fetchAndRender(currentYear - 1);
+        });
+        container.querySelector('.cal-next').addEventListener('click', function() {
+            fetchAndRender(currentYear + 1);
+        });
+        container.querySelectorAll('.calendar-year-chip').forEach(function(chip) {
+            chip.addEventListener('click', function() {
+                fetchAndRender(parseInt(this.getAttribute('data-year')));
+            });
+        });
+
+        // Wire day click → filter grid
+        container.querySelectorAll('.calendar-day:not(.empty)').forEach(function(cell) {
+            cell.addEventListener('click', function() {
+                var date = this.getAttribute('data-date');
+                var qInput = document.querySelector('[name=q]');
+                if (qInput) {
+                    // Replace or append date: filter
+                    var val = qInput.value.replace(/\bdate:\S*/g, '').trim();
+                    qInput.value = (val ? val + ' ' : '') + 'date:' + date;
+                }
+                setView('grid');
+                triggerSearchFromCalendar();
+            });
+        });
+    }
+
+    function getFilterParams() {
+        var params = new URLSearchParams(window.location.search);
+        var result = {};
+        ['q', 'type', 'tag', 'format', 'volume', 'rating', 'label', 'collection', 'path'].forEach(function(k) {
+            // Read from form inputs for current state
+            var input;
+            if (k === 'tag') {
+                var chips = document.querySelectorAll('#tag-chips .tag-chip');
+                var tags = [];
+                chips.forEach(function(c) { tags.push(c.getAttribute('data-tag')); });
+                if (tags.length) result[k] = tags.join(',');
+            } else if (k === 'rating') {
+                if (typeof getFilterRating === 'function') {
+                    var r = getFilterRating();
+                    if (r) result[k] = r;
+                }
+            } else if (k === 'label') {
+                if (typeof getFilterLabel === 'function') {
+                    var l = getFilterLabel();
+                    if (l) result[k] = l;
+                }
+            } else {
+                input = document.querySelector('[name="' + k + '"]');
+                if (input && input.value) result[k] = input.value;
+            }
+        });
+        return result;
+    }
+
+    function fetchAndRender(year) {
+        var filterParams = getFilterParams();
+        var qs = 'year=' + year;
+        Object.keys(filterParams).forEach(function(k) {
+            qs += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(filterParams[k]);
+        });
+        fetch('/api/calendar?' + qs)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                render(data.year, data.counts, data.years);
+            })
+            .catch(function(err) {
+                console.error('Calendar fetch error:', err);
+            });
+    }
+
+    function triggerSearchFromCalendar() {
+        var form = document.querySelector('.search-bar');
+        if (form) htmx.trigger(form, 'submit');
+    }
+
+    function setView(mode) {
+        document.documentElement.setAttribute('data-view', mode);
+        localStorage.setItem('dam-view-mode', mode);
+        // Update toggle button states
+        document.querySelectorAll('.view-btn').forEach(function(btn) {
+            btn.classList.toggle('active', btn.getAttribute('data-view') === mode);
+        });
+        if (mode === 'calendar') {
+            fetchAndRender(currentYear);
+        }
+    }
+
+    // Initialize view toggle buttons (event delegation on #results survives htmx swaps)
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('.view-btn');
+        if (!btn) return;
+        var mode = btn.getAttribute('data-view');
+        if (mode) setView(mode);
+    });
+
+    // Restore view mode from localStorage
+    var savedView = localStorage.getItem('dam-view-mode') || 'grid';
+    document.documentElement.setAttribute('data-view', savedView);
+    // Initial button state set after first render via htmx:afterSwap or directly
+    setTimeout(function() {
+        document.querySelectorAll('.view-btn').forEach(function(btn) {
+            btn.classList.toggle('active', btn.getAttribute('data-view') === savedView);
+        });
+        if (savedView === 'calendar') fetchAndRender(currentYear);
+    }, 0);
+
+    // Re-apply view toggle button states after htmx swaps results
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target && e.detail.target.id === 'results') {
+            var mode = document.documentElement.getAttribute('data-view') || 'grid';
+            document.querySelectorAll('.view-btn').forEach(function(btn) {
+                btn.classList.toggle('active', btn.getAttribute('data-view') === mode);
+            });
+            // Re-fetch calendar if in calendar view (filters may have changed)
+            if (mode === 'calendar') fetchAndRender(currentYear);
+        }
+    });
+
+    return { setView: setView, fetchAndRender: fetchAndRender };
 })();
 </script>
 {% endblock %}
