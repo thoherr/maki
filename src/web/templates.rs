@@ -42,6 +42,7 @@ pub struct AssetCard {
     pub rating: Option<u8>,
     pub color_label: Option<String>,
     pub variant_count: u32,
+    pub stack_count: Option<u32>,
 }
 
 impl AssetCard {
@@ -62,6 +63,7 @@ impl AssetCard {
             rating: row.rating,
             color_label: row.color_label.clone(),
             variant_count: row.variant_count,
+            stack_count: row.stack_count.filter(|&n| n >= 2),
         }
     }
 }
@@ -171,6 +173,7 @@ pub struct BrowsePage {
     pub collection: String,
     pub path: String,
     pub saved_searches: Vec<SavedSearchChip>,
+    pub collapse_stacks: bool,
 }
 
 #[derive(Template)]
@@ -191,6 +194,7 @@ pub struct ResultsPartial {
     pub page: u32,
     pub per_page: u32,
     pub total_pages: u32,
+    pub collapse_stacks: bool,
 }
 
 #[derive(Template)]
@@ -210,6 +214,8 @@ pub struct AssetPage {
     pub variants: Vec<VariantRow>,
     pub recipes: Vec<RecipeRow>,
     pub collections: Vec<AssetCollectionChip>,
+    pub stack_members: Vec<StackMemberCard>,
+    pub is_stack_pick: bool,
 }
 
 /// Collections the asset belongs to, shown on asset detail page.
@@ -217,8 +223,22 @@ pub struct AssetCollectionChip {
     pub name: String,
 }
 
+/// A member of a stack, shown on asset detail page.
+pub struct StackMemberCard {
+    pub asset_id: String,
+    pub display_name: String,
+    pub preview_url: String,
+    pub is_pick: bool,
+}
+
 impl AssetPage {
-    pub fn from_details(details: AssetDetails, preview: Option<String>, collections: Vec<String>) -> Self {
+    pub fn from_details(
+        details: AssetDetails,
+        preview: Option<String>,
+        collections: Vec<String>,
+        stack_members: Vec<StackMemberCard>,
+        is_stack_pick: bool,
+    ) -> Self {
         let fallback_name = details
             .variants
             .first()
@@ -288,6 +308,8 @@ impl AssetPage {
                 .into_iter()
                 .map(|name| AssetCollectionChip { name })
                 .collect(),
+            stack_members,
+            is_stack_pick,
         }
     }
 }

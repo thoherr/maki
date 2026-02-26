@@ -43,6 +43,7 @@ pub struct ParsedSearch {
     pub date_prefix: Option<String>,
     pub date_from: Option<String>,
     pub date_until: Option<String>,
+    pub stacked: Option<bool>,
 }
 
 impl ParsedSearch {
@@ -79,6 +80,7 @@ impl ParsedSearch {
             date_prefix: self.date_prefix.as_deref(),
             date_from: self.date_from.as_deref(),
             date_until: self.date_until.as_deref(),
+            stacked_filter: self.stacked,
             ..Default::default()
         }
     }
@@ -220,6 +222,10 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
             parsed.date_from = Some(value.to_string());
         } else if let Some(value) = token.strip_prefix("dateUntil:") {
             parsed.date_until = Some(value.to_string());
+        } else if token == "stacked:true" {
+            parsed.stacked = Some(true);
+        } else if token == "stacked:false" {
+            parsed.stacked = Some(false);
         } else {
             text_parts.push(token);
         }

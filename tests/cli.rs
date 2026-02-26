@@ -6624,3 +6624,337 @@ fn import_xmp_hierarchical_subject() {
         .success()
         .stdout(predicate::str::contains("1 result"));
 }
+
+// ====================== Stack tests ======================
+
+/// Helper: import files and return their asset IDs.
+fn import_and_get_ids(root: &Path, names: &[&str]) -> Vec<String> {
+    for name in names {
+        create_test_file(root, name, name.as_bytes());
+        dam()
+            .current_dir(root)
+            .args(["import", root.join(name).to_str().unwrap()])
+            .assert()
+            .success();
+    }
+    let mut ids = Vec::new();
+    for name in names {
+        let stem = Path::new(name).file_stem().unwrap().to_str().unwrap();
+        let output = dam()
+            .current_dir(root)
+            .args(["search", "--format", "ids", stem])
+            .output()
+            .unwrap();
+        let id = String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+        assert!(!id.is_empty(), "asset not found for {name}");
+        ids.push(id);
+    }
+    ids
+}
+
+#[test]
+fn stack_create_and_list() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["stack_a.jpg", "stack_b.jpg", "stack_c.jpg"]);
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "create", &ids[0], &ids[1], &ids[2]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created stack"))
+        .stdout(predicate::str::contains("3 assets"));
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3 assets"))
+        .stdout(predicate::str::contains("pick:"));
+}
+
+#[test]
+fn stack_alias_works() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["st_a.jpg", "st_b.jpg"]);
+
+    dam()
+        .current_dir(&root)
+        .args(["st", "create", &ids[0], &ids[1]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created stack"));
+}
+
+#[test]
+fn stack_show_members() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["show_a.jpg", "show_b.jpg"]);
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "create", &ids[0], &ids[1]])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "show", &ids[0]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&ids[0]))
+        .stdout(predicate::str::contains(&ids[1]))
+        .stdout(predicate::str::contains("[pick]"));
+}
+
+#[test]
+fn stack_set_pick() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["pick_a.jpg", "pick_b.jpg"]);
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "create", &ids[0], &ids[1]])
+        .assert()
+        .success();
+
+    // Initially ids[0] is the pick
+    dam()
+        .current_dir(&root)
+        .args(["stack", "show", &ids[0]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("{} [pick]", &ids[0])));
+
+    // Change pick to ids[1]
+    dam()
+        .current_dir(&root)
+        .args(["stack", "pick", &ids[1]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("as stack pick"));
+
+    // Verify ids[1] is now pick
+    dam()
+        .current_dir(&root)
+        .args(["stack", "show", &ids[1]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("{} [pick]", &ids[1])));
+}
+
+#[test]
+fn stack_remove_members() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["rm_a.jpg", "rm_b.jpg", "rm_c.jpg"]);
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "create", &ids[0], &ids[1], &ids[2]])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "remove", &ids[2]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed 1 asset"));
+
+    // Stack should now have 2 members
+    dam()
+        .current_dir(&root)
+        .args(["stack", "show", &ids[0]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&ids[0]))
+        .stdout(predicate::str::contains(&ids[1]));
+}
+
+#[test]
+fn stack_dissolve() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["diss_a.jpg", "diss_b.jpg"]);
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "create", &ids[0], &ids[1]])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "dissolve", &ids[0]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Stack dissolved"));
+
+    // No stacks should remain
+    dam()
+        .current_dir(&root)
+        .args(["stack", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No stacks"));
+}
+
+#[test]
+fn stack_add_to_existing() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["add_a.jpg", "add_b.jpg", "add_c.jpg"]);
+
+    // Create stack with first two
+    dam()
+        .current_dir(&root)
+        .args(["stack", "create", &ids[0], &ids[1]])
+        .assert()
+        .success();
+
+    // Add third to existing stack (reference: ids[0])
+    dam()
+        .current_dir(&root)
+        .args(["stack", "add", &ids[0], &ids[1], &ids[2]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added"));
+
+    // Show should include all three
+    dam()
+        .current_dir(&root)
+        .args(["stack", "show", &ids[0]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&ids[2]));
+}
+
+#[test]
+fn stack_json_output() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["json_a.jpg", "json_b.jpg"]);
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "create", "--json", &ids[0], &ids[1]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("member_count"))
+        .stdout(predicate::str::contains("2"));
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "list", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("member_count"))
+        .stdout(predicate::str::contains("2"));
+}
+
+#[test]
+fn stack_search_stacked_filter() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["sf_a.jpg", "sf_b.jpg", "sf_solo.jpg"]);
+
+    // Stack first two, leave third solo
+    dam()
+        .current_dir(&root)
+        .args(["stack", "create", &ids[0], &ids[1]])
+        .assert()
+        .success();
+
+    // stacked:true should find 2 assets
+    dam()
+        .current_dir(&root)
+        .args(["search", "stacked:true"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 result"));
+
+    // stacked:false should find 1 asset
+    dam()
+        .current_dir(&root)
+        .args(["search", "stacked:false"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 result"));
+}
+
+#[test]
+fn stack_rebuild_catalog_preserves_stacks() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["rb_a.jpg", "rb_b.jpg"]);
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "create", &ids[0], &ids[1]])
+        .assert()
+        .success();
+
+    // Rebuild catalog
+    dam()
+        .current_dir(&root)
+        .args(["rebuild-catalog"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("stack"));
+
+    // Stacks should survive
+    dam()
+        .current_dir(&root)
+        .args(["stack", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 assets"));
+}
+
+#[test]
+fn stack_remove_dissolves_when_one_left() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["auto_a.jpg", "auto_b.jpg"]);
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "create", &ids[0], &ids[1]])
+        .assert()
+        .success();
+
+    // Remove one member — stack should auto-dissolve since only 1 would remain
+    dam()
+        .current_dir(&root)
+        .args(["stack", "remove", &ids[1]])
+        .assert()
+        .success();
+
+    // No stacks should remain
+    dam()
+        .current_dir(&root)
+        .args(["stack", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No stacks"));
+}

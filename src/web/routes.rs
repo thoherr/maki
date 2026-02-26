@@ -15,7 +15,7 @@ use super::templates::{
     format_size, AssetCard, AssetPage, BackupPage, BrowsePage, CollectionOption,
     DescriptionFragment, FormatOption, LabelFragment, NameFragment, PreviewFragment,
     RatingFragment, ResultsPartial, SavedSearchChip, SavedSearchEntry, SavedSearchesPage,
-    StatsPage, TagOption, TagTreeEntry, TagsFragment, TagsPage, VolumeOption,
+    StackMemberCard, StatsPage, TagOption, TagTreeEntry, TagsFragment, TagsPage, VolumeOption,
 };
 use super::AppState;
 
@@ -33,6 +33,7 @@ pub struct SearchParams {
     pub path: Option<String>,
     pub sort: Option<String>,
     pub page: Option<u32>,
+    pub stacks: Option<String>,
 }
 
 /// GET / — browse page with initial results (full page for browser, partial for htmx).
@@ -59,6 +60,7 @@ pub async fn browse_page(
 
         let collection_str = params.collection.as_deref().unwrap_or("");
         let path_str = params.path.as_deref().unwrap_or("");
+        let collapse_stacks = params.stacks.as_deref().unwrap_or("1") == "1";
 
         // Normalize absolute path → volume-relative + implicit volume filter
         let (normalized_path, path_volume_id) = if !path_str.is_empty() {
@@ -95,6 +97,7 @@ pub async fn browse_page(
         opts.sort = SearchSort::from_str(sort_str);
         opts.page = page;
         opts.per_page = 60;
+        opts.collapse_stacks = collapse_stacks;
 
         let total = catalog.search_count(&opts)?;
         let rows = catalog.search_paginated(&opts)?;
@@ -118,6 +121,7 @@ pub async fn browse_page(
                 page,
                 per_page: 60,
                 total_pages,
+                collapse_stacks,
             };
             return Ok::<_, anyhow::Error>(tmpl.render()?);
         }
@@ -174,6 +178,7 @@ pub async fn browse_page(
             collection: collection_str.to_string(),
             path: path_str.to_string(),
             saved_searches,
+            collapse_stacks,
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
@@ -224,6 +229,7 @@ pub async fn search_api(
 
         let collection_str = params.collection.as_deref().unwrap_or("");
         let path_str = params.path.as_deref().unwrap_or("");
+        let collapse_stacks = params.stacks.as_deref().unwrap_or("1") == "1";
 
         // Normalize absolute path → volume-relative + implicit volume filter
         let (normalized_path, path_volume_id) = if !path_str.is_empty() {
@@ -260,6 +266,7 @@ pub async fn search_api(
         opts.sort = SearchSort::from_str(sort_str);
         opts.page = page;
         opts.per_page = 60;
+        opts.collapse_stacks = collapse_stacks;
 
         let total = catalog.search_count(&opts)?;
         let rows = catalog.search_paginated(&opts)?;
@@ -282,6 +289,7 @@ pub async fn search_api(
             page,
             per_page: 60,
             total_pages,
+            collapse_stacks,
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
@@ -319,13 +327,40 @@ pub async fn asset_page(
         });
 
         // Load collections this asset belongs to
-        let collections = {
+        let (collections, stack_members, is_stack_pick) = {
             let catalog = state.catalog()?;
             let col_store = crate::collection::CollectionStore::new(catalog.conn());
-            col_store.collections_for_asset(&asset_id).unwrap_or_default()
+            let cols = col_store.collections_for_asset(&asset_id).unwrap_or_default();
+
+            let stack_store = crate::stack::StackStore::new(catalog.conn());
+            let (members, is_pick) = match stack_store.stack_for_asset(&asset_id).unwrap_or(None) {
+                Some((_sid, member_ids)) => {
+                    let is_pick = member_ids.first().map_or(false, |id| id == &asset_id);
+                    let mut cards = Vec::new();
+                    for (i, mid) in member_ids.iter().enumerate() {
+                        if mid == &asset_id { continue; }
+                        // Load minimal info for stack member
+                        let name = catalog.get_asset_name(mid).unwrap_or(None)
+                            .unwrap_or_else(|| mid[..8.min(mid.len())].to_string());
+                        let hash = catalog.get_asset_best_variant_hash(mid).unwrap_or(None);
+                        let purl = hash.map(|h| super::templates::preview_url(&h, &preview_ext))
+                            .unwrap_or_default();
+                        cards.push(StackMemberCard {
+                            asset_id: mid.clone(),
+                            display_name: name,
+                            preview_url: purl,
+                            is_pick: i == 0,
+                        });
+                    }
+                    (cards, is_pick)
+                }
+                None => (Vec::new(), false),
+            };
+
+            (cols, members, is_pick)
         };
 
-        let tmpl = AssetPage::from_details(details, preview_url, collections);
+        let tmpl = AssetPage::from_details(details, preview_url, collections, stack_members, is_stack_pick);
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
     .await;
@@ -1359,6 +1394,118 @@ pub async fn batch_auto_group(
     }
 }
 
+// --- Stack batch operations ---
+
+#[derive(serde::Deserialize)]
+pub struct BatchStackRequest {
+    pub asset_ids: Vec<String>,
+}
+
+/// POST /api/batch/stack — create a stack from selected assets.
+pub async fn batch_create_stack(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BatchStackRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+        let store = crate::stack::StackStore::new(catalog.conn());
+        let stack = store.create(&req.asset_ids)?;
+        let yaml = store.export_all()?;
+        crate::stack::save_yaml(&state.catalog_root, &yaml)?;
+        Ok::<_, anyhow::Error>(serde_json::json!({
+            "stack_id": stack.id.to_string(),
+            "member_count": stack.asset_ids.len(),
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::BAD_REQUEST, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+/// DELETE /api/batch/stack — unstack selected assets.
+pub async fn batch_unstack(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BatchStackRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+        let store = crate::stack::StackStore::new(catalog.conn());
+        let removed = store.remove(&req.asset_ids)?;
+        let yaml = store.export_all()?;
+        crate::stack::save_yaml(&state.catalog_root, &yaml)?;
+        Ok::<_, anyhow::Error>(serde_json::json!({
+            "removed": removed,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+/// PUT /api/asset/{id}/stack-pick — set this asset as the stack pick.
+pub async fn set_stack_pick(
+    State(state): State<Arc<AppState>>,
+    Path(asset_id): Path<String>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+        let store = crate::stack::StackStore::new(catalog.conn());
+        store.set_pick(&asset_id)?;
+        let yaml = store.export_all()?;
+        crate::stack::save_yaml(&state.catalog_root, &yaml)?;
+        Ok::<_, anyhow::Error>(serde_json::json!({ "pick": asset_id }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::BAD_REQUEST, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+/// DELETE /api/asset/{id}/stack — dissolve the stack this asset belongs to.
+pub async fn dissolve_stack(
+    State(state): State<Arc<AppState>>,
+    Path(asset_id): Path<String>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+        let store = crate::stack::StackStore::new(catalog.conn());
+        store.dissolve(&asset_id)?;
+        let yaml = store.export_all()?;
+        crate::stack::save_yaml(&state.catalog_root, &yaml)?;
+        Ok::<_, anyhow::Error>(serde_json::json!({ "status": "dissolved" }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::BAD_REQUEST, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
 // --- Saved searches management ---
 
 /// GET /saved-searches — saved searches management page.
@@ -1498,6 +1645,7 @@ pub struct CalendarParams {
     pub label: Option<String>,
     pub collection: Option<String>,
     pub path: Option<String>,
+    pub stacks: Option<String>,
 }
 
 /// GET /api/calendar — calendar heatmap data.
@@ -1545,6 +1693,10 @@ pub async fn calendar_api(
         if !normalized_path.is_empty() {
             opts.path_prefix = Some(&normalized_path);
         }
+
+        // Collapse stacks (default: yes)
+        let collapse_stacks = params.stacks.as_deref().unwrap_or("1") == "1";
+        opts.collapse_stacks = collapse_stacks;
 
         // Resolve collection filter
         let collection_ids;

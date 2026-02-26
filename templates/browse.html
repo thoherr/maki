@@ -7,7 +7,7 @@
       hx-get="/"
       hx-target="#results"
       hx-push-url="true"
-      hx-vals='js:{"q": document.querySelector("[name=q]").value, "type": document.querySelector("[name=type]").value, "tag": getSelectedTags().join(","), "format": document.querySelector("[name=format]").value, "volume": (document.querySelector("[name=volume]") || {value:""}).value, "collection": (document.querySelector("[name=collection]") || {value:""}).value, "path": (document.querySelector("[name=path]") || {value:""}).value, "rating": getFilterRating(), "label": getFilterLabel(), "sort": new URLSearchParams(window.location.search).get("sort") || "date_desc", "page": "1"}'>
+      hx-vals='js:{"q": document.querySelector("[name=q]").value, "type": document.querySelector("[name=type]").value, "tag": getSelectedTags().join(","), "format": document.querySelector("[name=format]").value, "volume": (document.querySelector("[name=volume]") || {value:""}).value, "collection": (document.querySelector("[name=collection]") || {value:""}).value, "path": (document.querySelector("[name=path]") || {value:""}).value, "rating": getFilterRating(), "label": getFilterLabel(), "sort": new URLSearchParams(window.location.search).get("sort") || "date_desc", "page": "1", "stacks": getStackCollapse()}'>
     <div class="search-row">
         <input type="text" name="q" placeholder="Search assets..." value="{{ query }}" autocomplete="off">
     </div>
@@ -167,6 +167,9 @@
         <button class="batch-btn batch-btn-danger" id="batch-remove-collection" style="display:none">&minus; Collection</button>
         <span class="batch-sep"></span>
         <button class="batch-btn" id="batch-auto-group">Group by name</button>
+        <span class="batch-sep"></span>
+        <button class="batch-btn" id="batch-stack">Stack</button>
+        <button class="batch-btn batch-btn-danger" id="batch-unstack">Unstack</button>
     </div>
 </div>
 
@@ -490,10 +493,29 @@
         if (pathInput) pathInput.value = params.get('path') || '';
     });
 
+    // --- Stack collapse toggle ---
+    var stackCollapse = "{% if collapse_stacks %}1{% else %}0{% endif %}";
+    // Restore from localStorage if this is a fresh page load (not a server-round-trip override)
+    var storedCollapse = localStorage.getItem('dam-stack-collapse');
+    if (storedCollapse !== null && new URLSearchParams(window.location.search).get('stacks') === null) {
+        stackCollapse = storedCollapse;
+    }
+
+    function getStackCollapse() {
+        return stackCollapse;
+    }
+
+    function setStackCollapse(val) {
+        stackCollapse = val;
+        localStorage.setItem('dam-stack-collapse', val);
+    }
+
     // Expose for hx-vals
     window.getSelectedTags = getSelectedTags;
     window.getFilterRating = getFilterRating;
     window.getFilterLabel = getFilterLabel;
+    window.getStackCollapse = getStackCollapse;
+    window.setStackCollapse = setStackCollapse;
 
     // Refresh results when page is restored from bfcache (e.g., back from asset detail)
     // so that changes made on the asset page (rating, tags) are reflected.
@@ -953,6 +975,43 @@
     }
     window.addEventListener('popstate', updateCollectionButtons);
 
+    // Batch stack (create stack from selected)
+    document.getElementById('batch-stack').addEventListener('click', function() {
+        if (selected.size < 2 || batchBusy) return;
+        if (!confirm('Create a stack from ' + selected.size + ' selected asset(s)?')) return;
+        setButtonsBusy(true);
+        fetch('/api/batch/stack', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({asset_ids: Array.from(selected)})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function() {
+            clearSelection();
+            refreshResults();
+        })
+        .catch(function(err) { console.error('Batch stack error:', err); })
+        .finally(function() { setButtonsBusy(false); });
+    });
+
+    // Batch unstack (remove selected from stacks)
+    document.getElementById('batch-unstack').addEventListener('click', function() {
+        if (selected.size === 0 || batchBusy) return;
+        setButtonsBusy(true);
+        fetch('/api/batch/stack', {
+            method: 'DELETE',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({asset_ids: Array.from(selected)})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function() {
+            clearSelection();
+            refreshResults();
+        })
+        .catch(function(err) { console.error('Batch unstack error:', err); })
+        .finally(function() { setButtonsBusy(false); });
+    });
+
     // Batch auto-group by filename stem
     document.getElementById('batch-auto-group').addEventListener('click', function() {
         if (selected.size === 0 || batchBusy) return;
@@ -1014,6 +1073,34 @@
 
     document.body.addEventListener('htmx:afterSwap', function(e) {
         if (e.detail.target && e.detail.target.id === 'results') setActive();
+    });
+})();
+
+// --- Stack collapse toggle ---
+(function() {
+    document.getElementById('results').addEventListener('click', function(e) {
+        var btn = e.target.closest('.stack-toggle-btn');
+        if (!btn) return;
+        var current = window.getStackCollapse();
+        var next = current === '1' ? '0' : '1';
+        window.setStackCollapse(next);
+        // Re-trigger search to apply the new collapse state
+        var form = document.querySelector('.search-bar');
+        if (form) htmx.trigger(form, 'submit');
+    });
+
+    // Sync button state after htmx swaps
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target && e.detail.target.id === 'results') {
+            var btn = document.getElementById('stack-collapse-toggle');
+            if (btn) {
+                if (window.getStackCollapse() === '1') {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            }
+        }
     });
 })();
 
@@ -1617,6 +1704,10 @@ window.damCalendar = (function() {
     function getFilterParams() {
         var params = new URLSearchParams(window.location.search);
         var result = {};
+        // Include stack collapse state
+        if (typeof getStackCollapse === 'function') {
+            result['stacks'] = getStackCollapse();
+        }
         ['q', 'type', 'tag', 'format', 'volume', 'rating', 'label', 'collection', 'path'].forEach(function(k) {
             // Read from form inputs for current state
             var input;

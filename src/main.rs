@@ -14,7 +14,7 @@ use dam::query::QueryEngine;
 Quick Reference:
   Setup:      init, volume
   Ingest:     import, tag, edit, group, auto-group
-  Organize:   collection (col), saved-search (ss)
+  Organize:   collection (col), saved-search (ss), stack (st)
   Retrieve:   search, show, duplicates, stats, backup-status, serve
   Maintain:   verify, sync, refresh, cleanup, dedup, relocate,
               update-location, generate-previews, fix-roles,
@@ -161,6 +161,10 @@ enum Commands {
     /// Manage saved searches (smart albums)
     #[command(subcommand, alias = "ss", display_order = 21)]
     SavedSearch(SavedSearchCommands),
+
+    /// Manage stacks (scene grouping)
+    #[command(subcommand, alias = "st", display_order = 22)]
+    Stack(StackCommands),
 
     // --- Retrieve ---
 
@@ -640,6 +644,55 @@ enum CollectionCommands {
     Delete {
         /// Collection name
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum StackCommands {
+    /// Create a new stack from the given assets
+    Create {
+        /// Asset IDs to stack (first becomes pick)
+        asset_ids: Vec<String>,
+    },
+
+    /// Add assets to an existing stack
+    Add {
+        /// Any asset already in the target stack
+        reference: String,
+
+        /// Asset IDs to add
+        asset_ids: Vec<String>,
+    },
+
+    /// Remove assets from their stack
+    Remove {
+        /// Asset IDs to remove from stacks
+        asset_ids: Vec<String>,
+    },
+
+    /// Set the pick (top) of a stack
+    Pick {
+        /// Asset ID to make the pick
+        asset_id: String,
+    },
+
+    /// Dissolve an entire stack
+    Dissolve {
+        /// Any asset in the stack to dissolve
+        asset_id: String,
+    },
+
+    /// List all stacks
+    List,
+
+    /// Show members of a stack
+    Show {
+        /// Any asset in the stack
+        asset_id: String,
+
+        /// Output format: ids, short, full, json, or a custom template
+        #[arg(long)]
+        format: Option<String>,
     },
 }
 
@@ -2561,16 +2614,31 @@ fn main() {
                 }
             };
 
+            // Restore stacks from YAML
+            let stacks_restored = {
+                let stacks_file = dam::stack::load_yaml(&catalog_root).unwrap_or_default();
+                if !stacks_file.stacks.is_empty() {
+                    let stack_store = dam::stack::StackStore::new(catalog.conn());
+                    stack_store.import_from_yaml(&stacks_file).unwrap_or(0)
+                } else {
+                    0
+                }
+            };
+
             if cli.json {
                 println!("{}", serde_json::json!({
                     "synced": result.synced,
                     "errors": result.errors,
                     "collections_restored": collections_restored,
+                    "stacks_restored": stacks_restored,
                 }));
             } else {
                 println!("Rebuild complete: {} asset(s) synced", result.synced);
                 if collections_restored > 0 {
                     println!("  {} collection(s) restored", collections_restored);
+                }
+                if stacks_restored > 0 {
+                    println!("  {} stack(s) restored", stacks_restored);
                 }
                 if result.errors > 0 {
                     println!("  {} error(s) encountered", result.errors);
@@ -2978,6 +3046,129 @@ fn main() {
                         }));
                     } else {
                         println!("Deleted collection '{name}'");
+                    }
+                    Ok(())
+                }
+            }
+        }
+        Commands::Stack(cmd) => {
+            let catalog_root = dam::config::find_catalog_root()?;
+            let catalog = Catalog::open(&catalog_root)?;
+            let store = dam::stack::StackStore::new(catalog.conn());
+            match cmd {
+                StackCommands::Create { asset_ids } => {
+                    if asset_ids.len() < 2 {
+                        anyhow::bail!("A stack requires at least 2 assets");
+                    }
+                    let stack = store.create(&asset_ids)?;
+                    let yaml = store.export_all()?;
+                    dam::stack::save_yaml(&catalog_root, &yaml)?;
+                    if cli.json {
+                        println!("{}", serde_json::json!({
+                            "id": stack.id.to_string(),
+                            "member_count": stack.asset_ids.len(),
+                            "pick": stack.asset_ids[0],
+                        }));
+                    } else {
+                        println!("Created stack {} ({} assets, pick: {})",
+                            &stack.id.to_string()[..8],
+                            stack.asset_ids.len(),
+                            &stack.asset_ids[0][..8.min(stack.asset_ids[0].len())]);
+                    }
+                    Ok(())
+                }
+                StackCommands::Add { reference, asset_ids } => {
+                    let added = store.add(&reference, &asset_ids)?;
+                    let yaml = store.export_all()?;
+                    dam::stack::save_yaml(&catalog_root, &yaml)?;
+                    if cli.json {
+                        println!("{}", serde_json::json!({ "added": added }));
+                    } else {
+                        println!("Added {} asset(s) to stack", added);
+                    }
+                    Ok(())
+                }
+                StackCommands::Remove { asset_ids } => {
+                    if asset_ids.is_empty() {
+                        anyhow::bail!("No asset IDs specified.");
+                    }
+                    let removed = store.remove(&asset_ids)?;
+                    let yaml = store.export_all()?;
+                    dam::stack::save_yaml(&catalog_root, &yaml)?;
+                    if cli.json {
+                        println!("{}", serde_json::json!({ "removed": removed }));
+                    } else {
+                        println!("Removed {} asset(s) from stack(s)", removed);
+                    }
+                    Ok(())
+                }
+                StackCommands::Pick { asset_id } => {
+                    store.set_pick(&asset_id)?;
+                    let yaml = store.export_all()?;
+                    dam::stack::save_yaml(&catalog_root, &yaml)?;
+                    if cli.json {
+                        println!("{}", serde_json::json!({ "pick": asset_id }));
+                    } else {
+                        println!("Set {} as stack pick", &asset_id[..8.min(asset_id.len())]);
+                    }
+                    Ok(())
+                }
+                StackCommands::Dissolve { asset_id } => {
+                    store.dissolve(&asset_id)?;
+                    let yaml = store.export_all()?;
+                    dam::stack::save_yaml(&catalog_root, &yaml)?;
+                    if cli.json {
+                        println!("{}", serde_json::json!({ "status": "dissolved" }));
+                    } else {
+                        println!("Stack dissolved");
+                    }
+                    Ok(())
+                }
+                StackCommands::List => {
+                    let list = store.list()?;
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&list)?);
+                    } else if list.is_empty() {
+                        println!("No stacks.");
+                    } else {
+                        for s in &list {
+                            let pick = s.pick_asset_id.as_deref().unwrap_or("?");
+                            let short_id = &s.id[..8.min(s.id.len())];
+                            let short_pick = &pick[..8.min(pick.len())];
+                            println!("  {} ({} assets, pick: {})", short_id, s.member_count, short_pick);
+                        }
+                    }
+                    Ok(())
+                }
+                StackCommands::Show { asset_id, format } => {
+                    let (stack_id, members) = store.stack_for_asset(&asset_id)?
+                        .ok_or_else(|| anyhow::anyhow!("Asset {asset_id} is not in a stack"))?;
+                    if cli.json {
+                        println!("{}", serde_json::json!({
+                            "stack_id": stack_id,
+                            "members": members,
+                            "pick": members.first(),
+                        }));
+                    } else if let Some(ref fmt) = format {
+                        if fmt == "ids" {
+                            for id in &members {
+                                println!("{}", id);
+                            }
+                        } else {
+                            let short_sid = &stack_id[..8.min(stack_id.len())];
+                            println!("Stack {}:", short_sid);
+                            for (i, id) in members.iter().enumerate() {
+                                let marker = if i == 0 { " [pick]" } else { "" };
+                                println!("  {}{}", id, marker);
+                            }
+                        }
+                    } else {
+                        let short_sid = &stack_id[..8.min(stack_id.len())];
+                        println!("Stack {}:", short_sid);
+                        for (i, id) in members.iter().enumerate() {
+                            let marker = if i == 0 { " [pick]" } else { "" };
+                            println!("  {}{}", id, marker);
+                        }
                     }
                     Ok(())
                 }

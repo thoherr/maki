@@ -233,6 +233,19 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/api/batch/auto-group",
             axum::routing::post(routes::batch_auto_group),
         )
+        .route(
+            "/api/batch/stack",
+            axum::routing::post(routes::batch_create_stack)
+                .delete(routes::batch_unstack),
+        )
+        .route(
+            "/api/asset/{id}/stack-pick",
+            axum::routing::put(routes::set_stack_pick),
+        )
+        .route(
+            "/api/asset/{id}/stack",
+            axum::routing::delete(routes::dissolve_stack),
+        )
         .route("/api/calendar", axum::routing::get(routes::calendar_api))
         .route("/static/htmx.min.js", axum::routing::get(static_assets::htmx_js))
         .route("/static/style.css", axum::routing::get(static_assets::style_css))

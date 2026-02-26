@@ -24,6 +24,10 @@ pub struct SearchRow {
     pub primary_format: Option<String>,
     /// Number of variants belonging to this asset.
     pub variant_count: u32,
+    /// Stack ID if this asset is in a stack.
+    pub stack_id: Option<String>,
+    /// Number of members in this asset's stack (for badge rendering).
+    pub stack_count: Option<u32>,
 }
 
 impl SearchRow {
@@ -344,6 +348,8 @@ pub struct SearchOptions<'a> {
     pub date_prefix: Option<&'a str>,
     pub date_from: Option<&'a str>,
     pub date_until: Option<&'a str>,
+    pub collapse_stacks: bool,
+    pub stacked_filter: Option<bool>,
     pub sort: SearchSort,
     pub page: u32,
     pub per_page: u32,
@@ -382,6 +388,8 @@ impl<'a> Default for SearchOptions<'a> {
             date_prefix: None,
             date_from: None,
             date_until: None,
+            collapse_stacks: false,
+            stacked_filter: None,
             sort: SearchSort::DateDesc,
             page: 1,
             per_page: 60,
@@ -527,6 +535,13 @@ impl Catalog {
         );
         // Collection tables
         let _ = crate::collection::CollectionStore::initialize(&self.conn);
+        // Stack tables
+        let _ = crate::stack::StackStore::initialize(&self.conn);
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN stack_id TEXT");
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN stack_position INTEGER");
+        let _ = self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_assets_stack_id ON assets(stack_id);",
+        );
         // Volume purpose
         let _ = self.conn.execute_batch("ALTER TABLE volumes ADD COLUMN purpose TEXT");
         // Performance indexes for search, stats, and join queries
@@ -620,6 +635,14 @@ impl Catalog {
 
         // Collection tables
         crate::collection::CollectionStore::initialize(&self.conn)?;
+
+        // Stack tables
+        crate::stack::StackStore::initialize(&self.conn)?;
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN stack_id TEXT");
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN stack_position INTEGER");
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_assets_stack_id ON assets(stack_id);",
+        )?;
 
         // Migration: add purpose column to volumes
         let _ = self.conn.execute_batch("ALTER TABLE volumes ADD COLUMN purpose TEXT");
@@ -1127,6 +1150,32 @@ impl Catalog {
         let mut rows = stmt.query(rusqlite::params![content_hash])?;
         match rows.next()? {
             Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Get an asset's name by ID.
+    pub fn get_asset_name(&self, asset_id: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT COALESCE(a.name, bv.original_filename) FROM assets a \
+             LEFT JOIN variants bv ON bv.content_hash = a.best_variant_hash \
+             WHERE a.id = ?1",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![asset_id])?;
+        match rows.next()? {
+            Some(row) => Ok(row.get(0)?),
+            None => Ok(None),
+        }
+    }
+
+    /// Get an asset's best_variant_hash by ID.
+    pub fn get_asset_best_variant_hash(&self, asset_id: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT best_variant_hash FROM assets WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![asset_id])?;
+        match rows.next()? {
+            Some(row) => Ok(row.get(0)?),
             None => Ok(None),
         }
     }
@@ -2057,6 +2106,20 @@ impl Catalog {
             }
         }
 
+        // Stack collapse: only show pick (position 0) or unstacked assets
+        if opts.collapse_stacks {
+            clauses.push("(a.stack_id IS NULL OR a.stack_position = 0)".to_string());
+        }
+
+        // Stacked filter
+        if let Some(stacked) = opts.stacked_filter {
+            if stacked {
+                clauses.push("a.stack_id IS NOT NULL".to_string());
+            } else {
+                clauses.push("a.stack_id IS NULL".to_string());
+            }
+        }
+
         let where_clause = if clauses.is_empty() {
             " WHERE 1=1".to_string()
         } else {
@@ -2078,9 +2141,10 @@ impl Catalog {
         let mut sql = String::from(
             "SELECT a.id, a.name, a.asset_type, a.created_at, bv.original_filename, bv.format, \
              a.tags, a.description, bv.content_hash, a.rating, a.color_label, \
-             a.primary_variant_format, a.variant_count \
+             a.primary_variant_format, a.variant_count, a.stack_id, s.member_count \
              FROM assets a \
-             JOIN variants bv ON bv.content_hash = a.best_variant_hash",
+             JOIN variants bv ON bv.content_hash = a.best_variant_hash \
+             LEFT JOIN stacks s ON s.id = a.stack_id",
         );
 
         if needs_v_join {
@@ -2112,6 +2176,7 @@ impl Catalog {
             let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
             let rating_val: Option<i64> = row.get(9)?;
             let variant_count_val: i64 = row.get(12)?;
+            let stack_member_count: Option<i64> = row.get(14)?;
             Ok(SearchRow {
                 asset_id: row.get(0)?,
                 name: row.get(1)?,
@@ -2126,6 +2191,8 @@ impl Catalog {
                 color_label: row.get(10)?,
                 primary_format: row.get(11)?,
                 variant_count: variant_count_val as u32,
+                stack_id: row.get(13)?,
+                stack_count: stack_member_count.map(|n| n as u32),
             })
         })?;
 
@@ -3063,7 +3130,7 @@ mod tests {
 
         assert_eq!(
             tables,
-            vec!["assets", "collection_assets", "collections", "file_locations", "recipes", "variants", "volumes"]
+            vec!["assets", "collection_assets", "collections", "file_locations", "recipes", "stacks", "variants", "volumes"]
         );
     }
 

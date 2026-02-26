@@ -89,6 +89,67 @@
         </script>
         {% endif %}
 
+        {% if !stack_members.is_empty() %}
+        <details open>
+            <summary>Stack ({{ stack_members.len() }} members)</summary>
+            <div class="stack-members">
+                {% for m in stack_members %}
+                <a href="/asset/{{ m.asset_id }}" class="stack-member{% if m.is_pick %} is-pick{% endif %}{% if m.asset_id == asset_id %} current{% endif %}">
+                    <img class="stack-thumb"
+                         src="{{ m.preview_url }}"
+                         alt="{{ m.display_name }}"
+                         loading="lazy"
+                         onerror="this.outerHTML='<div class=\'thumb-placeholder\'>&#128444;</div>'">
+                    <span class="stack-member-name">{{ m.display_name }}</span>
+                    {% if m.is_pick %}<span class="stack-pick-badge" title="Pick">&#9733;</span>{% endif %}
+                </a>
+                {% endfor %}
+            </div>
+            <div class="stack-actions">
+                {% if !is_stack_pick %}
+                <button class="btn btn-sm" id="set-pick-btn">Set as pick</button>
+                {% endif %}
+                <button class="btn btn-sm btn-danger" id="dissolve-stack-btn">Dissolve stack</button>
+            </div>
+        </details>
+        <script>
+        (function() {
+            var assetId = '{{ asset_id }}';
+            var pickBtn = document.getElementById('set-pick-btn');
+            if (pickBtn) {
+                pickBtn.addEventListener('click', function() {
+                    fetch('/api/asset/' + assetId + '/stack-pick', {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({})
+                    })
+                    .then(function(r) {
+                        if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+                        return r.json();
+                    })
+                    .then(function() { window.location.reload(); })
+                    .catch(function(err) { alert('Failed to set pick: ' + err.message); });
+                });
+            }
+            var dissolveBtn = document.getElementById('dissolve-stack-btn');
+            if (dissolveBtn) {
+                dissolveBtn.addEventListener('click', function() {
+                    if (!confirm('Dissolve this entire stack? All members will become unstacked.')) return;
+                    fetch('/api/asset/' + assetId + '/stack', {
+                        method: 'DELETE'
+                    })
+                    .then(function(r) {
+                        if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+                        return r.json();
+                    })
+                    .then(function() { window.location.reload(); })
+                    .catch(function(err) { alert('Failed to dissolve stack: ' + err.message); });
+                });
+            }
+        })();
+        </script>
+        {% endif %}
+
         {% if !variants.is_empty() %}
         <details open>
             <summary>Variants ({{ variants.len() }})</summary>
