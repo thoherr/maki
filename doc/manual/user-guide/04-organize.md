@@ -15,6 +15,28 @@ Tags are free-form keywords attached to an asset. They are deduplicated
 automatically -- tags from XMP sidecar files, embedded XMP in JPEGs, and
 manual additions are merged into a single set.
 
+### Hierarchical tags
+
+Tags can contain `/` as a hierarchy separator, allowing you to organize
+keywords into a tree structure:
+
+```
+dam tag a1b2c3d4 animals/birds/eagles
+dam tag a1b2c3d4 location/europe/germany
+```
+
+Parent tag searches match all descendants -- searching for `tag:animals` will
+find assets tagged `animals/birds/eagles`. This works in both CLI and web UI
+searches.
+
+Hierarchical tags interoperate with Lightroom's `lr:hierarchicalSubject` XMP
+field. When importing XMP files that contain `lr:hierarchicalSubject` entries,
+dam reads the hierarchy and stores the full path as a tag. Write-back preserves
+the hierarchy in the XMP file.
+
+The tags page in the web UI displays hierarchical tags as a collapsible tree
+(see [Web UI](06-web-ui.md) for details).
+
 ### Adding tags
 
 Pass one or more tag names after the asset ID:
@@ -337,6 +359,107 @@ Note the quoted value for collection names with spaces.
 - In the **batch toolbar**, a collection dropdown lets you add or remove
   selected assets from a collection. The dropdown includes a **"New..."**
   option that creates a collection inline.
+
+---
+
+## Stacks
+
+Stacks are lightweight anonymous groups of assets -- burst shots, exposure
+brackets, or similar scenes that you want to collapse into a single entry in the
+browse grid. Unlike grouping (which permanently merges variants into one asset),
+stacks keep each asset independent. You can dissolve a stack at any time to
+separate the assets again.
+
+Each asset can belong to at most one stack. Members are position-ordered;
+position 0 is the **pick** -- the representative image shown when the stack is
+collapsed in the browse grid. Stacks auto-dissolve when they have one or fewer
+members.
+
+The alias `dam st` can be used in place of `dam stack` for brevity.
+
+### Creating a stack
+
+Pass two or more asset IDs to create a new stack:
+
+```
+dam stack create a1b2c3d4 e5f6a7b8 c9d0e1f2
+```
+
+The first asset becomes the pick (position 0). The remaining assets are ordered
+by their position in the argument list.
+
+### Adding assets to a stack
+
+```
+dam stack add <stack-id> f3a4b5c6
+```
+
+The new asset is appended to the end of the stack.
+
+### Setting the pick
+
+Promote any member to the pick position:
+
+```
+dam stack pick <stack-id> e5f6a7b8
+```
+
+The previous pick moves to position 1; all other positions shift accordingly.
+
+### Removing assets from a stack
+
+```
+dam stack remove <stack-id> c9d0e1f2
+```
+
+If the stack has one or fewer members after removal, it auto-dissolves.
+
+### Dissolving a stack
+
+Dissolve a stack entirely, returning all members to standalone assets:
+
+```
+dam stack dissolve <stack-id>
+```
+
+### Listing stacks
+
+```
+dam stack list
+```
+
+Shows all stacks with their member counts.
+
+### Showing stack details
+
+```
+dam stack show <stack-id>
+```
+
+Displays the stack's members in position order, with the pick marked.
+
+### Searching for stacked assets
+
+Use the `stacked:` filter in any search:
+
+```
+dam search "stacked:true"      # assets that are in a stack
+dam search "stacked:false"     # standalone assets
+```
+
+### Structured output
+
+All stack commands support `--json`:
+
+```
+dam --json stack list
+dam --json stack show <stack-id>
+```
+
+### Web UI
+
+See [Web UI](06-web-ui.md) for the stack experience in the browse grid, batch
+operations, and asset detail page.
 
 ---
 

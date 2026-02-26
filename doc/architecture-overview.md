@@ -21,9 +21,10 @@ The system is organized in four layers, from top to bottom:
 - **XMP Reader** — extracts and writes back XMP metadata (keywords, rating, description, color label) for bidirectional sync with CaptureOne/Lightroom.
 - **Collection Store** — manages static album collections (dual storage: SQLite for queries + YAML for rebuild persistence).
 - **Saved Search Store** — manages named search queries (stored in TOML).
+- **Stack Store** — manages asset stacks / scene groupings (dual storage: SQLite `stacks` table + `stacks.yaml` for rebuild persistence). Stacks collapse multiple assets into a single pick in the browse grid.
 
 ### 3. Storage Layer
-- **Local Catalog** — always available on local disk. Contains asset index, cached metadata, thumbnails, volume registry. Small compared to originals.
+- **Local Catalog** — always available on local disk. Contains asset index, cached metadata, thumbnails, volume registry, collection and stack membership. Small compared to originals.
 - **Media Volumes** — external/offline drives holding the actual asset files. May be unmounted.
 
 ## Key Design Decisions

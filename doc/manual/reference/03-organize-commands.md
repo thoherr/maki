@@ -1,6 +1,6 @@
 # Organize Commands
 
-Commands for curating static collections and managing saved searches (smart albums).
+Commands for curating static collections, managing saved searches (smart albums), and grouping assets into stacks.
 
 ---
 
@@ -599,6 +599,373 @@ dam ss delete "Drafts" --json
 
 [saved-search save](#dam-saved-search-save) -- create a new saved search.
 [saved-search list](#dam-saved-search-list) -- list all saved searches.
+
+---
+
+## dam stack create
+
+### NAME
+
+dam-stack-create -- create a new stack from the given assets
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] stack create <ASSET_IDS...>
+```
+
+Alias: `dam st create`
+
+### DESCRIPTION
+
+Creates a new stack from two or more assets. Stacks are lightweight anonymous groups for visually related images -- burst shots, bracketing sequences, similar scenes. The first asset ID becomes the stack's "pick" (displayed in the browse grid).
+
+Each asset can belong to at most one stack. Attempting to stack an asset that is already in a stack produces an error.
+
+Stacks are persisted in `stacks.yaml` at the catalog root and restored during `rebuild-catalog`.
+
+### ARGUMENTS
+
+**ASSET_IDS** (required)
+: Two or more asset IDs. The first ID becomes the pick (position 0).
+
+### OPTIONS
+
+This command only accepts [global flags](00-cli-conventions.md#global-flags).
+
+`--json` outputs the created stack's details (id, member_count, asset_ids).
+
+### EXAMPLES
+
+Create a stack from three burst shots (first becomes pick):
+
+```bash
+dam stack create a1b2c3d4-... e5f67890-... f1a2b3c4-...
+```
+
+Create using the alias with JSON output:
+
+```bash
+dam st create a1b2c3d4-... e5f67890-... --json
+```
+
+### SEE ALSO
+
+[stack add](#dam-stack-add) -- add assets to an existing stack.
+[stack pick](#dam-stack-pick) -- change which asset is the pick.
+[stack dissolve](#dam-stack-dissolve) -- dissolve a stack entirely.
+
+---
+
+## dam stack add
+
+### NAME
+
+dam-stack-add -- add assets to an existing stack
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] stack add <REFERENCE> <ASSET_IDS...>
+```
+
+Alias: `dam st add`
+
+### DESCRIPTION
+
+Adds one or more assets to an existing stack. The reference asset identifies which stack to add to -- it must already be a member of a stack. New assets are appended to the end of the stack's member list.
+
+Assets that are already in a stack (any stack) cannot be added and will produce an error.
+
+### ARGUMENTS
+
+**REFERENCE** (required)
+: Any asset ID that is already in the target stack.
+
+**ASSET_IDS** (required)
+: One or more asset IDs to add to the stack.
+
+### OPTIONS
+
+This command only accepts [global flags](00-cli-conventions.md#global-flags).
+
+`--json` outputs `{"added": N}` with the count of assets added.
+
+### EXAMPLES
+
+Add an asset to the stack containing a1b2c3d4:
+
+```bash
+dam stack add a1b2c3d4-... new-asset-id-...
+```
+
+Add multiple assets:
+
+```bash
+dam st add a1b2c3d4-... b2c3d4e5-... c3d4e5f6-...
+```
+
+### SEE ALSO
+
+[stack create](#dam-stack-create) -- create a new stack.
+[stack remove](#dam-stack-remove) -- remove assets from a stack.
+
+---
+
+## dam stack remove
+
+### NAME
+
+dam-stack-remove -- remove assets from their stack
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] stack remove <ASSET_IDS...>
+```
+
+Alias: `dam st remove`
+
+### DESCRIPTION
+
+Removes one or more assets from their stacks. Each asset is removed from whatever stack it belongs to. If removing an asset causes a stack to have fewer than 2 members, the stack is automatically dissolved.
+
+Assets not currently in a stack are silently skipped.
+
+### ARGUMENTS
+
+**ASSET_IDS** (required)
+: One or more asset IDs to remove from their stacks.
+
+### OPTIONS
+
+This command only accepts [global flags](00-cli-conventions.md#global-flags).
+
+`--json` outputs `{"removed": N}` with the count of assets removed.
+
+### EXAMPLES
+
+Remove a single asset from its stack:
+
+```bash
+dam stack remove a1b2c3d4-e5f6-7890-abcd-ef1234567890
+```
+
+Remove multiple assets:
+
+```bash
+dam st remove a1b2c3d4-... e5f67890-...
+```
+
+### SEE ALSO
+
+[stack add](#dam-stack-add) -- add assets to a stack.
+[stack dissolve](#dam-stack-dissolve) -- dissolve an entire stack at once.
+
+---
+
+## dam stack pick
+
+### NAME
+
+dam-stack-pick -- set the pick (top) of a stack
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] stack pick <ASSET_ID>
+```
+
+Alias: `dam st pick`
+
+### DESCRIPTION
+
+Promotes an asset to position 0 (the "pick") of its stack. The pick is the asset shown in the browse grid when stacks are collapsed. The asset must already be a member of a stack.
+
+### ARGUMENTS
+
+**ASSET_ID** (required)
+: The asset ID to make the pick. Must be in a stack.
+
+### OPTIONS
+
+This command only accepts [global flags](00-cli-conventions.md#global-flags).
+
+`--json` outputs `{"pick": "<asset_id>"}`.
+
+### EXAMPLES
+
+Set a specific asset as the stack pick:
+
+```bash
+dam stack pick a1b2c3d4-e5f6-7890-abcd-ef1234567890
+```
+
+Set pick using the alias:
+
+```bash
+dam st pick a1b2c3d4-...
+```
+
+### SEE ALSO
+
+[stack show](#dam-stack-show) -- view current stack members and pick.
+[stack create](#dam-stack-create) -- the first asset in create becomes the initial pick.
+
+---
+
+## dam stack dissolve
+
+### NAME
+
+dam-stack-dissolve -- dissolve an entire stack
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] stack dissolve <ASSET_ID>
+```
+
+Alias: `dam st dissolve`
+
+### DESCRIPTION
+
+Dissolves the stack that contains the given asset. All member assets become unstacked. The assets themselves are not affected -- only the stack grouping is removed.
+
+### ARGUMENTS
+
+**ASSET_ID** (required)
+: Any asset ID in the stack to dissolve.
+
+### OPTIONS
+
+This command only accepts [global flags](00-cli-conventions.md#global-flags).
+
+`--json` outputs `{"status": "dissolved"}`.
+
+### EXAMPLES
+
+Dissolve a stack:
+
+```bash
+dam stack dissolve a1b2c3d4-e5f6-7890-abcd-ef1234567890
+```
+
+Dissolve using the alias:
+
+```bash
+dam st dissolve a1b2c3d4-...
+```
+
+### SEE ALSO
+
+[stack remove](#dam-stack-remove) -- remove individual assets instead of dissolving the whole stack.
+[stack list](#dam-stack-list) -- list all stacks.
+
+---
+
+## dam stack list
+
+### NAME
+
+dam-stack-list -- list all stacks
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] stack list
+```
+
+Alias: `dam st list`
+
+### DESCRIPTION
+
+Lists all stacks in the catalog, showing each stack's ID, member count, creation date, and pick asset ID.
+
+### ARGUMENTS
+
+None.
+
+### OPTIONS
+
+This command only accepts [global flags](00-cli-conventions.md#global-flags).
+
+`--json` outputs an array of `StackSummary` objects.
+
+### EXAMPLES
+
+List all stacks:
+
+```bash
+dam stack list
+```
+
+List as JSON and count stacks:
+
+```bash
+dam st list --json | jq 'length'
+```
+
+### SEE ALSO
+
+[stack show](#dam-stack-show) -- view members of a specific stack.
+[stack create](#dam-stack-create) -- create a new stack.
+
+---
+
+## dam stack show
+
+### NAME
+
+dam-stack-show -- show members of a stack
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] stack show <ASSET_ID> [--format <FMT>]
+```
+
+Alias: `dam st show`
+
+### DESCRIPTION
+
+Displays the ordered member list of the stack containing the given asset. The pick (position 0) is shown first. Output format can be customized using the same format presets and template syntax as `dam search`.
+
+### ARGUMENTS
+
+**ASSET_ID** (required)
+: Any asset ID that belongs to a stack.
+
+### OPTIONS
+
+**--format \<FMT\>**
+: Output format. Presets: `ids`, `short` (default), `full`, `json`. Custom templates use `{placeholder}` syntax.
+
+### EXAMPLES
+
+Show members of a stack:
+
+```bash
+dam stack show a1b2c3d4-...
+```
+
+Get just the member IDs:
+
+```bash
+dam st show a1b2c3d4-... --format ids
+```
+
+Show as JSON:
+
+```bash
+dam st show a1b2c3d4-... --json
+```
+
+### SEE ALSO
+
+[stack pick](#dam-stack-pick) -- change the pick.
+[stack list](#dam-stack-list) -- list all stacks.
+[search](04-retrieve-commands.md#dam-search) -- `stacked:true` filter finds all stacked assets.
 
 ---
 

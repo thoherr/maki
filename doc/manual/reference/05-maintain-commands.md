@@ -972,7 +972,7 @@ This command is useful when:
 - Schema changes require a full rebuild.
 - The catalog needs to be verified against sidecar files.
 
-After rebuilding, all denormalized columns (best variant hash, primary format, variant count) are recomputed. Collections are preserved via `collections.yaml`.
+After rebuilding, all denormalized columns (best variant hash, primary format, variant count) are recomputed. Collections are preserved via `collections.yaml`. Stacks are restored from `stacks.yaml`, re-populating the `stacks` table and the `stack_id`/`stack_position` columns on the `assets` table.
 
 ### ARGUMENTS
 

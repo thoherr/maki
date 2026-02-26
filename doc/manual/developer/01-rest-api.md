@@ -245,6 +245,48 @@ Regenerates the preview thumbnail for the asset's primary variant. Requires the 
 curl -X POST http://localhost:8080/api/asset/{id}/preview
 ```
 
+### `PUT /api/asset/{id}/stack-pick` -- Set Stack Pick
+
+Sets this asset as the pick (position 0) of its stack. The previous pick swaps to this asset's former position. Persists to both SQLite and `stacks.yaml`.
+
+| Parameter | Type   | Description             |
+|-----------|--------|-------------------------|
+| `id`      | string | Asset UUID (path param) |
+
+**Response**:
+```json
+{
+  "status": "ok"
+}
+```
+
+**Errors**: Returns 500 if the asset is not in a stack.
+
+```bash
+curl -X PUT http://localhost:8080/api/asset/{id}/stack-pick
+```
+
+### `DELETE /api/asset/{id}/stack` -- Dissolve Stack
+
+Dissolves the entire stack that this asset belongs to. All members are unstacked. Persists to both SQLite and `stacks.yaml`.
+
+| Parameter | Type   | Description             |
+|-----------|--------|-------------------------|
+| `id`      | string | Asset UUID (path param) |
+
+**Response**:
+```json
+{
+  "status": "ok"
+}
+```
+
+**Errors**: Returns 500 if the asset is not in a stack.
+
+```bash
+curl -X DELETE http://localhost:8080/api/asset/{id}/stack
+```
+
 ---
 
 ## Batch Operations
@@ -425,6 +467,69 @@ Removes assets from a named collection. Persists to both SQLite and YAML.
 curl -X DELETE http://localhost:8080/api/batch/collection \
   -H "Content-Type: application/json" \
   -d '{"asset_ids": ["uuid-1", "uuid-2"], "collection": "Best of 2025"}'
+```
+
+### `POST /api/batch/stack` -- Create Stack
+
+Creates a stack from the selected assets. The first asset becomes the pick (position 0). Assets already in a stack are rejected. Persists to both SQLite and `stacks.yaml`.
+
+**Content-Type**: `application/json`
+
+**Request body**:
+```json
+{
+  "asset_ids": ["uuid-1", "uuid-2", "uuid-3"]
+}
+```
+
+| Field      | Type     | Description                              |
+|------------|----------|------------------------------------------|
+| `asset_ids` | string[] | Array of asset UUIDs (minimum 2)        |
+
+**Response**:
+```json
+{
+  "stack_id": "550e8400-e29b-41d4-a716-446655440000",
+  "member_count": 3
+}
+```
+
+**Errors**: Returns 500 if any asset is already in a stack, or fewer than 2 assets are provided.
+
+```bash
+curl -X POST http://localhost:8080/api/batch/stack \
+  -H "Content-Type: application/json" \
+  -d '{"asset_ids": ["uuid-1", "uuid-2", "uuid-3"]}'
+```
+
+### `DELETE /api/batch/stack` -- Unstack Assets
+
+Removes assets from their stacks. If a stack is left with 1 or fewer members, it is automatically dissolved. Persists to both SQLite and `stacks.yaml`.
+
+**Content-Type**: `application/json`
+
+**Request body**:
+```json
+{
+  "asset_ids": ["uuid-1", "uuid-2"]
+}
+```
+
+| Field      | Type     | Description            |
+|------------|----------|------------------------|
+| `asset_ids` | string[] | Array of asset UUIDs  |
+
+**Response**:
+```json
+{
+  "removed": 2
+}
+```
+
+```bash
+curl -X DELETE http://localhost:8080/api/batch/stack \
+  -H "Content-Type: application/json" \
+  -d '{"asset_ids": ["uuid-1", "uuid-2"]}'
 ```
 
 ### `POST /api/batch/auto-group` -- Auto-Group by Stem

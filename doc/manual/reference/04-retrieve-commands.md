@@ -27,7 +27,7 @@ Searches the catalog for assets matching the given query. The query string suppo
 | Filter | Description | Examples |
 |--------|-------------|----------|
 | `type:` | Asset type | `type:image`, `type:video`, `type:audio` |
-| `tag:` | Tag name | `tag:landscape`, `tag:"golden hour"` |
+| `tag:` | Tag name (hierarchical: matches descendants) | `tag:landscape`, `tag:"golden hour"`, `tag:animals/birds` |
 | `format:` | File format | `format:jpg`, `format:nef`, `format:mp4` |
 | `rating:` | Star rating (exact) | `rating:5` |
 | `rating:N+` | Star rating (minimum) | `rating:3+` |
@@ -51,6 +51,8 @@ Searches the catalog for assets matching the given query. The query string suppo
 | `missing:true` | Assets with files missing on disk | `missing:true` |
 | `stale:N` | Not verified in N days | `stale:30`, `stale:90` |
 | `volume:none` | Assets not on any online volume | `volume:none` |
+| `stacked:true` | Assets in a stack | `stacked:true` |
+| `stacked:false` | Assets not in any stack | `stacked:false` |
 
 Filters can be freely combined. Free-text tokens that do not match a filter prefix are joined as a text search against filenames and metadata.
 
@@ -536,9 +538,11 @@ Starts a local web server that provides a browser-based interface for browsing, 
 - **Asset detail page**: Full preview, editable metadata (inline name, description, star rating, color label, tags), variant list, recipe list, and collection membership chips.
 - **Tags page** (`/tags`): Sortable tag list with counts, live text filter, and multi-column layout.
 - **Collections page** (`/collections`): List of all collections with creation button.
-- **Batch operations**: Checkbox selection on browse cards with a fixed bottom toolbar for batch tagging, rating, labeling, and auto-grouping.
+- **Stacks**: When stack collapsing is enabled (default), stacked assets are collapsed in the browse grid to show only the pick image with a stack count badge. A toggle button in the results bar switches between collapsed and expanded views. The `stacked:true` and `stacked:false` search filters are available in the query input.
+- **Batch operations**: Checkbox selection on browse cards with a fixed bottom toolbar for batch tagging, rating, labeling, auto-grouping, stacking, and unstacking. "Stack" creates a new stack from selected assets; "Unstack" removes selected assets from their stacks.
 - **Keyboard navigation**: Arrow keys navigate between cards, Enter opens details, Space toggles selection, 1-5 sets rating, 0 clears rating, Alt+1-7 sets label, single letters (r/o/y/g/b/p/u) set label by color initial, x clears label.
 - **Saved search chips**: Clickable chips on the browse page load saved searches into the filter UI.
+- **Tags page**: Shows a collapsible tree view for hierarchical tags (tags containing `/` as a hierarchy separator). Non-hierarchical tags continue to display in the flat multi-column layout.
 
 The server defaults to `127.0.0.1:8080`. These can be overridden by CLI flags or the `[serve]` section in `dam.toml`. CLI flags take precedence over configuration.
 
@@ -599,5 +603,5 @@ dam serve --log --time
 
 ---
 
-Previous: [Organize Commands](03-organize-commands.md) -- `collection`, `saved-search`.
+Previous: [Organize Commands](03-organize-commands.md) -- `collection`, `saved-search`, `stack`.
 Next: [Maintain Commands](05-maintain-commands.md) -- `verify`, `sync`, `refresh`, `cleanup`, `relocate`, `update-location`, `generate-previews`, `fix-roles`, `rebuild-catalog`.

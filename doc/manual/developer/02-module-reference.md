@@ -22,6 +22,7 @@ graph TD
     config["config<br/>(dam.toml)"]
     collection["collection"]
     saved_search["saved_search"]
+    stack["stack"]
     format["format<br/>(output templates)"]
 
     main --> query
@@ -31,6 +32,7 @@ graph TD
     main --> device_registry
     main --> collection
     main --> saved_search
+    main --> stack
     main --> format
     main --> web
     main --> models
@@ -45,6 +47,7 @@ graph TD
     web --> device_registry
     web --> collection
     web --> saved_search
+    web --> stack
     web --> asset_service
     web --> content_store
     web --> metadata_store
@@ -93,6 +96,7 @@ graph TD
 | `preview` | `src/preview.rs` | Preview/thumbnail generation. Standard images use the `image` crate (resized to configurable max edge, default 800px). RAW files use `dcraw` or `dcraw_emu` (LibRaw). Videos use `ffmpeg`. Non-visual formats get info cards rendered with `imageproc`/`ab_glyph`. Previews stored at `previews/<hash-prefix>/<hash>.{jpg,webp}`. |
 | `query` | `src/query.rs` | Search query parsing and `QueryEngine` orchestration. Parses filter syntax (`tag:X`, `rating:N+`, `label:Red`, `collection:X`, `path:prefix`, `orphan:true`, `missing:true`, `stale:N`, `volume:none`). `QueryEngine` wraps catalog + metadata store + device registry to provide high-level operations: `search`, `show`, `tag`, `edit`, `set_rating`, `set_description`, `set_name`, `set_color_label`, `auto_group`, `fix_roles`. Includes path normalization for volume-relative prefix matching. |
 | `saved_search` | `src/saved_search.rs` | Saved search (smart album) persistence. Stores named queries in `searches.toml` at the catalog root. Provides `load()`, `save()`, and `SavedSearch` struct with `to_url_params()` for web UI chip rendering. |
+| `stack` | `src/stack.rs` | Stack (scene grouping) persistence. Dual storage: SQLite `stacks` table for fast queries + `stacks.yaml` at catalog root for rebuild resilience. Provides `StackStore` with create, add, remove, set_pick, dissolve, list, and export/import operations. Assets in a stack have `stack_id` and `stack_position` columns on the `assets` table. Position 0 is the pick (displayed in browse grid when stacks are collapsed). |
 | `web` | `src/web/` | Axum web server. Split into sub-modules: |
 | | `src/web/mod.rs` | Server setup, router construction, `AppState`, request logging middleware, graceful shutdown. |
 | | `src/web/routes.rs` | All HTTP route handlers: browse, asset detail, tags page, stats page, collections page, search API, asset editing endpoints, batch operations, saved search CRUD, collection CRUD. |

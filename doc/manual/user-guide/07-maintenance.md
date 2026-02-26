@@ -390,7 +390,7 @@ dam rebuild-catalog
 Sample output:
 
 ```
-Rebuild complete: 1847 assets, 2914 variants, 312 recipes, 3 collections
+Rebuild complete: 1847 assets, 2914 variants, 312 recipes, 3 collections, 45 stacks
 ```
 
 ### When to use it
@@ -403,14 +403,16 @@ Rebuild complete: 1847 assets, 2914 variants, 312 recipes, 3 collections
 
 - **Sidecar YAML files**: Untouched (they are the source, not the target).
 - **Collections**: Restored from `collections.yaml` at the catalog root.
+- **Stacks**: Restored from `stacks.yaml` at the catalog root (member order and pick assignments are preserved).
 - **Preview files**: Untouched (they are content-addressed by hash).
 - **Volumes**: Re-registered from `volumes.yaml`.
 
 ### What is regenerated
 
-- All SQLite tables (assets, variants, recipes, file locations, tags).
+- All SQLite tables (assets, variants, recipes, file locations, tags, stacks).
 - Denormalized columns (`best_variant_hash`, `primary_variant_format`, `variant_count`).
 - Collection membership records (from `collections.yaml`).
+- Stack membership records (from `stacks.yaml`).
 
 This is a safe operation -- only the derived cache (SQLite) is rebuilt. No files on disk are modified or deleted.
 

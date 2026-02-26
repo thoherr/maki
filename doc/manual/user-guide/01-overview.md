@@ -4,7 +4,7 @@ This chapter introduces the data model, architecture, and workflow of **dam** --
 
 ## Data Model
 
-dam organizes your files into five core entities.
+dam organizes your files into six core entities.
 
 ### Entity Relationships
 
@@ -12,6 +12,7 @@ dam organizes your files into five core entities.
 erDiagram
     Asset ||--o{ Variant : "has variants"
     Asset ||--o{ Recipe : "has recipes"
+    Asset }o--o| Stack : "member of"
     Variant ||--o{ FileLocation : "stored at"
     Recipe ||--|| FileLocation : "located at"
     Recipe }o--|| Variant : "attached to"
@@ -59,11 +60,16 @@ erDiagram
         string volume_type "Local, External, Network"
         bool is_online "auto-detected at runtime"
     }
+
+    Stack {
+        UUID id PK
+        int position "0 = pick"
+    }
 ```
 
 ### Asset
 
-The top-level entity. An Asset represents a single logical image or media item -- "photo of sunset at the beach" -- regardless of how many files exist for it. An Asset has a deterministic UUID derived from the content hash of its first variant, plus optional metadata: name, description, tags (keywords), rating (1--5 stars), and color label (Red, Orange, Yellow, Green, Blue, Pink, Purple -- a superset of Lightroom's palette that matches CaptureOne).
+The top-level entity. An Asset represents a single logical image or media item -- "photo of sunset at the beach" -- regardless of how many files exist for it. An Asset has a deterministic UUID derived from the content hash of its first variant, plus optional metadata: name, description, tags (keywords), rating (1--5 stars), and color label (Red, Orange, Yellow, Green, Blue, Pink, Purple -- a superset of Lightroom's palette that matches CaptureOne). Tags support hierarchy using `/` as a separator (e.g., `animals/birds/eagles`); searching for a parent tag matches all descendants.
 
 ### Variant
 
@@ -89,6 +95,10 @@ A processing sidecar file (`.xmp`, `.cos`, `.cot`, `.cop`, `.pp3`, `.dop`, `.on1
 ### Volume
 
 A registered storage device: local disk, external drive, or network share. Each Volume has a human-readable label and a mount point. dam detects online/offline status at runtime, so you can browse and search assets on unmounted drives using cached metadata and preview thumbnails.
+
+### Stack
+
+A lightweight anonymous group of assets -- burst shots, exposure brackets, or similar scenes that you want to collapse into a single entry in the browse grid. Each asset can belong to at most one stack. Members are position-ordered; position 0 is the **pick** (the representative image shown when the stack is collapsed). Stacks auto-dissolve when they have one or fewer members. Persisted in `stacks.yaml` at the catalog root for resilience across catalog rebuilds.
 
 ## Content-Addressable Storage
 
@@ -242,6 +252,7 @@ Additional modules handle EXIF extraction, XMP reading/writing, configuration pa
 - `volumes.yaml` -- registered volume definitions
 - `searches.toml` -- saved searches
 - `collections.yaml` -- static album definitions
+- `stacks.yaml` -- stack definitions (member order and pick)
 - `dam.toml` -- configuration
 
 **Media Volumes** (may be offline): The actual asset files on external drives, NAS, or local directories. dam never moves or modifies original media files unless explicitly asked (via `relocate --remove-source`).
@@ -263,15 +274,17 @@ The display logic prefers Export > Processed > Original variant previews, with s
 
 Preview settings (max edge size, format, quality) are configurable in `dam.toml`. See [Setup](02-setup.md) for configuration details and [Ingesting Assets](03-ingest.md) for the `generate-previews` command.
 
-## Collections and Saved Searches
+## Collections, Stacks, and Saved Searches
 
-dam provides two ways to organize assets into groups:
+dam provides three ways to organize assets into groups:
 
 **Collections** (static albums): Manually curated lists of asset IDs. You explicitly add and remove assets. Backed by both SQLite (for fast queries) and a `collections.yaml` file (for persistence across catalog rebuilds). Use these for curated sets like "Portfolio" or "Client Deliverables".
 
+**Stacks**: Lightweight anonymous groups for burst shots, bracketing, or similar scenes. The browse grid collapses each stack to show only the pick image with a count badge, reducing visual clutter. Backed by a `stacks.yaml` file for persistence across catalog rebuilds. Use these to declutter the browse grid without permanently merging variants.
+
 **Saved searches** (smart albums): Named queries stored in `searches.toml`. A saved search is a set of filter criteria (tags, rating, date range, volume, etc.) that is re-evaluated every time you run it. Results update automatically as your catalog changes. Use these for dynamic views like "5-star landscapes" or "untagged imports from last week".
 
-Both are accessible from the CLI and the web UI. See [Organizing Assets](04-organize.md) for detailed usage.
+All three are accessible from the CLI and the web UI. See [Organizing Assets](04-organize.md) for detailed usage.
 
 ## The Round-Trip Workflow
 

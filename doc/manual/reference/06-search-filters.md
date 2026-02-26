@@ -47,7 +47,11 @@ dam search "type:video rating:3+"
 
 **Syntax:** `tag:<name>` or `tag:"<multi-word name>"`
 
-**Description:** Filters to assets that have a specific tag. Exact match on tag name. Supports quoted values for multi-word tags.
+**Description:** Filters to assets that have a specific tag. Supports quoted values for multi-word tags.
+
+**Hierarchical matching:** Tags can be organized hierarchically using `/` as a separator (e.g., `animals/birds/eagles`). Searching for a parent tag matches all descendants: `tag:animals` finds assets tagged `animals`, `animals/birds`, and `animals/birds/eagles`. Searching for an intermediate level also works: `tag:animals/birds` matches both `animals/birds` and `animals/birds/eagles`.
+
+Internally, hierarchical tags are stored with `|` as the separator (to avoid conflicts with literal slashes in tag names like `f/1.4`). The search system handles the conversion transparently -- users always type `/` in queries.
 
 **Examples:**
 
@@ -55,9 +59,11 @@ dam search "type:video rating:3+"
 dam search "tag:landscape"
 dam search 'tag:"Fools Theater"'
 dam search 'tag:"Black and White" rating:4+'
+dam search "tag:animals"                   # matches animals, animals/birds, animals/birds/eagles
+dam search "tag:animals/birds"             # matches animals/birds and animals/birds/eagles
 ```
 
-**SQL behavior:** `WHERE EXISTS (SELECT 1 FROM tags t WHERE t.asset_id = a.id AND t.tag = ?)`. Subquery on the tags table.
+**SQL behavior:** `WHERE (a.tags LIKE '%"stored"%' OR a.tags LIKE '%"stored|%')`. The second LIKE clause enables parent-matches-children semantics. Tags containing literal `/` get an additional raw fallback clause.
 
 ---
 
@@ -456,6 +462,28 @@ dam search "stale:90 type:image"
 
 ---
 
+## stacked
+
+**Syntax:** `stacked:true` or `stacked:false`
+
+**Description:** Filters by whether an asset belongs to a stack. `stacked:true` finds assets that are members of a stack; `stacked:false` finds assets that are not in any stack.
+
+**Examples:**
+
+```
+dam search "stacked:true"                  # all stacked assets
+dam search "stacked:false rating:5"        # 5-star assets not in a stack
+dam search "stacked:true type:image"       # stacked images
+```
+
+**SQL behavior:**
+- `stacked:true`: `WHERE a.stack_id IS NOT NULL`
+- `stacked:false`: `WHERE a.stack_id IS NULL`
+
+Pure assets-table filter, no JOIN required.
+
+---
+
 ## copies
 
 **Syntax:** `copies:<N>` (exact) or `copies:<N>+` (minimum)
@@ -522,6 +550,12 @@ dam search "dateFrom:2026-01-01 dateUntil:2026-03-31 tag:landscape"
 
 # Everything shot in February 2026
 dam search "date:2026-02"
+
+# Unstacked 5-star images (candidates for stacking review)
+dam search "stacked:false rating:5 type:image"
+
+# Find stacked assets with a hierarchical tag
+dam search "stacked:true tag:animals/birds"
 ```
 
 ---
@@ -576,6 +610,7 @@ dam search "camera:fuji"
 | `orphan:true` | yes | no | yes |
 | `missing:true` | yes | no | yes |
 | `stale:` | yes | no | yes |
+| `stacked:` | yes | no | yes |
 
 ---
 

@@ -100,8 +100,13 @@ Below the search bar, results appear as a grid of thumbnail cards. Each card sho
 - The asset name (or filename as fallback)
 - Badges for type and primary format (e.g., "image" and "NEF")
 - A variant count badge when the asset has multiple variants (e.g., "3v")
+- A stack badge when the asset is in a stack (e.g., a small grid icon with the member count)
 - Star rating (filled stars)
 - Color label dot
+
+Cards that belong to a stack have a colored left border for quick visual identification.
+
+**Stack collapsing**: By default, stacks are collapsed -- only the pick image (position 0) is shown in the grid, with a stack count badge indicating how many assets are hidden. A collapse toggle in the results bar lets you expand all stacks so every member is visible. When expanded, all stack members appear in position order with the colored border indicating membership.
 
 Click a card to open the [asset detail page](#asset-detail-page).
 
@@ -249,6 +254,10 @@ Below the editable fields:
 
 If the asset belongs to any collections, they appear as clickable chips. Click a chip to browse that collection. Click the x button on a chip to remove the asset from that collection.
 
+### Stack members
+
+If the asset belongs to a stack, a section shows all members in position order with thumbnail previews. The pick is indicated. You can click any member to navigate to its detail page.
+
 ### Variants
 
 An expandable section lists all variants of the asset in a table with columns for role, filename, format, size, and file locations (volume and path). This gives you a complete picture of where the asset's files live across your storage volumes.
@@ -289,6 +298,10 @@ A fixed toolbar appears at the bottom of the screen whenever one or more assets 
 **Collection**: a dropdown listing your collections (plus a "New..." option to create one inline). The buttons next to it are context-sensitive:
 - When you are **not** browsing a collection, a "+ Collection" button adds the selected assets to the chosen collection.
 - When you **are** browsing a collection (the collection filter is active), a "- Collection" button removes the selected assets from that collection. The dropdown auto-selects the current collection.
+
+**Stack**: creates a stack from the selected assets (or adds them to an existing stack if one of the selected assets is already stacked). The first selected asset becomes the pick. This is a lightweight, reversible grouping -- assets remain independent.
+
+**Unstack**: removes the selected assets from their stacks. If a stack has one or fewer members after removal, it auto-dissolves.
 
 **Group by name**: merges the selected assets by filename stem. A confirmation dialog explains the action. Assets whose filenames share a common prefix (e.g., `DSC_001.nef` and `DSC_001.jpg`) are merged into a single asset with multiple variants. This cannot be undone.
 
@@ -363,6 +376,7 @@ Navigate to `/tags` or click "Tags" in the navigation bar.
 - **Live text filter**: type in the filter input to narrow the tag list. Filtering begins at 2 characters. The count display updates to show "X of Y" tags.
 - **Multi-column layout**: tags flow into multiple columns automatically, adapting to the viewport width.
 - **Clickable tags**: click any tag name to jump to the browse page filtered by that tag.
+- **Hierarchical tree view**: tags containing `/` separators are displayed as a collapsible tree. Each node shows its own count (assets tagged with that exact tag) and a total count (including all descendants). Click the disclosure triangle to expand or collapse a branch. Clicking a parent tag searches for all descendants.
 
 
 ## Collections Page

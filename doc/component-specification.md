@@ -18,6 +18,8 @@ The central entity. Represents a logical asset (e.g. "photo of sunset at beach, 
 | best_variant_hash | String | Denormalized: content hash of the best display variant (Export > Processed > Original, image formats preferred, size tiebreak). Computed at write time. |
 | primary_variant_format | String | Denormalized: identity format of the asset (Original+RAW first, then Original+any, then best variant). Computed at write time. |
 | variant_count | u32 | Denormalized: number of variants belonging to this asset. Computed at write time. |
+| stack_id | Option<UUID> | Stack this asset belongs to (NULL if unstacked) |
+| stack_position | Option<i64> | Position within the stack (0 = pick) |
 
 An asset groups one or more **variants**.
 
@@ -69,6 +71,17 @@ Known recipe extensions: `.xmp` (Adobe/Lightroom/CaptureOne), `.cos` / `.cot` / 
 | content_hash | SHA-256 | Hash of the recipe file itself (mutable — updated when file changes) |
 | location | FileLocation | Where the recipe file lives (primary identity for dedup) |
 | verified_at | DateTime | Last time hash was verified at this location |
+
+### Stack
+A scene grouping that collapses multiple assets into a single pick in the browse grid. Anonymous (no name or description), position-based ordering. Stacks auto-dissolve when reduced to one member or fewer.
+
+| Field | Type | Description |
+|---|---|---|
+| id | UUID | Stable identifier |
+| created_at | DateTime | When the stack was created |
+| member_count | u64 | Number of assets in the stack |
+
+Stack membership is tracked on the `assets` table via `stack_id` and `stack_position` columns. Position 0 is the pick. Stacks are persisted in both SQLite (`stacks` table) and `stacks.yaml` at the catalog root for rebuild resilience.
 
 **Design decision — location-based identity**: Recipes are identified by their location `(variant_hash, volume_id, relative_path)` rather than their content hash. This is because recipe files (XMP, COS, etc.) are routinely edited by external software. Re-importing after an external edit updates the recipe in place (new hash, re-extracted XMP metadata) rather than creating a duplicate. During verification, a changed recipe hash is reported as "modified" (not a failure) and the stored hash is updated.
 
@@ -128,7 +141,7 @@ recipes:
 
 **Responsibility**: fast queryable index over all metadata. Rebuilt from sidecar files.
 
-**Tables** mirror the data model: `assets`, `variants`, `file_locations`, `volumes`, `recipes`.
+**Tables** mirror the data model: `assets`, `variants`, `file_locations`, `volumes`, `recipes`, `stacks`, `collections`, `collection_assets`.
 
 This is a **derived cache**, not the source of truth. Running `dam rebuild-catalog` regenerates it from sidecar files. This means:
 - No data loss if the SQLite file is deleted.
@@ -254,6 +267,10 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 - `POST /api/batch/collection` — batch add assets to a collection (JSON: `{asset_ids, collection}`)
 - `DELETE /api/batch/collection` — batch remove assets from a collection (JSON: `{asset_ids, collection}`)
 - `POST /api/batch/auto-group` — batch auto-group selected assets by stem (JSON: `{asset_ids}`)
+- `POST /api/batch/stack` — create a stack from selected assets (JSON: `{asset_ids}`)
+- `DELETE /api/batch/stack` — unstack selected assets (JSON: `{asset_ids}`)
+- `PUT /api/asset/{id}/stack-pick` — set this asset as the stack pick
+- `DELETE /api/asset/{id}/stack` — dissolve the stack this asset belongs to
 - `PUT /api/asset/{id}/name` — set/clear asset name (form: `name=text`), returns name fragment
 - `GET /api/saved-searches` — list all saved searches as JSON
 - `POST /api/saved-searches` — save a new search (JSON: `{name, query, sort?, favorite?}`)
@@ -339,7 +356,26 @@ After each write, the file is re-hashed and the recipe's `content_hash` is updat
 
 **Favorite field**: Each saved search has a `favorite: bool` field (default `false`). Only favorites are shown as chips on the browse page. The `/saved-searches` management page shows all searches and allows toggling favorites.
 
-### 16. CLI
+### 16. Stack Store
+
+**Responsibility**: manage asset stacks (scene groupings).
+
+**Module**: `src/stack.rs` — dual storage: SQLite `stacks` table for fast queries + `stacks.yaml` at catalog root for persistence across `rebuild-catalog`.
+
+**Operations**:
+- `create(asset_ids)` — create a new stack (minimum 2 assets, first is the pick)
+- `add(reference_asset_id, new_asset_ids)` — add assets to an existing stack
+- `remove(asset_ids)` — remove assets from their stacks (auto-dissolves if <=1 member remains)
+- `set_pick(asset_id)` — set an asset as the stack pick (position 0)
+- `dissolve(asset_id)` — dissolve the entire stack
+- `list()` — list all stacks with summary info
+- `stack_for_asset(asset_id)` — get the stack and ordered members for an asset
+- `export_all()` — export all stacks to `StacksFile` for YAML persistence
+- `import_from_yaml(file)` — rebuild SQLite from YAML (used during `rebuild-catalog`)
+
+**Browse grid integration**: When stacks are collapsed (default), only the pick (position 0) is shown. Stack badges indicate member count.
+
+### 17. CLI
 
 **Global flags**:
 - `--json` — output machine-readable JSON
@@ -383,6 +419,7 @@ dam serve [--port P] [--bind ADDR] [--log]         # start web UI server (--log 
   catalog.db                          # SQLite index (derived, rebuildable)
   searches.toml                       # saved search definitions
   collections.yaml                    # collection membership (persists across rebuild-catalog)
+  stacks.yaml                         # stack membership (persists across rebuild-catalog)
   metadata/
     55/
       550e8400-e29b-41d4-...yaml      # asset sidecar files, sharded by UUID prefix

@@ -581,7 +581,7 @@ dependencies = [
 
 [[package]]
 name = "dam"
-version = "1.5.3"
+version = "1.6.0"
 dependencies = [
  "ab_glyph",
  "anyhow",

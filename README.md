@@ -12,8 +12,10 @@ A command-line digital asset manager built in Rust, designed for large collectio
 - **Bidirectional XMP sync** — rating, tag, description, and label changes written back to `.xmp` recipe files
 - **Preview generation** — thumbnails for images, RAW files (via dcraw/LibRaw), videos (via ffmpeg), and info cards for audio/documents
 - **Integrity verification** — detect bit rot and corruption by re-hashing files against stored checksums
+- **Stacks** — group burst shots and similar-scene images into collapsible stacks, showing only the "pick" in the browse grid
+- **Hierarchical tags** — tree-structured keywords with Lightroom `lr:hierarchicalSubject` interop
 - **Saved searches & collections** — smart albums (dynamic queries) and static albums (curated lists)
-- **Web UI** — browser-based interface with search, inline editing, batch operations, keyboard navigation, lightbox viewer, dark mode, and grid density controls
+- **Web UI** — browser-based interface with search, inline editing, batch operations, keyboard navigation, lightbox viewer, dark mode, grid density controls, and calendar heatmap
 - **Flexible output** — JSON on all commands, custom format templates, quiet mode for scripting
 
 ## Quick Start
@@ -41,9 +43,9 @@ dam serve
 
 ## Commands
 
-23 commands covering setup, import, search, editing, maintenance, and more:
+24 commands covering setup, import, search, editing, maintenance, and more:
 
-`init` · `volume add/list/combine/remove` · `import` · `search` · `show` · `edit` · `tag` · `group` · `auto-group` · `duplicates` · `generate-previews` · `relocate` · `verify` · `sync` · `refresh` · `cleanup` · `stats` · `fix-roles` · `fix-dates` · `rebuild-catalog` · `saved-search` · `collection` · `serve`
+`init` · `volume add/list/combine/remove` · `import` · `search` · `show` · `edit` · `tag` · `group` · `auto-group` · `stack` · `duplicates` · `generate-previews` · `relocate` · `verify` · `sync` · `refresh` · `cleanup` · `stats` · `fix-roles` · `fix-dates` · `rebuild-catalog` · `saved-search` · `collection` · `serve`
 
 **Global flags**: `--json`, `--log`, `--debug`, `--time`. Run `dam --help` or `dam <command> --help` for usage.
 

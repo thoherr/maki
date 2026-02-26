@@ -2,6 +2,20 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v1.6.0
+
+### New Features
+- **Stacks (scene grouping)** — group burst shots, bracketing sequences, and similar-scene images into lightweight anonymous stacks. The browse grid collapses stacks to show only the "pick" image with a count badge, reducing visual clutter. Click the stack toggle (⊞) in the results bar to expand/collapse all stacks globally. Stacks are position-ordered (index 0 = pick), one stack per asset, with auto-dissolve when only one member remains.
+  - **CLI**: `dam stack create/add/remove/pick/dissolve/list/show` (alias `st`). Full `--json` support. Stacks persist in `stacks.yaml` and survive `rebuild-catalog`.
+  - **Web UI browse**: Stack badge (⊞ N) on cards, colored left border per stack (hue derived from stack ID) for visual grouping, collapse/expand toggle button, "Stack" and "Unstack" batch toolbar buttons.
+  - **Web UI asset detail**: Stack members section with thumbnail strip, "Set as pick" and "Dissolve stack" buttons.
+  - **Search filter**: `stacked:true` / `stacked:false` to find stacked or unstacked assets.
+  - **Calendar**: Respects stack collapse state in heatmap counts.
+- **Hierarchical tags** — tags can now contain `/` as a hierarchy separator (e.g. `animals/birds/eagles`). Searching for a parent tag (e.g. `tag:animals`) matches all descendants. The tags page displays a collapsible tree view with own-count and total-count columns. Interoperates with Lightroom's `lr:hierarchicalSubject` XMP field: hierarchical subjects are imported, merged with flat `dc:subject` tags (deduplicating components), and written back on change. Internally stored with `|` as separator to avoid conflicts with literal `/` in tag names.
+
+### Enhancements
+- **Tag search with literal slashes** — tags containing literal `/` characters (not hierarchy separators) are now handled correctly in search and web display.
+
 ## v1.5.3
 
 ### New Features

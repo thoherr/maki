@@ -14,6 +14,7 @@ erDiagram
     FileLocation }o--|| Volume : "on volume"
     Recipe }o--|| Volume : "on volume"
     Collection }o--o{ Asset : "contains"
+    Stack ||--o{ Asset : "groups"
 
     Asset {
         UUID id PK "deterministic UUID v5 from content hash"
@@ -25,9 +26,17 @@ erDiagram
         u8 rating "1-5 star rating, optional"
         string color_label "color name, optional"
         datetime created_at "from EXIF or filesystem"
+        UUID stack_id FK "denormalized: parent stack, optional"
+        integer stack_position "denormalized: position in stack (0 = pick)"
         string best_variant_hash "denormalized: hash of best display variant"
         string primary_variant_format "denormalized: identity format"
         integer variant_count "denormalized: number of variants"
+    }
+
+    Stack {
+        UUID id PK
+        datetime created_at
+        string_array asset_ids "ordered member list (index 0 = pick)"
     }
 
     Variant {
@@ -118,8 +127,10 @@ The top-level entity. An Asset represents a single logical media item -- "photo 
 | `best_variant_hash` | String | Content hash of the best display variant (see [Display Priority](#display-priority)). Used for the browse grid JOIN. |
 | `primary_variant_format` | String | Identity format of the asset. Prefers Original+RAW, then Original+any, then best variant's format. Shown on browse cards (e.g. "NEF"). |
 | `variant_count` | Integer | Number of variants. Shown as a badge on browse cards (e.g. "3v"). |
+| `stack_id` | Option\<UUID\> | Foreign key to the Stack this asset belongs to. `None` if unstacked. |
+| `stack_position` | Option\<Integer\> | Position within the stack (0 = pick). `None` if unstacked. |
 
-These columns are updated by `insert_asset()`, `update_denormalized_variant_columns()`, and `fix_roles`. They are backfilled during schema migration and rebuilt by `rebuild-catalog`.
+The variant-related columns are updated by `insert_asset()`, `update_denormalized_variant_columns()`, and `fix_roles`. The stack columns are updated by `StackStore` operations. All are backfilled during schema migration and rebuilt by `rebuild-catalog`.
 
 ### Variant
 
@@ -212,6 +223,23 @@ A manually curated list of assets (static album). Backed by both SQLite (for fas
 | `created_at` | DateTime\<Utc\> | When the collection was created. |
 | `asset_ids` | Vec\<String\> | Ordered list of asset UUIDs (in YAML). In SQLite, this is a separate `collection_assets` join table with `(collection_id, asset_id, added_at)`. |
 
+### Stack
+
+A lightweight anonymous group of assets for visually related images (burst shots, bracketing sequences, similar scenes). In the browse grid, stacked assets are collapsed to show only the "pick" image with a count badge.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Primary key (random UUID v4). |
+| `created_at` | DateTime\<Utc\> | When the stack was created. |
+| `asset_ids` | Vec\<String\> | Ordered list of asset UUIDs. Index 0 is the pick (displayed in browse grid). |
+
+**Constraints**:
+- Each asset can belong to at most one stack.
+- A stack must have at least 2 members. Removing members that would leave fewer than 2 causes automatic dissolution.
+- Stack membership is denormalized onto the `assets` table as `stack_id` (FK to the stack) and `stack_position` (integer, 0 = pick). These columns enable efficient filtering (`stacked:true/false`) and stack collapsing in browse queries without joining a separate table.
+
+**Storage**: Stacks are persisted in `stacks.yaml` at the catalog root (alongside `collections.yaml` and `searches.toml`). The SQLite `stacks` table and the `stack_id`/`stack_position` columns on `assets` are derived from this file and rebuilt by `rebuild-catalog`.
+
 ### SavedSearch
 
 A named query (smart album) stored in `searches.toml`. Re-evaluated every time it is run, so results update automatically as the catalog changes.
@@ -274,7 +302,7 @@ catalog/
 
 A single `catalog.db` file providing fast indexed queries. Contains denormalized columns for efficient browse-grid rendering. The catalog is always rebuildable from the YAML sidecars via `dam rebuild-catalog` -- it is a performance optimization, not a source of truth.
 
-**Tables**: `assets`, `variants`, `file_locations`, `volumes`, `recipes`, `collections`, `collection_assets`
+**Tables**: `assets`, `variants`, `file_locations`, `volumes`, `recipes`, `collections`, `collection_assets`, `stacks`
 
 **Performance indexes** (created automatically via schema migrations):
 
@@ -291,6 +319,7 @@ A single `catalog.db` file providing fast indexed queries. Contains denormalized
 | `volumes.yaml` | YAML | Registered volume definitions (id, label, mount_point, type) |
 | `searches.toml` | TOML | Saved search definitions (name, query, sort) |
 | `collections.yaml` | YAML | Collection definitions with ordered asset ID lists |
+| `stacks.yaml` | YAML | Stack definitions with ordered asset ID lists |
 | `dam.toml` | TOML | User configuration (preview settings, serve settings, import settings) |
 | `previews/<prefix>/<hash>.jpg` | JPEG | Preview thumbnails keyed by variant content hash |
 
