@@ -978,7 +978,6 @@
     // Batch stack (create stack from selected)
     document.getElementById('batch-stack').addEventListener('click', function() {
         if (selected.size < 2 || batchBusy) return;
-        if (!confirm('Create a stack from ' + selected.size + ' selected asset(s)?')) return;
         setButtonsBusy(true);
         fetch('/api/batch/stack', {
             method: 'POST',

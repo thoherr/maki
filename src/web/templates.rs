@@ -43,6 +43,7 @@ pub struct AssetCard {
     pub color_label: Option<String>,
     pub variant_count: u32,
     pub stack_count: Option<u32>,
+    pub stack_id: Option<String>,
 }
 
 impl AssetCard {
@@ -64,6 +65,7 @@ impl AssetCard {
             color_label: row.color_label.clone(),
             variant_count: row.variant_count,
             stack_count: row.stack_count.filter(|&n| n >= 2),
+            stack_id: row.stack_id.clone(),
         }
     }
 }
@@ -445,6 +447,13 @@ mod filters {
     /// Uses simple replacement (no `\/` escaping) since web display is read-only.
     pub fn tag_display(tag: &str) -> ::askama::Result<String> {
         Ok(tag.replace('|', "/"))
+    }
+
+    /// Hash a stack ID to an HSL color for visual grouping.
+    pub fn stack_color(stack_id: &str) -> ::askama::Result<String> {
+        let hash: u32 = stack_id.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
+        let hue = hash % 360;
+        Ok(format!("hsl({hue}, 60%, 50%)"))
     }
 
     pub fn label_color(name: &str) -> ::askama::Result<String> {
