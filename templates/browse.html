@@ -1810,6 +1810,24 @@ window.damCalendar = (function() {
 })();
 </script>
 <script>
+// --- Browse context for detail page navigation ---
+(function() {
+    function storeBrowseContext() {
+        var cards = document.querySelectorAll('.asset-card');
+        var ids = [];
+        cards.forEach(function(c) { ids.push(c.getAttribute('data-asset-id')); });
+        sessionStorage.setItem('dam-browse-ids', JSON.stringify(ids));
+        sessionStorage.setItem('dam-browse-url', window.location.href);
+    }
+    storeBrowseContext();
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target && e.detail.target.id === 'results') {
+            storeBrowseContext();
+        }
+    });
+})();
+</script>
+<script>
 if (window.damHelp) {
     damHelp.registerShortcuts([
         { title: 'Navigation', shortcuts: [

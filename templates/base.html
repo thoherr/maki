@@ -26,9 +26,6 @@
         </button>
         <span class="nav-version">v{{ ""|version }} &copy; 2026 Thomas Herrmann</span>
     </nav>
-    <div class="container">
-        {% block content %}{% endblock %}
-    </div>
 <div class="keyboard-help" id="keyboard-help">
     <div class="keyboard-help-inner">
         <div class="keyboard-help-header">
@@ -113,6 +110,9 @@
     };
 })();
 </script>
+    <div class="container">
+        {% block content %}{% endblock %}
+    </div>
 <script>
 (function(){
     var btn = document.getElementById('theme-toggle');

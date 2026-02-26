@@ -4,17 +4,9 @@
 
 {% block content %}
 <div class="asset-nav">
-    {% if prev_id.is_some() %}
-    <a href="/asset/{{ prev_id.as_deref().unwrap() }}?next={{ asset_id }}" class="asset-nav-btn" id="nav-prev">&larr; Prev</a>
-    {% else %}
-    <span class="asset-nav-btn invisible">&larr; Prev</span>
-    {% endif %}
-    <a href="javascript:history.back()" class="asset-nav-btn">&larr; Back</a>
-    {% if next_id.is_some() %}
-    <a href="/asset/{{ next_id.as_deref().unwrap() }}?prev={{ asset_id }}" class="asset-nav-btn" id="nav-next">Next &rarr;</a>
-    {% else %}
-    <span class="asset-nav-btn invisible">Next &rarr;</span>
-    {% endif %}
+    <a href="#" class="asset-nav-btn invisible" id="nav-prev">&larr; Prev</a>
+    <a href="/" class="asset-nav-btn" id="nav-back">&larr; Back</a>
+    <a href="#" class="asset-nav-btn invisible" id="nav-next">Next &rarr;</a>
 </div>
 <div class="asset-detail">
     <div class="asset-preview">
@@ -236,6 +228,49 @@
     var labelNumMap = {'1':'Red','2':'Orange','3':'Yellow','4':'Green','5':'Blue','6':'Pink','7':'Purple'};
     var labelLetterMap = {r:'Red',o:'Orange',y:'Yellow',g:'Green',b:'Blue',p:'Pink',u:'Purple'};
 
+    // --- sessionStorage-based navigation ---
+    var browseIds = [];
+    var browseUrl = '/';
+    try {
+        var stored = sessionStorage.getItem('dam-browse-ids');
+        if (stored) browseIds = JSON.parse(stored);
+        var storedUrl = sessionStorage.getItem('dam-browse-url');
+        if (storedUrl) browseUrl = storedUrl;
+    } catch(e) {}
+
+    var idx = browseIds.indexOf(assetId);
+    var prevNav = document.getElementById('nav-prev');
+    var nextNav = document.getElementById('nav-next');
+    var backNav = document.getElementById('nav-back');
+
+    if (idx > 0) {
+        prevNav.href = '/asset/' + browseIds[idx - 1];
+        prevNav.classList.remove('invisible');
+    } else if (idx < 0) {
+        // Fallback to URL params when not in sessionStorage
+        var params = new URLSearchParams(window.location.search);
+        var paramPrev = params.get('prev');
+        if (paramPrev) {
+            prevNav.href = '/asset/' + paramPrev;
+            prevNav.classList.remove('invisible');
+        }
+    }
+
+    if (idx >= 0 && idx < browseIds.length - 1) {
+        nextNav.href = '/asset/' + browseIds[idx + 1];
+        nextNav.classList.remove('invisible');
+    } else if (idx < 0) {
+        var params2 = new URLSearchParams(window.location.search);
+        var paramNext = params2.get('next');
+        if (paramNext) {
+            nextNav.href = '/asset/' + paramNext;
+            nextNav.classList.remove('invisible');
+        }
+    }
+
+    backNav.href = browseUrl;
+
+    // --- Keyboard shortcuts ---
     document.addEventListener('keydown', function(e) {
         if (window.damHelp && window.damHelp.isOpen()) return;
         var el = e.target;
@@ -244,19 +279,17 @@
 
         // Arrow left/right: prev/next navigation
         if (e.key === 'ArrowLeft') {
-            var prev = document.getElementById('nav-prev');
-            if (prev) { e.preventDefault(); prev.click(); }
+            if (!prevNav.classList.contains('invisible')) { e.preventDefault(); prevNav.click(); }
             return;
         }
         if (e.key === 'ArrowRight') {
-            var next = document.getElementById('nav-next');
-            if (next) { e.preventDefault(); next.click(); }
+            if (!nextNav.classList.contains('invisible')) { e.preventDefault(); nextNav.click(); }
             return;
         }
 
-        // Escape: go back
+        // Escape: go back to browse
         if (e.key === 'Escape') {
-            history.back();
+            window.location.href = browseUrl;
             return;
         }
 
