@@ -183,6 +183,7 @@ Clicking a thumbnail in the browse grid opens a full-screen lightbox overlay for
 - **Keyboard**: Left and Right arrow keys navigate between assets
 - **Counter**: the top bar shows your position (e.g., "3 / 156")
 - **Close**: click the × button or press Escape to return to the browse grid
+- **Detail page**: press `d` to open the full detail page for the current asset
 
 ### Info panel
 
@@ -195,6 +196,12 @@ Click the ℹ button in the top bar (or press `i`) to toggle a side panel showin
 Rating and label changes made in the lightbox are saved immediately via the API and reflected in the browse grid behind the lightbox.
 
 The info panel has its own × close button.
+
+### Rating and label
+
+The lightbox top bar shows interactive rating stars and color label dots, always visible without opening the info panel. Click a star to set rating, click × to clear. Click a color dot to set a label, click the active dot again to clear.
+
+These controls are also available in the info panel with more detail, but the top bar provides quick access during rapid browsing.
 
 ### Detail page link
 
@@ -209,6 +216,7 @@ All browse keyboard shortcuts for rating and label work inside the lightbox:
 | Left / Right arrow | Previous / next asset |
 | Escape | Close lightbox |
 | i | Toggle info panel |
+| d | Open detail page |
 | 1-5 | Set rating |
 | 0 | Clear rating |
 | Alt+1 through Alt+7 | Set color label |
@@ -220,9 +228,35 @@ When the lightbox is open, browse keyboard navigation (arrow keys for card focus
 
 ## Asset Detail Page
 
-Click the "↗ Detail" link in the lightbox top bar, or press Enter on a focused card when the lightbox is closed, to open the asset detail page.
+Click the "↗ Detail" link in the lightbox top bar, or press `d` in the lightbox, to open the asset detail page.
 
 ![Asset detail page with preview, metadata editing, and variants](../screenshots/asset-detail.png)
+
+### Navigation
+
+A navigation bar at the top of the page provides Prev, Back, and Next buttons:
+
+- **Prev / Next**: navigate to adjacent assets in the browse results. These buttons use the browse page's card list (stored in sessionStorage) for unlimited multi-hop navigation — you can press Next repeatedly to step through the entire result set. When accessed via a direct URL without browse context, these buttons are hidden.
+- **Back**: returns to the browse page, preserving your search and filters.
+
+Keyboard navigation:
+
+| Key | Action |
+|-----|--------|
+| Left arrow | Previous asset |
+| Right arrow | Next asset |
+| l | Return to lightbox view |
+| Escape | Return to browse page |
+
+Rating and label keyboard shortcuts also work on the detail page:
+
+| Key | Action |
+|-----|--------|
+| 1-5 | Set rating |
+| 0 | Clear rating |
+| Alt+1 through Alt+7 | Set color label |
+| Alt+0, x | Clear color label |
+| r/o/y/g/b/p/u | Set label by color initial |
 
 ### Preview
 
@@ -321,6 +355,10 @@ These shortcuts are suppressed when focus is in a text input, textarea, or dropd
 
 The browse page supports full keyboard navigation for efficient photo culling and rating workflows. No mouse required.
 
+### Keyboard help
+
+Press `?` on any page (or click the "?" button in the navigation bar) to open a keyboard shortcuts overlay. The overlay shows all shortcuts available on the current page, organized by category. Press Escape, click ×, or click outside the panel to close it.
+
 ### Movement
 
 | Key | Action |
@@ -340,7 +378,7 @@ The focused card has a blue outline, visually distinct from the selection highli
 | Space | Toggle selection of the focused card |
 | 1-5 | Set rating (applies to focused card, or to all selected if a batch selection is active) |
 | 0 | Clear rating |
-| Alt+1 through Alt+7 | Set color label (1=Red, 2=Orange, 3=Yellow, 4=Green, 5=Blue, 6=Pink, 7=Purple) |
+| Alt+1 through Alt+7 | Set color label (1=Red, 2=Orange, 3=Yellow, 4=Green, 5=Blue, 6=Pink, 7=Purple). On macOS, use Option+number. |
 | Alt+0 | Clear color label |
 | r | Set Red label |
 | o | Set Orange label |

@@ -2,6 +2,16 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v1.6.1
+
+### Enhancements
+- **Keyboard help panel** — press `?` on any page (or click the "?" button in the nav bar) to see all available keyboard shortcuts. The overlay shows shortcuts organized by category, specific to the current page (browse, lightbox, or asset detail). Press Escape or click outside to dismiss.
+- **Detail page navigation** — the asset detail page now has Prev/Next buttons and arrow key navigation for stepping through browse results. Uses sessionStorage for unlimited multi-hop navigation (not limited to one step). Escape and Back return to the browse page with search state preserved.
+- **Detail page rating and label shortcuts** — rating (0-5) and color label (Alt/Option+1-7, r/o/y/g/b/p/u/x) keyboard shortcuts now work on the asset detail page, matching browse and lightbox behavior.
+- **Lightbox top bar rating and label** — interactive rating stars and color label dots are now always visible in the lightbox top bar, eliminating the need to open the info panel for quick edits.
+- **Lightbox/detail page switching** — press `d` in the lightbox to open the detail page; press `l` on the detail page to return to the lightbox at that asset.
+- **macOS Option+number fix** — Alt/Option+number shortcuts for color labels now work correctly on macOS (uses physical key codes instead of character values).
+
 ## v1.6.0
 
 ### New Features
