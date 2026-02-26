@@ -321,6 +321,29 @@ pub struct AutoGroupResult {
     pub dry_run: bool,
 }
 
+/// Result of converting tags into stacks via `stack_from_tag`.
+#[derive(Debug, serde::Serialize)]
+pub struct FromTagResult {
+    pub tags_matched: u32,
+    pub tags_skipped: u32,
+    pub stacks_created: u32,
+    pub assets_stacked: u32,
+    pub assets_skipped: u32,
+    pub tags_removed: u32,
+    pub dry_run: bool,
+    pub details: Vec<FromTagDetail>,
+}
+
+/// One matched tag in a `stack_from_tag` operation.
+#[derive(Debug, serde::Serialize)]
+pub struct FromTagDetail {
+    pub tag: String,
+    pub assets_found: u32,
+    pub assets_stacked: u32,
+    pub assets_skipped: u32,
+    pub stack_id: Option<String>,
+}
+
 /// Fields to edit on an asset. `None` = no change, `Some(None)` = clear, `Some(Some(x))` = set.
 pub struct EditFields {
     pub name: Option<Option<String>>,
@@ -1380,6 +1403,122 @@ impl QueryEngine {
             }
         }
     }
+
+    /// Convert tags matching a pattern into stacks.
+    /// Pattern uses `{}` as a wildcard placeholder (e.g. `"Aperture Stack {}"`).
+    /// Default is report-only (dry run); pass `apply=true` to execute.
+    pub fn stack_from_tag(
+        &self,
+        pattern: &str,
+        remove_tags: bool,
+        apply: bool,
+        log: bool,
+    ) -> Result<FromTagResult> {
+        if !pattern.contains("{}") {
+            anyhow::bail!("Pattern must contain '{{}}' as a wildcard placeholder");
+        }
+
+        // Build regex: escape metacharacters, replace {} with (.+), anchor
+        let escaped = regex::escape(pattern).replace("\\{\\}", "(.+)");
+        let re = regex::Regex::new(&format!("^{escaped}$"))?;
+
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let all_tags = catalog.list_all_tags()?;
+
+        let mut matching_tags: Vec<String> = all_tags
+            .iter()
+            .filter(|(tag, _)| re.is_match(tag))
+            .map(|(tag, _)| tag.clone())
+            .collect();
+        matching_tags.sort();
+
+        let mut result = FromTagResult {
+            tags_matched: matching_tags.len() as u32,
+            tags_skipped: 0,
+            stacks_created: 0,
+            assets_stacked: 0,
+            assets_skipped: 0,
+            tags_removed: 0,
+            dry_run: !apply,
+            details: Vec::new(),
+        };
+
+        let store = crate::stack::StackStore::new(catalog.conn());
+
+        for tag in &matching_tags {
+            let assets = catalog.assets_with_exact_tag(tag)?;
+            let total_found = assets.len() as u32;
+
+            // Partition into stacked and unstacked
+            let (already_stacked, unstacked): (Vec<_>, Vec<_>) =
+                assets.into_iter().partition(|(_, stack_id)| stack_id.is_some());
+
+            let skipped = already_stacked.len() as u32;
+
+            if unstacked.len() < 2 {
+                result.tags_skipped += 1;
+                if log {
+                    eprintln!(
+                        "{} — skipped ({} unstacked, {} already stacked)",
+                        tag,
+                        unstacked.len(),
+                        skipped
+                    );
+                }
+                result.details.push(FromTagDetail {
+                    tag: tag.clone(),
+                    assets_found: total_found,
+                    assets_stacked: 0,
+                    assets_skipped: skipped,
+                    stack_id: None,
+                });
+                continue;
+            }
+
+            let unstacked_ids: Vec<String> = unstacked.into_iter().map(|(id, _)| id).collect();
+            let stacked_count = unstacked_ids.len() as u32;
+            let mut stack_id_str = None;
+
+            if apply {
+                let stack = store.create(&unstacked_ids)?;
+                stack_id_str = Some(stack.id.to_string());
+
+                if remove_tags {
+                    for id in &unstacked_ids {
+                        let _ = self.tag(id, &[tag.clone()], true);
+                        result.tags_removed += 1;
+                    }
+                }
+            }
+
+            result.stacks_created += 1;
+            result.assets_stacked += stacked_count;
+            result.assets_skipped += skipped;
+
+            if log {
+                let action = if apply { "stacked" } else { "would stack" };
+                eprintln!(
+                    "{} — {} {} assets (skipped {})",
+                    tag, action, stacked_count, skipped
+                );
+            }
+
+            result.details.push(FromTagDetail {
+                tag: tag.clone(),
+                assets_found: total_found,
+                assets_stacked: stacked_count,
+                assets_skipped: skipped,
+                stack_id: stack_id_str,
+            });
+        }
+
+        if apply {
+            let yaml = store.export_all()?;
+            crate::stack::save_yaml(&self.catalog_root, &yaml)?;
+        }
+
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
@@ -2302,5 +2441,47 @@ mod tests {
         // Plain relative paths stay as volume-relative prefix matches
         assert_eq!(rel, "Capture/2026");
         assert!(vid.is_none());
+    }
+
+    // -- from-tag pattern matching tests --
+
+    fn build_from_tag_regex(pattern: &str) -> regex::Regex {
+        let escaped = regex::escape(pattern).replace("\\{\\}", "(.+)");
+        regex::Regex::new(&format!("^{escaped}$")).unwrap()
+    }
+
+    #[test]
+    fn from_tag_pattern_matches_aperture_stack() {
+        let re = build_from_tag_regex("Aperture Stack {}");
+        assert!(re.is_match("Aperture Stack 1"));
+        assert!(re.is_match("Aperture Stack 1234"));
+        assert!(re.is_match("Aperture Stack abc"));
+        assert!(re.is_match("Aperture Stack 1 extra")); // wildcard captures "1 extra"
+        assert!(!re.is_match("Aperture Stack")); // empty wildcard = no match
+        assert!(!re.is_match("Other Tag"));
+    }
+
+    #[test]
+    fn from_tag_pattern_matches_prefix_wildcard() {
+        let re = build_from_tag_regex("shoot-{}");
+        assert!(re.is_match("shoot-A"));
+        assert!(re.is_match("shoot-paris-01"));
+        assert!(!re.is_match("shoot-")); // empty wildcard
+        assert!(!re.is_match("xshoot-A")); // prefix mismatch
+    }
+
+    #[test]
+    fn from_tag_pattern_escapes_regex_metacharacters() {
+        let re = build_from_tag_regex("Group (A) {}");
+        assert!(re.is_match("Group (A) 1"));
+        assert!(!re.is_match("Group A 1")); // literal parens required
+    }
+
+    #[test]
+    fn from_tag_pattern_middle_wildcard() {
+        let re = build_from_tag_regex("pre-{}-post");
+        assert!(re.is_match("pre-X-post"));
+        assert!(re.is_match("pre-hello world-post"));
+        assert!(!re.is_match("pre--post")); // empty wildcard
     }
 }

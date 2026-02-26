@@ -6958,3 +6958,183 @@ fn stack_remove_dissolves_when_one_left() {
         .success()
         .stdout(predicate::str::contains("No stacks"));
 }
+
+// -- stack from-tag tests --
+
+#[test]
+fn stack_from_tag_dry_run() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["ft_a.jpg", "ft_b.jpg", "ft_c.jpg", "ft_d.jpg", "ft_e.jpg"]);
+
+    // Tag 3 assets with "Group A"
+    for id in &ids[0..3] {
+        dam().current_dir(&root).args(["tag", id, "Group A"]).assert().success();
+    }
+    // Tag 2 assets with "Group B"
+    for id in &ids[3..5] {
+        dam().current_dir(&root).args(["tag", id, "Group B"]).assert().success();
+    }
+
+    // Dry run
+    dam()
+        .current_dir(&root)
+        .args(["stack", "from-tag", "Group {}"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Tags matched: 2"))
+        .stdout(predicate::str::contains("Stacks created: 2"))
+        .stdout(predicate::str::contains("dry run"));
+
+    // Verify no stacks were actually created
+    dam()
+        .current_dir(&root)
+        .args(["stack", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No stacks"));
+}
+
+#[test]
+fn stack_from_tag_apply() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["fta_a.jpg", "fta_b.jpg", "fta_c.jpg"]);
+
+    for id in &ids {
+        dam().current_dir(&root).args(["tag", id, "MyGroup X"]).assert().success();
+    }
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "from-tag", "MyGroup {}", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Stacks created: 1"))
+        .stdout(predicate::str::contains("Assets stacked: 3"));
+
+    // Verify stack was created
+    dam()
+        .current_dir(&root)
+        .args(["stack", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3 assets"));
+}
+
+#[test]
+fn stack_from_tag_remove_tags() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["ftr_a.jpg", "ftr_b.jpg"]);
+
+    for id in &ids {
+        dam().current_dir(&root).args(["tag", id, "Stack 99"]).assert().success();
+        dam().current_dir(&root).args(["tag", id, "keeper"]).assert().success();
+    }
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "from-tag", "Stack {}", "--apply", "--remove-tags"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Tags removed: 2"));
+
+    // Verify "Stack 99" tag is gone but "keeper" remains
+    dam()
+        .current_dir(&root)
+        .args(["show", &ids[0]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("keeper"))
+        .stdout(predicate::str::contains("Stack 99").not());
+}
+
+#[test]
+fn stack_from_tag_skips_already_stacked() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["fts_a.jpg", "fts_b.jpg", "fts_c.jpg"]);
+
+    // Tag all three with same tag FIRST (tagging does insert_asset which resets stack_id)
+    for id in &ids {
+        dam().current_dir(&root).args(["tag", id, "Overlap X"]).assert().success();
+    }
+
+    // Then stack first two
+    dam()
+        .current_dir(&root)
+        .args(["stack", "create", &ids[0], &ids[1]])
+        .assert()
+        .success();
+
+    // Only 1 unstacked asset — too few to create a stack
+    dam()
+        .current_dir(&root)
+        .args(["stack", "from-tag", "Overlap {}", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Tags skipped: 1"))
+        .stdout(predicate::str::contains("Stacks created: 0"));
+}
+
+#[test]
+fn stack_from_tag_single_asset_skipped() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["fts1_a.jpg"]);
+
+    dam().current_dir(&root).args(["tag", &ids[0], "Solo 1"]).assert().success();
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "from-tag", "Solo {}", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Tags skipped: 1"))
+        .stdout(predicate::str::contains("Stacks created: 0"));
+}
+
+#[test]
+fn stack_from_tag_json_output() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let ids = import_and_get_ids(&root, &["ftj_a.jpg", "ftj_b.jpg"]);
+
+    for id in &ids {
+        dam().current_dir(&root).args(["tag", id, "Batch 42"]).assert().success();
+    }
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "stack", "from-tag", "Batch {}", "--apply"])
+        .output()
+        .unwrap();
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    assert_eq!(json["tags_matched"], 1);
+    assert_eq!(json["stacks_created"], 1);
+    assert_eq!(json["assets_stacked"], 2);
+    assert_eq!(json["dry_run"], false);
+    assert!(json["details"][0]["stack_id"].is_string());
+}
+
+#[test]
+fn stack_from_tag_no_wildcard_errors() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    dam()
+        .current_dir(&root)
+        .args(["stack", "from-tag", "no wildcard"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("{}"));
+}

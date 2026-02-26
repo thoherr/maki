@@ -2305,6 +2305,21 @@ impl Catalog {
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Find assets with a specific exact tag, returning (asset_id, stack_id) pairs.
+    /// Ordered by created_at ASC so the oldest asset comes first.
+    pub fn assets_with_exact_tag(&self, tag: &str) -> Result<Vec<(String, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.id, a.stack_id \
+             FROM assets a, json_each(a.tags) AS je \
+             WHERE je.value = ?1 \
+             ORDER BY a.created_at ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![tag], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// List all distinct variant formats.
     pub fn list_all_formats(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
@@ -5390,5 +5405,67 @@ mod tests {
         // Different year returns empty
         let counts2 = catalog.calendar_counts(2025, &opts).unwrap();
         assert!(counts2.is_empty());
+    }
+
+    #[test]
+    fn assets_with_exact_tag_finds_correct_assets() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        // Asset with tag "Group A"
+        let mut a1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:tag1");
+        a1.tags = vec!["Group A".to_string(), "landscape".to_string()];
+        let v1 = crate::models::Variant {
+            content_hash: "sha256:tag1".to_string(),
+            asset_id: a1.id.clone(),
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 1000,
+            original_filename: "a.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        a1.variants.push(v1.clone());
+        catalog.insert_asset(&a1).unwrap();
+        catalog.insert_variant(&v1).unwrap();
+
+        // Asset with tag "Group B" (should not match)
+        let mut a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:tag2");
+        a2.tags = vec!["Group B".to_string()];
+        let v2 = crate::models::Variant {
+            content_hash: "sha256:tag2".to_string(),
+            asset_id: a2.id.clone(),
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 1000,
+            original_filename: "b.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        a2.variants.push(v2.clone());
+        catalog.insert_asset(&a2).unwrap();
+        catalog.insert_variant(&v2).unwrap();
+
+        // Asset with hierarchical tag "Group A|sub" (should NOT match exact "Group A")
+        let mut a3 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:tag3");
+        a3.tags = vec!["Group A|sub".to_string()];
+        let v3 = crate::models::Variant {
+            content_hash: "sha256:tag3".to_string(),
+            asset_id: a3.id.clone(),
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 1000,
+            original_filename: "c.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        a3.variants.push(v3.clone());
+        catalog.insert_asset(&a3).unwrap();
+        catalog.insert_variant(&v3).unwrap();
+
+        let results = catalog.assets_with_exact_tag("Group A").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, a1.id.to_string());
+        assert!(results[0].1.is_none()); // not stacked
     }
 }

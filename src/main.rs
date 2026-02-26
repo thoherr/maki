@@ -694,6 +694,20 @@ enum StackCommands {
         #[arg(long)]
         format: Option<String>,
     },
+
+    /// Convert matching tags into stacks
+    FromTag {
+        /// Tag pattern with {} as wildcard (e.g. "Aperture Stack {}")
+        pattern: String,
+
+        /// Remove the matched tag from stacked assets after conversion
+        #[arg(long)]
+        remove_tags: bool,
+
+        /// Actually create stacks (default: report only)
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 fn main() {
@@ -3168,6 +3182,25 @@ fn main() {
                         for (i, id) in members.iter().enumerate() {
                             let marker = if i == 0 { " [pick]" } else { "" };
                             println!("  {}{}", id, marker);
+                        }
+                    }
+                    Ok(())
+                }
+                StackCommands::FromTag { pattern, remove_tags, apply } => {
+                    let engine = QueryEngine::new(&catalog_root);
+                    let result = engine.stack_from_tag(&pattern, remove_tags, apply, cli.log)?;
+
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&result)?);
+                    } else {
+                        let mode = if result.dry_run { " (dry run)" } else { "" };
+                        println!("Tags matched: {}{}", result.tags_matched, mode);
+                        println!("Tags skipped: {}", result.tags_skipped);
+                        println!("Stacks created: {}", result.stacks_created);
+                        println!("Assets stacked: {}", result.assets_stacked);
+                        println!("Assets already stacked (skipped): {}", result.assets_skipped);
+                        if remove_tags {
+                            println!("Tags removed: {}", result.tags_removed);
                         }
                     }
                     Ok(())
