@@ -1627,6 +1627,50 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     overflow: hidden;
     text-overflow: ellipsis;
 }
+/* Lightbox top bar rating & labels */
+.lb-topbar-rating {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+    font-size: 1.05rem;
+    margin-left: auto;
+}
+.lb-topbar-rating .star { cursor: pointer; user-select: none; }
+.lb-topbar-rating .star.filled { color: #f5a623; }
+.lb-topbar-rating .star.empty { color: rgba(255,255,255,0.35); }
+.lb-topbar-rating .star:hover { transform: scale(1.15); }
+.lb-topbar-rating .star-clear {
+    font-size: 0.8rem;
+    color: rgba(255,255,255,0.4);
+    cursor: pointer;
+    margin-left: 0.1rem;
+}
+.lb-topbar-rating .star-clear:hover { color: #fff; }
+.lb-topbar-labels {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+}
+.lb-topbar-labels .lb-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: transform 0.1s, border-color 0.15s;
+}
+.lb-topbar-labels .lb-dot:hover { transform: scale(1.2); }
+.lb-topbar-labels .lb-dot.active {
+    border-color: #fff;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.3);
+}
+.lb-topbar-labels .lb-clear {
+    font-size: 0.8rem;
+    color: rgba(255,255,255,0.4);
+    cursor: pointer;
+    margin-left: 0.1rem;
+}
+.lb-topbar-labels .lb-clear:hover { color: #fff; }
 .lightbox-btn {
     background: none;
     border: 1px solid rgba(255,255,255,0.2);

@@ -289,14 +289,16 @@
 
         // Escape: go back to browse
         if (e.key === 'Escape') {
-            window.location.href = browseUrl;
+            e.preventDefault();
+            backNav.click();
             return;
         }
 
-        // Alt+0-7: label
-        if (e.altKey && e.key >= '0' && e.key <= '7') {
+        // Alt/Option+0-7: label (use e.code for macOS compatibility)
+        if (e.altKey && e.code >= 'Digit0' && e.code <= 'Digit7') {
             e.preventDefault();
-            var lbl = e.key === '0' ? '' : (labelNumMap[e.key] || '');
+            var num = e.code.charAt(5);
+            var lbl = num === '0' ? '' : (labelNumMap[num] || '');
             htmx.ajax('PUT', '/api/asset/' + assetId + '/label', {target:'#label', swap:'innerHTML', values:{label: lbl}});
             return;
         }

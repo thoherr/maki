@@ -84,6 +84,24 @@
     <div class="lightbox-top-bar">
         <span class="lightbox-counter" id="lb-counter"></span>
         <span class="lightbox-title" id="lb-title"></span>
+        <span class="lb-topbar-rating" id="lb-topbar-rating">
+            <span class="star empty" data-value="1">&#9734;</span>
+            <span class="star empty" data-value="2">&#9734;</span>
+            <span class="star empty" data-value="3">&#9734;</span>
+            <span class="star empty" data-value="4">&#9734;</span>
+            <span class="star empty" data-value="5">&#9734;</span>
+            <span class="star-clear" title="Clear rating">&times;</span>
+        </span>
+        <span class="lb-topbar-labels" id="lb-topbar-labels">
+            <span class="lb-dot" data-label="Red" style="background:#e74c3c;" title="Red"></span>
+            <span class="lb-dot" data-label="Orange" style="background:#e67e22;" title="Orange"></span>
+            <span class="lb-dot" data-label="Yellow" style="background:#f1c40f;" title="Yellow"></span>
+            <span class="lb-dot" data-label="Green" style="background:#27ae60;" title="Green"></span>
+            <span class="lb-dot" data-label="Blue" style="background:#3498db;" title="Blue"></span>
+            <span class="lb-dot" data-label="Pink" style="background:#e91e8e;" title="Pink"></span>
+            <span class="lb-dot" data-label="Purple" style="background:#9b59b6;" title="Purple"></span>
+            <span class="lb-clear" title="Clear label">&times;</span>
+        </span>
         <button class="lightbox-btn" id="lb-info-toggle" title="Toggle info (i)">&#8505;</button>
         <a class="lightbox-btn" id="lb-detail-link" title="Open detail page">&#8599; Detail</a>
         <button class="lightbox-btn" id="lb-close" title="Close (Esc)">&times;</button>
@@ -1191,7 +1209,7 @@
     }
 
     function renderStars(rating) {
-        var stars = document.querySelectorAll('#lb-stars .star');
+        var stars = document.querySelectorAll('#lb-stars .star, #lb-topbar-rating .star');
         stars.forEach(function(s) {
             var v = parseInt(s.getAttribute('data-value'));
             if (v <= rating) {
@@ -1205,7 +1223,7 @@
     }
 
     function renderLabels(label) {
-        var dots = document.querySelectorAll('#lb-labels .lb-dot');
+        var dots = document.querySelectorAll('#lb-labels .lb-dot, #lb-topbar-labels .lb-dot');
         dots.forEach(function(d) {
             d.classList.toggle('active', d.getAttribute('data-label') === label);
         });
@@ -1311,6 +1329,29 @@
         applyLabel('');
     });
 
+    // Top bar rating stars
+    document.querySelectorAll('#lb-topbar-rating .star').forEach(function(s) {
+        s.addEventListener('click', function() {
+            applyRating(parseInt(this.getAttribute('data-value')));
+        });
+    });
+    document.querySelector('#lb-topbar-rating .star-clear').addEventListener('click', function() {
+        applyRating(0);
+    });
+
+    // Top bar label dots
+    document.querySelectorAll('#lb-topbar-labels .lb-dot').forEach(function(d) {
+        d.addEventListener('click', function() {
+            var lbl = this.getAttribute('data-label');
+            var cards = getCards();
+            var current = cards[currentIndex] ? cards[currentIndex].getAttribute('data-label') : '';
+            applyLabel(current === lbl ? '' : lbl);
+        });
+    });
+    document.querySelector('#lb-topbar-labels .lb-clear').addEventListener('click', function() {
+        applyLabel('');
+    });
+
     // Keyboard: capture phase to intercept before keyboard nav
     document.addEventListener('keydown', function(e) {
         if (!isOpen) return;
@@ -1345,12 +1386,13 @@
             return;
         }
 
-        // Alt+0-7: label
-        if (e.altKey && e.key >= '0' && e.key <= '7') {
+        // Alt/Option+0-7: label (use e.code for macOS compatibility)
+        if (e.altKey && e.code >= 'Digit0' && e.code <= 'Digit7') {
             e.preventDefault();
             e.stopImmediatePropagation();
-            if (e.key === '0') applyLabel('');
-            else applyLabel(labelNumMap[e.key] || '');
+            var num = e.code.charAt(5);
+            if (num === '0') applyLabel('');
+            else applyLabel(labelNumMap[num] || '');
             return;
         }
 
@@ -1558,13 +1600,14 @@
             return;
         }
 
-        // Alt+0-7: color label
-        if (e.altKey && e.key >= '0' && e.key <= '7') {
+        // Alt/Option+0-7: color label (use e.code for macOS compatibility)
+        if (e.altKey && e.code >= 'Digit0' && e.code <= 'Digit7') {
             e.preventDefault();
-            if (e.key === '0') {
+            var num = e.code.charAt(5);
+            if (num === '0') {
                 applyLabel('');
             } else {
-                applyLabel(labelNumMap[e.key] || '');
+                applyLabel(labelNumMap[num] || '');
             }
             return;
         }
