@@ -16,6 +16,12 @@ Currently we only have simple queries, and all of them are anded in the query.
 Some sort of logical query language could be useful (e.g. "find all vacation images, but not from france"
 or "give me all images with tags "alice" or "bob").
 
+### Asset folder link
+
+The details page should contain a link to the asset and/or asset folder at the locations. maybe just make the location
+clickable, if the volume is online (folder part opens folder of asset, asset file name opens asset directly).
+Optional/alternative open terminal window at location.
+
 ## CLI
 
 ### Scripting example
