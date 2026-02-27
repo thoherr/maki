@@ -76,3 +76,5 @@
 - **Hierarchical tags** — tags can contain `/` as a hierarchy separator (e.g. `animals/birds/eagles`). Searching `tag:animals` matches all descendants. The tags page shows a collapsible tree view with own-count and total-count columns. Interoperates with Lightroom's `lr:hierarchicalSubject` XMP field: hierarchical subjects are imported, merged with flat `dc:subject` tags (components deduplicated), and written back on change. Internally stored with `|` separator to avoid conflicts with literal `/` in tag names.
 
 ### not yet implemented
+
+See [`doc/proposals/roadmap.md`](proposals/roadmap.md) for planned features organized by priority.
