@@ -1970,6 +1970,8 @@ fn main() {
                 use dam::asset_service::DedupStatus;
                 service.dedup(
                     volume.as_deref(),
+                    None,
+                    None,
                     prefer.as_deref(),
                     min_copies,
                     apply,
@@ -1990,6 +1992,8 @@ fn main() {
             } else {
                 service.dedup(
                     volume.as_deref(),
+                    None,
+                    None,
                     prefer.as_deref(),
                     min_copies,
                     apply,

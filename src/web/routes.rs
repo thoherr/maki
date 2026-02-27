@@ -1836,9 +1836,13 @@ pub async fn duplicates_page(
 #[derive(Debug, serde::Deserialize)]
 pub struct DedupResolveRequest {
     pub min_copies: Option<usize>,
+    pub volume: Option<String>,
+    pub format: Option<String>,
+    pub path: Option<String>,
+    pub dry_run: Option<bool>,
 }
 
-/// POST /api/dedup/resolve — auto-resolve all same-volume duplicates.
+/// POST /api/dedup/resolve — auto-resolve same-volume duplicates (with optional filters and dry-run).
 pub async fn dedup_resolve_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DedupResolveRequest>,
@@ -1847,7 +1851,20 @@ pub async fn dedup_resolve_api(
     let result = tokio::task::spawn_blocking(move || {
         let service = state.asset_service();
         let min_copies = req.min_copies.unwrap_or(1);
-        let dedup_result = service.dedup(None, None, min_copies, true, |_, _, _, _| {})?;
+        let dry_run = req.dry_run.unwrap_or(false);
+        let apply = !dry_run;
+        let volume = req.volume.filter(|s| !s.is_empty());
+        let format = req.format.filter(|s| !s.is_empty());
+        let path = req.path.filter(|s| !s.is_empty());
+        let dedup_result = service.dedup(
+            volume.as_deref(),
+            format.as_deref(),
+            path.as_deref(),
+            None,
+            min_copies,
+            apply,
+            |_, _, _, _| {},
+        )?;
         Ok::<_, anyhow::Error>(dedup_result)
     })
     .await;

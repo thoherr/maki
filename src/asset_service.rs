@@ -2979,6 +2979,8 @@ impl AssetService {
     pub fn dedup(
         &self,
         volume_filter: Option<&str>,
+        format_filter: Option<&str>,
+        path_prefix: Option<&str>,
         prefer: Option<&str>,
         min_copies: usize,
         apply: bool,
@@ -2995,7 +2997,16 @@ impl AssetService {
             None
         };
 
-        let entries = catalog.find_duplicates_same_volume()?;
+        let entries = if format_filter.is_some() || path_prefix.is_some() || filter_volume_id.is_some() {
+            catalog.find_duplicates_filtered(
+                "same",
+                filter_volume_id.as_deref(),
+                format_filter,
+                path_prefix,
+            )?
+        } else {
+            catalog.find_duplicates_same_volume()?
+        };
 
         let mut result = DedupResult {
             duplicates_found: 0,

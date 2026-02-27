@@ -72,7 +72,7 @@
 {% if same_volume_count > 0 %}
 <!-- Auto-resolve button -->
 <div class="dup-actions">
-    <button class="btn-resolve" id="auto-resolve-btn">Auto-resolve all same-volume duplicates</button>
+    <button class="btn-resolve" id="auto-resolve-btn">{% if !volume.is_empty() || !format_filter.is_empty() || !path.is_empty() %}Auto-resolve filtered same-volume duplicates{% else %}Auto-resolve all same-volume duplicates{% endif %}</button>
 </div>
 {% endif %}
 
@@ -159,31 +159,71 @@
         return b + ' B';
     }
 
-    // Auto-resolve button
+    // Auto-resolve button (two-step: dry-run preview → confirm → execute)
     var resolveBtn = document.getElementById('auto-resolve-btn');
     if (resolveBtn) {
+        var resolveBtnLabel = resolveBtn.textContent;
+
+        function getFilterPayload(dryRun) {
+            var form = document.querySelector('.dup-filter-row');
+            var payload = { dry_run: dryRun };
+            var vol = form.querySelector('[name="volume"]').value;
+            var fmt = form.querySelector('[name="format"]').value;
+            var p = form.querySelector('[name="path"]').value;
+            if (vol) payload.volume = vol;
+            if (fmt) payload.format = fmt;
+            if (p) payload.path = p;
+            return payload;
+        }
+
         resolveBtn.addEventListener('click', function() {
-            if (!confirm('Auto-resolve all same-volume duplicates?\n\nFiles will be permanently deleted from disk. The best copy on each volume is kept.')) return;
             resolveBtn.disabled = true;
-            resolveBtn.textContent = 'Resolving\u2026';
+            resolveBtn.textContent = 'Checking\u2026';
+
+            // Step 1: dry-run to preview what would happen
             fetch('/api/dedup/resolve', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: '{}'
+                body: JSON.stringify(getFilterPayload(true))
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (data.errors && data.errors.length > 0) {
-                    alert('Completed with errors:\n' + data.errors.join('\n'));
-                } else {
-                    alert('Removed ' + data.locations_removed + ' locations, freed ' + formatBytes(data.bytes_freed));
+                if (data.locations_to_remove === 0) {
+                    alert('No duplicate locations to remove.');
+                    resolveBtn.disabled = false;
+                    resolveBtn.textContent = resolveBtnLabel;
+                    return;
                 }
-                window.location.reload();
+                // Step 2: confirm with preview counts
+                var msg = 'This will remove ' + data.locations_to_remove + ' duplicate file copies, freeing ' + formatBytes(data.bytes_freed) + '.\n' +
+                    data.duplicates_found + ' duplicate group(s) affected.\n\n' +
+                    'Files will be permanently deleted from disk. Continue?';
+                if (!confirm(msg)) {
+                    resolveBtn.disabled = false;
+                    resolveBtn.textContent = resolveBtnLabel;
+                    return;
+                }
+                // Step 3: execute for real
+                resolveBtn.textContent = 'Resolving\u2026';
+                return fetch('/api/dedup/resolve', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(getFilterPayload(false))
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(result) {
+                    if (result.errors && result.errors.length > 0) {
+                        alert('Completed with errors:\n' + result.errors.join('\n'));
+                    } else {
+                        alert('Removed ' + result.locations_removed + ' locations, freed ' + formatBytes(result.bytes_freed));
+                    }
+                    window.location.reload();
+                });
             })
             .catch(function(err) {
                 alert('Error: ' + err.message);
                 resolveBtn.disabled = false;
-                resolveBtn.textContent = 'Auto-resolve all same-volume duplicates';
+                resolveBtn.textContent = resolveBtnLabel;
             });
         });
     }
