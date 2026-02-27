@@ -73,6 +73,10 @@ enum Commands {
         #[arg(long, display_order = 13)]
         skip: Vec<String>,
 
+        /// Add a tag to every imported asset (repeatable)
+        #[arg(long = "add-tag", display_order = 15)]
+        add_tags: Vec<String>,
+
         /// Show what would be imported without making changes
         #[arg(long, display_order = 20)]
         dry_run: bool,
@@ -990,6 +994,7 @@ fn main() {
             volume,
             include,
             skip,
+            add_tags,
             dry_run,
             auto_group,
         } => {
@@ -1039,10 +1044,18 @@ fn main() {
                 registry.find_volume_for_path(&canonical_paths[0])?
             };
 
+            // Merge config auto_tags with CLI --add-tag values
+            let mut all_tags = config.import.auto_tags.clone();
+            for tag in &add_tags {
+                if !all_tags.contains(tag) {
+                    all_tags.push(tag.clone());
+                }
+            }
+
             let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
             let result = if cli.log {
                 use dam::asset_service::FileStatus;
-                service.import_with_callback(&canonical_paths, &volume, &filter, &config.import.exclude, &config.import.auto_tags, dry_run, |path, status, elapsed| {
+                service.import_with_callback(&canonical_paths, &volume, &filter, &config.import.exclude, &all_tags, dry_run, |path, status, elapsed| {
                     let label = match status {
                         FileStatus::Imported => "imported",
                         FileStatus::LocationAdded => "location added",
@@ -1056,7 +1069,7 @@ fn main() {
                     eprintln!("  {} — {} ({})", name, label, format_duration(elapsed));
                 })?
             } else {
-                service.import_with_callback(&canonical_paths, &volume, &filter, &config.import.exclude, &config.import.auto_tags, dry_run, |_, _, _| {})?
+                service.import_with_callback(&canonical_paths, &volume, &filter, &config.import.exclude, &all_tags, dry_run, |_, _, _| {})?
             };
 
             // Post-import auto-group phase
