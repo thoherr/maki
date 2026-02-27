@@ -1764,7 +1764,7 @@ pub async fn duplicates_page(
         let path_filter = params.path.as_deref().filter(|s| !s.is_empty());
         let has_filters = vol_filter.is_some() || fmt_filter.is_some() || path_filter.is_some();
 
-        let entries = if has_filters {
+        let mut entries = if has_filters {
             catalog.find_duplicates_filtered(mode, vol_filter, fmt_filter, path_filter)?
         } else {
             match mode {
@@ -1773,6 +1773,12 @@ pub async fn duplicates_page(
                 _ => catalog.find_duplicates()?,
             }
         };
+
+        let preview_ext = state.preview_ext.clone();
+        for entry in &mut entries {
+            entry.preview_url =
+                super::templates::preview_url(&entry.content_hash, &preview_ext);
+        }
 
         let total_groups = entries.len();
 

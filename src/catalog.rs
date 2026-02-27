@@ -84,11 +84,15 @@ pub struct DuplicateEntry {
     pub format: String,
     pub file_size: u64,
     pub asset_name: Option<String>,
+    pub asset_id: String,
     pub locations: Vec<LocationDetails>,
     /// Number of distinct volumes this variant exists on.
     pub volume_count: usize,
     /// Volume labels that have 2+ locations for this variant (same-volume dupes).
     pub same_volume_groups: Vec<String>,
+    /// Pre-computed preview URL for the web UI (not serialized).
+    #[serde(skip)]
+    pub preview_url: String,
 }
 
 /// Recipe details within an `AssetDetails`.
@@ -1266,9 +1270,11 @@ impl Catalog {
                     format: row.get(2)?,
                     file_size: row.get(3)?,
                     asset_name: row.get(4)?,
+                    asset_id: row.get(5)?,
                     locations: Vec::new(),
                     volume_count: 0,
                     same_volume_groups: Vec::new(),
+                    preview_url: String::new(),
                 })
             })?
             .collect::<std::result::Result<_, _>>()?;
@@ -1295,7 +1301,7 @@ impl Catalog {
     /// Find variants that have more than one file location (duplicates).
     pub fn find_duplicates(&self) -> Result<Vec<DuplicateEntry>> {
         self.load_duplicate_entries(
-            "SELECT v.content_hash, v.original_filename, v.format, v.file_size, a.name \
+            "SELECT v.content_hash, v.original_filename, v.format, v.file_size, a.name, a.id \
              FROM variants v \
              JOIN assets a ON v.asset_id = a.id \
              WHERE v.content_hash IN ( \
@@ -1309,7 +1315,7 @@ impl Catalog {
     /// Find variants with 2+ locations on the **same** volume.
     pub fn find_duplicates_same_volume(&self) -> Result<Vec<DuplicateEntry>> {
         self.load_duplicate_entries(
-            "SELECT v.content_hash, v.original_filename, v.format, v.file_size, a.name \
+            "SELECT v.content_hash, v.original_filename, v.format, v.file_size, a.name, a.id \
              FROM variants v \
              JOIN assets a ON v.asset_id = a.id \
              WHERE v.content_hash IN ( \
@@ -1323,7 +1329,7 @@ impl Catalog {
     /// Find variants with locations on 2+ **different** volumes.
     pub fn find_duplicates_cross_volume(&self) -> Result<Vec<DuplicateEntry>> {
         self.load_duplicate_entries(
-            "SELECT v.content_hash, v.original_filename, v.format, v.file_size, a.name \
+            "SELECT v.content_hash, v.original_filename, v.format, v.file_size, a.name, a.id \
              FROM variants v \
              JOIN assets a ON v.asset_id = a.id \
              WHERE v.content_hash IN ( \
@@ -1359,7 +1365,7 @@ impl Catalog {
         };
 
         let mut sql = format!(
-            "SELECT v.content_hash, v.original_filename, v.format, v.file_size, a.name \
+            "SELECT v.content_hash, v.original_filename, v.format, v.file_size, a.name, a.id \
              FROM variants v \
              JOIN assets a ON v.asset_id = a.id \
              WHERE v.content_hash IN ({inner})"
@@ -1411,9 +1417,11 @@ impl Catalog {
                     format: row.get(2)?,
                     file_size: row.get(3)?,
                     asset_name: row.get(4)?,
+                    asset_id: row.get(5)?,
                     locations: Vec::new(),
                     volume_count: 0,
                     same_volume_groups: Vec::new(),
+                    preview_url: String::new(),
                 })
             })?
             .collect::<std::result::Result<_, _>>()?;

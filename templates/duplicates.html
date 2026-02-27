@@ -78,8 +78,9 @@
 
 <!-- Duplicate Groups -->
 {% for entry in entries %}
-<div class="dup-group">
+<div class="dup-group" data-preview="{{ entry.preview_url }}" data-filename="{{ entry.original_filename }}" data-format="{{ entry.format }}" data-asset-id="{{ entry.asset_id }}">
     <div class="dup-header">
+        <img class="dup-thumb" src="{{ entry.preview_url }}" alt="" loading="lazy" onerror="this.style.display='none'">
         <span class="dup-filename">{{ entry.original_filename }}</span>
         <span class="badge">{{ entry.format }}</span>
         <span class="dup-size">{{ entry.file_size|fmt_bytes }}</span>
@@ -131,6 +132,23 @@
 {% if entries.is_empty() %}
 <div class="empty-message">No duplicates found.</div>
 {% endif %}
+
+<!-- Lightbox overlay for duplicate previews -->
+<div id="dup-lightbox" class="dup-lightbox">
+    <div class="dup-lightbox-top">
+        <span class="dup-lightbox-counter" id="dup-lb-counter"></span>
+        <span class="dup-lightbox-title" id="dup-lb-title"></span>
+        <a class="dup-lightbox-detail" id="dup-lb-detail" href="#">Detail</a>
+        <button class="dup-lightbox-close" id="dup-lb-close">&times;</button>
+    </div>
+    <div class="dup-lightbox-body">
+        <button class="dup-lightbox-nav dup-lightbox-prev" id="dup-lb-prev">&#8249;</button>
+        <div class="dup-lightbox-img-wrap">
+            <img id="dup-lb-img" src="" alt="">
+        </div>
+        <button class="dup-lightbox-nav dup-lightbox-next" id="dup-lb-next">&#8250;</button>
+    </div>
+</div>
 
 <script>
 (function() {
@@ -204,6 +222,71 @@
             btn.disabled = false;
         });
     });
+
+    // Lightbox for duplicate previews
+    (function() {
+        var lb = document.getElementById('dup-lightbox');
+        var img = document.getElementById('dup-lb-img');
+        var counter = document.getElementById('dup-lb-counter');
+        var title = document.getElementById('dup-lb-title');
+        var detail = document.getElementById('dup-lb-detail');
+        var groups = document.querySelectorAll('.dup-group[data-preview]');
+        var items = [];
+        groups.forEach(function(g) {
+            items.push({
+                preview: g.dataset.preview,
+                filename: g.dataset.filename,
+                format: g.dataset.format,
+                assetId: g.dataset.assetId
+            });
+        });
+        var cur = 0;
+        function show(idx) {
+            if (items.length === 0) return;
+            cur = idx;
+            var it = items[cur];
+            img.src = it.preview;
+            img.alt = it.filename;
+            counter.textContent = (cur + 1) + ' / ' + items.length;
+            title.textContent = it.filename + ' (' + it.format.toUpperCase() + ')';
+            detail.href = '/asset/' + it.assetId;
+            lb.classList.add('open');
+            document.body.style.overflow = 'hidden';
+        }
+        function hide() {
+            lb.classList.remove('open');
+            document.body.style.overflow = '';
+            img.src = '';
+        }
+        function prev() { if (items.length > 0) show((cur - 1 + items.length) % items.length); }
+        function next() { if (items.length > 0) show((cur + 1) % items.length); }
+
+        // Open on thumbnail click
+        document.addEventListener('click', function(e) {
+            var thumb = e.target.closest('.dup-thumb');
+            if (!thumb) return;
+            var group = thumb.closest('.dup-group');
+            var idx = Array.prototype.indexOf.call(groups, group);
+            if (idx >= 0) show(idx);
+        });
+
+        document.getElementById('dup-lb-close').addEventListener('click', hide);
+        document.getElementById('dup-lb-prev').addEventListener('click', prev);
+        document.getElementById('dup-lb-next').addEventListener('click', next);
+
+        // Click outside image to close
+        lb.addEventListener('click', function(e) {
+            if (e.target === lb) hide();
+        });
+
+        // Keyboard navigation
+        document.addEventListener('keydown', function(e) {
+            if (!lb.classList.contains('open')) return;
+            if (e.key === 'Escape') { hide(); e.preventDefault(); }
+            else if (e.key === 'ArrowLeft') { prev(); e.preventDefault(); }
+            else if (e.key === 'ArrowRight') { next(); e.preventDefault(); }
+        });
+    })();
 })();
 </script>
 
