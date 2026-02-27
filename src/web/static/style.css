@@ -513,6 +513,9 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
     background: var(--badge-bg);
 }
 /* Asset preview zoom */
+.asset-preview.zoomed {
+    min-width: 0;
+}
 .asset-preview.zoomed #preview {
     overflow: auto;
     cursor: grab;
@@ -1752,6 +1755,7 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     cursor: grab;
     align-items: flex-start;
     justify-content: flex-start;
+    align-self: stretch;
 }
 .lightbox-img-wrap.zoomed.dragging {
     cursor: grabbing;
