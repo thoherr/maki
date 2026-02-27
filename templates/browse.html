@@ -1336,6 +1336,7 @@
     }
 
     function close() {
+        resetZoom();
         isOpen = false;
         overlay.classList.remove('open');
         document.body.style.overflow = '';
@@ -1472,7 +1473,7 @@
     });
 
     // Close on button or clicking empty area around image
-    document.getElementById('lb-close').addEventListener('click', function() { resetZoom(); close(); });
+    document.getElementById('lb-close').addEventListener('click', close);
     document.getElementById('lb-img-wrap').addEventListener('click', function(e) {
         if (e.target === this && !imgWrap.classList.contains('zoomed')) close();
     });
