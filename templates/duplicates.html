@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+
+{% block title %}Duplicates - DAM{% endblock %}
+
+{% block content %}
+<h1>Duplicates</h1>
+
+<!-- Summary Cards -->
+<div class="dup-summary">
+    <div class="stat-card accent-blue">
+        <div class="stat-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="8" y="2" width="12" height="16" rx="2"></rect>
+                <rect x="4" y="6" width="12" height="16" rx="2"></rect>
+            </svg>
+        </div>
+        <div class="stat-value">{{ total_groups }}</div>
+        <div class="stat-label">Duplicate Groups</div>
+    </div>
+    <div class="stat-card {% if total_wasted > 0 %}accent-amber{% else %}accent-emerald{% endif %}">
+        <div class="stat-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+            </svg>
+        </div>
+        <div class="stat-value">{{ total_wasted|fmt_bytes }}</div>
+        <div class="stat-label">Wasted Space</div>
+    </div>
+    <div class="stat-card {% if same_volume_count > 0 %}accent-danger{% else %}accent-emerald{% endif %}">
+        <div class="stat-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                <line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+        </div>
+        <div class="stat-value">{{ same_volume_count }}</div>
+        <div class="stat-label">Same-Volume</div>
+    </div>
+</div>
+
+<!-- Mode Tabs -->
+<div class="dup-tabs">
+    <a href="/duplicates?mode=all" class="dup-tab{% if mode == "all" %} active{% endif %}">All</a>
+    <a href="/duplicates?mode=same" class="dup-tab{% if mode == "same" %} active{% endif %}">Same Volume</a>
+    <a href="/duplicates?mode=cross" class="dup-tab{% if mode == "cross" %} active{% endif %}">Cross Volume</a>
+</div>
+
+{% if same_volume_count > 0 %}
+<!-- Auto-resolve button -->
+<div class="dup-actions">
+    <button class="btn-resolve" id="auto-resolve-btn">Auto-resolve all same-volume duplicates</button>
+</div>
+{% endif %}
+
+<!-- Duplicate Groups -->
+{% for entry in entries %}
+<div class="dup-group">
+    <div class="dup-header">
+        <span class="dup-filename">{{ entry.original_filename }}</span>
+        <span class="badge">{{ entry.format }}</span>
+        <span class="dup-size">{{ entry.file_size|fmt_bytes }}</span>
+        {% match entry.asset_name %}
+        {% when Some with (name) %}
+        <span class="dup-name">{{ name }}</span>
+        {% when None %}
+        {% endmatch %}
+        {% if !entry.same_volume_groups.is_empty() %}
+        <span class="badge badge-warn">same-volume</span>
+        {% endif %}
+    </div>
+    <table class="dup-locations">
+        <thead>
+            <tr>
+                <th>Volume</th>
+                <th>Path</th>
+                <th>Verified</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for loc in entry.locations %}
+        <tr>
+            <td><span class="badge">{{ loc.volume_label }}</span>
+                {% match loc.volume_purpose %}
+                {% when Some with (p) %}
+                <span class="badge badge-purpose">{{ p }}</span>
+                {% when None %}
+                {% endmatch %}
+            </td>
+            <td class="dup-path">{{ loc.relative_path }}</td>
+            <td>{% match loc.verified_at %}{% when Some with (d) %}{{ d }}{% when None %}never{% endmatch %}</td>
+            <td>
+                {% if entry.locations.len() > 1 %}
+                <button class="btn-remove dup-remove-btn"
+                    data-hash="{{ entry.content_hash }}"
+                    data-vol="{{ loc.volume_id }}"
+                    data-path="{{ loc.relative_path }}">Remove</button>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endfor %}
+
+{% if entries.is_empty() %}
+<div class="empty-message">No duplicates found.</div>
+{% endif %}
+
+<script>
+(function() {
+    function formatBytes(b) {
+        if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+        if (b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
+        if (b >= 1024) return (b / 1024).toFixed(1) + ' KB';
+        return b + ' B';
+    }
+
+    // Auto-resolve button
+    var resolveBtn = document.getElementById('auto-resolve-btn');
+    if (resolveBtn) {
+        resolveBtn.addEventListener('click', function() {
+            if (!confirm('Auto-resolve all same-volume duplicates?\n\nFiles will be permanently deleted from disk. The best copy on each volume is kept.')) return;
+            resolveBtn.disabled = true;
+            resolveBtn.textContent = 'Resolving\u2026';
+            fetch('/api/dedup/resolve', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: '{}'
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.errors && data.errors.length > 0) {
+                    alert('Completed with errors:\n' + data.errors.join('\n'));
+                } else {
+                    alert('Removed ' + data.locations_removed + ' locations, freed ' + formatBytes(data.bytes_freed));
+                }
+                window.location.reload();
+            })
+            .catch(function(err) {
+                alert('Error: ' + err.message);
+                resolveBtn.disabled = false;
+                resolveBtn.textContent = 'Auto-resolve all same-volume duplicates';
+            });
+        });
+    }
+
+    // Per-location remove buttons (event delegation)
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('.dup-remove-btn');
+        if (!btn) return;
+        if (!confirm('Remove this file copy?\n\nThe file will be permanently deleted from disk.')) return;
+        btn.disabled = true;
+        fetch('/api/dedup/location', {
+            method: 'DELETE',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                content_hash: btn.dataset.hash,
+                volume_id: btn.dataset.vol,
+                relative_path: btn.dataset.path
+            })
+        })
+        .then(function(r) {
+            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            return r.json();
+        })
+        .then(function() {
+            // Remove the row; if only one row left, hide remaining remove buttons
+            var tbody = btn.closest('tbody');
+            btn.closest('tr').remove();
+            var remaining = tbody.querySelectorAll('tr');
+            if (remaining.length <= 1) {
+                var btns = tbody.querySelectorAll('.dup-remove-btn');
+                btns.forEach(function(b) { b.style.display = 'none'; });
+            }
+        })
+        .catch(function(err) {
+            alert('Error: ' + err.message);
+            btn.disabled = false;
+        });
+    });
+})();
+</script>
+
+{% endblock %}

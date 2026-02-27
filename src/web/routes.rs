@@ -13,9 +13,10 @@ use crate::device_registry::DeviceRegistry;
 
 use super::templates::{
     format_size, link_cards, AssetCard, AssetPage, BackupPage, BrowsePage, CollectionOption,
-    DescriptionFragment, FormatOption, LabelFragment, NameFragment, PreviewFragment,
-    RatingFragment, ResultsPartial, SavedSearchChip, SavedSearchEntry, SavedSearchesPage,
-    StackMemberCard, StatsPage, TagOption, TagTreeEntry, TagsFragment, TagsPage, VolumeOption,
+    DescriptionFragment, DuplicatesPage, FormatOption, LabelFragment, NameFragment,
+    PreviewFragment, RatingFragment, ResultsPartial, SavedSearchChip, SavedSearchEntry,
+    SavedSearchesPage, StackMemberCard, StatsPage, TagOption, TagTreeEntry, TagsFragment,
+    TagsPage, VolumeOption,
 };
 use super::AppState;
 
@@ -1733,6 +1734,183 @@ pub async fn calendar_api(
         Ok(Ok(json)) => Json(json).into_response(),
         Ok(Err(e)) => {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+// --- Duplicates ---
+
+#[derive(Debug, serde::Deserialize)]
+pub struct DuplicatesParams {
+    pub mode: Option<String>,
+}
+
+/// GET /duplicates — duplicates page showing duplicate file groups.
+pub async fn duplicates_page(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<DuplicatesParams>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+        let mode = params.mode.as_deref().unwrap_or("all");
+
+        let entries = match mode {
+            "same" => catalog.find_duplicates_same_volume()?,
+            "cross" => catalog.find_duplicates_cross_volume()?,
+            _ => catalog.find_duplicates()?,
+        };
+
+        let total_groups = entries.len();
+
+        // Compute wasted space: for groups with same-volume dupes,
+        // count file_size * (extra copies on same volume) per volume group
+        let mut total_wasted: u64 = 0;
+        let mut same_volume_count: usize = 0;
+        for entry in &entries {
+            if !entry.same_volume_groups.is_empty() {
+                same_volume_count += 1;
+                // Count extra same-volume locations
+                let mut vol_counts: std::collections::HashMap<&str, usize> =
+                    std::collections::HashMap::new();
+                for loc in &entry.locations {
+                    *vol_counts.entry(&loc.volume_id).or_insert(0) += 1;
+                }
+                for (_, count) in &vol_counts {
+                    if *count > 1 {
+                        total_wasted += entry.file_size * (*count as u64 - 1);
+                    }
+                }
+            }
+        }
+
+        let tmpl = DuplicatesPage {
+            entries,
+            mode: mode.to_string(),
+            total_groups,
+            total_wasted,
+            same_volume_count,
+        };
+        Ok::<_, anyhow::Error>(tmpl.render()?)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(html)) => Html(html).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct DedupResolveRequest {
+    pub min_copies: Option<usize>,
+}
+
+/// POST /api/dedup/resolve — auto-resolve all same-volume duplicates.
+pub async fn dedup_resolve_api(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<DedupResolveRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let service = state.asset_service();
+        let min_copies = req.min_copies.unwrap_or(1);
+        let dedup_result = service.dedup(None, None, min_copies, true, |_, _, _, _| {})?;
+        Ok::<_, anyhow::Error>(dedup_result)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(dedup)) => Json(dedup).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RemoveLocationRequest {
+    pub content_hash: String,
+    pub volume_id: String,
+    pub relative_path: String,
+}
+
+/// DELETE /api/dedup/location — remove a specific file copy.
+pub async fn dedup_remove_location_api(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RemoveLocationRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+
+        // Safety check: count remaining locations for this hash
+        let location_count: u64 = catalog.conn().query_row(
+            "SELECT COUNT(*) FROM file_locations WHERE content_hash = ?1",
+            rusqlite::params![req.content_hash],
+            |row| row.get(0),
+        )?;
+        if location_count <= 1 {
+            anyhow::bail!("Cannot remove the last copy of a file");
+        }
+
+        // Resolve volume and check it's online
+        let registry = DeviceRegistry::new(&state.catalog_root);
+        let volumes = registry.list()?;
+        let vol = volumes
+            .iter()
+            .find(|v| v.id.to_string() == req.volume_id)
+            .ok_or_else(|| anyhow::anyhow!("Volume not found: {}", req.volume_id))?;
+        if !vol.is_online {
+            anyhow::bail!("Volume '{}' is offline", vol.label);
+        }
+
+        // Delete the physical file
+        let full_path = vol.mount_point.join(&req.relative_path);
+        if full_path.exists() {
+            std::fs::remove_file(&full_path).map_err(|e| {
+                anyhow::anyhow!("Failed to delete {}: {e}", full_path.display())
+            })?;
+        }
+
+        // Remove from catalog
+        catalog.delete_file_location(&req.content_hash, &req.volume_id, &req.relative_path)?;
+
+        // Update sidecar YAML
+        let service = state.asset_service();
+        let metadata_store = crate::metadata_store::MetadataStore::new(&state.catalog_root);
+        let vol_uuid: uuid::Uuid = req.volume_id.parse().map_err(|e| {
+            anyhow::anyhow!("Invalid volume ID '{}': {e}", req.volume_id)
+        })?;
+        if let Err(e) = service.remove_sidecar_file_location(
+            &metadata_store,
+            &catalog,
+            &req.content_hash,
+            vol_uuid,
+            &req.relative_path,
+        ) {
+            eprintln!("Warning: failed to update sidecar: {e}");
+        }
+
+        Ok::<_, anyhow::Error>(serde_json::json!({"removed": true}))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => {
+            let msg = format!("{e:#}");
+            let status = if msg.contains("Cannot remove") || msg.contains("offline") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, msg).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
     }

@@ -2267,7 +2267,7 @@ impl AssetService {
     }
 
     /// Remove a file location from the sidecar YAML.
-    fn remove_sidecar_file_location(
+    pub fn remove_sidecar_file_location(
         &self,
         metadata_store: &MetadataStore,
         catalog: &Catalog,

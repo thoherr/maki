@@ -437,6 +437,16 @@ pub struct CollectionsPage {
     pub collections: Vec<crate::collection::CollectionSummary>,
 }
 
+#[derive(Template)]
+#[template(path = "duplicates.html")]
+pub struct DuplicatesPage {
+    pub entries: Vec<crate::catalog::DuplicateEntry>,
+    pub mode: String,
+    pub total_groups: usize,
+    pub total_wasted: u64,
+    pub same_volume_count: usize,
+}
+
 /// Custom askama filters for templates.
 mod filters {
     pub fn fmt_bytes(bytes: &u64) -> ::askama::Result<String> {

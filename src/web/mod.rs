@@ -10,6 +10,7 @@ use anyhow::Result;
 use axum::Router;
 use tower_http::services::ServeDir;
 
+use crate::asset_service::AssetService;
 use crate::catalog::Catalog;
 use crate::config::PreviewConfig;
 use crate::preview::PreviewGenerator;
@@ -143,6 +144,11 @@ impl AppState {
     pub fn preview_generator(&self) -> PreviewGenerator {
         PreviewGenerator::new(&self.catalog_root, false, &self.preview_config)
     }
+
+    /// Create an AssetService for dedup and other operations.
+    pub fn asset_service(&self) -> AssetService {
+        AssetService::new(&self.catalog_root, false, &self.preview_config)
+    }
 }
 
 fn build_router(state: Arc<AppState>) -> Router {
@@ -246,6 +252,9 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/api/asset/{id}/stack",
             axum::routing::delete(routes::dissolve_stack),
         )
+        .route("/duplicates", axum::routing::get(routes::duplicates_page))
+        .route("/api/dedup/resolve", axum::routing::post(routes::dedup_resolve_api))
+        .route("/api/dedup/location", axum::routing::delete(routes::dedup_remove_location_api))
         .route("/api/calendar", axum::routing::get(routes::calendar_api))
         .route("/static/htmx.min.js", axum::routing::get(static_assets::htmx_js))
         .route("/static/style.css", axum::routing::get(static_assets::style_css))
