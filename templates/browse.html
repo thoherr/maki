@@ -1475,14 +1475,16 @@
         });
     }
 
-    // Click on thumbnail opens lightbox (event delegation)
+    // Click on thumbnail opens lightbox; click on card-body navigates to detail page
     document.getElementById('results').addEventListener('click', function(e) {
-        var link = e.target.closest('.asset-card a');
-        if (!link) return;
-        var card = link.closest('.asset-card');
-        if (!card) return;
         // Don't intercept checkbox clicks
         if (e.target.closest('.select-checkbox')) return;
+        // Card-body is a link to detail page — let it navigate naturally
+        if (e.target.closest('.card-body')) return;
+        // Thumbnail click opens lightbox
+        var card = e.target.closest('.asset-card');
+        if (!card) return;
+        if (!e.target.closest('.thumb') && !e.target.closest('.thumb-placeholder')) return;
         e.preventDefault();
         var cards = getCards();
         var idx = cards.indexOf(card);
@@ -1828,11 +1830,21 @@
             return;
         }
 
-        // Enter: open lightbox for focused card
-        if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
+        // Enter or l: open lightbox for focused card
+        if ((e.key === 'Enter' || e.key === 'l') && !e.metaKey && !e.ctrlKey && !e.altKey) {
             if (focusedIndex >= 0 && window.damLightbox) {
                 e.preventDefault();
                 window.damLightbox.open(focusedIndex);
+            }
+            return;
+        }
+
+        // d: open detail page for focused card
+        if (e.key === 'd' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+            var focId = getFocusedId();
+            if (focId) {
+                e.preventDefault();
+                window.location.href = '/asset/' + focId;
             }
             return;
         }
@@ -2132,7 +2144,8 @@ if (window.damHelp) {
     damHelp.registerShortcuts([
         { title: 'Navigation', shortcuts: [
             { keys: '\u2190 \u2191 \u2192 \u2193', desc: 'Move focus between cards' },
-            { keys: 'Enter', desc: 'Open lightbox' },
+            { keys: 'Enter / l', desc: 'Open lightbox' },
+            { keys: 'd', desc: 'Open detail page' },
             { keys: 'Escape', desc: 'Clear selection / focus' }
         ]},
         { title: 'Selection', shortcuts: [

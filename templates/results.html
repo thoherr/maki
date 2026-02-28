@@ -107,27 +107,25 @@
             <input type="checkbox" class="asset-select-cb" value="{{ card.asset_id }}">
             <span class="checkmark"></span>
         </label>
-        <a href="{{ card.detail_url() }}">
-            <img class="thumb"
-                 src="{{ card.preview_url }}"
-                 alt="{{ card.display_name }}"
-                 loading="lazy"
-                 onerror="this.outerHTML='<div class=\'thumb-placeholder\'>&#128444;</div>'">
-            <div class="card-body">
-                <div class="card-title">{{ card.display_name }}</div>
-                <div class="card-meta">
-                    <span class="badge">{{ card.asset_type }}</span>
-                    <span class="badge">{{ card.format }}</span>
-                    {% if card.variant_count > 1 %}<span class="badge badge-count">{{ card.variant_count }}v</span>{% endif %}
-                    {% if let Some(sc) = card.stack_count %}<span class="badge badge-stack" title="Stack of {{ sc }}">&#8862; {{ sc }}</span>{% endif %}
-                    <span>{{ card.date }}</span>
-                </div>
-                {% if card.rating.is_some() && card.rating.unwrap() > 0 %}
-                <div class="card-stars">{% for i in 1..=5u8 %}{% if i <= card.rating.unwrap() %}&#9733;{% else %}&#9734;{% endif %}{% endfor %}{% if card.color_label.is_some() %} <span class="card-label-dot" style="background: {{ card.color_label.as_deref().unwrap()|label_color }};"></span>{% endif %}</div>
-                {% else if card.color_label.is_some() %}
-                <div class="card-stars"><span class="card-label-dot" style="background: {{ card.color_label.as_deref().unwrap()|label_color }};"></span></div>
-                {% endif %}
+        <img class="thumb"
+             src="{{ card.preview_url }}"
+             alt="{{ card.display_name }}"
+             loading="lazy"
+             onerror="this.outerHTML='<div class=\'thumb-placeholder\'>&#128444;</div>'">
+        <a class="card-body" href="{{ card.detail_url() }}">
+            <div class="card-title">{{ card.display_name }}</div>
+            <div class="card-meta">
+                <span class="badge">{{ card.asset_type }}</span>
+                <span class="badge">{{ card.format }}</span>
+                {% if card.variant_count > 1 %}<span class="badge badge-count">{{ card.variant_count }}v</span>{% endif %}
+                {% if let Some(sc) = card.stack_count %}<span class="badge badge-stack" title="Stack of {{ sc }}">&#8862; {{ sc }}</span>{% endif %}
+                <span>{{ card.date }}</span>
             </div>
+            {% if card.rating.is_some() && card.rating.unwrap() > 0 %}
+            <div class="card-stars">{% for i in 1..=5u8 %}{% if i <= card.rating.unwrap() %}&#9733;{% else %}&#9734;{% endif %}{% endfor %}{% if card.color_label.is_some() %} <span class="card-label-dot" style="background: {{ card.color_label.as_deref().unwrap()|label_color }};"></span>{% endif %}</div>
+            {% else if card.color_label.is_some() %}
+            <div class="card-stars"><span class="card-label-dot" style="background: {{ card.color_label.as_deref().unwrap()|label_color }};"></span></div>
+            {% endif %}
         </a>
     </div>
     {% endfor %}

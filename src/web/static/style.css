@@ -256,13 +256,13 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
 .asset-card.stacked {
     border-left: 3px solid var(--stack-color, var(--border));
 }
-.asset-card a { display: block; color: inherit; text-decoration: none; }
 .asset-card .thumb {
     width: 100%;
     aspect-ratio: 1;
     object-fit: cover;
     display: block;
     background: var(--badge-bg);
+    cursor: pointer;
 }
 .asset-card .thumb-placeholder {
     width: 100%;
@@ -273,9 +273,13 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
     background: var(--badge-bg);
     color: var(--text-muted);
     font-size: 2rem;
+    cursor: pointer;
 }
 .asset-card .card-body {
+    display: block;
     padding: 0.5rem 0.75rem;
+    color: inherit;
+    text-decoration: none;
 }
 .asset-card .card-title {
     font-size: 0.85rem;
