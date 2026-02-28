@@ -2562,13 +2562,13 @@ body.has-batch-toolbar { padding-bottom: 60px; }
 
 /* Map popup */
 .map-popup { text-align: center; max-width: 180px; }
-.map-popup img { width: 150px; height: 100px; object-fit: cover; border-radius: 4px; margin-bottom: 4px; }
+.map-popup img { width: 150px; height: 100px; object-fit: cover; border-radius: 4px; margin-bottom: 4px; cursor: pointer; }
 .map-popup .popup-name { font-weight: 500; font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
 .map-popup .popup-meta { font-size: 0.75rem; color: var(--text-muted); }
 .map-popup .popup-stars { color: #f39c12; font-size: 0.8rem; }
 .map-popup .popup-label-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: middle; margin-left: 4px; }
-.map-popup a { color: var(--primary); text-decoration: none; }
-.map-popup a:hover { text-decoration: underline; }
+.map-popup .popup-detail-link { color: var(--text); text-decoration: none; display: block; }
+.map-popup .popup-detail-link:hover { color: var(--primary); }
 .map-truncated { text-align: center; padding: 0.5rem; font-size: 0.85rem; color: var(--text-muted); background: var(--bg-card); border-radius: var(--radius); margin-top: 0.5rem; }
 
 /* Dark mode map tiles */

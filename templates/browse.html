@@ -2283,8 +2283,9 @@ window.damMap = (function() {
                     var marker = L.marker([m.lat, m.lng]);
                     var popupHtml = '<div class="map-popup">';
                     if (m.preview) {
-                        popupHtml += '<a href="/asset/' + m.id + '"><img src="' + m.preview + '" loading="lazy" alt=""></a>';
+                        popupHtml += '<a href="/asset/' + m.id + '"><img class="map-popup-thumb" src="' + m.preview + '" loading="lazy" alt=""></a>';
                     }
+                    popupHtml += '<a class="popup-detail-link" href="/asset/' + m.id + '">';
                     popupHtml += '<div class="popup-name">' + escapeHtml(m.name) + '</div>';
                     popupHtml += '<div class="popup-meta">';
                     popupHtml += starsHtml(m.rating);
@@ -2292,7 +2293,7 @@ window.damMap = (function() {
                         popupHtml += '<span class="popup-label-dot" style="background:' + LABEL_COLORS[m.label] + '"></span>';
                     }
                     popupHtml += '</div>';
-                    popupHtml += '<a href="/asset/' + m.id + '">Details</a>';
+                    popupHtml += '</a>';
                     popupHtml += '</div>';
                     marker.bindPopup(popupHtml, { maxWidth: 200 });
                     clusterGroup.addLayer(marker);
