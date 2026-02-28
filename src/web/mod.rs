@@ -116,11 +116,13 @@ pub struct AppState {
     pub log_requests: bool,
     pub dropdown_cache: DropdownCache,
     pub dedup_prefer: Option<String>,
+    pub smart_on_demand: bool,
 }
 
 impl AppState {
     pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>) -> Self {
         let preview_ext = preview_config.format.extension().to_string();
+        let smart_on_demand = preview_config.generate_on_demand;
         Self {
             catalog_root,
             preview_config,
@@ -128,6 +130,7 @@ impl AppState {
             log_requests,
             dropdown_cache: DropdownCache::new(),
             dedup_prefer,
+            smart_on_demand,
         }
     }
 
@@ -155,7 +158,6 @@ impl AppState {
 
 fn build_router(state: Arc<AppState>) -> Router {
     let preview_dir = state.catalog_root.join("previews");
-    let smart_preview_dir = state.catalog_root.join("smart-previews");
 
     Router::new()
         .route("/", axum::routing::get(routes::browse_page))
@@ -267,7 +269,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/static/htmx.min.js", axum::routing::get(static_assets::htmx_js))
         .route("/static/style.css", axum::routing::get(static_assets::style_css))
         .nest_service("/preview", ServeDir::new(preview_dir))
-        .nest_service("/smart-preview", ServeDir::new(smart_preview_dir))
+        .route("/smart-preview/{prefix}/{file}", axum::routing::get(routes::serve_smart_preview))
         .layer(axum::middleware::from_fn_with_state(state.clone(), log_request))
         .with_state(state)
 }

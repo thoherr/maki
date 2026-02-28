@@ -41,6 +41,8 @@ pub struct PreviewConfig {
     pub smart_max_edge: u32,
     #[serde(default = "default_smart_quality")]
     pub smart_quality: u8,
+    #[serde(default)]
+    pub generate_on_demand: bool,
 }
 
 fn default_max_edge() -> u32 {
@@ -67,6 +69,7 @@ impl Default for PreviewConfig {
             quality: 85,
             smart_max_edge: 2560,
             smart_quality: 85,
+            generate_on_demand: false,
         }
     }
 }
@@ -348,6 +351,7 @@ max_edge = 1000
                 quality: 90,
                 smart_max_edge: 3000,
                 smart_quality: 92,
+                ..Default::default()
             },
             serve: ServeConfig {
                 port: 9090,
@@ -494,6 +498,7 @@ max_edge = 1000
                 quality: 90,
                 smart_max_edge: 3000,
                 smart_quality: 92,
+                ..Default::default()
             },
             serve: ServeConfig::default(),
             import: ImportConfig {

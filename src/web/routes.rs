@@ -2165,3 +2165,98 @@ pub async fn compare_page(
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
     }
 }
+
+/// GET /smart-preview/{prefix}/{file} — serve smart preview, generating on-demand if configured.
+pub async fn serve_smart_preview(
+    State(state): State<Arc<AppState>>,
+    Path((prefix, file)): Path<(String, String)>,
+) -> Response {
+    let smart_dir = state.catalog_root.join("smart-previews");
+    let file_path = smart_dir.join(&prefix).join(&file);
+
+    // If the file already exists, serve it directly
+    if file_path.exists() {
+        return serve_smart_file(&file_path, &file).await;
+    }
+
+    // If on-demand generation is disabled, return 404
+    if !state.smart_on_demand {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    // Extract content hash from filename (strip extension, prepend sha256:)
+    let hash_hex = match file.rsplit_once('.') {
+        Some((stem, _ext)) => stem,
+        None => &file,
+    };
+    let content_hash = format!("sha256:{hash_hex}");
+
+    let state = state.clone();
+    let file_path_clone = file_path.clone();
+    let file_name = file.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+
+        // Look up variant format
+        let format = catalog
+            .get_variant_format(&content_hash)?
+            .ok_or_else(|| anyhow::anyhow!("Variant not found"))?;
+
+        // Find an online source file
+        let locations = catalog.get_variant_file_locations(&content_hash)?;
+        let registry = DeviceRegistry::new(&state.catalog_root);
+        let volumes = registry.list()?;
+
+        let source_path = locations
+            .iter()
+            .find_map(|(vol_id, rel_path)| {
+                let vol = volumes.iter().find(|v| v.id.to_string() == *vol_id)?;
+                if !vol.is_online {
+                    return None;
+                }
+                let path = vol.mount_point.join(rel_path);
+                if path.exists() {
+                    Some(path)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| anyhow::anyhow!("No online source file"))?;
+
+        // Generate the smart preview
+        let preview_gen = state.preview_generator();
+        preview_gen.generate_smart(&content_hash, &source_path, &format)?;
+
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) if file_path_clone.exists() => {
+            serve_smart_file(&file_path_clone, &file_name).await
+        }
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn serve_smart_file(path: &std::path::Path, filename: &str) -> Response {
+    match tokio::fs::read(path).await {
+        Ok(bytes) => {
+            let content_type = if filename.ends_with(".webp") {
+                "image/webp"
+            } else {
+                "image/jpeg"
+            };
+            (
+                StatusCode::OK,
+                [
+                    (axum::http::header::CONTENT_TYPE, content_type),
+                    (axum::http::header::CACHE_CONTROL, "public, max-age=86400"),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}

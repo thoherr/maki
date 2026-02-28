@@ -996,6 +996,18 @@ impl Catalog {
         }
     }
 
+    /// Look up file locations for a variant by content hash.
+    /// Returns (volume_id, relative_path) pairs.
+    pub fn get_variant_file_locations(&self, content_hash: &str) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT volume_id, relative_path FROM file_locations WHERE content_hash = ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![content_hash], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
     /// Open an in-memory catalog (for testing).
     #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
