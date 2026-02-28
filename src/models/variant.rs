@@ -98,6 +98,45 @@ pub fn compute_primary_format(variants: &[Variant]) -> Option<String> {
     best_preview_index(variants).map(|i| variants[i].format.clone())
 }
 
+/// Compute GPS coordinates from an asset's variants.
+///
+/// Prefers the Original-role variant, falls back to any variant with GPS.
+/// Reads `gps_latitude_decimal`/`gps_longitude_decimal` first, then parses DMS strings.
+pub fn compute_gps_from_variants(variants: &[Variant]) -> (Option<f64>, Option<f64>) {
+    // Sort: prefer original role
+    let candidates: Vec<&Variant> = {
+        let mut originals: Vec<&Variant> = variants.iter().filter(|v| v.role == VariantRole::Original).collect();
+        let mut others: Vec<&Variant> = variants.iter().filter(|v| v.role != VariantRole::Original).collect();
+        originals.append(&mut others);
+        originals
+    };
+
+    for v in candidates {
+        // Try decimal values first
+        if let (Some(lat_str), Some(lon_str)) = (
+            v.source_metadata.get("gps_latitude_decimal"),
+            v.source_metadata.get("gps_longitude_decimal"),
+        ) {
+            if let (Ok(lat), Ok(lon)) = (lat_str.parse::<f64>(), lon_str.parse::<f64>()) {
+                return (Some(lat), Some(lon));
+            }
+        }
+        // Fall back to DMS strings
+        if let (Some(lat_str), Some(lon_str)) = (
+            v.source_metadata.get("gps_latitude"),
+            v.source_metadata.get("gps_longitude"),
+        ) {
+            if let (Some(lat), Some(lon)) = (
+                crate::exif_reader::parse_dms_string(lat_str),
+                crate::exif_reader::parse_dms_string(lon_str),
+            ) {
+                return (Some(lat), Some(lon));
+            }
+        }
+    }
+    (None, None)
+}
+
 /// Return the index of the best preview variant from catalog `VariantDetails` (role is a String).
 pub fn best_preview_index_details(variants: &[VariantDetails]) -> Option<usize> {
     if variants.is_empty() {

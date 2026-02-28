@@ -6,6 +6,18 @@ use rusqlite::Connection;
 
 use crate::models::{Asset, FileLocation, Recipe, Variant};
 
+/// Map marker data for the web UI map view.
+#[derive(Debug, serde::Serialize)]
+pub struct MapMarker {
+    pub id: String,
+    pub lat: f64,
+    pub lng: f64,
+    pub preview: Option<String>,
+    pub name: String,
+    pub rating: Option<u8>,
+    pub label: Option<String>,
+}
+
 /// A row returned from a search query.
 #[derive(Debug, serde::Serialize)]
 pub struct SearchRow {
@@ -354,6 +366,8 @@ pub struct SearchOptions<'a> {
     pub date_until: Option<&'a str>,
     pub collapse_stacks: bool,
     pub stacked_filter: Option<bool>,
+    pub geo_bbox: Option<(f64, f64, f64, f64)>,
+    pub has_gps: Option<bool>,
     pub sort: SearchSort,
     pub page: u32,
     pub per_page: u32,
@@ -394,6 +408,8 @@ impl<'a> Default for SearchOptions<'a> {
             date_until: None,
             collapse_stacks: false,
             stacked_filter: None,
+            geo_bbox: None,
+            has_gps: None,
             sort: SearchSort::DateDesc,
             page: 1,
             per_page: 60,
@@ -557,6 +573,13 @@ impl Catalog {
              CREATE INDEX IF NOT EXISTS idx_variants_format ON variants(format);
              CREATE INDEX IF NOT EXISTS idx_recipes_variant_hash ON recipes(variant_hash);",
         );
+        // GPS coordinate columns
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN latitude REAL");
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN longitude REAL");
+        let _ = self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_assets_geo ON assets(latitude, longitude) WHERE latitude IS NOT NULL",
+        );
+        self.backfill_gps_columns();
     }
 
     /// Initialize the database schema.
@@ -571,7 +594,9 @@ impl Catalog {
                 description TEXT,
                 best_variant_hash TEXT,
                 primary_variant_format TEXT,
-                variant_count INTEGER NOT NULL DEFAULT 0
+                variant_count INTEGER NOT NULL DEFAULT 0,
+                latitude REAL,
+                longitude REAL
             );
 
             CREATE TABLE IF NOT EXISTS variants (
@@ -704,6 +729,14 @@ impl Catalog {
              CREATE INDEX IF NOT EXISTS idx_recipes_variant_hash ON recipes(variant_hash);",
         )?;
 
+        // GPS coordinate columns
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN latitude REAL");
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN longitude REAL");
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_assets_geo ON assets(latitude, longitude) WHERE latitude IS NOT NULL",
+        )?;
+        self.backfill_gps_columns();
+
         Ok(())
     }
 
@@ -713,9 +746,10 @@ impl Catalog {
         let best_hash = crate::models::variant::compute_best_variant_hash(&asset.variants);
         let primary_format = crate::models::variant::compute_primary_format(&asset.variants);
         let variant_count = asset.variants.len() as i64;
+        let (latitude, longitude) = crate::models::variant::compute_gps_from_variants(&asset.variants);
         self.conn.execute(
-            "INSERT OR REPLACE INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT OR REPLACE INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count, latitude, longitude) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             rusqlite::params![
                 asset.id.to_string(),
                 asset.name,
@@ -728,6 +762,8 @@ impl Catalog {
                 best_hash,
                 primary_format,
                 variant_count,
+                latitude,
+                longitude,
             ],
         )?;
         Ok(())
@@ -774,9 +810,10 @@ impl Catalog {
         let best_hash = crate::models::variant::compute_best_variant_hash(&asset.variants);
         let primary_format = crate::models::variant::compute_primary_format(&asset.variants);
         let variant_count = asset.variants.len() as i64;
+        let (latitude, longitude) = crate::models::variant::compute_gps_from_variants(&asset.variants);
         self.conn.execute(
-            "UPDATE assets SET best_variant_hash = ?1, primary_variant_format = ?2, variant_count = ?3 WHERE id = ?4",
-            rusqlite::params![best_hash, primary_format, variant_count, asset.id.to_string()],
+            "UPDATE assets SET best_variant_hash = ?1, primary_variant_format = ?2, variant_count = ?3, latitude = ?4, longitude = ?5 WHERE id = ?6",
+            rusqlite::params![best_hash, primary_format, variant_count, latitude, longitude, asset.id.to_string()],
         )?;
         Ok(())
     }
@@ -2280,6 +2317,24 @@ impl Catalog {
             }
         }
 
+        // Geo bounding box filter
+        if let Some((south, west, north, east)) = opts.geo_bbox {
+            clauses.push("a.latitude >= ? AND a.latitude <= ? AND a.longitude >= ? AND a.longitude <= ?".to_string());
+            params.push(Box::new(south));
+            params.push(Box::new(north));
+            params.push(Box::new(west));
+            params.push(Box::new(east));
+        }
+
+        // GPS presence filter
+        if let Some(has_gps) = opts.has_gps {
+            if has_gps {
+                clauses.push("a.latitude IS NOT NULL AND a.longitude IS NOT NULL".to_string());
+            } else {
+                clauses.push("(a.latitude IS NULL OR a.longitude IS NULL)".to_string());
+            }
+        }
+
         let where_clause = if clauses.is_empty() {
             " WHERE 1=1".to_string()
         } else {
@@ -2447,6 +2502,132 @@ impl Catalog {
             years.push(row?);
         }
         Ok(years)
+    }
+
+    /// Backfill GPS latitude/longitude on assets from variant source_metadata.
+    /// Called from migrations, idempotent via `WHERE a.latitude IS NULL`.
+    fn backfill_gps_columns(&self) {
+        // Try gps_latitude_decimal first, fall back to parsing DMS strings
+        let _ = self.conn.execute_batch(
+            "UPDATE assets SET
+                latitude = (
+                    SELECT COALESCE(
+                        CAST(json_extract(v.source_metadata, '$.gps_latitude_decimal') AS REAL),
+                        NULL
+                    )
+                    FROM variants v WHERE v.asset_id = assets.id
+                    AND json_extract(v.source_metadata, '$.gps_latitude_decimal') IS NOT NULL
+                    ORDER BY CASE v.role WHEN 'original' THEN 0 ELSE 1 END LIMIT 1
+                ),
+                longitude = (
+                    SELECT COALESCE(
+                        CAST(json_extract(v.source_metadata, '$.gps_longitude_decimal') AS REAL),
+                        NULL
+                    )
+                    FROM variants v WHERE v.asset_id = assets.id
+                    AND json_extract(v.source_metadata, '$.gps_longitude_decimal') IS NOT NULL
+                    ORDER BY CASE v.role WHEN 'original' THEN 0 ELSE 1 END LIMIT 1
+                )
+            WHERE assets.latitude IS NULL
+            AND EXISTS (
+                SELECT 1 FROM variants v2
+                WHERE v2.asset_id = assets.id
+                AND json_extract(v2.source_metadata, '$.gps_latitude_decimal') IS NOT NULL
+            )"
+        );
+
+        // Fallback: parse DMS strings for rows still NULL
+        // This needs Rust-side parsing, so we query and update individually
+        let rows: Vec<(String, String, String)> = if let Ok(mut stmt) = self.conn.prepare(
+            "SELECT a.id, json_extract(v.source_metadata, '$.gps_latitude'),
+                    json_extract(v.source_metadata, '$.gps_longitude')
+             FROM assets a
+             JOIN variants v ON v.asset_id = a.id
+             WHERE a.latitude IS NULL
+             AND json_extract(v.source_metadata, '$.gps_latitude') IS NOT NULL
+             AND json_extract(v.source_metadata, '$.gps_longitude') IS NOT NULL
+             GROUP BY a.id"
+        ) {
+            stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+            }).map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        for (id, lat_str, lon_str) in &rows {
+            if let (Some(lat), Some(lon)) = (
+                crate::exif_reader::parse_dms_string(lat_str),
+                crate::exif_reader::parse_dms_string(lon_str),
+            ) {
+                let _ = self.conn.execute(
+                    "UPDATE assets SET latitude = ?1, longitude = ?2 WHERE id = ?3",
+                    rusqlite::params![lat, lon, id],
+                );
+            }
+        }
+    }
+
+    /// Get map markers (geotagged assets) matching search filters.
+    pub fn map_markers(&self, opts: &SearchOptions, limit: u32) -> Result<(Vec<MapMarker>, u64)> {
+        let (where_clause, mut params, needs_fl_join, needs_v_join) = Self::build_search_where(opts);
+
+        // Count total geotagged assets matching filters
+        let mut count_sql = String::from(
+            "SELECT COUNT(DISTINCT a.id) FROM assets a \
+             JOIN variants bv ON bv.content_hash = a.best_variant_hash",
+        );
+        if needs_v_join {
+            count_sql.push_str(" JOIN variants v ON v.asset_id = a.id");
+        }
+        if needs_fl_join {
+            count_sql.push_str(" JOIN file_locations fl ON v.content_hash = fl.content_hash");
+        }
+        count_sql.push_str(&where_clause);
+        count_sql.push_str(" AND a.latitude IS NOT NULL AND a.longitude IS NOT NULL");
+
+        let count_param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let total: u64 = self.conn.query_row(&count_sql, count_param_refs.as_slice(), |r| r.get(0))?;
+
+        // Fetch markers
+        let mut sql = String::from(
+            "SELECT DISTINCT a.id, a.latitude, a.longitude, a.best_variant_hash, \
+             COALESCE(a.name, bv.original_filename) as display_name, a.rating, a.color_label \
+             FROM assets a \
+             JOIN variants bv ON bv.content_hash = a.best_variant_hash",
+        );
+        if needs_v_join {
+            sql.push_str(" JOIN variants v ON v.asset_id = a.id");
+        }
+        if needs_fl_join {
+            sql.push_str(" JOIN file_locations fl ON v.content_hash = fl.content_hash");
+        }
+        sql.push_str(&where_clause);
+        sql.push_str(" AND a.latitude IS NOT NULL AND a.longitude IS NOT NULL");
+        sql.push_str(" LIMIT ?");
+        params.push(Box::new(limit as u64));
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(param_refs.as_slice(), |row| {
+            Ok(MapMarker {
+                id: row.get(0)?,
+                lat: row.get(1)?,
+                lng: row.get(2)?,
+                preview: row.get(3)?,
+                name: row.get(4)?,
+                rating: row.get::<_, Option<i64>>(5)?.map(|r| r as u8),
+                label: row.get(6)?,
+            })
+        })?;
+
+        let mut markers = Vec::new();
+        for row in rows {
+            markers.push(row?);
+        }
+        Ok((markers, total))
     }
 
     /// List all unique tags with their usage counts, sorted by count descending.

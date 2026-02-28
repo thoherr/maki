@@ -44,6 +44,8 @@ pub struct ParsedSearch {
     pub date_from: Option<String>,
     pub date_until: Option<String>,
     pub stacked: Option<bool>,
+    pub geo_bbox: Option<(f64, f64, f64, f64)>,  // (south, west, north, east)
+    pub has_gps: Option<bool>,
 }
 
 impl ParsedSearch {
@@ -81,6 +83,8 @@ impl ParsedSearch {
             date_from: self.date_from.as_deref(),
             date_until: self.date_until.as_deref(),
             stacked_filter: self.stacked,
+            geo_bbox: self.geo_bbox,
+            has_gps: self.has_gps,
             ..Default::default()
         }
     }
@@ -226,6 +230,27 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
             parsed.stacked = Some(true);
         } else if token == "stacked:false" {
             parsed.stacked = Some(false);
+        } else if let Some(value) = token.strip_prefix("geo:") {
+            if value == "any" {
+                parsed.has_gps = Some(true);
+            } else if value == "none" {
+                parsed.has_gps = Some(false);
+            } else {
+                // Try lat,lng,radius_km or south,west,north,east
+                let parts: Vec<f64> = value.split(',').filter_map(|s| s.parse().ok()).collect();
+                if parts.len() == 3 {
+                    // geo:lat,lng,radius_km → bounding box
+                    let lat = parts[0];
+                    let lng = parts[1];
+                    let r = parts[2];
+                    let dlat = r / 111.0;
+                    let dlng = r / (111.0 * lat.to_radians().cos());
+                    parsed.geo_bbox = Some((lat - dlat, lng - dlng, lat + dlat, lng + dlng));
+                } else if parts.len() == 4 {
+                    // geo:south,west,north,east
+                    parsed.geo_bbox = Some((parts[0], parts[1], parts[2], parts[3]));
+                }
+            }
         } else {
             text_parts.push(token);
         }
@@ -2033,6 +2058,42 @@ mod tests {
         assert_eq!(p.date_from.as_deref(), Some("2026-01-01"));
         assert_eq!(p.date_until.as_deref(), Some("2026-12-31"));
         assert_eq!(p.tag.as_deref(), Some("landscape"));
+    }
+
+    #[test]
+    fn parse_geo_any() {
+        let p = parse_search_query("geo:any");
+        assert_eq!(p.has_gps, Some(true));
+        assert!(p.geo_bbox.is_none());
+    }
+
+    #[test]
+    fn parse_geo_none() {
+        let p = parse_search_query("geo:none");
+        assert_eq!(p.has_gps, Some(false));
+    }
+
+    #[test]
+    fn parse_geo_lat_lng_radius() {
+        let p = parse_search_query("geo:52.5,13.4,10");
+        assert!(p.geo_bbox.is_some());
+        let (s, w, n, e) = p.geo_bbox.unwrap();
+        assert!((s - (52.5 - 10.0/111.0)).abs() < 0.01);
+        assert!(n > s);
+        assert!(e > w);
+        assert!(w < 13.4);
+        assert!(e > 13.4);
+    }
+
+    #[test]
+    fn parse_geo_bbox() {
+        let p = parse_search_query("geo:50,10,55,15");
+        assert!(p.geo_bbox.is_some());
+        let (s, w, n, e) = p.geo_bbox.unwrap();
+        assert!((s - 50.0).abs() < 0.001);
+        assert!((w - 10.0).abs() < 0.001);
+        assert!((n - 55.0).abs() < 0.001);
+        assert!((e - 15.0).abs() < 0.001);
     }
 
     // ── group recipe preservation tests ──────────────────────────────

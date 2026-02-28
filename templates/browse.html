@@ -2,6 +2,14 @@
 
 {% block title %}Browse - DAM{% endblock %}
 
+{% block extra_head %}
+<link rel="stylesheet" href="/static/leaflet.css">
+<link rel="stylesheet" href="/static/MarkerCluster.css">
+<link rel="stylesheet" href="/static/MarkerCluster.Default.css">
+<script src="/static/leaflet.min.js"></script>
+<script src="/static/leaflet.markercluster.min.js"></script>
+{% endblock %}
+
 {% block content %}
 <form class="search-bar"
       hx-get="/"
@@ -79,6 +87,7 @@
 </div>
 
 <div id="calendar-container"></div>
+<div id="map-container"></div>
 
 <div class="lightbox" id="lightbox">
     <div class="lightbox-top-bar">
@@ -1853,8 +1862,10 @@
         if (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
         if (el.tagName === 'INPUT' && el.type !== 'checkbox') return;
 
+        var currentView = document.documentElement.getAttribute('data-view') || 'grid';
+
         var cards = getCards();
-        if (cards.length === 0) return;
+        if (cards.length === 0 && currentView === 'grid') return;
 
         // Escape: clear selection first, then focus
         if (e.key === 'Escape') {
@@ -1866,8 +1877,8 @@
             return;
         }
 
-        // Arrow keys
-        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        // Arrow keys — grid view only
+        if (currentView === 'grid' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
             e.preventDefault();
             if (focusedIndex < 0) {
                 setFocus(0);
@@ -1948,6 +1959,12 @@
             // c: compare selected (2-4)
             if (lower === 'c' && window.damBatch && window.damBatch.selected.size >= 2 && window.damBatch.selected.size <= 4) {
                 window.location.href = '/compare?ids=' + Array.from(window.damBatch.selected).join(',');
+                return;
+            }
+            // m: map view toggle
+            if (lower === 'm' && window.damCalendar) {
+                var cur = document.documentElement.getAttribute('data-view') || 'grid';
+                window.damCalendar.setView(cur === 'map' ? 'grid' : 'map');
                 return;
             }
         }
@@ -2164,6 +2181,11 @@ window.damCalendar = (function() {
         if (mode === 'calendar') {
             fetchAndRender(currentYear);
         }
+        if (mode === 'map' && window.damMap) {
+            window.damMap.fetchAndRender();
+            // Leaflet needs a size invalidation when container becomes visible
+            setTimeout(function() { window.damMap.invalidateSize(); }, 100);
+        }
     }
 
     // Initialize view toggle buttons (event delegation on #results survives htmx swaps)
@@ -2183,6 +2205,10 @@ window.damCalendar = (function() {
             btn.classList.toggle('active', btn.getAttribute('data-view') === savedView);
         });
         if (savedView === 'calendar') fetchAndRender(currentYear);
+        if (savedView === 'map' && window.damMap) {
+            window.damMap.fetchAndRender();
+            setTimeout(function() { window.damMap.invalidateSize(); }, 100);
+        }
     }, 0);
 
     // Re-apply view toggle button states after htmx swaps results
@@ -2194,10 +2220,124 @@ window.damCalendar = (function() {
             });
             // Re-fetch calendar if in calendar view (filters may have changed)
             if (mode === 'calendar') fetchAndRender(currentYear);
+            if (mode === 'map' && window.damMap) window.damMap.fetchAndRender();
         }
     });
 
-    return { setView: setView, fetchAndRender: fetchAndRender };
+    return { setView: setView, fetchAndRender: fetchAndRender, getFilterParams: getFilterParams };
+})();
+</script>
+<script>
+/* ── Map view IIFE ───────────────────────────────────── */
+window.damMap = (function() {
+    var map = null;
+    var clusterGroup = null;
+    var container = document.getElementById('map-container');
+    var truncatedDiv = null;
+
+    var LABEL_COLORS = {
+        'Red': '#e74c3c', 'Orange': '#e67e22', 'Yellow': '#f1c40f',
+        'Green': '#27ae60', 'Blue': '#3498db', 'Pink': '#e91e8e', 'Purple': '#9b59b6'
+    };
+
+    function initMap() {
+        if (map) return;
+        // Fix Leaflet icon paths for embedded assets
+        L.Icon.Default.prototype.options.imagePath = '/static/images/';
+        map = L.map('map-container', { zoomControl: true }).setView([30, 0], 2);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+            maxZoom: 19
+        }).addTo(map);
+        clusterGroup = L.markerClusterGroup({
+            maxClusterRadius: 50,
+            spiderfyOnMaxZoom: true,
+            showCoverageOnHover: false,
+            disableClusteringAtZoom: 18
+        });
+        map.addLayer(clusterGroup);
+    }
+
+    function starsHtml(rating) {
+        if (!rating) return '';
+        var s = '';
+        for (var i = 1; i <= 5; i++) s += (i <= rating) ? '\u2605' : '\u2606';
+        return '<span class="popup-stars">' + s + '</span>';
+    }
+
+    function fetchAndRender() {
+        initMap();
+        var filterParams = window.damCalendar ? window.damCalendar.getFilterParams() : {};
+        var qs = '';
+        Object.keys(filterParams).forEach(function(k) {
+            qs += (qs ? '&' : '') + encodeURIComponent(k) + '=' + encodeURIComponent(filterParams[k]);
+        });
+        fetch('/api/map?' + qs)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                clusterGroup.clearLayers();
+                if (truncatedDiv) { truncatedDiv.remove(); truncatedDiv = null; }
+
+                var bounds = [];
+                data.markers.forEach(function(m) {
+                    var marker = L.marker([m.lat, m.lng]);
+                    var popupHtml = '<div class="map-popup">';
+                    if (m.preview) {
+                        popupHtml += '<a href="/asset/' + m.id + '"><img src="' + m.preview + '" loading="lazy" alt=""></a>';
+                    }
+                    popupHtml += '<div class="popup-name">' + escapeHtml(m.name) + '</div>';
+                    popupHtml += '<div class="popup-meta">';
+                    popupHtml += starsHtml(m.rating);
+                    if (m.label && LABEL_COLORS[m.label]) {
+                        popupHtml += '<span class="popup-label-dot" style="background:' + LABEL_COLORS[m.label] + '"></span>';
+                    }
+                    popupHtml += '</div>';
+                    popupHtml += '<a href="/asset/' + m.id + '">Details</a>';
+                    popupHtml += '</div>';
+                    marker.bindPopup(popupHtml, { maxWidth: 200 });
+                    clusterGroup.addLayer(marker);
+                    bounds.push([m.lat, m.lng]);
+                });
+
+                if (bounds.length > 0) {
+                    map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+                }
+
+                // Update results count with geo info
+                var countEl = document.querySelector('.results-count');
+                if (countEl && data.total > 0) {
+                    var geoNote = ' (' + data.total + ' geotagged';
+                    if (data.truncated) geoNote += ', showing first ' + data.markers.length;
+                    geoNote += ')';
+                    // Only append if not already there
+                    if (countEl.textContent.indexOf('geotagged') === -1) {
+                        countEl.textContent += geoNote;
+                    }
+                }
+
+                if (data.truncated) {
+                    truncatedDiv = document.createElement('div');
+                    truncatedDiv.className = 'map-truncated';
+                    truncatedDiv.textContent = 'Showing ' + data.markers.length + ' of ' + data.total + ' geotagged assets. Use filters to narrow results.';
+                    container.parentNode.insertBefore(truncatedDiv, container.nextSibling);
+                }
+            })
+            .catch(function(err) {
+                console.error('Map fetch error:', err);
+            });
+    }
+
+    function escapeHtml(s) {
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    function invalidateSize() {
+        if (map) map.invalidateSize();
+    }
+
+    return { fetchAndRender: fetchAndRender, invalidateSize: invalidateSize };
 })();
 </script>
 <script>
@@ -2253,6 +2393,9 @@ if (window.damHelp) {
             { keys: '. (period)', desc: 'Zoom to 100%' },
             { keys: '+ / =', desc: 'Zoom in' },
             { keys: '-', desc: 'Zoom out' }
+        ]},
+        { title: 'Views', shortcuts: [
+            { keys: 'm', desc: 'Toggle map view' }
         ]},
         { title: 'General', shortcuts: [
             { keys: '?', desc: 'Show this help' }

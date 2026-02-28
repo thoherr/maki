@@ -43,6 +43,48 @@ fn clean_field_value(field: &exif::Field) -> String {
     field.display_value().to_string()
 }
 
+/// Parse a DMS string like `"51 deg 30 min 26.36 sec N"` to decimal degrees.
+///
+/// Used by the GPS backfill migration to convert existing display strings stored
+/// in variant `source_metadata` to decimal coordinates.
+pub fn parse_dms_string(dms: &str) -> Option<f64> {
+    // Expected format: "D deg M min S sec [N/S/E/W]"
+    let parts: Vec<&str> = dms.split_whitespace().collect();
+    if parts.len() < 6 {
+        return None;
+    }
+    let deg: f64 = parts[0].parse().ok()?;
+    // parts[1] should be "deg"
+    let min: f64 = parts[2].parse().ok()?;
+    // parts[3] should be "min"
+    let sec: f64 = parts[4].parse().ok()?;
+    // parts[5] should be "sec" — sometimes ref is parts[6], sometimes parts[5] is the ref
+    let ref_val = *parts.last()?;
+    let decimal = deg + min / 60.0 + sec / 3600.0;
+    match ref_val {
+        "S" | "W" => Some(-decimal),
+        "N" | "E" => Some(decimal),
+        _ => Some(decimal), // no ref → positive
+    }
+}
+
+/// Parse GPS decimal degrees from a kamadak-exif Rational value.
+fn parse_gps_decimal(field: &exif::Field, ref_val: &str) -> Option<f64> {
+    if let exif::Value::Rational(ref rats) = field.value {
+        if rats.len() >= 3 {
+            let deg = rats[0].to_f64();
+            let min = rats[1].to_f64();
+            let sec = rats[2].to_f64();
+            let decimal = deg + min / 60.0 + sec / 3600.0;
+            return match ref_val.trim() {
+                "S" | "W" => Some(-decimal),
+                _ => Some(decimal),
+            };
+        }
+    }
+    None
+}
+
 /// Extract EXIF metadata from a file. Infallible — returns empty data on any error.
 pub fn extract(path: &Path) -> ExifData {
     let file = match std::fs::File::open(path) {
@@ -88,6 +130,9 @@ pub fn extract(path: &Path) -> ExifData {
         if !coord.is_empty() {
             meta.insert("gps_latitude".to_string(), format!("{coord} {ref_val}").trim().to_string());
         }
+        if let Some(decimal) = parse_gps_decimal(lat, &ref_val) {
+            meta.insert("gps_latitude_decimal".to_string(), decimal.to_string());
+        }
     }
 
     // GPS longitude
@@ -99,6 +144,9 @@ pub fn extract(path: &Path) -> ExifData {
         let coord = lon.display_value().to_string();
         if !coord.is_empty() {
             meta.insert("gps_longitude".to_string(), format!("{coord} {ref_val}").trim().to_string());
+        }
+        if let Some(decimal) = parse_gps_decimal(lon, &ref_val) {
+            meta.insert("gps_longitude_decimal".to_string(), decimal.to_string());
         }
     }
 
@@ -155,6 +203,53 @@ mod tests {
         let data = extract(&PathBuf::from("/nonexistent/file.jpg"));
         assert!(data.source_metadata.is_empty());
         assert!(data.date_taken.is_none());
+    }
+
+    #[test]
+    fn parse_dms_north() {
+        let result = parse_dms_string("51 deg 30 min 26.36 sec N");
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert!((val - 51.507322).abs() < 0.0001);
+    }
+
+    #[test]
+    fn parse_dms_south() {
+        let result = parse_dms_string("33 deg 51 min 54.00 sec S");
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert!((val - (-33.865)).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_dms_east() {
+        let result = parse_dms_string("13 deg 23 min 0.00 sec E");
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert!((val - 13.3833).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_dms_west() {
+        let result = parse_dms_string("0 deg 7 min 39.93 sec W");
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert!(val < 0.0);
+        assert!((val - (-0.12776)).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_dms_zero() {
+        let result = parse_dms_string("0 deg 0 min 0.00 sec N");
+        assert!(result.is_some());
+        assert!((result.unwrap()).abs() < 0.0001);
+    }
+
+    #[test]
+    fn parse_dms_malformed() {
+        assert!(parse_dms_string("").is_none());
+        assert!(parse_dms_string("not a coordinate").is_none());
+        assert!(parse_dms_string("abc deg def min ghi sec N").is_none());
     }
 
     #[test]
