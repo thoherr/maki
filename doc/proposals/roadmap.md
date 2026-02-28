@@ -36,6 +36,8 @@ EXIF GPS coordinates are already extracted into `source_metadata` during import.
 
 **Why:** Spatial browsing is a natural complement to temporal browsing (calendar view). Essential for travel photography, event coverage, and "where was this taken?" queries. Combined with date and tag filters, enables powerful multi-dimensional browsing.
 
+> **Status (v1.8.0):** Fully implemented. Map view as third browse mode toggle (grid/calendar/map) with Leaflet.js + MarkerCluster embedded as static assets. GPS parsed to decimal degrees during import, denormalized as `latitude`/`longitude` on assets table with composite index, backfilled on migration. `geo:` search filter with `any`/`none`/lat,lng,radius/bounding-box syntax. Thumbnail popups open the navigable lightbox; metadata links to detail page. Dark mode tile inversion. `m` keyboard shortcut. `GET /api/map` endpoint reuses `build_search_where()` for full filter consistency.
+
 ---
 
 ### 3. Smart Previews for Offline Browsing
@@ -220,7 +222,7 @@ Each facet updates counts in real time based on the current filter combination (
 | Priority | Feature | Effort | Impact | Theme | Status |
 |----------|---------|--------|--------|-------|--------|
 | 1 | Side-by-side compare | Medium | Very high | Evaluation | **Done** (v1.7.0) |
-| 2 | Map view | Medium | High | Overview / browsing | |
+| 2 | Map view | Medium | High | Overview / browsing | **Done** (v1.8.0) |
 | 3 | Smart previews | Medium | High | Offline evaluation | **Done** (v1.7.0) |
 | 4 | AI tagging & similarity | High | Very high | Discovery / organization | |
 | 5 | Import profiles | Low | Medium | Workflow convenience | |
@@ -232,4 +234,4 @@ Each facet updates counts in real time based on the current filter combination (
 | 11 | Statistics dashboard | Medium | Medium | Overview / insights | |
 | 12 | Faceted browse sidebar | Medium | High | Overview / discovery | |
 
-Items 1 and 3 are complete as of v1.7.0, delivering the core "find and evaluate the best images" workflow with compare view and smart previews. The highest-priority remaining items are 2 (map view) and 4 (AI tagging). Items 11–12 provide the "overview of assets" dimension.
+Items 1, 2, and 3 are complete as of v1.8.0, delivering the core "find and evaluate the best images" workflow with compare view, smart previews, and spatial browsing via the map view. The highest-priority remaining item is 4 (AI tagging). Items 11–12 provide the "overview of assets" dimension.

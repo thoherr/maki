@@ -511,6 +511,42 @@ dam search "copies:2+ type:video"  # backed-up videos
 
 ---
 
+## geo
+
+**Syntax:** `geo:any` | `geo:none` | `geo:<lat>,<lng>,<radius_km>` | `geo:<south>,<west>,<north>,<east>`
+
+**Description:** Filters by GPS geolocation. GPS coordinates are extracted from EXIF data during import and stored as denormalized `latitude`/`longitude` columns on the assets table.
+
+**Modes:**
+
+| Form | Description |
+|------|-------------|
+| `geo:any` | Assets that have GPS coordinates |
+| `geo:none` | Assets without GPS coordinates |
+| `geo:52.5,13.4,10` | Assets within 10km of latitude 52.5, longitude 13.4 (bounding circle approximated as a bounding box) |
+| `geo:48.0,11.0,53.0,14.0` | Assets within the bounding box: south 48.0, west 11.0, north 53.0, east 14.0 |
+
+The 3-parameter form (lat, lng, radius) is converted to a bounding box internally using the approximation `dlat = radius / 111` and `dlng = radius / (111 * cos(lat))`.
+
+**Examples:**
+
+```
+dam search "geo:any"                           # all geotagged assets
+dam search "geo:none"                          # assets without GPS data
+dam search "geo:52.52,13.405,5"                # within 5km of Berlin center
+dam search "geo:48.0,11.0,53.0,14.0"           # bounding box covering Germany
+dam search "geo:any rating:4+ tag:landscape"   # geotagged 4+ star landscapes
+```
+
+**SQL behavior:**
+- `geo:any`: `WHERE a.latitude IS NOT NULL AND a.longitude IS NOT NULL`
+- `geo:none`: `WHERE (a.latitude IS NULL OR a.longitude IS NULL)`
+- Bounding box/circle: `WHERE a.latitude >= ? AND a.latitude <= ? AND a.longitude >= ? AND a.longitude <= ?`
+
+Pure assets-table filter, no JOIN required. Uses the composite index on `(latitude, longitude)`.
+
+---
+
 ## Combining Filters
 
 All filters are combined with AND logic. Every specified filter must match for an asset to appear in results. Free-text terms are also AND-combined with all prefix filters.
@@ -556,6 +592,12 @@ dam search "stacked:false rating:5 type:image"
 
 # Find stacked assets with a hierarchical tag
 dam search "stacked:true tag:animals/birds"
+
+# Geotagged photos within 5km of a location
+dam search "geo:52.52,13.405,5 rating:4+"
+
+# All geotagged landscape images
+dam search "geo:any tag:landscape type:image"
 ```
 
 ---
@@ -611,6 +653,7 @@ dam search "camera:fuji"
 | `missing:true` | yes | no | yes |
 | `stale:` | yes | no | yes |
 | `stacked:` | yes | no | yes |
+| `geo:` | yes | yes (query input) | yes |
 
 ---
 

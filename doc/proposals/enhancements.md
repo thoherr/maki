@@ -63,6 +63,8 @@ EXIF GPS coordinates are already extracted into `source_metadata` during import.
 
 **Why:** Spatial browsing is a natural complement to temporal browsing. Useful for travel photography, location scouting, and finding "all photos taken at this venue."
 
+> **Status (v1.8.0):** Fully implemented. Map view as third browse mode (grid/calendar/map toggle). Leaflet.js + MarkerCluster embedded as static assets. Denormalized `latitude`/`longitude` on assets table. `geo:` filter with `any`/`none`/lat,lng,radius/bounding-box syntax. Thumbnail popups with lightbox integration. Dark mode support. `m` keyboard shortcut.
+
 ---
 
 ### 4. Timeline / Calendar View

@@ -2,6 +2,17 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v1.8.0
+
+### New Features
+- **Map view for geotagged photos** — a third browse view mode alongside grid and calendar, showing asset locations on an OpenStreetMap map. Geotagged assets appear as clustered markers with thumbnail popups. All browse filters (tag, rating, label, type, format, volume, collection, path, date) apply to the map. Click a thumbnail to open the lightbox (with full prev/next navigation), click the name/metadata area to go to the detail page.
+  - **GPS coordinate extraction** — EXIF GPS data is parsed to decimal degrees during import and stored as denormalized `latitude`/`longitude` columns on the assets table (indexed). Existing catalogs are backfilled automatically on first open.
+  - **`geo:` search filter** — `geo:any` (has GPS), `geo:none` (no GPS), `geo:lat,lng,radius_km` (bounding circle), `geo:south,west,north,east` (bounding box). Works in CLI, web UI, and saved searches.
+  - **Embedded map libraries** — Leaflet.js 1.9.4 and MarkerCluster 1.5.3 are embedded as static assets (no external CDN dependency). Marker images included for offline use.
+  - **Dark mode** — map tiles are inverted for dark theme consistency. Popups and controls adapt to the current theme.
+  - **Keyboard shortcut** — `m` toggles map view. View state persists in localStorage.
+- **Lightbox standalone mode** — `openWithData()` method allows the lightbox to open with explicit asset data (used as fallback when a map marker's asset is not on the current grid page). The lightbox prefers the normal navigable mode when the card exists in the DOM.
+
 ## v1.7.1
 
 ### Enhancements

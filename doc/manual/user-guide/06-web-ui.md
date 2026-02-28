@@ -112,10 +112,11 @@ Click a card to open the [asset detail page](#asset-detail-page).
 
 ### View mode toggle
 
-Next to the density controls, two view mode buttons switch between **Grid** and **Calendar** views:
+Next to the density controls, three view mode buttons switch between **Grid**, **Calendar**, and **Map** views:
 
 - **Grid** (default): the standard thumbnail grid described above
 - **Calendar**: a year-at-a-glance heatmap showing when assets were created
+- **Map**: a map showing geotagged assets as clustered markers
 
 Your view mode preference is saved in the browser and preserved across reloads.
 
@@ -130,6 +131,20 @@ The calendar view displays a GitHub-style heatmap with 12 months laid out in a r
 **Day click**: Click any day cell to filter the browse grid to that date. The view switches back to grid mode with `date:YYYY-MM-DD` added to the search query, showing only assets from that day. You can then clear the date filter from the search input to return to unfiltered browsing.
 
 **Legend**: A color scale legend at the bottom of the calendar shows the meaning of each intensity level.
+
+### Map view
+
+The map view displays geotagged assets on an interactive OpenStreetMap map powered by Leaflet.js. Assets with GPS coordinates appear as markers, automatically clustered at wider zoom levels for performance.
+
+**Markers and popups**: Click a marker (or cluster) to see a popup with a thumbnail preview, asset name, rating stars, and color label dot. Click the thumbnail to open the asset in the lightbox with full prev/next navigation through visible markers. Click the name or metadata area to navigate to the asset detail page.
+
+**Filter integration**: All browse filters (text search, tag, rating, label, type, format, volume, collection, path, date) apply to the map. Adding `tag:landscape` shows only landscape photos on the map. The `geo:` search filter also works: `geo:any` shows only geotagged assets, `geo:none` shows assets without GPS data, and `geo:52.5,13.4,10` restricts to a 10km radius around a point.
+
+**Dark mode**: Map tiles are automatically inverted for the dark theme to maintain visual consistency. Popups and controls adapt to the current color scheme.
+
+**Keyboard shortcut**: Press `m` to switch to map view from any other view mode.
+
+**Embedded libraries**: Leaflet.js and MarkerCluster are embedded as static assets — no external CDN or internet connection is required. The map tiles themselves are loaded from OpenStreetMap servers, so an internet connection is needed for the tile layer (but not for the application code).
 
 ### Grid density
 
