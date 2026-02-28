@@ -2390,15 +2390,24 @@ window.damMap = (function() {
         if (!thumb) return;
         e.preventDefault();
         e.stopPropagation();
-        if (window.damLightbox && window.damLightbox.openWithData) {
-            window.damLightbox.openWithData({
-                id: thumb.getAttribute('data-id'),
-                preview: thumb.getAttribute('data-preview'),
-                name: thumb.getAttribute('data-name'),
-                rating: parseInt(thumb.getAttribute('data-rating') || '0'),
-                label: thumb.getAttribute('data-label') || ''
-            });
+        if (!window.damLightbox) return;
+        var assetId = thumb.getAttribute('data-id');
+        // Find matching card in the grid (hidden but present in DOM)
+        var cards = Array.from(document.querySelectorAll('.asset-card'));
+        for (var i = 0; i < cards.length; i++) {
+            if (cards[i].getAttribute('data-asset-id') === assetId) {
+                window.damLightbox.open(i);
+                return;
+            }
         }
+        // Fallback: standalone mode if card not on current page
+        window.damLightbox.openWithData({
+            id: assetId,
+            preview: thumb.getAttribute('data-preview'),
+            name: thumb.getAttribute('data-name'),
+            rating: parseInt(thumb.getAttribute('data-rating') || '0'),
+            label: thumb.getAttribute('data-label') || ''
+        });
     });
 
     return { fetchAndRender: fetchAndRender, invalidateSize: invalidateSize };
