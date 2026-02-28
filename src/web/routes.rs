@@ -1916,8 +1916,7 @@ pub async fn map_api(
         // Transform preview hashes to URLs
         let markers_json: Vec<serde_json::Value> = markers.iter().map(|m| {
             let preview_url = m.preview.as_ref().map(|h| {
-                let prefix = &h[..2.min(h.len())];
-                format!("/preview/{prefix}/{h}.{preview_ext}")
+                super::templates::preview_url(h, preview_ext)
             });
             serde_json::json!({
                 "id": m.id,
