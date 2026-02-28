@@ -228,6 +228,8 @@
     var labelNumMap = {'1':'Red','2':'Orange','3':'Yellow','4':'Green','5':'Blue','6':'Pink','7':'Purple'};
     var labelLetterMap = {r:'Red',o:'Orange',y:'Yellow',g:'Green',b:'Blue',p:'Pink',u:'Purple'};
 
+    sessionStorage.setItem('dam-browse-focus', assetId);
+
     // --- sessionStorage-based navigation ---
     var browseIds = [];
     var browseUrl = '/';
@@ -450,11 +452,12 @@
             if (dragState) { previewDiv.classList.remove('dragging'); dragState = null; }
         });
 
-        // Click on image: toggle fit <-> 100%
+        // Click on image: navigate to lightbox via browse page
         img.addEventListener('click', function(e) {
-            if (!hasSmartPreview) return;
             if (wasDrag) { wasDrag = false; return; }
-            if (zoomMode === 'fit') { detailZoomTo(1.0); } else { detailZoomFit(); }
+            sessionStorage.setItem('dam-lightbox-asset', assetId);
+            sessionStorage.setItem('dam-browse-focus', assetId);
+            backNav.click();
         });
     }
     initZoom();
@@ -523,6 +526,7 @@
             }
             if (lower === 'l') {
                 sessionStorage.setItem('dam-lightbox-asset', assetId);
+                sessionStorage.setItem('dam-browse-focus', assetId);
                 backNav.click();
                 return;
             }
@@ -533,6 +537,7 @@
         damHelp.registerShortcuts([
             { title: 'Navigation', shortcuts: [
                 { keys: '\u2190 \u2192', desc: 'Previous / next asset' },
+                { keys: 'Click image', desc: 'Open in lightbox' },
                 { keys: 'l', desc: 'Open in lightbox' },
                 { keys: 'Escape', desc: 'Go back to browse' }
             ]},

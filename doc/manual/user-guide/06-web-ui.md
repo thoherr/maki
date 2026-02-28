@@ -173,6 +173,24 @@ The web UI uses [htmx](https://htmx.org/) for partial page updates. When you sea
 Because the URL updates with every search (via `hx-push-url`), the browser back button, forward button, reload, and bookmarks all work correctly. Navigating back from an asset detail page also refreshes results to reflect any edits you made.
 
 
+## Navigation Between Views
+
+The browse grid, lightbox, and asset detail page form a seamless navigation loop. You can switch between all three views with keyboard shortcuts, clicks, and the browser back button. The current asset is tracked across views so focus and scroll position are restored when you return.
+
+| From | Action | To |
+|------|--------|----|
+| Browse | Thumbnail click / Enter / `l` | Lightbox |
+| Browse | Card body click / `d` | Detail page |
+| Lightbox | Click image / `d` | Detail page |
+| Lightbox | Escape | Browse (focus syncs to last-viewed card) |
+| Detail | Click image / `l` | Lightbox (via browse) |
+| Detail | Escape / Back | Browse (scroll + focus restored) |
+| Detail | Left / Right arrows | Detail (next/prev asset) |
+| Lightbox | Left / Right arrows | Lightbox (next/prev asset) |
+
+Focus and scroll position are preserved when navigating back to the browse page, even when the browser restores the page from its back/forward cache. Arrow key navigation in the lightbox and detail page updates which card will be focused when you return to browse.
+
+
 ## Lightbox
 
 Clicking a thumbnail in the browse grid opens a full-screen lightbox overlay for previewing assets without leaving the page.
@@ -183,7 +201,7 @@ Clicking a thumbnail in the browse grid opens a full-screen lightbox overlay for
 - **Keyboard**: Left and Right arrow keys navigate between assets
 - **Counter**: the top bar shows your position (e.g., "3 / 156")
 - **Close**: click the × button or press Escape to return to the browse grid
-- **Detail page**: press `d` to open the full detail page for the current asset
+- **Detail page**: click the image, press `d`, or click "↗ Detail" to open the full detail page for the current asset
 
 ### Info panel
 
@@ -210,15 +228,10 @@ When a smart preview (high-resolution, 2560px) is available, the lightbox loads 
 With a smart preview loaded, you can zoom and pan:
 
 - **Mouse wheel**: zoom in/out centered on cursor position
-- **Click**: toggle between fit-to-screen and 100% zoom
 - **Drag**: pan the image when zoomed in (cursor changes to grab/grabbing)
 - **Keyboard**: `,` fit to screen, `.` 100% zoom, `+` zoom in, `-` zoom out
 
 Smart previews can be generated via `dam import --smart`, `[import] smart_previews = true` in config, the "Generate smart preview" button on the detail page, or on-demand via `[preview] generate_on_demand = true`.
-
-### Detail page link
-
-Click the "↗ Detail" link in the top bar to navigate to the full asset detail page for the current asset.
 
 ### Keyboard shortcuts
 
@@ -228,6 +241,7 @@ All browse keyboard shortcuts for rating and label work inside the lightbox:
 |-----|--------|
 | Left / Right arrow | Previous / next asset |
 | Escape | Close lightbox |
+| Click image | Open detail page |
 | i | Toggle info panel |
 | d | Open detail page |
 | 1-5 | Set rating |
@@ -262,7 +276,8 @@ Keyboard navigation:
 |-----|--------|
 | Left arrow | Previous asset |
 | Right arrow | Next asset |
-| l | Return to lightbox view |
+| Click image | Open in lightbox |
+| l | Open in lightbox |
 | Escape | Return to browse page |
 
 Rating, label, and zoom keyboard shortcuts also work on the detail page:
@@ -283,7 +298,7 @@ Rating, label, and zoom keyboard shortcuts also work on the detail page:
 
 The left side shows a large preview image. This is the best available preview for the asset, preferring export variants over processed variants over originals, and standard image formats over RAW.
 
-When a smart preview is available, it loads in the background with a pulsing "HD" badge. Once loaded, the image supports zoom and pan via mouse wheel, click, drag, and keyboard shortcuts (`,` `.` `+` `-`). Two buttons below the preview let you regenerate the regular preview or generate/regenerate the smart preview on demand.
+When a smart preview is available, it loads in the background with a pulsing "HD" badge. Once loaded, the image supports zoom and pan via mouse wheel, drag, and keyboard shortcuts (`,` `.` `+` `-`). Clicking the preview image opens the asset in the lightbox for full-screen viewing. Two buttons below the preview let you regenerate the regular preview or generate/regenerate the smart preview on demand.
 
 ### Editable metadata
 

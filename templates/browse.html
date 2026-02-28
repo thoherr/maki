@@ -542,6 +542,7 @@
     // so that changes made on the asset page (rating, tags) are reflected.
     window.addEventListener('pageshow', function(event) {
         if (event.persisted) {
+            window._damRestoring = true;
             htmx.ajax('GET', window.location.href, {target: '#results', swap: 'innerHTML'});
         }
     });
@@ -1310,16 +1311,15 @@
         }
     });
 
-    // Click on image: toggle fit <-> 100%
+    // Click on image: navigate to detail page
     img.addEventListener('click', function(e) {
-        if (!hasSmartPreview) return;
         if (wasDrag) { wasDrag = false; return; }
         e.stopPropagation();
-        if (zoomMode === 'fit') {
-            zoomTo(1.0);
-        } else {
-            zoomFit();
+        var cards = getCards();
+        if (cards[currentIndex]) {
+            sessionStorage.setItem('dam-browse-focus', cards[currentIndex].getAttribute('data-asset-id'));
         }
+        detailLink.click();
     });
 
     function getCards() {
@@ -1334,6 +1334,9 @@
         overlay.classList.add('open');
         document.body.style.overflow = 'hidden';
         render();
+        if (cards[currentIndex]) {
+            sessionStorage.setItem('dam-browse-focus', cards[currentIndex].getAttribute('data-asset-id'));
+        }
     }
 
     function close() {
@@ -1341,6 +1344,9 @@
         isOpen = false;
         overlay.classList.remove('open');
         document.body.style.overflow = '';
+        if (window.damKeyNav) window.damKeyNav.setFocusById(
+            sessionStorage.getItem('dam-browse-focus')
+        );
     }
 
     function render() {
@@ -1441,6 +1447,9 @@
         if (next < 0 || next >= cards.length) return;
         currentIndex = next;
         render();
+        if (cards[currentIndex]) {
+            sessionStorage.setItem('dam-browse-focus', cards[currentIndex].getAttribute('data-asset-id'));
+        }
     }
 
     function applyRating(rating) {
@@ -1595,6 +1604,10 @@
         if (e.key === 'd' && !e.metaKey && !e.ctrlKey && !e.altKey) {
             e.preventDefault();
             e.stopImmediatePropagation();
+            var cards = getCards();
+            if (cards[currentIndex]) {
+                sessionStorage.setItem('dam-browse-focus', cards[currentIndex].getAttribute('data-asset-id'));
+            }
             detailLink.click();
             return;
         }
@@ -1844,6 +1857,7 @@
             var focId = getFocusedId();
             if (focId) {
                 e.preventDefault();
+                sessionStorage.setItem('dam-browse-focus', focId);
                 window.location.href = '/asset/' + focId;
             }
             return;
@@ -1901,16 +1915,64 @@
         }
     });
 
-    // Re-apply focus after htmx swaps (pagination/sort)
+    // Unified afterSwap handler: lightbox auto-open, focus restore, scroll restore
     document.body.addEventListener('htmx:afterSwap', function(e) {
         if (e.detail.target && e.detail.target.id === 'results') {
             var cards = getCards();
-            if (focusedIndex >= cards.length) focusedIndex = cards.length - 1;
-            if (focusedIndex >= 0 && cards.length > 0) {
+            // 1. Lightbox auto-open (for bfcache return from detail via l key / image click)
+            var lbAsset = sessionStorage.getItem('dam-lightbox-asset');
+            if (lbAsset) {
+                sessionStorage.removeItem('dam-lightbox-asset');
+                for (var ci = 0; ci < cards.length; ci++) {
+                    if (cards[ci].getAttribute('data-asset-id') === lbAsset) {
+                        if (window.damLightbox) window.damLightbox.open(ci);
+                        focusedIndex = ci;
+                        break;
+                    }
+                }
+                window._damRestoring = false;
+                return;
+            }
+            // 2. Focus restore by asset ID
+            var focusId = sessionStorage.getItem('dam-browse-focus');
+            if (focusId) {
+                for (var fi = 0; fi < cards.length; fi++) {
+                    if (cards[fi].getAttribute('data-asset-id') === focusId) {
+                        setFocus(fi);
+                        break;
+                    }
+                }
+            } else if (focusedIndex >= cards.length) {
+                focusedIndex = cards.length - 1;
+                if (focusedIndex >= 0) cards[focusedIndex].classList.add('focused');
+            } else if (focusedIndex >= 0 && cards.length > 0) {
                 cards[focusedIndex].classList.add('focused');
+            }
+            // 3. Scroll restore (only on bfcache return)
+            if (window._damRestoring) {
+                window._damRestoring = false;
+                var savedScroll = sessionStorage.getItem('dam-browse-scroll');
+                if (savedScroll) {
+                    requestAnimationFrame(function() {
+                        window.scrollTo(0, parseInt(savedScroll));
+                    });
+                }
             }
         }
     });
+
+    window.damKeyNav = {
+        setFocusById: function(assetId) {
+            if (!assetId) return;
+            var cards = getCards();
+            for (var i = 0; i < cards.length; i++) {
+                if (cards[i].getAttribute('data-asset-id') === assetId) {
+                    setFocus(i);
+                    return;
+                }
+            }
+        }
+    };
 })();
 </script>
 
@@ -2137,6 +2199,9 @@ window.damCalendar = (function() {
             storeBrowseContext();
         }
     });
+    window.addEventListener('pagehide', function() {
+        sessionStorage.setItem('dam-browse-scroll', String(window.scrollY));
+    });
 })();
 </script>
 <script>
@@ -2164,6 +2229,7 @@ if (window.damHelp) {
         ]},
         { title: 'Lightbox', shortcuts: [
             { keys: '\u2190 \u2192', desc: 'Previous / next' },
+            { keys: 'Click image', desc: 'Open detail page' },
             { keys: 'i', desc: 'Toggle info panel' },
             { keys: 'd', desc: 'Open detail page' },
             { keys: 'Escape', desc: 'Close lightbox' }
