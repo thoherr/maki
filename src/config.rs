@@ -104,6 +104,8 @@ pub struct ImportConfig {
     pub exclude: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub auto_tags: Vec<String>,
+    #[serde(default)]
+    pub smart_previews: bool,
 }
 
 fn is_default_preview(p: &PreviewConfig) -> bool {
@@ -354,6 +356,7 @@ max_edge = 1000
             import: ImportConfig {
                 exclude: vec!["*.tmp".to_string()],
                 auto_tags: vec!["test".to_string()],
+                ..Default::default()
             },
             dedup: DedupConfig::default(),
         };
@@ -496,6 +499,7 @@ max_edge = 1000
             import: ImportConfig {
                 exclude: vec!["*.tmp".to_string()],
                 auto_tags: vec![],
+                ..Default::default()
             },
             dedup: DedupConfig::default(),
         };

@@ -84,6 +84,10 @@ enum Commands {
         /// Auto-group imported files with nearby catalog assets by filename stem
         #[arg(long, display_order = 21)]
         auto_group: bool,
+
+        /// Generate smart previews (2560px) alongside regular previews
+        #[arg(long, display_order = 22)]
+        smart: bool,
     },
 
     /// Add or remove tags on an asset
@@ -1001,11 +1005,13 @@ fn main() {
             add_tags,
             dry_run,
             auto_group,
+            smart,
         } => {
             use dam::asset_service::FileTypeFilter;
 
             let catalog_root = dam::config::find_catalog_root()?;
             let config = CatalogConfig::load(&catalog_root)?;
+            let smart = smart || config.import.smart_previews;
             let registry = DeviceRegistry::new(&catalog_root);
 
             // Build file type filter
@@ -1059,7 +1065,7 @@ fn main() {
             let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
             let result = if cli.log {
                 use dam::asset_service::FileStatus;
-                service.import_with_callback(&canonical_paths, &volume, &filter, &config.import.exclude, &all_tags, dry_run, |path, status, elapsed| {
+                service.import_with_callback(&canonical_paths, &volume, &filter, &config.import.exclude, &all_tags, dry_run, smart, |path, status, elapsed| {
                     let label = match status {
                         FileStatus::Imported => "imported",
                         FileStatus::LocationAdded => "location added",
@@ -1073,7 +1079,7 @@ fn main() {
                     eprintln!("  {} — {} ({})", name, label, format_duration(elapsed));
                 })?
             } else {
-                service.import_with_callback(&canonical_paths, &volume, &filter, &config.import.exclude, &all_tags, dry_run, |_, _, _| {})?
+                service.import_with_callback(&canonical_paths, &volume, &filter, &config.import.exclude, &all_tags, dry_run, smart, |_, _, _| {})?
             };
 
             // Post-import auto-group phase
@@ -1154,6 +1160,9 @@ fn main() {
                 }
                 if result.previews_generated > 0 {
                     parts.push(format!("{} preview(s) generated", result.previews_generated));
+                }
+                if result.smart_previews_generated > 0 {
+                    parts.push(format!("{} smart preview(s) generated", result.smart_previews_generated));
                 }
                 if parts.is_empty() {
                     println!("Import: nothing to import");

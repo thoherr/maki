@@ -167,6 +167,7 @@ pub struct ImportResult {
     pub recipes_attached: usize,
     pub recipes_updated: usize,
     pub previews_generated: usize,
+    pub smart_previews_generated: usize,
     /// Asset IDs created during this import (for post-import auto-grouping).
     #[serde(skip)]
     pub new_asset_ids: Vec<String>,
@@ -442,11 +443,12 @@ impl AssetService {
         volume: &Volume,
         filter: &FileTypeFilter,
     ) -> Result<ImportResult> {
-        self.import_with_callback(paths, volume, filter, &[], &[], false, |_, _, _| {})
+        self.import_with_callback(paths, volume, filter, &[], &[], false, false, |_, _, _| {})
     }
 
     /// Import files with a per-file callback reporting path, status, and elapsed time.
     /// With `dry_run`, reports what would happen without writing to catalog, sidecar, or disk.
+    /// With `smart`, generates smart previews (2560px) alongside regular previews.
     pub fn import_with_callback(
         &self,
         paths: &[PathBuf],
@@ -455,6 +457,7 @@ impl AssetService {
         exclude_patterns: &[String],
         auto_tags: &[String],
         dry_run: bool,
+        smart: bool,
         on_file: impl Fn(&Path, FileStatus, Duration),
     ) -> Result<ImportResult> {
         let content_store = ContentStore::new(&self.catalog_root);
@@ -475,6 +478,7 @@ impl AssetService {
         let mut recipes_attached = 0;
         let mut recipes_updated = 0;
         let mut previews_generated = 0;
+        let mut smart_previews_generated = 0;
         let mut new_asset_ids = Vec::new();
         let mut imported_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -661,6 +665,13 @@ impl AssetService {
                             Ok(None) => {}
                             Err(e) => eprintln!("  Preview warning: {e:#}"),
                         }
+                        if smart {
+                            match preview_gen.generate_smart(&content_hash, file_path, ext) {
+                                Ok(Some(_)) => smart_previews_generated += 1,
+                                Ok(None) => {}
+                                Err(e) => eprintln!("  Smart preview warning: {e:#}"),
+                            }
+                        }
                     }
 
                     new_asset_ids.push(asset.id.to_string());
@@ -723,6 +734,13 @@ impl AssetService {
                             Ok(Some(_)) => previews_generated += 1,
                             Ok(None) => {}
                             Err(e) => eprintln!("  Preview warning: {e:#}"),
+                        }
+                        if smart {
+                            match preview_gen.generate_smart(&content_hash, file_path, ext) {
+                                Ok(Some(_)) => smart_previews_generated += 1,
+                                Ok(None) => {}
+                                Err(e) => eprintln!("  Smart preview warning: {e:#}"),
+                            }
                         }
                     }
                 }
@@ -1055,6 +1073,7 @@ impl AssetService {
             recipes_attached,
             recipes_updated,
             previews_generated,
+            smart_previews_generated,
             new_asset_ids,
             imported_directories: imported_dirs.into_iter().collect(),
         })
@@ -5464,6 +5483,7 @@ mod tests {
             &[],
             &auto_tags,
             false,
+            false,
             |_, _, _| {},
         ).unwrap();
 
@@ -5499,6 +5519,7 @@ mod tests {
             &default_filter(),
             &exclude,
             &[],
+            false,
             false,
             |_, _, _| {},
         ).unwrap();
