@@ -2,6 +2,28 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v1.7.0
+
+### New Features
+- **Smart previews** — a second preview tier at 2560px (configurable) for high-resolution offline browsing. Smart previews are stored alongside regular thumbnails in `smart_previews/<hash-prefix>/<hash>.jpg` and enable zoom and pan in the web UI even when the original media volume is offline.
+  - **Import `--smart` flag**: `dam import --smart <PATHS...>` generates smart previews alongside regular thumbnails during import. Can also be enabled permanently via `[import] smart_previews = true` in `dam.toml`.
+  - **On-demand generation**: Set `[preview] generate_on_demand = true` in `dam.toml` to have the web server generate smart previews automatically when first requested. The first load takes a few seconds (pulsing HD badge shown); subsequent loads are instant.
+  - **Manual generation**: "Generate smart preview" button on the asset detail page (`POST /api/asset/{id}/smart-preview`).
+  - **Configuration**: `[preview]` section gains `smart_max_edge` (default 2560), `smart_quality` (default 85), and `generate_on_demand` (default false). `[import]` section gains `smart_previews` (default false).
+- **Compare view** — side-by-side comparison of 2–4 assets at `/compare?ids=...`. Select assets in the browse grid and click the "Compare" button in the batch toolbar.
+  - Synchronized zoom and pan across all columns (toggle with `s` key or checkbox)
+  - Interactive rating stars and color label dots per asset
+  - Full EXIF display (camera, lens, focal length, aperture, shutter speed, ISO)
+  - Keyboard navigation: arrow keys for focus, `d` for detail page, `s` for sync toggle, `0`–`5` for rating, Alt+1–7 for labels, letter keys for labels
+  - Smart preview upgrade with HD badge
+- **Zoom and pan** — mouse wheel zoom, drag-to-pan, and click-to-toggle (fit ↔ 100%) for smart previews in the lightbox, asset detail page, and compare view. Keyboard shortcuts: `,` (fit), `.` (100%), `+` (zoom in), `-` (zoom out). Zoom is enabled when a smart preview is available.
+- **Progressive smart preview loading** — the lightbox and detail page show the regular preview instantly, then background-load the smart preview and swap it in when ready. A pulsing "HD" badge provides visual feedback while the smart preview generates. The badge briefly shows with solid opacity after the smart preview loads as a status indicator.
+- **Import `--add-tag` flag** — `dam import --add-tag landscape --add-tag 2026 <PATHS...>` adds tags to every imported asset. Repeatable. Merged with `[import] auto_tags` from config and XMP tags.
+- **Asset folder link** — the asset detail page shows clickable links to the folder containing each variant file.
+
+### Bug Fixes
+- **generate-previews PATHS mode** — fix fallback to hash-based variant lookup when the file is not on the expected volume, preventing "variant not found" errors for files with valid catalog entries on other volumes.
+
 ## v1.6.3
 
 ### Enhancements

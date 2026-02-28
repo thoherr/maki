@@ -50,6 +50,12 @@ The volume is auto-detected from the first path by matching against registered v
 **--skip \<GROUP\>**
 : Skip file type groups that would normally be imported. Can be specified multiple times. Example groups: `audio`, `xmp`.
 
+**--add-tag \<TAG\>**
+: Add a tag to every imported asset. Can be specified multiple times. Merged with `[import] auto_tags` from `dam.toml` and XMP-extracted tags, deduplicated.
+
+**--smart**
+: Generate smart previews (high-resolution, 2560px) alongside regular thumbnails during import. Smart previews enable zoom and pan in the web UI. Can be enabled permanently via `[import] smart_previews = true` in `dam.toml`. Smart preview dimensions are controlled by `[preview] smart_max_edge`.
+
 **--dry-run**
 : Show what would be imported without writing to catalog, sidecar, or disk. Files are still hashed to detect duplicates. Reports the same counters as a real import (imported, skipped, locations added, recipes attached/updated).
 
@@ -82,6 +88,18 @@ Import only image files, skipping audio and XMP sidecars:
 
 ```bash
 dam import --skip audio --skip xmp /Volumes/Photos/Mixed
+```
+
+Import with smart previews for high-resolution browsing:
+
+```bash
+dam import --smart /Volumes/Photos/Capture/2026-02-22
+```
+
+Tag assets during import:
+
+```bash
+dam import --add-tag landscape --add-tag "2026" /Volumes/Photos/Landscapes
 ```
 
 Import a CaptureOne session and auto-group RAW+exports:

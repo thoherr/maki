@@ -70,15 +70,44 @@ Output format for preview files. JPEG produces lossy compressed thumbnails contr
 
 JPEG compression quality. Higher values produce larger files with better visual quality. Only applies when `format = "jpeg"`. Ignored for WebP.
 
+### smart_max_edge
+
+- **Type:** unsigned integer
+- **Default:** `2560`
+- **Validation:** must be greater than 0
+
+Maximum pixel size of the longest edge for smart previews. Smart previews are a higher-resolution preview tier (separate from regular thumbnails) that enable zoom and pan in the web UI.
+
+### smart_quality
+
+- **Type:** unsigned integer (1--100)
+- **Default:** `85`
+
+JPEG compression quality for smart previews. Only applies when the preview format is JPEG.
+
+### generate_on_demand
+
+- **Type:** boolean
+- **Default:** `false`
+
+When `true`, the web server generates smart previews automatically on first request. The first load takes a few seconds while the preview is generated; subsequent requests are served from disk. A pulsing "HD" badge in the lightbox and detail page provides visual feedback during generation.
+
+When `false`, smart previews must be generated explicitly via `dam import --smart`, the "Generate smart preview" button on the asset detail page, or a future batch command.
+
 ### Notes
 
 Changing `max_edge` or `format` affects only newly generated previews. Existing previews are not automatically regenerated. Use `dam generate-previews --force` to regenerate all previews with the new settings.
+
+Smart previews are stored in a separate directory (`smart_previews/`) and do not replace regular thumbnails.
 
 ```toml
 [preview]
 max_edge = 1200
 format = "jpeg"
 quality = 90
+smart_max_edge = 2560
+smart_quality = 85
+generate_on_demand = true
 ```
 
 ---
@@ -146,13 +175,25 @@ exclude = [
 - **Type:** array of tag strings
 - **Default:** `[]` (empty, no auto-tags)
 
-Tags automatically applied to every newly imported asset. These are merged with any tags extracted from XMP metadata and deduplicated (no duplicate tags are created).
+Tags automatically applied to every newly imported asset. These are merged with any tags extracted from XMP metadata, CLI `--add-tag` values, and deduplicated (no duplicate tags are created).
 
 Useful for marking import batches or applying a default workflow status:
 
 ```toml
 [import]
 auto_tags = ["inbox", "unreviewed"]
+```
+
+### smart_previews
+
+- **Type:** boolean
+- **Default:** `false`
+
+When `true`, import automatically generates smart previews (high-resolution, 2560px) alongside regular thumbnails. Equivalent to passing `--smart` on every `dam import` command. Smart preview dimensions are controlled by `[preview] smart_max_edge`.
+
+```toml
+[import]
+smart_previews = true
 ```
 
 ---
@@ -193,6 +234,12 @@ max_edge = 1200
 format = "jpeg"
 # JPEG quality (1-100). Ignored for WebP.
 quality = 90
+# Smart preview: maximum pixel size of the longest edge.
+smart_max_edge = 2560
+# Smart preview: JPEG quality (1-100).
+smart_quality = 85
+# Generate smart previews on first web request.
+generate_on_demand = true
 
 [serve]
 # Web UI port. Override with: dam serve --port 9090
@@ -211,6 +258,8 @@ exclude = [
 ]
 # Tags automatically applied to every new asset.
 auto_tags = ["inbox", "unreviewed"]
+# Generate smart previews during import.
+smart_previews = true
 
 [dedup]
 # Default path substring for --prefer (keep files whose path contains this).
@@ -257,10 +306,14 @@ When a field is absent from `dam.toml`, these defaults apply:
 | `preview.max_edge` | `800` |
 | `preview.format` | `"jpeg"` |
 | `preview.quality` | `85` |
+| `preview.smart_max_edge` | `2560` |
+| `preview.smart_quality` | `85` |
+| `preview.generate_on_demand` | `false` |
 | `serve.port` | `8080` |
 | `serve.bind` | `"127.0.0.1"` |
 | `import.exclude` | `[]` |
 | `import.auto_tags` | `[]` |
+| `import.smart_previews` | `false` |
 | `dedup.prefer` | none |
 
 ---

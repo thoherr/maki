@@ -203,6 +203,19 @@ The lightbox top bar shows interactive rating stars and color label dots, always
 
 These controls are also available in the info panel with more detail, but the top bar provides quick access during rapid browsing.
 
+### Smart preview and zoom
+
+When a smart preview (high-resolution, 2560px) is available, the lightbox loads the regular preview instantly for display, then background-loads the smart preview. A pulsing **HD** badge in the top-right corner provides visual feedback during loading. Once the smart preview loads, the badge briefly shows with solid opacity before fading out.
+
+With a smart preview loaded, you can zoom and pan:
+
+- **Mouse wheel**: zoom in/out centered on cursor position
+- **Click**: toggle between fit-to-screen and 100% zoom
+- **Drag**: pan the image when zoomed in (cursor changes to grab/grabbing)
+- **Keyboard**: `,` fit to screen, `.` 100% zoom, `+` zoom in, `-` zoom out
+
+Smart previews can be generated via `dam import --smart`, `[import] smart_previews = true` in config, the "Generate smart preview" button on the detail page, or on-demand via `[preview] generate_on_demand = true`.
+
 ### Detail page link
 
 Click the "↗ Detail" link in the top bar to navigate to the full asset detail page for the current asset.
@@ -222,6 +235,10 @@ All browse keyboard shortcuts for rating and label work inside the lightbox:
 | Alt+1 through Alt+7 | Set color label |
 | Alt+0, x | Clear color label |
 | r/o/y/g/b/p/u | Set label by color initial |
+| , (comma) | Fit to screen (zoom) |
+| . (period) | 100% zoom |
+| + | Zoom in |
+| - | Zoom out |
 
 When the lightbox is open, browse keyboard navigation (arrow keys for card focus, Enter, Space) is suppressed.
 
@@ -248,7 +265,7 @@ Keyboard navigation:
 | l | Return to lightbox view |
 | Escape | Return to browse page |
 
-Rating and label keyboard shortcuts also work on the detail page:
+Rating, label, and zoom keyboard shortcuts also work on the detail page:
 
 | Key | Action |
 |-----|--------|
@@ -257,10 +274,16 @@ Rating and label keyboard shortcuts also work on the detail page:
 | Alt+1 through Alt+7 | Set color label |
 | Alt+0, x | Clear color label |
 | r/o/y/g/b/p/u | Set label by color initial |
+| , (comma) | Fit to screen (zoom) |
+| . (period) | 100% zoom |
+| + | Zoom in |
+| - | Zoom out |
 
 ### Preview
 
 The left side shows a large preview image. This is the best available preview for the asset, preferring export variants over processed variants over originals, and standard image formats over RAW.
+
+When a smart preview is available, it loads in the background with a pulsing "HD" badge. Once loaded, the image supports zoom and pan via mouse wheel, click, drag, and keyboard shortcuts (`,` `.` `+` `-`). Two buttons below the preview let you regenerate the regular preview or generate/regenerate the smart preview on demand.
 
 ### Editable metadata
 
@@ -339,6 +362,8 @@ A fixed toolbar appears at the bottom of the screen whenever one or more assets 
 
 **Group by name**: merges the selected assets by filename stem. A confirmation dialog explains the action. Assets whose filenames share a common prefix (e.g., `DSC_001.nef` and `DSC_001.jpg`) are merged into a single asset with multiple variants. This cannot be undone.
 
+**Compare**: opens a side-by-side compare view with the selected assets (2–4). See [Compare View](#compare-view) below.
+
 After every batch operation, the selection clears and the results grid refreshes to reflect the changes. All toolbar buttons are disabled during the operation to prevent double submissions.
 
 ### Keyboard shortcuts for selection
@@ -398,6 +423,47 @@ Focus position is preserved across pagination and sort changes. If you are focus
 ### Input suppression
 
 All keyboard shortcuts are suppressed when focus is in a text input, textarea, or select dropdown. This prevents accidental rating or label changes while typing a search query or tag name.
+
+
+## Compare View
+
+Select 2–4 assets in the browse grid and click the "Compare" button in the batch toolbar to open a side-by-side comparison view.
+
+### Layout
+
+Each asset appears in its own column with a preview image on top and metadata below. The metadata section shows the display name (clickable link to detail page), creation date, interactive rating stars, color label dots, and EXIF data (camera, lens, focal length, aperture, shutter speed, ISO).
+
+### Zoom and pan
+
+All columns support zoom and pan:
+
+- **Mouse wheel**: zoom in/out centered on cursor position (0.5× to 20×)
+- **Drag**: pan the image when zoomed
+- **Double-click**: reset zoom to 1×
+
+**Sync zoom**: when enabled (on by default), zooming or panning one column applies the same transform to all columns. This lets you inspect the same area across all images simultaneously. Toggle sync with the checkbox in the top bar or press `s`.
+
+Smart previews are loaded automatically when available, with a pulsing HD badge during loading.
+
+### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| Left / Right arrow | Move focus between columns |
+| d | Open detail page for focused asset |
+| s | Toggle sync zoom |
+| Escape | Return to browse |
+| 1-5 | Set rating on focused asset |
+| 0 | Clear rating |
+| Alt+1 through Alt+7 | Set color label |
+| Alt+0, x | Clear color label |
+| r/o/y/g/b/p/u | Set label by color initial |
+| , (comma) | Fit to view (zoom) |
+| . (period) | Toggle 3× zoom |
+| + | Zoom in |
+| - | Zoom out |
+
+The focused column has a blue border. Rating and label changes are saved immediately.
 
 
 ## Tags Page
