@@ -86,4 +86,4 @@ Rust, SQLite, clap, axum, askama, htmx. See [`Cargo.toml`](Cargo.toml) for the f
 ## Requirements
 
 - Rust 2021 edition (stable)
-- macOS or Linux
+- macOS, Linux, or Windows
