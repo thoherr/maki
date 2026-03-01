@@ -304,14 +304,27 @@ async fn log_request(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    if !state.log_requests {
-        return next.run(req).await;
+    let is_preview = req.uri().path().starts_with("/preview/")
+        || req.uri().path().starts_with("/smart-preview/");
+    let log = state.log_requests;
+    let method = if log { Some(req.method().clone()) } else { None };
+    let uri = if log { Some(req.uri().clone()) } else { None };
+    let start = if log { Some(std::time::Instant::now()) } else { None };
+
+    let mut response = next.run(req).await;
+
+    // Previews can change (rotation/regeneration) — tell browsers to always revalidate.
+    // ServeDir sets Last-Modified, so unchanged files get fast 304 Not Modified.
+    if is_preview {
+        response.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-cache"),
+        );
     }
-    let method = req.method().clone();
-    let uri = req.uri().clone();
-    let start = std::time::Instant::now();
-    let response = next.run(req).await;
-    eprintln!("{method} {uri} -> {} ({:.1?})", response.status(), start.elapsed());
+
+    if let (Some(method), Some(uri), Some(start)) = (method, uri, start) {
+        eprintln!("{method} {uri} -> {} ({:.1?})", response.status(), start.elapsed());
+    }
     response
 }
 
