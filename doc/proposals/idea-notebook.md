@@ -37,3 +37,6 @@ Since the CLI can provide information in machine readable JSON format, one or mo
 with pictures of Alices birthday and copy the two highest rated images with Bob to a sd card" (where the names would
 of cource have been tagged). Or maybe we come up with another, more useful example.
 
+## Documentation
+
+### Cross References in the PDF manual do not work (they link to the *.md file) - BUG
