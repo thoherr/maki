@@ -24,11 +24,9 @@ Currently we only have simple queries, and all of them are anded in the query.
 Some sort of logical query language could be useful (e.g. "find all vacation images, but not from france"
 or "give me all images with tags "alice" or "bob").
 
-### Asset folder link
+### ~~Asset folder link~~ — **DONE** (v1.8.2)
 
-The details page should contain a link to the asset and/or asset folder at the locations. maybe just make the location
-clickable, if the volume is online (folder part opens folder of asset, asset file name opens asset directly).
-Optional/alternative open terminal window at location.
+Implemented as reveal-in-file-manager (📂) and open-terminal (`>_`) buttons on the asset detail page, next to each file location on online volumes. Supports macOS (Finder/Terminal.app), Linux (xdg-open/terminal emulators), and Windows (Explorer/cmd). Backed by `POST /api/open-location` and `POST /api/open-terminal` endpoints.
 
 ## CLI
 

@@ -26,7 +26,7 @@ Returns the asset browse grid with search, filtering, sorting, and pagination.
 | `collection` | string | `""`        | Collection name filter                           |
 | `path`       | string | `""`        | Path prefix filter                               |
 | `sort`       | string | `date_desc` | Sort order (see below)                           |
-| `page`       | u32    | `1`         | Page number (60 results per page)                |
+| `page`       | u32    | `1`         | Page number (configurable results per page, default 60) |
 
 **Sort values**: `date_desc`, `date_asc`, `name_desc`, `name_asc`, `size_desc`, `size_asc`
 
@@ -303,6 +303,18 @@ Regenerates the preview thumbnail for the asset's primary variant. Requires the 
 
 ```bash
 curl -X POST http://localhost:8080/api/asset/{id}/preview
+```
+
+### `POST /api/asset/{id}/rotate` -- Rotate Preview
+
+Cycles the preview rotation 90° clockwise (0° → 90° → 180° → 270° → 0°). Regenerates both regular and smart previews with EXIF auto-orientation applied. The rotation is persisted per asset.
+
+**Content-Type**: None (no body required)
+
+**Response**: HTML partial -- updated preview fragment with cache-busted URLs.
+
+```bash
+curl -X POST http://localhost:8080/api/asset/{id}/rotate
 ```
 
 ### `PUT /api/asset/{id}/stack-pick` -- Set Stack Pick

@@ -247,7 +247,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 
 **Routes**:
 - `GET /` — browse page with search, filter dropdowns (type, tag, format, volume, collection, rating), color label filter dots, sort, pagination, grid density controls (compact/normal/large), thumbnail grid with star ratings and color label dots. Grid/Calendar view toggle (calendar shows year-at-a-glance heatmap with per-day asset counts, year navigation, day-click filtering). Lightbox overlay on card click (prev/next navigation, info panel with rating/label editing). Batch operations toolbar with tag, rating, and label editing. Dark mode toggle in nav bar (persisted in localStorage, follows OS preference). Favorite saved searches shown as chips with "Manage..." link to `/saved-searches`.
-- `GET /asset/{id}` — asset detail with preview, metadata, editable tags, inline editable star rating, inline color label picker (7 color dots), variants, recipes
+- `GET /asset/{id}` — asset detail with preview, metadata, editable tags, inline editable star rating, inline color label picker (7 color dots), rotate button (cycles 90° CW, regenerates previews with EXIF auto-orientation), variants, recipes
 - `GET /tags` — tags page with sortable columns (name/count), live text filter, multi-column layout
 - `GET /api/search` — results partial (htmx target) with pagination
 - `POST /api/asset/{id}/tags` — add tags, returns tags fragment
@@ -256,6 +256,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 - `PUT /api/asset/{id}/description` — set/clear description, returns description fragment
 - `PUT /api/asset/{id}/label` — set/clear color label (form: `label=Red`), returns label fragment
 - `POST /api/asset/{id}/preview` — generate preview on demand
+- `POST /api/asset/{id}/rotate` — cycle preview rotation 90° CW, regenerate previews
 - `PUT /api/batch/rating` — batch set/clear rating for multiple assets
 - `POST /api/batch/tags` — batch add/remove tags for multiple assets
 - `PUT /api/batch/label` — batch set/clear color label for multiple assets

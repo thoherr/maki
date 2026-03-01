@@ -130,18 +130,26 @@ TCP port for the web server.
 
 Bind address for the web server. Use `"127.0.0.1"` to restrict access to the local machine. Use `"0.0.0.0"` to allow connections from other devices on the network.
 
+### per_page
+
+- **Type:** unsigned 32-bit integer
+- **Default:** `60`
+
+Number of results per page in the browse grid.
+
 ### CLI Override
 
-The `--port` and `--bind` flags on `dam serve` override the values from `dam.toml`:
+The `--port`, `--bind`, and `--per-page` flags on `dam serve` override the values from `dam.toml`:
 
 ```bash
-dam serve --port 9090 --bind 0.0.0.0
+dam serve --port 9090 --bind 0.0.0.0 --per-page 100
 ```
 
 ```toml
 [serve]
 port = 8080
 bind = "127.0.0.1"
+per_page = 100
 ```
 
 ---

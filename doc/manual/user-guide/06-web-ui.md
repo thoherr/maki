@@ -179,7 +179,9 @@ When results span multiple pages, pagination controls appear both above and belo
 - First page, previous page, numbered page links, next page, last page
 - A "Page X of Y" indicator
 
-Page numbers with ellipsis keep the controls compact for large result sets.
+Page numbers with ellipsis keep the controls compact for large result sets. The number of results per page defaults to 60 and can be configured via `[serve] per_page` in `dam.toml` or the `--per-page` CLI flag.
+
+Use **Shift+Left/Right arrow** keys to quickly turn pages from the keyboard. In the lightbox, regular arrow keys at page boundaries automatically navigate to the next/previous page with a loading spinner overlay.
 
 ### Saved search chips
 
@@ -343,7 +345,7 @@ Rating, label, and zoom keyboard shortcuts also work on the detail page:
 
 The left side shows a large preview image. This is the best available preview for the asset, preferring export variants over processed variants over originals, and standard image formats over RAW.
 
-When a smart preview is available, it loads in the background with a pulsing "HD" badge. Once loaded, the image supports zoom and pan via mouse wheel, drag, and keyboard shortcuts (`,` `.` `+` `-`). Clicking the preview image opens the asset in the lightbox for full-screen viewing. Two buttons below the preview let you regenerate the regular preview or generate/regenerate the smart preview on demand.
+When a smart preview is available, it loads in the background with a pulsing "HD" badge. Once loaded, the image supports zoom and pan via mouse wheel, drag, and keyboard shortcuts (`,` `.` `+` `-`). Clicking the preview image opens the asset in the lightbox for full-screen viewing. Buttons below the preview let you regenerate the regular preview, generate/regenerate the smart preview, or rotate the image 90° clockwise. Rotation cycles through 0° → 90° → 180° → 270° → 0° and is persisted per asset. Previews are automatically oriented using EXIF tags during generation; manual rotation is applied on top.
 
 ### Editable metadata
 
@@ -463,7 +465,10 @@ The focused card has a blue outline, visually distinct from the selection highli
 
 | Key | Action |
 |-----|--------|
+| Shift+Left | Previous page |
+| Shift+Right | Next page |
 | Enter | Open the focused card in the lightbox |
+| d | Open the focused card's detail page |
 | Space | Toggle selection of the focused card |
 | 1-5 | Set rating (applies to focused card, or to all selected if a batch selection is active) |
 | 0 | Clear rating |

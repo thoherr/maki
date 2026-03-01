@@ -2,6 +2,23 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v1.8.3
+
+### New Features
+- **EXIF auto-orientation** — preview generation now reads EXIF orientation tags and automatically rotates/flips the image to its correct display orientation. Applies to JPEG, TIFF, and RAW previews (both standard and smart). Previously, images shot in portrait mode could appear sideways in the browse grid and lightbox.
+- **Manual rotation** — a "Rotate" button on the asset detail page cycles the preview rotation 90° clockwise (0° → 90° → 180° → 270° → 0°). Rotation is persisted per asset (sidecar YAML + SQLite) and applied on top of EXIF auto-orientation. Both regular and smart previews are regenerated with the new rotation. The rotation state is stored in `preview_rotation` on the asset model.
+- **Configurable page size** — the number of results per page in the browse grid is now configurable via `[serve] per_page` in `dam.toml` (default: 60). Also available as `dam serve --per-page N` CLI flag.
+- **Page-turn keyboard shortcuts** — Shift+Left/Right arrow keys navigate to the previous/next page in the browse grid and lightbox. In the lightbox, regular arrow keys at page boundaries automatically trigger cross-page navigation with a loading spinner overlay.
+
+### Enhancements
+- **Batch operation performance** — batch tag, rating, and label operations now share a single catalog connection, device registry, and content store across all assets instead of opening fresh instances per asset. Batch tagging 30+ assets is now ~10× faster.
+- **Batch toolbar feedback** — the batch toolbar shows "Processing N assets..." with a pulsing animation while operations are in progress, instead of silently disabling buttons.
+- **Lightbox cross-page loading indicator** — when navigating across a page boundary in the lightbox, a spinner overlay appears and further arrow key presses are blocked until the new page loads.
+- **Detail page nav loading indicator** — small spinners appear next to the Prev/Next buttons while adjacent page IDs are being fetched at page boundaries.
+- **Preserve selection after batch operations** — batch tag, rating, and label operations no longer clear the selection, allowing multiple operations on the same set of assets.
+- **Preview cache freshness** — preview and smart preview HTTP responses now include `Cache-Control: no-cache`, ensuring browsers revalidate after rotation or regeneration instead of serving stale cached images. Combined with `Last-Modified` headers, unchanged previews still get fast 304 responses.
+- **Batch operation timing logs** — when `dam serve --log` is enabled, batch operations log timing to stderr (e.g. `batch_tag: 30 assets in 1.2s (30 ok, 0 err)`).
+
 ## v1.8.2
 
 ### New Features
