@@ -2749,7 +2749,7 @@ body.has-batch-toolbar { padding-bottom: 60px; }
 
 /* Detail page nav loading spinner */
 .nav-loading-spinner {
-    display: inline-block;
+    display: none;
     width: 16px;
     height: 16px;
     border: 2px solid var(--border, #ddd);
@@ -2757,4 +2757,7 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     border-radius: 50%;
     animation: lb-spin 0.8s linear infinite;
     vertical-align: middle;
+}
+.nav-loading-spinner.active {
+    display: inline-block;
 }

@@ -4,11 +4,11 @@
 
 {% block content %}
 <div class="asset-nav">
-    <span class="nav-loading-spinner invisible" id="nav-prev-loading"></span>
+    <span class="nav-loading-spinner" id="nav-prev-loading"></span>
     <a href="#" class="asset-nav-btn invisible" id="nav-prev">&larr; Prev</a>
     <a href="/" class="asset-nav-btn" id="nav-back">&larr; Back</a>
     <a href="#" class="asset-nav-btn invisible" id="nav-next">Next &rarr;</a>
-    <span class="nav-loading-spinner invisible" id="nav-next-loading"></span>
+    <span class="nav-loading-spinner" id="nav-next-loading"></span>
 </div>
 <div class="asset-detail">
     <div class="asset-preview">
@@ -298,9 +298,9 @@
     var nextSpinner = document.getElementById('nav-next-loading');
 
     if (idx === 0 && browsePage > 1) {
-        prevSpinner.classList.remove('invisible');
+        prevSpinner.classList.add('active');
         fetchPageIds(browsePage - 1, function(data) {
-            prevSpinner.classList.add('invisible');
+            prevSpinner.classList.remove('active');
             if (data.ids && data.ids.length > 0) {
                 browseIds = data.ids.concat(browseIds);
                 idx = data.ids.length;
@@ -314,9 +314,9 @@
     }
 
     if (idx >= 0 && idx === browseIds.length - 1 && browsePage < browseTotalPages) {
-        nextSpinner.classList.remove('invisible');
+        nextSpinner.classList.add('active');
         fetchPageIds(browsePage + 1, function(data) {
-            nextSpinner.classList.add('invisible');
+            nextSpinner.classList.remove('active');
             if (data.ids && data.ids.length > 0) {
                 browseIds = browseIds.concat(data.ids);
                 sessionStorage.setItem('dam-browse-ids', JSON.stringify(browseIds));
@@ -617,6 +617,20 @@
             ]}
         ]);
     }
+})();
+</script>
+<script>
+// Track preview changes (rotation, regeneration) for browse page cache-busting
+(function() {
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target && e.detail.target.id === 'preview') {
+            try {
+                var rotated = JSON.parse(sessionStorage.getItem('dam-previews-changed') || '{}');
+                rotated['{{ asset_id }}'] = Date.now();
+                sessionStorage.setItem('dam-previews-changed', JSON.stringify(rotated));
+            } catch(ex) {}
+        }
+    });
 })();
 </script>
 {% endblock %}

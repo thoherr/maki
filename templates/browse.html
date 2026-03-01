@@ -560,11 +560,38 @@
     window.getStackCollapse = getStackCollapse;
     window.setStackCollapse = setStackCollapse;
 
+    // Bust cached thumbnails for assets whose previews were regenerated (rotation etc.)
+    function bustChangedPreviews() {
+        try {
+            var changed = JSON.parse(sessionStorage.getItem('dam-previews-changed') || '{}');
+            var ids = Object.keys(changed);
+            if (ids.length === 0) return;
+            var cards = document.querySelectorAll('.asset-card');
+            cards.forEach(function(card) {
+                var aid = card.getAttribute('data-asset-id');
+                if (changed[aid]) {
+                    var img = card.querySelector('.thumb');
+                    if (img && img.src) {
+                        var base = img.src.replace(/[?].*$/, '');
+                        img.src = base + '?t=' + changed[aid];
+                    }
+                    // Also update the data-preview attribute for lightbox
+                    var dp = card.getAttribute('data-preview');
+                    if (dp) {
+                        card.setAttribute('data-preview', dp.replace(/[?].*$/, '') + '?t=' + changed[aid]);
+                    }
+                }
+            });
+            sessionStorage.removeItem('dam-previews-changed');
+        } catch(e) {}
+    }
+
     // Handle bfcache restoration (back from detail/compare).
     // Don't htmx-refresh — bfcache preserves scroll, selection, and focus.
     // Only handle lightbox auto-open and focus sync.
     window.addEventListener('pageshow', function(event) {
         if (event.persisted) {
+            bustChangedPreviews();
             // Clear saved selection — JS Set is already intact via bfcache
             sessionStorage.removeItem('dam-browse-selection');
             var lbAsset = sessionStorage.getItem('dam-lightbox-asset');
