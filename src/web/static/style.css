@@ -2645,14 +2645,8 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     align-items: center;
     gap: 0.4rem;
     padding: 0.2rem 0.3rem;
-    cursor: pointer;
     border-radius: 3px;
     color: var(--text);
-}
-.facet-item:hover { background: var(--bg-input); }
-.facet-item.facet-active {
-    color: var(--primary);
-    font-weight: 600;
 }
 .facet-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .facet-count {

@@ -158,21 +158,11 @@ Your density preference is saved in the browser and preserved across page reload
 
 ### Faceted sidebar
 
-The faceted sidebar provides a live breakdown of your current results by rating, color label, format, volume, tag, year, and geolocation. It helps you discover the distribution of values and quickly narrow results.
+The faceted sidebar provides a read-only statistical breakdown of your current results by rating, color label, format, volume, tag, year, and geolocation. It helps you understand the distribution of values in your collection at a glance. All filtering is done through the filter bar at the top of the page.
 
-**Toggle**: Click the filter icon button in the results bar (next to the stack collapse button) or press `f`. The sidebar appears on the left side of the browse page. Your preference is saved in the browser.
+**Toggle**: Click the facet icon button in the results bar (next to the stack collapse button) or press `f`. The sidebar appears on the left side of the browse page. Your preference is saved in the browser.
 
-**Facet sections**: Each section is a collapsible `<details>` element. Ratings and years include a proportional bar chart. Labels show color dots. Formats, volumes, and tags show counts. The geotagged facet shows a single count of assets with GPS data.
-
-**Click to filter**: Clicking a facet value applies that filter:
-- **Rating**: clicks the corresponding star in the filter row
-- **Label**: clicks the corresponding label dot
-- **Format / Volume**: sets the dropdown value
-- **Tag**: adds the tag chip
-- **Year**: sets a `date:YYYY` filter in the search input
-- **Geo**: toggles `geo:any` in the search input
-
-Active filters are highlighted in the sidebar. Facet counts automatically update when search results change (pagination, sort, or filter changes).
+**Facet sections**: Each section is collapsible. Ratings and years include a proportional bar chart. Labels show color dots. Formats, volumes, and tags show counts sorted by frequency. The geotagged facet shows a single count of assets with GPS data. Counts automatically update when the current search filters change.
 
 **Collapse state**: Each section remembers its open/closed state in the browser across page loads.
 
