@@ -1544,12 +1544,26 @@
     function navigate(delta) {
         var cards = getCards();
         var next = currentIndex + delta;
-        if (next < 0 || next >= cards.length) return;
-        currentIndex = next;
-        render();
-        if (cards[currentIndex]) {
-            sessionStorage.setItem('dam-browse-focus', cards[currentIndex].getAttribute('data-asset-id'));
+        if (next >= 0 && next < cards.length) {
+            currentIndex = next;
+            render();
+            if (cards[currentIndex]) {
+                sessionStorage.setItem('dam-browse-focus', cards[currentIndex].getAttribute('data-asset-id'));
+            }
+            return;
         }
+        // Cross-page boundary: click pagination link
+        var meta = document.getElementById('results-meta');
+        if (!meta) return;
+        var curPage = parseInt(meta.dataset.page);
+        var totalPages = parseInt(meta.dataset.totalPages);
+        var targetPage = (delta > 0) ? curPage + 1 : curPage - 1;
+        if (targetPage < 1 || targetPage > totalPages) return;
+        window._lightboxResumeIndex = (delta > 0) ? 0 : -1;
+        var link = (delta > 0)
+            ? document.querySelector('.top-pagination a[href]:nth-last-child(2)')
+            : document.querySelector('.top-pagination a[href]:nth-child(2)');
+        if (link) link.click();
     }
 
     function applyRating(rating) {
@@ -1681,6 +1695,19 @@
             e.preventDefault();
             e.stopImmediatePropagation();
             close();
+            return;
+        }
+        if (e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            close();
+            var link = e.key === 'ArrowLeft'
+                ? document.querySelector('.top-pagination a[href]:nth-child(2)')
+                : document.querySelector('.top-pagination a[href]:nth-last-child(2)');
+            if (link) {
+                window._lightboxResumeIndex = (e.key === 'ArrowRight') ? 0 : -1;
+                link.click();
+            }
             return;
         }
         if (e.key === 'ArrowLeft') {
@@ -1928,6 +1955,16 @@
             } else if (focusedIndex >= 0) {
                 clearFocus();
             }
+            return;
+        }
+
+        // Shift+Arrow: page turn
+        if (e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+            e.preventDefault();
+            var link = e.key === 'ArrowLeft'
+                ? document.querySelector('.top-pagination a[href]:nth-child(2)')
+                : document.querySelector('.top-pagination a[href]:nth-last-child(2)');
+            if (link) link.click();
             return;
         }
 
@@ -2676,11 +2713,26 @@ window.damFacets = (function() {
         cards.forEach(function(c) { ids.push(c.getAttribute('data-asset-id')); });
         sessionStorage.setItem('dam-browse-ids', JSON.stringify(ids));
         sessionStorage.setItem('dam-browse-url', window.location.href);
+        var meta = document.getElementById('results-meta');
+        if (meta) {
+            sessionStorage.setItem('dam-browse-page', meta.dataset.page);
+            sessionStorage.setItem('dam-browse-total-pages', meta.dataset.totalPages);
+        }
     }
     storeBrowseContext();
     document.body.addEventListener('htmx:afterSwap', function(e) {
         if (e.detail.target && e.detail.target.id === 'results') {
             storeBrowseContext();
+            // Resume lightbox on cross-page navigation
+            if (typeof window._lightboxResumeIndex !== 'undefined') {
+                var idx = window._lightboxResumeIndex;
+                delete window._lightboxResumeIndex;
+                var newCards = document.querySelectorAll('.asset-card');
+                if (newCards.length > 0 && window.damLightbox) {
+                    var openIdx = (idx === -1) ? newCards.length - 1 : idx;
+                    window.damLightbox.open(openIdx);
+                }
+            }
         }
     });
 })();
@@ -2690,6 +2742,7 @@ if (window.damHelp) {
     damHelp.registerShortcuts([
         { title: 'Navigation', shortcuts: [
             { keys: '\u2190 \u2191 \u2192 \u2193', desc: 'Move focus between cards' },
+            { keys: 'Shift+\u2190 / \u2192', desc: 'Previous / next page' },
             { keys: 'Enter / l', desc: 'Open lightbox' },
             { keys: 'd', desc: 'Open detail page' },
             { keys: 'Escape', desc: 'Clear selection / focus' }

@@ -248,29 +248,73 @@
     var nextNav = document.getElementById('nav-next');
     var backNav = document.getElementById('nav-back');
 
-    if (idx > 0) {
-        prevNav.href = '/asset/' + browseIds[idx - 1];
-        prevNav.classList.remove('invisible');
-    } else if (idx < 0) {
-        // Fallback to URL params when not in sessionStorage
-        var params = new URLSearchParams(window.location.search);
-        var paramPrev = params.get('prev');
-        if (paramPrev) {
-            prevNav.href = '/asset/' + paramPrev;
+    var browsePage = parseInt(sessionStorage.getItem('dam-browse-page') || '0');
+    var browseTotalPages = parseInt(sessionStorage.getItem('dam-browse-total-pages') || '0');
+
+    function setNavLinks() {
+        if (idx > 0) {
+            prevNav.href = '/asset/' + browseIds[idx - 1];
             prevNav.classList.remove('invisible');
+        } else if (idx < 0) {
+            var params = new URLSearchParams(window.location.search);
+            var paramPrev = params.get('prev');
+            if (paramPrev) {
+                prevNav.href = '/asset/' + paramPrev;
+                prevNav.classList.remove('invisible');
+            }
+        }
+
+        if (idx >= 0 && idx < browseIds.length - 1) {
+            nextNav.href = '/asset/' + browseIds[idx + 1];
+            nextNav.classList.remove('invisible');
+        } else if (idx < 0) {
+            var params2 = new URLSearchParams(window.location.search);
+            var paramNext = params2.get('next');
+            if (paramNext) {
+                nextNav.href = '/asset/' + paramNext;
+                nextNav.classList.remove('invisible');
+            }
         }
     }
 
-    if (idx >= 0 && idx < browseIds.length - 1) {
-        nextNav.href = '/asset/' + browseIds[idx + 1];
-        nextNav.classList.remove('invisible');
-    } else if (idx < 0) {
-        var params2 = new URLSearchParams(window.location.search);
-        var paramNext = params2.get('next');
-        if (paramNext) {
-            nextNav.href = '/asset/' + paramNext;
-            nextNav.classList.remove('invisible');
-        }
+    setNavLinks();
+
+    // Cross-page: fetch adjacent page IDs at boundaries
+    function fetchPageIds(targetPage, callback) {
+        var base = sessionStorage.getItem('dam-browse-url') || '/';
+        var url;
+        try {
+            var u = new URL(base, window.location.origin);
+            u.pathname = '/api/page-ids';
+            u.searchParams.set('page', targetPage);
+            url = u.pathname + u.search;
+        } catch(e) { return; }
+        fetch(url).then(function(r) { return r.json(); }).then(callback).catch(function(){});
+    }
+
+    if (idx === 0 && browsePage > 1) {
+        fetchPageIds(browsePage - 1, function(data) {
+            if (data.ids && data.ids.length > 0) {
+                browseIds = data.ids.concat(browseIds);
+                idx = data.ids.length;
+                sessionStorage.setItem('dam-browse-ids', JSON.stringify(browseIds));
+                sessionStorage.setItem('dam-browse-page', String(browsePage - 1));
+                browsePage = browsePage - 1;
+                prevNav.href = '/asset/' + browseIds[idx - 1];
+                prevNav.classList.remove('invisible');
+            }
+        });
+    }
+
+    if (idx >= 0 && idx === browseIds.length - 1 && browsePage < browseTotalPages) {
+        fetchPageIds(browsePage + 1, function(data) {
+            if (data.ids && data.ids.length > 0) {
+                browseIds = browseIds.concat(data.ids);
+                sessionStorage.setItem('dam-browse-ids', JSON.stringify(browseIds));
+                nextNav.href = '/asset/' + browseIds[idx + 1];
+                nextNav.classList.remove('invisible');
+            }
+        });
     }
 
     backNav.href = browseUrl;

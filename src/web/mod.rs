@@ -117,10 +117,11 @@ pub struct AppState {
     pub dropdown_cache: DropdownCache,
     pub dedup_prefer: Option<String>,
     pub smart_on_demand: bool,
+    pub per_page: u32,
 }
 
 impl AppState {
-    pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>) -> Self {
+    pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>, per_page: u32) -> Self {
         let preview_ext = preview_config.format.extension().to_string();
         let smart_on_demand = preview_config.generate_on_demand;
         Self {
@@ -131,6 +132,7 @@ impl AppState {
             dropdown_cache: DropdownCache::new(),
             dedup_prefer,
             smart_on_demand,
+            per_page,
         }
     }
 
@@ -272,6 +274,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/calendar", axum::routing::get(routes::calendar_api))
         .route("/api/map", axum::routing::get(routes::map_api))
         .route("/api/facets", axum::routing::get(routes::facets_api))
+        .route("/api/page-ids", axum::routing::get(routes::page_ids_api))
         .route("/api/open-location", axum::routing::post(routes::open_location))
         .route("/api/open-terminal", axum::routing::post(routes::open_terminal))
         .route("/static/htmx.min.js", axum::routing::get(static_assets::htmx_js))
@@ -309,8 +312,8 @@ async fn log_request(
 }
 
 /// Start the web server.
-pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config: PreviewConfig, log: bool, dedup_prefer: Option<String>) -> Result<()> {
-    let state = Arc::new(AppState::new(catalog_root, preview_config, log, dedup_prefer));
+pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config: PreviewConfig, log: bool, dedup_prefer: Option<String>, per_page: u32) -> Result<()> {
+    let state = Arc::new(AppState::new(catalog_root, preview_config, log, dedup_prefer, per_page));
 
     // Verify catalog is accessible and run schema migrations once at startup
     Catalog::open(&state.catalog_root)?;

@@ -95,14 +95,15 @@ pub async fn browse_page(
             opts.collection_asset_ids = Some(&collection_ids);
         }
 
+        let per_page = state.per_page;
         opts.sort = SearchSort::from_str(sort_str);
         opts.page = page;
-        opts.per_page = 60;
+        opts.per_page = per_page;
         opts.collapse_stacks = collapse_stacks;
 
         let total = catalog.search_count(&opts)?;
         let rows = catalog.search_paginated(&opts)?;
-        let total_pages = ((total as f64) / 60.0).ceil() as u32;
+        let total_pages = ((total as f64) / per_page as f64).ceil() as u32;
         let mut cards: Vec<AssetCard> = rows.iter().map(|r| AssetCard::from_row(r, &preview_ext)).collect();
         link_cards(&mut cards);
 
@@ -121,7 +122,7 @@ pub async fn browse_page(
                 cards,
                 total,
                 page,
-                per_page: 60,
+                per_page,
                 total_pages,
                 collapse_stacks,
             };
@@ -171,7 +172,7 @@ pub async fn browse_page(
             cards,
             total,
             page,
-            per_page: 60,
+            per_page,
             total_pages,
             all_tags,
             all_formats,
@@ -265,14 +266,15 @@ pub async fn search_api(
             opts.collection_asset_ids = Some(&collection_ids);
         }
 
+        let per_page = state.per_page;
         opts.sort = SearchSort::from_str(sort_str);
         opts.page = page;
-        opts.per_page = 60;
+        opts.per_page = per_page;
         opts.collapse_stacks = collapse_stacks;
 
         let total = catalog.search_count(&opts)?;
         let rows = catalog.search_paginated(&opts)?;
-        let total_pages = ((total as f64) / 60.0).ceil() as u32;
+        let total_pages = ((total as f64) / per_page as f64).ceil() as u32;
         let mut cards: Vec<AssetCard> = rows.iter().map(|r| AssetCard::from_row(r, &preview_ext)).collect();
         link_cards(&mut cards);
 
@@ -290,7 +292,7 @@ pub async fn search_api(
             cards,
             total,
             page,
-            per_page: 60,
+            per_page,
             total_pages,
             collapse_stacks,
         };
@@ -300,6 +302,87 @@ pub async fn search_api(
 
     match result {
         Ok(Ok(html)) => Html(html).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+/// GET /api/page-ids — returns asset IDs for a given page (for cross-page navigation).
+pub async fn page_ids_api(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<SearchParams>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+
+        let query = params.q.as_deref().unwrap_or("");
+        let asset_type = params.asset_type.as_deref().unwrap_or("");
+        let tag = params.tag.as_deref().unwrap_or("");
+        let format = params.format.as_deref().unwrap_or("");
+        let volume = params.volume.as_deref().unwrap_or("");
+        let rating_str = params.rating.as_deref().unwrap_or("");
+        let label_str = params.label.as_deref().unwrap_or("");
+        let sort_str = params.sort.as_deref().unwrap_or("date_desc");
+        let page = params.page.unwrap_or(1).max(1);
+
+        let collection_str = params.collection.as_deref().unwrap_or("");
+        let path_str = params.path.as_deref().unwrap_or("");
+        let collapse_stacks = params.stacks.as_deref().unwrap_or("1") == "1";
+
+        let (normalized_path, path_volume_id) = if !path_str.is_empty() {
+            let registry = DeviceRegistry::new(&state.catalog_root);
+            let vols = registry.list().unwrap_or_default();
+            normalize_path_for_search(path_str, &vols, None)
+        } else {
+            (String::new(), None)
+        };
+
+        let parsed = merge_search_params(query, asset_type, tag, format, rating_str, label_str);
+        let mut opts = parsed.to_search_options();
+        if !volume.is_empty() {
+            opts.volume = Some(volume);
+        }
+        if let Some(ref vid) = path_volume_id {
+            if opts.volume.is_none() {
+                opts.volume = Some(vid);
+            }
+        }
+        if !normalized_path.is_empty() {
+            opts.path_prefix = Some(&normalized_path);
+        }
+
+        let collection_ids;
+        if !collection_str.is_empty() {
+            let col_store = crate::collection::CollectionStore::new(catalog.conn());
+            collection_ids = col_store.asset_ids_for_collection(collection_str)
+                .unwrap_or_default();
+            opts.collection_asset_ids = Some(&collection_ids);
+        }
+
+        let per_page = state.per_page;
+        opts.sort = SearchSort::from_str(sort_str);
+        opts.page = page;
+        opts.per_page = per_page;
+        opts.collapse_stacks = collapse_stacks;
+
+        let total = catalog.search_count(&opts)?;
+        let total_pages = ((total as f64) / per_page as f64).ceil() as u32;
+        let rows = catalog.search_paginated(&opts)?;
+        let ids: Vec<String> = rows.iter().map(|r| r.asset_id.clone()).collect();
+
+        Ok::<_, anyhow::Error>(serde_json::json!({
+            "ids": ids,
+            "page": page,
+            "total_pages": total_pages,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
         Ok(Err(e)) => {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
         }

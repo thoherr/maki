@@ -109,6 +109,8 @@
     {% endif %}
 </div>
 
+<span id="results-meta" data-page="{{ page }}" data-total-pages="{{ total_pages }}" style="display:none"></span>
+
 <div class="results-grid">
     {% for card in cards %}
     <div class="asset-card{% if card.stack_id.is_some() %} stacked{% endif %}" data-asset-id="{{ card.asset_id }}" data-preview="{{ card.preview_url }}" data-name="{{ card.display_name }}" data-type="{{ card.asset_type }}" data-format="{{ card.format }}" data-date="{{ card.date }}" data-rating="{{ card.rating.unwrap_or(0) }}" data-label="{{ card.color_label.as_deref().unwrap_or_default() }}" data-variants="{{ card.variant_count }}" data-stack="{{ card.stack_id.as_deref().unwrap_or_default() }}" data-prev="{{ card.prev_id.as_deref().unwrap_or_default() }}" data-next="{{ card.next_id.as_deref().unwrap_or_default() }}" style="{% if card.stack_id.is_some() %}--stack-color: {{ card.stack_id.as_deref().unwrap()|stack_color }};{% endif %}">

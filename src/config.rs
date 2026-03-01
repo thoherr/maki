@@ -81,6 +81,8 @@ pub struct ServeConfig {
     pub port: u16,
     #[serde(default = "default_bind")]
     pub bind: String,
+    #[serde(default = "default_per_page")]
+    pub per_page: u32,
 }
 
 fn default_port() -> u16 {
@@ -91,11 +93,16 @@ fn default_bind() -> String {
     "127.0.0.1".to_string()
 }
 
+fn default_per_page() -> u32 {
+    60
+}
+
 impl Default for ServeConfig {
     fn default() -> Self {
         Self {
             port: 8080,
             bind: "127.0.0.1".to_string(),
+            per_page: 60,
         }
     }
 }
@@ -196,6 +203,9 @@ impl CatalogConfig {
         }
         if self.preview.smart_quality == 0 || self.preview.smart_quality > 100 {
             anyhow::bail!("preview.smart_quality must be between 1 and 100");
+        }
+        if self.serve.per_page == 0 || self.serve.per_page > 1000 {
+            anyhow::bail!("serve.per_page must be between 1 and 1000");
         }
         Ok(())
     }
@@ -356,6 +366,7 @@ max_edge = 1000
             serve: ServeConfig {
                 port: 9090,
                 bind: "0.0.0.0".to_string(),
+                ..Default::default()
             },
             import: ImportConfig {
                 exclude: vec!["*.tmp".to_string()],
