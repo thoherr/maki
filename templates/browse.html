@@ -782,7 +782,6 @@
         .then(function(r) { return r.json(); })
         .then(function() {
             input.value = '';
-            clearSelection();
             refreshResults();
         })
         .catch(function(err) { console.error('Batch tag error:', err); })
@@ -803,7 +802,6 @@
         .then(function(r) { return r.json(); })
         .then(function() {
             input.value = '';
-            clearSelection();
             refreshResults();
         })
         .catch(function(err) { console.error('Batch tag error:', err); })
@@ -854,7 +852,6 @@
             })
             .then(function(r) { return r.json(); })
             .then(function() {
-                clearSelection();
                 refreshResults();
             })
             .catch(function(err) { console.error('Batch rating error:', err); })
@@ -873,7 +870,6 @@
         })
         .then(function(r) { return r.json(); })
         .then(function() {
-            clearSelection();
             refreshResults();
         })
         .catch(function(err) { console.error('Batch rating error:', err); })
@@ -894,7 +890,6 @@
             })
             .then(function(r) { return r.json(); })
             .then(function() {
-                clearSelection();
                 refreshResults();
             })
             .catch(function(err) { console.error('Batch label error:', err); })
@@ -913,7 +908,6 @@
         })
         .then(function(r) { return r.json(); })
         .then(function() {
-            clearSelection();
             refreshResults();
         })
         .catch(function(err) { console.error('Batch label error:', err); })
@@ -1891,7 +1885,6 @@
             })
             .then(function(r) { return r.json(); })
             .then(function() {
-                window.damBatch.clearSelection();
                 refreshResults();
             })
             .catch(function(err) { console.error('Batch rating error:', err); })
@@ -1924,7 +1917,6 @@
             })
             .then(function(r) { return r.json(); })
             .then(function() {
-                window.damBatch.clearSelection();
                 refreshResults();
             })
             .catch(function(err) { console.error('Batch label error:', err); })
