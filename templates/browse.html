@@ -177,7 +177,10 @@
         <button class="batch-btn" id="batch-select-page">Select page <kbd class="shortcut-hint"><span class="mod-key"></span>A</kbd></button>
         <button class="batch-btn" id="batch-clear">Clear <kbd class="shortcut-hint">Esc</kbd></button>
         <span class="batch-sep"></span>
-        <input type="text" class="batch-tag-input" id="batch-tag-input" placeholder="tag name">
+        <span class="batch-tag-wrapper">
+            <input type="text" class="batch-tag-input" id="batch-tag-input" placeholder="tag name" autocomplete="off">
+            <div class="batch-tag-autocomplete" id="batch-tag-autocomplete"></div>
+        </span>
         <button class="batch-btn batch-btn-primary" id="batch-add-tag">+ Tag</button>
         <button class="batch-btn batch-btn-danger" id="batch-remove-tag">&minus; Tag</button>
         <span class="batch-sep"></span>
@@ -433,6 +436,14 @@
             if (t) addTag(t);
         });
     }
+
+    // Expose tag data for batch toolbar and other consumers
+    window.damTags = {
+        allTags: function() { return allTags; },
+        fetchTags: fetchTags,
+        tagToDisplay: tagToDisplay,
+        tagToStorage: tagToStorage
+    };
 
     // --- Rating filter stars ---
     var currentRating = "{{ rating }}";
@@ -816,6 +827,7 @@
         .then(function(r) { return r.json(); })
         .then(function() {
             input.value = '';
+            if (window.damTags) window.damTags.fetchTags();
             refreshResults();
         })
         .catch(function(err) { console.error('Batch tag error:', err); })
@@ -836,20 +848,119 @@
         .then(function(r) { return r.json(); })
         .then(function() {
             input.value = '';
+            if (window.damTags) window.damTags.fetchTags();
             refreshResults();
         })
         .catch(function(err) { console.error('Batch tag error:', err); })
         .finally(function() { setButtonsBusy(false); });
     });
 
-    // Enter key in tag input triggers add
-    document.getElementById('batch-tag-input').addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            e.stopPropagation();
-            document.getElementById('batch-add-tag').click();
+    // --- Batch tag autocomplete ---
+    (function() {
+        var bInput = document.getElementById('batch-tag-input');
+        var bAc = document.getElementById('batch-tag-autocomplete');
+        var bAcIndex = -1;
+
+        function bShowSuggestions(query) {
+            if (!window.damTags) return;
+            var tags = window.damTags.allTags();
+            query = query.toLowerCase();
+            var queryStorage = query.replace(/\//g, '|');
+            var matches = tags.filter(function(t) {
+                var tl = t.toLowerCase();
+                return tl.indexOf(query) !== -1 || tl.indexOf(queryStorage) !== -1;
+            }).slice(0, 10);
+
+            if (matches.length === 0) {
+                bAc.style.display = 'none';
+                bAcIndex = -1;
+                return;
+            }
+
+            bAc.innerHTML = '';
+            bAcIndex = -1;
+            matches.forEach(function(t) {
+                var div = document.createElement('div');
+                div.className = 'tag-suggestion';
+                div.setAttribute('data-tag', t);
+                var parts = t.split('|');
+                if (parts.length > 1) {
+                    var prefix = parts.slice(0, -1).join('/') + '/';
+                    div.innerHTML = '<span class="tag-path-prefix">' +
+                        prefix.replace(/&/g,'&amp;').replace(/</g,'&lt;') +
+                        '</span>' + parts[parts.length - 1].replace(/&/g,'&amp;').replace(/</g,'&lt;');
+                } else {
+                    div.textContent = window.damTags.tagToDisplay(t);
+                }
+                div.addEventListener('mousedown', function(e) {
+                    e.preventDefault();
+                    bInput.value = window.damTags.tagToDisplay(t);
+                    bAc.style.display = 'none';
+                    bAcIndex = -1;
+                });
+                bAc.appendChild(div);
+            });
+            bAc.style.display = 'block';
         }
-    });
+
+        function bHighlight(idx) {
+            var items = bAc.querySelectorAll('.tag-suggestion');
+            items.forEach(function(el, i) {
+                el.classList.toggle('active', i === idx);
+            });
+            if (idx >= 0 && items[idx]) items[idx].scrollIntoView({block: 'nearest'});
+        }
+
+        bInput.addEventListener('input', function() {
+            var val = this.value.trim();
+            if (val.length > 0) {
+                bShowSuggestions(val);
+            } else {
+                bAc.style.display = 'none';
+                bAcIndex = -1;
+            }
+        });
+
+        bInput.addEventListener('keydown', function(e) {
+            var items = bAc.querySelectorAll('.tag-suggestion');
+            if (e.key === 'ArrowDown' && bAc.style.display === 'block') {
+                e.preventDefault();
+                bAcIndex = Math.min(bAcIndex + 1, items.length - 1);
+                bHighlight(bAcIndex);
+            } else if (e.key === 'ArrowUp' && bAc.style.display === 'block') {
+                e.preventDefault();
+                bAcIndex = Math.max(bAcIndex - 1, 0);
+                bHighlight(bAcIndex);
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                e.stopPropagation();
+                if (bAcIndex >= 0 && items[bAcIndex]) {
+                    bInput.value = window.damTags.tagToDisplay(items[bAcIndex].getAttribute('data-tag'));
+                    bAc.style.display = 'none';
+                    bAcIndex = -1;
+                } else {
+                    bAc.style.display = 'none';
+                    bAcIndex = -1;
+                    document.getElementById('batch-add-tag').click();
+                }
+            } else if (e.key === 'Escape') {
+                bAc.style.display = 'none';
+                bAcIndex = -1;
+            }
+        });
+
+        bInput.addEventListener('blur', function() {
+            setTimeout(function() {
+                bAc.style.display = 'none';
+                bAcIndex = -1;
+            }, 150);
+        });
+
+        bInput.addEventListener('focus', function() {
+            var val = this.value.trim();
+            if (val.length > 0) bShowSuggestions(val);
+        });
+    })();
 
     // Batch rating stars
     var batchStars = document.querySelectorAll('#batch-rating .batch-star');

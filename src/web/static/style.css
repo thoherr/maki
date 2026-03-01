@@ -1329,6 +1329,38 @@ body.batch-active .select-checkbox {
     width: 120px;
 }
 .batch-tag-input::placeholder { color: rgba(255,255,255,0.5); }
+.batch-tag-wrapper {
+    position: relative;
+    display: inline-flex;
+}
+.batch-tag-autocomplete {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    min-width: 220px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 -4px 12px rgba(0,0,0,0.12);
+    z-index: 1100;
+    max-height: 200px;
+    overflow-y: auto;
+    margin-bottom: 4px;
+}
+.batch-tag-autocomplete .tag-suggestion {
+    color: var(--text);
+}
+.detail-tag-wrapper {
+    position: relative;
+    display: inline-flex;
+}
+.detail-tag-autocomplete {
+    min-width: 200px;
+}
+.tag-suggestion.active {
+    background: var(--badge-bg);
+}
 .batch-rating-group {
     display: inline-flex;
     align-items: center;

@@ -235,6 +235,11 @@
 
     sessionStorage.setItem('dam-browse-focus', assetId);
 
+    // Invalidate tag cache when tags are added/removed so autocomplete refreshes
+    document.getElementById('tags').addEventListener('htmx:afterSwap', function() {
+        window._damTagCache = null;
+    });
+
     // --- sessionStorage-based navigation ---
     var browseIds = [];
     var browseUrl = '/';
