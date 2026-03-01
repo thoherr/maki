@@ -2540,6 +2540,80 @@ pub async fn open_location(
     }
 }
 
+/// POST /api/open-terminal — open a terminal in the file's parent directory.
+pub async fn open_terminal(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<OpenLocationRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let registry = DeviceRegistry::new(&state.catalog_root);
+        let volumes = registry.list()?;
+        let vol = volumes
+            .iter()
+            .find(|v| v.id.to_string() == req.volume_id)
+            .ok_or_else(|| anyhow::anyhow!("Volume not found"))?;
+
+        if !vol.is_online {
+            anyhow::bail!("Volume '{}' is offline", vol.label);
+        }
+
+        let full_path = vol.mount_point.join(&req.relative_path);
+        let dir = if full_path.is_dir() {
+            full_path
+        } else {
+            full_path.parent()
+                .ok_or_else(|| anyhow::anyhow!("Cannot determine parent directory"))?
+                .to_path_buf()
+        };
+        if !dir.exists() {
+            anyhow::bail!("Directory not found on disk: {}", dir.display());
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open")
+                .arg("-a")
+                .arg("Terminal")
+                .arg(&dir)
+                .spawn()
+                .map_err(|e| anyhow::anyhow!("Failed to open Terminal: {e}"))?;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // Try common terminal emulators in order of preference
+            let terminals = ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"];
+            let mut launched = false;
+            for term in &terminals {
+                let res = std::process::Command::new(term)
+                    .arg("--working-directory")
+                    .arg(&dir)
+                    .spawn();
+                if res.is_ok() {
+                    launched = true;
+                    break;
+                }
+            }
+            if !launched {
+                anyhow::bail!("No terminal emulator found");
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            anyhow::bail!("Open terminal is not supported on this platform");
+        }
+
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => Json(serde_json::json!({"ok": true})).into_response(),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
 async fn serve_smart_file(path: &std::path::Path, filename: &str) -> Response {
     match tokio::fs::read(path).await {
         Ok(bytes) => {
