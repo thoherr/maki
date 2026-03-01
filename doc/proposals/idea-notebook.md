@@ -4,13 +4,6 @@ This is a unstructured collection of ideas that came to mind while working on an
 
 ## Data storage
 
-### Metadata of standalone JPEGs (esp.date, probably others) should be editable
-
-The metadata of JPEGs should also be updatable. But for "originals", i.e. imported JPEGs like old slides scans etc.,
-we do not want to loose our asset id, so we never write back to the JPEG, and normally we do not have a xmp sidecar
-(this should work already). Have to chack how capture one e.g. handles this. But the date field has to be updateable,
-probable this information would then only go to our own yaml sidecar file (which is our source of truth)?
-
 ### XMP sync / resolution for multi volume duplicates
 
 Maybe we could come up with ideas how to synchronize recipe files across volumes. this is especially critical for
