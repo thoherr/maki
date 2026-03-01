@@ -53,6 +53,7 @@ pub struct AssetCard {
     pub stack_id: Option<String>,
     pub prev_id: Option<String>,
     pub next_id: Option<String>,
+    pub preview_rotation: Option<u16>,
 }
 
 impl AssetCard {
@@ -77,6 +78,7 @@ impl AssetCard {
             stack_id: row.stack_id.clone(),
             prev_id: None,
             next_id: None,
+            preview_rotation: row.preview_rotation,
         }
     }
 

@@ -30,4 +30,12 @@
         hx-indicator="#preview-spinner">
     {% if has_smart_preview %}Regenerate smart preview{% else %}Generate smart preview{% endif %}
 </button>
+<button class="preview-generate-btn"
+        hx-post="/api/asset/{{ asset_id }}/rotate"
+        hx-target="#preview"
+        hx-swap="innerHTML"
+        hx-indicator="#preview-spinner"
+        title="Rotate 90° clockwise">
+    &#x21BB; Rotate
+</button>
 <span id="preview-spinner" class="htmx-indicator">Generating...</span>

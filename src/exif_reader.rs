@@ -10,6 +10,8 @@ pub struct ExifData {
     pub source_metadata: HashMap<String, String>,
     /// Parsed DateTimeOriginal, if available.
     pub date_taken: Option<DateTime<Utc>>,
+    /// EXIF orientation tag (1-8), if present.
+    pub orientation: Option<u16>,
 }
 
 impl ExifData {
@@ -17,6 +19,7 @@ impl ExifData {
         Self {
             source_metadata: HashMap::new(),
             date_taken: None,
+            orientation: None,
         }
     }
 }
@@ -120,6 +123,17 @@ pub fn extract(path: &Path) -> ExifData {
         }
     }
 
+    // Orientation
+    let orientation = exif
+        .get_field(exif::Tag::Orientation, exif::In::PRIMARY)
+        .and_then(|f| match f.value {
+            exif::Value::Short(ref v) => v.first().copied(),
+            _ => None,
+        });
+    if let Some(o) = orientation {
+        meta.insert("orientation".to_string(), o.to_string());
+    }
+
     // GPS latitude
     if let Some(lat) = exif.get_field(exif::Tag::GPSLatitude, exif::In::PRIMARY) {
         let ref_val = exif
@@ -179,6 +193,44 @@ pub fn extract(path: &Path) -> ExifData {
     ExifData {
         source_metadata: meta,
         date_taken,
+        orientation,
+    }
+}
+
+/// Apply EXIF orientation transform to an image.
+///
+/// EXIF orientation values 1-8 map to combinations of rotation and flip:
+/// 1 = no transform, 2 = flip horizontal, 3 = rotate 180°,
+/// 4 = flip vertical, 5 = rotate 90° CW + flip horizontal,
+/// 6 = rotate 90° CW, 7 = rotate 270° CW + flip horizontal,
+/// 8 = rotate 270° CW.
+pub fn apply_exif_orientation(
+    img: image::DynamicImage,
+    orientation: u16,
+) -> image::DynamicImage {
+    match orientation {
+        1 => img,
+        2 => img.fliph(),
+        3 => img.rotate180(),
+        4 => img.flipv(),
+        5 => img.rotate90().fliph(),
+        6 => img.rotate90(),
+        7 => img.rotate270().fliph(),
+        8 => img.rotate270(),
+        _ => img, // unknown orientation, leave as-is
+    }
+}
+
+/// Apply a manual rotation (in degrees clockwise) to an image.
+///
+/// Supported values: 0 (no-op), 90, 180, 270. Other values are ignored.
+pub fn apply_rotation(img: image::DynamicImage, degrees: u16) -> image::DynamicImage {
+    match degrees {
+        0 => img,
+        90 => img.rotate90(),
+        180 => img.rotate180(),
+        270 => img.rotate270(),
+        _ => img,
     }
 }
 
@@ -268,5 +320,85 @@ mod tests {
             "lens_model should be a single value, got: {lens}"
         );
         assert_eq!(lens, "XF56mmF1.2 R");
+    }
+
+    #[test]
+    fn exif_orientation_noop() {
+        let img = image::DynamicImage::new_rgb8(100, 50);
+        let result = apply_exif_orientation(img, 1);
+        assert_eq!(result.width(), 100);
+        assert_eq!(result.height(), 50);
+    }
+
+    #[test]
+    fn exif_orientation_rotate90_swaps_dimensions() {
+        let img = image::DynamicImage::new_rgb8(100, 50);
+        let result = apply_exif_orientation(img, 6); // rotate 90° CW
+        assert_eq!(result.width(), 50);
+        assert_eq!(result.height(), 100);
+    }
+
+    #[test]
+    fn exif_orientation_rotate270_swaps_dimensions() {
+        let img = image::DynamicImage::new_rgb8(100, 50);
+        let result = apply_exif_orientation(img, 8); // rotate 270° CW
+        assert_eq!(result.width(), 50);
+        assert_eq!(result.height(), 100);
+    }
+
+    #[test]
+    fn exif_orientation_rotate180_preserves_dimensions() {
+        let img = image::DynamicImage::new_rgb8(100, 50);
+        let result = apply_exif_orientation(img, 3);
+        assert_eq!(result.width(), 100);
+        assert_eq!(result.height(), 50);
+    }
+
+    #[test]
+    fn exif_orientation_flip_preserves_dimensions() {
+        let img = image::DynamicImage::new_rgb8(100, 50);
+        let result = apply_exif_orientation(img, 2); // flip horizontal
+        assert_eq!(result.width(), 100);
+        assert_eq!(result.height(), 50);
+    }
+
+    #[test]
+    fn apply_rotation_90() {
+        let img = image::DynamicImage::new_rgb8(100, 50);
+        let result = apply_rotation(img, 90);
+        assert_eq!(result.width(), 50);
+        assert_eq!(result.height(), 100);
+    }
+
+    #[test]
+    fn apply_rotation_180() {
+        let img = image::DynamicImage::new_rgb8(100, 50);
+        let result = apply_rotation(img, 180);
+        assert_eq!(result.width(), 100);
+        assert_eq!(result.height(), 50);
+    }
+
+    #[test]
+    fn apply_rotation_270() {
+        let img = image::DynamicImage::new_rgb8(100, 50);
+        let result = apply_rotation(img, 270);
+        assert_eq!(result.width(), 50);
+        assert_eq!(result.height(), 100);
+    }
+
+    #[test]
+    fn apply_rotation_0_noop() {
+        let img = image::DynamicImage::new_rgb8(100, 50);
+        let result = apply_rotation(img, 0);
+        assert_eq!(result.width(), 100);
+        assert_eq!(result.height(), 50);
+    }
+
+    #[test]
+    fn apply_rotation_unknown_noop() {
+        let img = image::DynamicImage::new_rgb8(100, 50);
+        let result = apply_rotation(img, 45);
+        assert_eq!(result.width(), 100);
+        assert_eq!(result.height(), 50);
     }
 }

@@ -39,6 +39,8 @@ pub struct Asset {
     pub rating: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_rotation: Option<u16>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variants: Vec<Variant>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -58,6 +60,7 @@ impl Asset {
             description: None,
             rating: None,
             color_label: None,
+            preview_rotation: None,
             variants: Vec::new(),
             recipes: Vec::new(),
         }

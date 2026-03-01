@@ -88,7 +88,7 @@ impl PreviewGenerator {
         if dest.exists() {
             return Ok(Some(dest));
         }
-        self.do_generate(content_hash, source_path, format)
+        self.do_generate(content_hash, source_path, format, None)
     }
 
     /// Like `generate`, but forces regeneration even if a preview already exists.
@@ -102,7 +102,22 @@ impl PreviewGenerator {
         if dest.exists() {
             std::fs::remove_file(&dest).ok();
         }
-        self.do_generate(content_hash, source_path, format)
+        self.do_generate(content_hash, source_path, format, None)
+    }
+
+    /// Like `regenerate`, but applies a manual rotation (0/90/180/270 degrees).
+    pub fn regenerate_with_rotation(
+        &self,
+        content_hash: &str,
+        source_path: &Path,
+        format: &str,
+        rotation: Option<u16>,
+    ) -> Result<Option<PathBuf>> {
+        let dest = self.preview_path(content_hash);
+        if dest.exists() {
+            std::fs::remove_file(&dest).ok();
+        }
+        self.do_generate(content_hash, source_path, format, rotation)
     }
 
     /// Return the path where a smart preview for this content hash would be stored.
@@ -129,7 +144,7 @@ impl PreviewGenerator {
         if dest.exists() {
             return Ok(Some(dest));
         }
-        self.do_generate_to(&dest, source_path, format, self.smart_max_edge, self.smart_quality)
+        self.do_generate_to(&dest, source_path, format, self.smart_max_edge, self.smart_quality, None)
     }
 
     /// Like `generate_smart`, but forces regeneration.
@@ -143,7 +158,22 @@ impl PreviewGenerator {
         if dest.exists() {
             std::fs::remove_file(&dest).ok();
         }
-        self.do_generate_to(&dest, source_path, format, self.smart_max_edge, self.smart_quality)
+        self.do_generate_to(&dest, source_path, format, self.smart_max_edge, self.smart_quality, None)
+    }
+
+    /// Like `regenerate_smart`, but applies a manual rotation (0/90/180/270 degrees).
+    pub fn regenerate_smart_with_rotation(
+        &self,
+        content_hash: &str,
+        source_path: &Path,
+        format: &str,
+        rotation: Option<u16>,
+    ) -> Result<Option<PathBuf>> {
+        let dest = self.smart_preview_path(content_hash);
+        if dest.exists() {
+            std::fs::remove_file(&dest).ok();
+        }
+        self.do_generate_to(&dest, source_path, format, self.smart_max_edge, self.smart_quality, rotation)
     }
 
     fn do_generate(
@@ -151,9 +181,10 @@ impl PreviewGenerator {
         _content_hash: &str,
         source_path: &Path,
         format: &str,
+        manual_rotation: Option<u16>,
     ) -> Result<Option<PathBuf>> {
         let dest = self.preview_path(_content_hash);
-        self.do_generate_to(&dest, source_path, format, self.max_edge, self.quality)
+        self.do_generate_to(&dest, source_path, format, self.max_edge, self.quality, manual_rotation)
     }
 
     fn do_generate_to(
@@ -163,22 +194,23 @@ impl PreviewGenerator {
         format: &str,
         max_edge: u32,
         quality: u8,
+        manual_rotation: Option<u16>,
     ) -> Result<Option<PathBuf>> {
         let fmt = format.to_lowercase();
 
         let result = match fmt.as_str() {
             // Standard image formats the `image` crate can decode
             "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp" | "ico" => {
-                self.generate_image(dest, source_path, max_edge, quality)
+                self.generate_image(dest, source_path, max_edge, quality, manual_rotation)
             }
             // RAW camera formats
             "raw" | "cr2" | "cr3" | "crw" | "nef" | "nrw" | "arw" | "sr2" | "srf"
             | "orf" | "rw2" | "dng" | "raf" | "pef" | "srw" | "mrw"
             | "3fr" | "fff" | "iiq" | "erf" | "kdc" | "dcr"
-            | "mef" | "mos" | "rwl" | "bay" | "x3f" => self.generate_raw(dest, source_path, max_edge, quality),
+            | "mef" | "mos" | "rwl" | "bay" | "x3f" => self.generate_raw(dest, source_path, max_edge, quality, manual_rotation),
             // Video formats
             "mp4" | "mov" | "avi" | "mkv" | "wmv" | "flv" | "webm" | "m4v" | "mpg" | "mpeg"
-            | "3gp" | "mts" | "m2ts" => self.generate_video(dest, source_path, max_edge, quality),
+            | "3gp" | "mts" | "m2ts" => self.generate_video(dest, source_path, max_edge, quality, manual_rotation),
             // Audio and everything else → info card
             _ => return self.generate_info_card(dest, source_path, &fmt, max_edge, quality),
         };
@@ -223,9 +255,24 @@ impl PreviewGenerator {
     }
 
     /// Generate preview from a standard image format using the `image` crate.
-    fn generate_image(&self, dest: &Path, source: &Path, max_edge: u32, quality: u8) -> Result<()> {
+    fn generate_image(&self, dest: &Path, source: &Path, max_edge: u32, quality: u8, manual_rotation: Option<u16>) -> Result<()> {
         let img = image::open(source)
             .with_context(|| format!("Failed to open image {}", source.display()))?;
+
+        // Apply EXIF orientation from the source file
+        let exif_data = crate::exif_reader::extract(source);
+        let img = if let Some(orient) = exif_data.orientation {
+            crate::exif_reader::apply_exif_orientation(img, orient)
+        } else {
+            img
+        };
+
+        // Apply manual rotation override if set
+        let img = if let Some(degrees) = manual_rotation {
+            crate::exif_reader::apply_rotation(img, degrees)
+        } else {
+            img
+        };
 
         let resized = resize_image(&img, max_edge);
         ensure_parent(dest)?;
@@ -234,10 +281,11 @@ impl PreviewGenerator {
     }
 
     /// Generate preview from a RAW camera file using dcraw or dcraw_emu.
-    fn generate_raw(&self, dest: &Path, source: &Path, max_edge: u32, quality: u8) -> Result<()> {
+    fn generate_raw(&self, dest: &Path, source: &Path, max_edge: u32, quality: u8, manual_rotation: Option<u16>) -> Result<()> {
         ensure_parent(dest)?;
 
         // Strategy 1: dcraw -e -c extracts the embedded JPEG preview to stdout
+        // The embedded JPEG is typically already oriented, so skip EXIF auto-orient.
         if tool_available("dcraw") {
             let output = Command::new("dcraw")
                 .args(["-e", "-c"])
@@ -253,6 +301,12 @@ impl PreviewGenerator {
             if output.status.success() && !output.stdout.is_empty() {
                 let img = image::load_from_memory(&output.stdout)
                     .context("Failed to decode dcraw output")?;
+                // Only apply manual rotation (embedded JPEG is pre-oriented)
+                let img = if let Some(degrees) = manual_rotation {
+                    crate::exif_reader::apply_rotation(img, degrees)
+                } else {
+                    img
+                };
                 let resized = resize_image(&img, max_edge);
                 self.save_preview(&resized, dest, quality)?;
                 return Ok(());
@@ -279,6 +333,19 @@ impl PreviewGenerator {
                     format!("Failed to open dcraw_emu output {}", temp_tiff.display())
                 })?;
                 std::fs::remove_file(&temp_tiff).ok();
+                // Apply EXIF orientation from the source RAW file
+                let exif_data = crate::exif_reader::extract(source);
+                let img = if let Some(orient) = exif_data.orientation {
+                    crate::exif_reader::apply_exif_orientation(img, orient)
+                } else {
+                    img
+                };
+                // Apply manual rotation
+                let img = if let Some(degrees) = manual_rotation {
+                    crate::exif_reader::apply_rotation(img, degrees)
+                } else {
+                    img
+                };
                 let resized = resize_image(&img, max_edge);
                 self.save_preview(&resized, dest, quality)?;
                 return Ok(());
@@ -294,7 +361,7 @@ impl PreviewGenerator {
     }
 
     /// Generate preview from a video file using ffmpeg.
-    fn generate_video(&self, dest: &Path, source: &Path, max_edge: u32, quality: u8) -> Result<()> {
+    fn generate_video(&self, dest: &Path, source: &Path, max_edge: u32, quality: u8, manual_rotation: Option<u16>) -> Result<()> {
         if !tool_available("ffmpeg") {
             anyhow::bail!("ffmpeg not found in PATH");
         }
@@ -328,6 +395,13 @@ impl PreviewGenerator {
         let img = image::open(&temp_frame)
             .with_context(|| format!("Failed to open ffmpeg frame {}", temp_frame.display()))?;
         std::fs::remove_file(&temp_frame).ok();
+
+        // ffmpeg auto-rotates, so only apply manual rotation
+        let img = if let Some(degrees) = manual_rotation {
+            crate::exif_reader::apply_rotation(img, degrees)
+        } else {
+            img
+        };
 
         let resized = resize_image(&img, max_edge);
         self.save_preview(&resized, dest, quality)?;
@@ -1000,7 +1074,7 @@ mod tests {
         let dest = gen.preview_path("sha256:badvideo");
         ensure_parent(&dest).unwrap();
         // Call generate_video directly to bypass do_generate's error filter
-        let err = gen.generate_video(&dest, &bad_source, 800, 85).unwrap_err();
+        let err = gen.generate_video(&dest, &bad_source, 800, 85, None).unwrap_err();
         let msg = err.to_string();
         // Should contain ffmpeg's actual error output, not just "non-zero status"
         assert!(

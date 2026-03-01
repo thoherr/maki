@@ -2468,11 +2468,12 @@ fn main() {
 
                         if let Some(path) = source_path {
                             let file_start = std::time::Instant::now();
+                            let rotation = asset_data.preview_rotation;
                             let result = if smart {
-                                if force || upgrade { preview_gen.regenerate_smart(&variant.content_hash, &path, &variant.format) }
+                                if force || upgrade { preview_gen.regenerate_smart_with_rotation(&variant.content_hash, &path, &variant.format, rotation) }
                                 else { preview_gen.generate_smart(&variant.content_hash, &path, &variant.format) }
                             } else if force || upgrade {
-                                preview_gen.regenerate(&variant.content_hash, &path, &variant.format)
+                                preview_gen.regenerate_with_rotation(&variant.content_hash, &path, &variant.format, rotation)
                             } else {
                                 preview_gen.generate(&variant.content_hash, &path, &variant.format)
                             };

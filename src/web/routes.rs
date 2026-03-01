@@ -1256,6 +1256,110 @@ pub async fn generate_smart_preview(
     }
 }
 
+/// POST /api/asset/{id}/rotate — cycle preview rotation 90° CW, regenerate previews.
+pub async fn set_rotation(
+    State(state): State<Arc<AppState>>,
+    Path(asset_id): Path<String>,
+) -> Response {
+    let preview_ext = state.preview_ext.clone();
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let engine = state.query_engine();
+        let catalog = state.catalog()?;
+
+        // Read current rotation from catalog
+        let details = engine.show(&asset_id)?;
+        let current: Option<u16> = catalog.conn().query_row(
+            "SELECT preview_rotation FROM assets WHERE id = ?1",
+            [&details.id],
+            |r| {
+                let val: Option<i64> = r.get(0)?;
+                Ok(val.map(|v| v as u16))
+            },
+        ).unwrap_or(None);
+
+        // Cycle: None→90→180→270→None
+        let new_rotation = match current {
+            None | Some(0) => Some(90u16),
+            Some(90) => Some(180),
+            Some(180) => Some(270),
+            Some(270) => None,
+            Some(_) => Some(90),
+        };
+
+        // Persist rotation
+        engine.set_preview_rotation(&asset_id, new_rotation)?;
+
+        // Find the best variant and resolve its source file
+        let best_idx = crate::models::variant::best_preview_index_details(&details.variants)
+            .ok_or_else(|| anyhow::anyhow!("Asset has no variants"))?;
+        let variant = &details.variants[best_idx];
+        let content_hash = &variant.content_hash;
+        let format = &variant.format;
+
+        let registry = crate::device_registry::DeviceRegistry::new(&state.catalog_root);
+        let volumes = registry.list()?;
+
+        let source_path = variant
+            .locations
+            .iter()
+            .find_map(|loc| {
+                let vol = volumes.iter().find(|v| v.label == loc.volume_label)?;
+                if !vol.is_online {
+                    return None;
+                }
+                let path = vol.mount_point.join(&loc.relative_path);
+                if path.exists() { Some(path) } else { None }
+            })
+            .ok_or_else(|| anyhow::anyhow!("No online file location found for variant"))?;
+
+        // Regenerate previews with the new rotation
+        let preview_gen = state.preview_generator();
+        preview_gen.regenerate_with_rotation(content_hash, &source_path, format, new_rotation)?;
+        if preview_gen.has_smart_preview(content_hash) {
+            preview_gen.regenerate_smart_with_rotation(content_hash, &source_path, format, new_rotation)?;
+        }
+
+        // Build response with cache-busted URLs
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let preview_url = if preview_gen.has_preview(content_hash) {
+            let url = super::templates::preview_url(content_hash, &preview_ext);
+            Some(format!("{url}?t={ts}"))
+        } else {
+            None
+        };
+
+        let has_smart = preview_gen.has_smart_preview(content_hash);
+        let smart_url = if has_smart {
+            let url = super::templates::smart_preview_url(content_hash, &preview_ext);
+            Some(format!("{url}?t={ts}"))
+        } else {
+            None
+        };
+
+        let tmpl = PreviewFragment {
+            asset_id,
+            primary_preview_url: preview_url,
+            smart_preview_url: smart_url,
+            has_smart_preview: has_smart,
+        };
+        Ok::<_, anyhow::Error>(tmpl.render()?)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(html)) => Html(html).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct LabelForm {
     pub label: Option<String>,

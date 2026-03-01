@@ -1296,6 +1296,29 @@ impl QueryEngine {
         Ok(label)
     }
 
+    /// Set the preview rotation override on an asset. Updates both sidecar YAML and SQLite catalog.
+    /// Returns the new rotation value.
+    pub fn set_preview_rotation(
+        &self,
+        asset_id_prefix: &str,
+        rotation: Option<u16>,
+    ) -> Result<Option<u16>> {
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let full_id = catalog
+            .resolve_asset_id(asset_id_prefix)?
+            .ok_or_else(|| anyhow::anyhow!("No asset found matching '{asset_id_prefix}'"))?;
+
+        let uuid: uuid::Uuid = full_id.parse()?;
+        let store = MetadataStore::new(&self.catalog_root);
+        let mut asset = store.load(uuid)?;
+
+        asset.preview_rotation = rotation;
+        store.save(&asset)?;
+        catalog.update_asset_preview_rotation(&full_id, rotation)?;
+
+        Ok(rotation)
+    }
+
     /// Set the description on an asset. Updates both sidecar YAML and SQLite catalog.
     /// Also writes back the description to any `.xmp` recipe files on disk.
     /// Returns the new description value.

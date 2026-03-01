@@ -53,6 +53,8 @@ pub struct SearchRow {
     pub stack_id: Option<String>,
     /// Number of members in this asset's stack (for badge rendering).
     pub stack_count: Option<u32>,
+    /// Manual preview rotation override in degrees (0/90/180/270).
+    pub preview_rotation: Option<u16>,
 }
 
 impl SearchRow {
@@ -592,6 +594,8 @@ impl Catalog {
         let _ = self.conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_assets_geo ON assets(latitude, longitude) WHERE latitude IS NOT NULL",
         );
+        // Preview rotation override
+        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN preview_rotation INTEGER");
         self.backfill_gps_columns();
     }
 
@@ -609,7 +613,8 @@ impl Catalog {
                 primary_variant_format TEXT,
                 variant_count INTEGER NOT NULL DEFAULT 0,
                 latitude REAL,
-                longitude REAL
+                longitude REAL,
+                preview_rotation INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS variants (
@@ -761,8 +766,8 @@ impl Catalog {
         let variant_count = asset.variants.len() as i64;
         let (latitude, longitude) = crate::models::variant::compute_gps_from_variants(&asset.variants);
         self.conn.execute(
-            "INSERT OR REPLACE INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count, latitude, longitude) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT OR REPLACE INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count, latitude, longitude, preview_rotation) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             rusqlite::params![
                 asset.id.to_string(),
                 asset.name,
@@ -777,6 +782,7 @@ impl Catalog {
                 variant_count,
                 latitude,
                 longitude,
+                asset.preview_rotation.map(|r| r as i64),
             ],
         )?;
         Ok(())
@@ -796,6 +802,15 @@ impl Catalog {
         self.conn.execute(
             "UPDATE assets SET color_label = ?1 WHERE id = ?2",
             rusqlite::params![color_label, asset_id],
+        )?;
+        Ok(())
+    }
+
+    /// Update just the preview rotation for an asset in the catalog.
+    pub fn update_asset_preview_rotation(&self, asset_id: &str, rotation: Option<u16>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE assets SET preview_rotation = ?1 WHERE id = ?2",
+            rusqlite::params![rotation.map(|r| r as i64), asset_id],
         )?;
         Ok(())
     }
@@ -2369,7 +2384,8 @@ impl Catalog {
         let mut sql = String::from(
             "SELECT a.id, a.name, a.asset_type, a.created_at, bv.original_filename, bv.format, \
              a.tags, a.description, bv.content_hash, a.rating, a.color_label, \
-             a.primary_variant_format, a.variant_count, a.stack_id, s.member_count \
+             a.primary_variant_format, a.variant_count, a.stack_id, s.member_count, \
+             a.preview_rotation \
              FROM assets a \
              JOIN variants bv ON bv.content_hash = a.best_variant_hash \
              LEFT JOIN stacks s ON s.id = a.stack_id",
@@ -2405,6 +2421,7 @@ impl Catalog {
             let rating_val: Option<i64> = row.get(9)?;
             let variant_count_val: i64 = row.get(12)?;
             let stack_member_count: Option<i64> = row.get(14)?;
+            let rotation_val: Option<i64> = row.get(15)?;
             Ok(SearchRow {
                 asset_id: row.get(0)?,
                 name: row.get(1)?,
@@ -2421,6 +2438,7 @@ impl Catalog {
                 variant_count: variant_count_val as u32,
                 stack_id: row.get(13)?,
                 stack_count: stack_member_count.map(|n| n as u32),
+                preview_rotation: rotation_val.map(|r| r as u16),
             })
         })?;
 
