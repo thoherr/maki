@@ -257,7 +257,7 @@ curl -X PUT http://localhost:8080/api/asset/{id}/date \
 
 ### `POST /api/open-location` -- Reveal in File Manager
 
-Opens the system file manager with the specified file selected. macOS uses `open -R` (Finder); Linux uses `xdg-open` on the parent directory.
+Opens the system file manager with the specified file selected. macOS uses `open -R` (Finder); Windows uses `explorer /select,` (Explorer); Linux uses `xdg-open` on the parent directory.
 
 | Field           | Type   | Description                     |
 |-----------------|--------|---------------------------------|
@@ -276,7 +276,7 @@ curl -X POST http://localhost:8080/api/open-location \
 
 ### `POST /api/open-terminal` -- Open Terminal
 
-Opens a terminal window in the file's parent directory. macOS uses Terminal.app; Linux tries common terminal emulators.
+Opens a terminal window in the file's parent directory. macOS uses Terminal.app; Windows uses cmd; Linux tries common terminal emulators.
 
 | Field           | Type   | Description                     |
 |-----------------|--------|---------------------------------|

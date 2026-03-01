@@ -2524,7 +2524,15 @@ pub async fn open_location(
                     .map_err(|e| anyhow::anyhow!("Failed to open file manager: {e}"))?;
             }
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(target_os = "windows")]
+        {
+            std::process::Command::new("explorer")
+                .arg("/select,")
+                .arg(&full_path)
+                .spawn()
+                .map_err(|e| anyhow::anyhow!("Failed to open Explorer: {e}"))?;
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         {
             anyhow::bail!("Reveal in file manager is not supported on this platform");
         }
@@ -2598,7 +2606,15 @@ pub async fn open_terminal(
                 anyhow::bail!("No terminal emulator found");
             }
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(target_os = "windows")]
+        {
+            std::process::Command::new("cmd")
+                .args(["/c", "start", "cmd"])
+                .current_dir(&dir)
+                .spawn()
+                .map_err(|e| anyhow::anyhow!("Failed to open command prompt: {e}"))?;
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         {
             anyhow::bail!("Open terminal is not supported on this platform");
         }
