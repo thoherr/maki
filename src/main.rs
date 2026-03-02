@@ -15,7 +15,7 @@ Quick Reference:
   Setup:      init, volume
   Ingest:     import, delete, tag, edit, group, auto-group
   Organize:   collection (col), saved-search (ss), stack (st)
-  Retrieve:   search, show, duplicates, stats, backup-status, serve
+  Retrieve:   search, show, export, duplicates, stats, backup-status, serve
   Maintain:   verify, sync, refresh, cleanup, dedup, relocate,
               update-location, generate-previews, fix-roles,
               fix-dates, rebuild-catalog"
@@ -248,6 +248,40 @@ enum Commands {
         /// Filter to entries with a location under this path prefix
         #[arg(long, display_order = 14)]
         path: Option<String>,
+    },
+
+    /// Export files matching a search query to a directory
+    #[command(display_order = 34)]
+    Export {
+        /// Search query (same syntax as dam search)
+        query: String,
+
+        /// Target directory (created if needed)
+        target: String,
+
+        /// Layout: flat (default) or mirror (preserves directory structure)
+        #[arg(long, default_value = "flat")]
+        layout: String,
+
+        /// Create symlinks instead of copies
+        #[arg(long)]
+        symlink: bool,
+
+        /// Export all variants (default: best variant only)
+        #[arg(long)]
+        all_variants: bool,
+
+        /// Include recipe/sidecar files (.xmp, .cos, etc.)
+        #[arg(long)]
+        include_sidecars: bool,
+
+        /// Show what would be exported without writing files
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Re-copy even if target already has matching content
+        #[arg(long)]
+        overwrite: bool,
     },
 
     /// Show catalog statistics
@@ -2908,6 +2942,105 @@ fn main() {
             let bind = bind.unwrap_or_else(|| config.serve.bind.clone());
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(dam::web::serve(catalog_root, &bind, port, config.preview, cli.log, config.dedup.prefer, config.serve.per_page))?;
+            Ok(())
+        }
+        Commands::Export {
+            query,
+            target,
+            layout,
+            symlink,
+            all_variants,
+            include_sidecars,
+            dry_run,
+            overwrite,
+        } => {
+            use dam::asset_service::{ExportLayout, ExportStatus};
+
+            let export_layout = match layout.as_str() {
+                "flat" => ExportLayout::Flat,
+                "mirror" => ExportLayout::Mirror,
+                _ => anyhow::bail!("Unknown layout '{}'. Valid layouts: flat, mirror", layout),
+            };
+
+            let target_path = PathBuf::from(&target);
+            if !dry_run {
+                std::fs::create_dir_all(&target_path)?;
+            }
+
+            let catalog_root = dam::config::find_catalog_root()?;
+            let config = CatalogConfig::load(&catalog_root)?;
+            let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
+
+            let show_log = cli.log;
+            let result = service.export(
+                &query,
+                &target_path,
+                export_layout,
+                symlink,
+                all_variants,
+                include_sidecars,
+                dry_run,
+                overwrite,
+                |path, status, elapsed| {
+                    if show_log {
+                        let name = path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy();
+                        match status {
+                            ExportStatus::Copied => {
+                                eprintln!("  {name} — copied ({})", format_duration(elapsed));
+                            }
+                            ExportStatus::Linked => {
+                                eprintln!("  {name} — linked ({})", format_duration(elapsed));
+                            }
+                            ExportStatus::Skipped => {
+                                eprintln!("  {name} — skipped ({})", format_duration(elapsed));
+                            }
+                            ExportStatus::Error(msg) => {
+                                eprintln!("  {name} — error: {msg}");
+                            }
+                        }
+                    }
+                },
+            )?;
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                for err in &result.errors {
+                    eprintln!("  {err}");
+                }
+
+                if dry_run {
+                    println!("Export (dry run): {} assets matched, {} files would be exported",
+                        result.assets_matched, result.files_exported);
+                    if result.sidecars_exported > 0 {
+                        println!("  {} sidecars would be exported", result.sidecars_exported);
+                    }
+                    if result.total_bytes > 0 {
+                        println!("  Total size: {}", format_size(result.total_bytes));
+                    }
+                } else if result.assets_matched == 0 {
+                    println!("No assets matched the query.");
+                } else {
+                    let verb = if symlink { "linked" } else { "copied" };
+                    let mut parts = vec![
+                        format!("{} files {verb}", result.files_exported),
+                    ];
+                    if result.sidecars_exported > 0 {
+                        parts.push(format!("{} sidecars", result.sidecars_exported));
+                    }
+                    if result.files_skipped > 0 {
+                        parts.push(format!("{} skipped", result.files_skipped));
+                    }
+                    println!("Export complete: {}", parts.join(", "));
+                    if result.total_bytes > 0 {
+                        println!("  Total size: {}", format_size(result.total_bytes));
+                    }
+                }
+            }
+
             Ok(())
         }
         Commands::Stats { types, volumes, tags, verified, all, limit } => {

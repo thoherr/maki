@@ -444,6 +444,97 @@ pub struct DedupResult {
     pub errors: Vec<String>,
 }
 
+/// Layout strategy for exported files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportLayout {
+    /// All files in the target root; collisions resolved by appending hash suffix.
+    Flat,
+    /// Preserves source volume-relative directory structure; multi-volume gets volume-label prefix.
+    Mirror,
+}
+
+/// Status of a single file during export.
+pub enum ExportStatus {
+    Copied,
+    Linked,
+    Skipped,
+    Error(String),
+}
+
+/// Result of an export operation.
+#[derive(Debug, serde::Serialize)]
+pub struct ExportResult {
+    pub dry_run: bool,
+    pub assets_matched: usize,
+    pub files_exported: usize,
+    pub files_skipped: usize,
+    pub sidecars_exported: usize,
+    pub total_bytes: u64,
+    pub errors: Vec<String>,
+}
+
+/// Internal plan entry for a single file to export.
+struct ExportFilePlan {
+    #[allow(dead_code)]
+    asset_id: String,
+    content_hash: String,
+    source_path: PathBuf,
+    target_path: PathBuf,
+    file_size: u64,
+    is_sidecar: bool,
+}
+
+/// Resolve a flat-mode target path, handling filename collisions.
+///
+/// `seen` tracks lowercase filename → content_hash. If the same filename maps to a
+/// different hash, a `_<hash[..8]>` suffix is inserted before the extension.
+fn resolve_flat_target(
+    target_dir: &Path,
+    filename: &str,
+    content_hash: &str,
+    seen: &mut std::collections::HashMap<String, String>,
+) -> PathBuf {
+    let key = filename.to_lowercase();
+    match seen.get(&key) {
+        Some(existing_hash) if existing_hash == content_hash => {
+            // Same content, reuse the same target path
+            target_dir.join(filename)
+        }
+        Some(_) => {
+            // Different content with same filename — add hash suffix
+            // content_hash is "sha256:<hex>", extract last 8 hex chars
+            let hex_part = content_hash
+                .strip_prefix("sha256:")
+                .unwrap_or(content_hash);
+            let hash_suffix = &hex_part[hex_part.len().saturating_sub(8)..];
+            let path = Path::new(filename);
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+            let new_name = if let Some(ext) = path.extension() {
+                format!("{}_{}.{}", stem, hash_suffix, ext.to_string_lossy())
+            } else {
+                format!("{}_{}", stem, hash_suffix)
+            };
+            seen.insert(new_name.to_lowercase(), content_hash.to_string());
+            target_dir.join(new_name)
+        }
+        None => {
+            seen.insert(key, content_hash.to_string());
+            target_dir.join(filename)
+        }
+    }
+}
+
+/// Create a symlink (platform-gated).
+#[cfg(unix)]
+fn create_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(source, target)
+}
+
+#[cfg(windows)]
+fn create_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(source, target)
+}
+
 /// Get file modification time as DateTime<Utc>. Returns None on any error.
 fn file_mtime(path: &Path) -> Option<chrono::DateTime<chrono::Utc>> {
     let metadata = std::fs::metadata(path).ok()?;
@@ -4376,6 +4467,342 @@ impl AssetService {
 
         Ok(result)
     }
+
+    /// Export files matching a search query to a target directory.
+    ///
+    /// Searches the catalog, resolves file locations on online volumes, and copies
+    /// (or symlinks) files to the target directory. By default exports only the best
+    /// variant per asset; `all_variants` exports every variant. `include_sidecars`
+    /// also copies recipe files. `dry_run` reports the plan without writing files.
+    pub fn export(
+        &self,
+        query: &str,
+        target_dir: &Path,
+        layout: ExportLayout,
+        symlink: bool,
+        all_variants: bool,
+        include_sidecars: bool,
+        dry_run: bool,
+        overwrite: bool,
+        on_file: impl Fn(&Path, &ExportStatus, Duration),
+    ) -> Result<ExportResult> {
+        use crate::catalog::Catalog;
+        use crate::models::variant::best_preview_index_details;
+
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let registry = DeviceRegistry::new(&self.catalog_root);
+        let content_store = ContentStore::new(&self.catalog_root);
+        let engine = crate::query::QueryEngine::new(&self.catalog_root);
+
+        // Phase 1: Search
+        let search_results = engine.search(query)?;
+        let assets_matched = search_results.len();
+
+        if assets_matched == 0 {
+            return Ok(ExportResult {
+                dry_run,
+                assets_matched: 0,
+                files_exported: 0,
+                files_skipped: 0,
+                sidecars_exported: 0,
+                total_bytes: 0,
+                errors: Vec::new(),
+            });
+        }
+
+        // Load volumes for resolving online mount points
+        let volumes = registry.list()?;
+        let online_volumes: std::collections::HashMap<String, &crate::models::Volume> = volumes
+            .iter()
+            .filter(|v| v.is_online)
+            .map(|v| (v.id.to_string(), v))
+            .collect();
+
+        // Determine if multiple volumes are involved (for mirror layout prefix)
+        let mut involved_volume_ids: HashSet<String> = HashSet::new();
+
+        // Phase 2: Build plan
+        let mut plan: Vec<ExportFilePlan> = Vec::new();
+        let mut planned_hashes: HashSet<String> = HashSet::new();
+        let mut flat_seen: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let mut errors: Vec<String> = Vec::new();
+
+        for row in &search_results {
+            let details = match catalog.load_asset_details(&row.asset_id)? {
+                Some(d) => d,
+                None => {
+                    errors.push(format!("Asset {} not found in catalog", &row.asset_id[..8]));
+                    continue;
+                }
+            };
+
+            // Select variant(s)
+            let variant_indices: Vec<usize> = if all_variants {
+                (0..details.variants.len()).collect()
+            } else {
+                match best_preview_index_details(&details.variants) {
+                    Some(i) => vec![i],
+                    None => {
+                        errors.push(format!(
+                            "Asset {} has no variants",
+                            &row.asset_id[..8]
+                        ));
+                        continue;
+                    }
+                }
+            };
+
+            for vi in &variant_indices {
+                let variant = &details.variants[*vi];
+
+                // Skip if we already planned this content hash
+                if planned_hashes.contains(&variant.content_hash) {
+                    continue;
+                }
+
+                // Find first online location
+                let loc = variant.locations.iter().find(|l| {
+                    online_volumes.contains_key(&l.volume_id)
+                });
+                let loc = match loc {
+                    Some(l) => l,
+                    None => {
+                        errors.push(format!(
+                            "Asset {} variant {} — all locations offline",
+                            &row.asset_id[..8],
+                            &variant.content_hash[..12]
+                        ));
+                        continue;
+                    }
+                };
+
+                let vol = online_volumes[&loc.volume_id];
+                let source_path = vol.mount_point.join(&loc.relative_path);
+
+                let target_path = match layout {
+                    ExportLayout::Flat => {
+                        resolve_flat_target(
+                            target_dir,
+                            &variant.original_filename,
+                            &variant.content_hash,
+                            &mut flat_seen,
+                        )
+                    }
+                    ExportLayout::Mirror => {
+                        involved_volume_ids.insert(loc.volume_id.clone());
+                        // Will finalize prefix after scanning all variants
+                        target_dir.join(&loc.relative_path)
+                    }
+                };
+
+                planned_hashes.insert(variant.content_hash.clone());
+                plan.push(ExportFilePlan {
+                    asset_id: row.asset_id.clone(),
+                    content_hash: variant.content_hash.clone(),
+                    source_path,
+                    target_path,
+                    file_size: variant.file_size,
+                    is_sidecar: false,
+                });
+            }
+
+            // Plan recipe (sidecar) files
+            if include_sidecars {
+                for recipe in &details.recipes {
+                    let (vol_id, rel_path) = match (&recipe.volume_id, &recipe.relative_path) {
+                        (Some(vid), Some(rp)) => (vid, rp),
+                        _ => continue,
+                    };
+
+                    if planned_hashes.contains(&recipe.content_hash) {
+                        continue;
+                    }
+
+                    let vol = match online_volumes.get(vol_id.as_str()) {
+                        Some(v) => v,
+                        None => continue, // offline, skip silently
+                    };
+
+                    let source_path = vol.mount_point.join(rel_path);
+                    let filename = Path::new(rel_path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+
+                    let target_path = match layout {
+                        ExportLayout::Flat => {
+                            resolve_flat_target(
+                                target_dir,
+                                &filename,
+                                &recipe.content_hash,
+                                &mut flat_seen,
+                            )
+                        }
+                        ExportLayout::Mirror => {
+                            involved_volume_ids.insert(vol_id.clone());
+                            target_dir.join(rel_path)
+                        }
+                    };
+
+                    let file_size = source_path.metadata().map(|m| m.len()).unwrap_or(0);
+                    planned_hashes.insert(recipe.content_hash.clone());
+                    plan.push(ExportFilePlan {
+                        asset_id: row.asset_id.clone(),
+                        content_hash: recipe.content_hash.clone(),
+                        source_path,
+                        target_path,
+                        file_size,
+                        is_sidecar: true,
+                    });
+                }
+            }
+        }
+
+        // Mirror layout: if multiple volumes involved, prefix with volume label
+        if layout == ExportLayout::Mirror && involved_volume_ids.len() > 1 {
+            // Rebuild target paths with volume label prefix
+            for entry in &mut plan {
+                // Find which volume this file is on
+                for vol in &volumes {
+                    if vol.is_online
+                        && entry
+                            .source_path
+                            .starts_with(&vol.mount_point)
+                    {
+                        if let Ok(rel) = entry.source_path.strip_prefix(&vol.mount_point) {
+                            entry.target_path =
+                                target_dir.join(&vol.label).join(rel);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Phase 3: Execute or dry-run
+        let mut result = ExportResult {
+            dry_run,
+            assets_matched,
+            files_exported: 0,
+            files_skipped: 0,
+            sidecars_exported: 0,
+            total_bytes: 0,
+            errors,
+        };
+
+        for entry in &plan {
+            let file_start = Instant::now();
+
+            if dry_run {
+                if entry.is_sidecar {
+                    result.sidecars_exported += 1;
+                } else {
+                    result.files_exported += 1;
+                }
+                result.total_bytes += entry.file_size;
+                on_file(&entry.target_path, &ExportStatus::Copied, file_start.elapsed());
+                continue;
+            }
+
+            // Check if target already exists with matching hash
+            if !overwrite && entry.target_path.exists() {
+                match content_store.hash_file(&entry.target_path) {
+                    Ok(existing_hash) if existing_hash == entry.content_hash => {
+                        result.files_skipped += 1;
+                        on_file(
+                            &entry.target_path,
+                            &ExportStatus::Skipped,
+                            file_start.elapsed(),
+                        );
+                        continue;
+                    }
+                    _ => {} // different hash or error — proceed with copy/overwrite
+                }
+            }
+
+            // Create parent directories
+            if let Some(parent) = entry.target_path.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    let msg = format!(
+                        "{} — failed to create directory: {}",
+                        entry.target_path.display(),
+                        e
+                    );
+                    result.errors.push(msg.clone());
+                    on_file(&entry.target_path, &ExportStatus::Error(msg), file_start.elapsed());
+                    continue;
+                }
+            }
+
+            if symlink {
+                match create_symlink(&entry.source_path, &entry.target_path) {
+                    Ok(()) => {
+                        if entry.is_sidecar {
+                            result.sidecars_exported += 1;
+                        } else {
+                            result.files_exported += 1;
+                        }
+                        result.total_bytes += entry.file_size;
+                        on_file(
+                            &entry.target_path,
+                            &ExportStatus::Linked,
+                            file_start.elapsed(),
+                        );
+                    }
+                    Err(e) => {
+                        let msg = format!(
+                            "{} — symlink failed: {}",
+                            entry.target_path.display(),
+                            e
+                        );
+                        result.errors.push(msg.clone());
+                        on_file(
+                            &entry.target_path,
+                            &ExportStatus::Error(msg),
+                            file_start.elapsed(),
+                        );
+                    }
+                }
+            } else {
+                match content_store.copy_and_verify(
+                    &entry.source_path,
+                    &entry.target_path,
+                    &entry.content_hash,
+                ) {
+                    Ok(()) => {
+                        if entry.is_sidecar {
+                            result.sidecars_exported += 1;
+                        } else {
+                            result.files_exported += 1;
+                        }
+                        result.total_bytes += entry.file_size;
+                        on_file(
+                            &entry.target_path,
+                            &ExportStatus::Copied,
+                            file_start.elapsed(),
+                        );
+                    }
+                    Err(e) => {
+                        let msg = format!(
+                            "{} — copy failed: {}",
+                            entry.target_path.display(),
+                            e
+                        );
+                        result.errors.push(msg.clone());
+                        on_file(
+                            &entry.target_path,
+                            &ExportStatus::Error(msg),
+                            file_start.elapsed(),
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(result)
+    }
 }
 
 /// Compute directory prefixes from scanned paths relative to the volume mount point.
@@ -6263,5 +6690,50 @@ mod tests {
     #[test]
     fn is_recently_verified_invalid_returns_false() {
         assert!(!is_recently_verified(Some("not-a-date"), 30));
+    }
+
+    #[test]
+    fn resolve_flat_target_no_collision() {
+        let dir = PathBuf::from("/tmp/export");
+        let mut seen = std::collections::HashMap::new();
+        let result = resolve_flat_target(&dir, "photo.jpg", "sha256:aabb", &mut seen);
+        assert_eq!(result, dir.join("photo.jpg"));
+    }
+
+    #[test]
+    fn resolve_flat_target_same_hash_reuses_name() {
+        let dir = PathBuf::from("/tmp/export");
+        let mut seen = std::collections::HashMap::new();
+        let r1 = resolve_flat_target(&dir, "photo.jpg", "sha256:aabb", &mut seen);
+        let r2 = resolve_flat_target(&dir, "photo.jpg", "sha256:aabb", &mut seen);
+        assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn resolve_flat_target_collision_adds_suffix() {
+        let dir = PathBuf::from("/tmp/export");
+        let mut seen = std::collections::HashMap::new();
+        resolve_flat_target(&dir, "photo.jpg", "sha256:aaaa1111", &mut seen);
+        let r2 = resolve_flat_target(&dir, "photo.jpg", "sha256:bbbb2222", &mut seen);
+        assert_eq!(r2, dir.join("photo_bbbb2222.jpg"));
+    }
+
+    #[test]
+    fn resolve_flat_target_no_extension() {
+        let dir = PathBuf::from("/tmp/export");
+        let mut seen = std::collections::HashMap::new();
+        resolve_flat_target(&dir, "README", "sha256:aaaa", &mut seen);
+        let r2 = resolve_flat_target(&dir, "README", "sha256:bbbb", &mut seen);
+        assert_eq!(r2, dir.join("README_bbbb"));
+    }
+
+    #[test]
+    fn resolve_flat_target_case_insensitive() {
+        let dir = PathBuf::from("/tmp/export");
+        let mut seen = std::collections::HashMap::new();
+        resolve_flat_target(&dir, "Photo.JPG", "sha256:aaaa", &mut seen);
+        let r2 = resolve_flat_target(&dir, "photo.jpg", "sha256:bbbb", &mut seen);
+        // Different hash with same name (case-insensitive) should get suffix
+        assert!(r2.file_name().unwrap().to_str().unwrap().contains("bbbb"));
     }
 }
