@@ -124,6 +124,112 @@ dam import /Volumes/Photos/NewShoot --json | jq '.imported'
 
 ---
 
+## dam delete
+
+### NAME
+
+dam-delete -- remove assets from the catalog
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] delete [OPTIONS] [ASSET_IDS...]
+```
+
+### DESCRIPTION
+
+Removes assets from the catalog. By default runs in **report-only mode** -- shows what would be deleted without making changes. Use `--apply` to execute the deletion.
+
+When `--apply` is set, the following data is removed for each asset:
+
+- The asset row from the SQLite catalog
+- All variants belonging to the asset
+- All file location records for those variants
+- All recipe records attached to those variants
+- All preview and smart preview files
+- The YAML sidecar file
+- Collection memberships (the asset is removed from all collections)
+- Stack membership (the stack auto-dissolves if only one member remains)
+
+With `--remove-files` (which requires `--apply`), physical media files and recipe files are also deleted from disk on online volumes. Files on offline volumes are skipped with a warning.
+
+Asset IDs support unique prefix matching (see [CLI Conventions](00-cli-conventions.md#asset-id-matching)).
+
+When no asset IDs are given on the command line, IDs are read from stdin (one per line). This enables piping from `dam search -q`:
+
+```bash
+dam search -q "orphan:true" | dam delete --apply
+```
+
+### ARGUMENTS
+
+**ASSET_IDS** (optional)
+: One or more asset IDs or unique prefixes. If omitted, reads from stdin.
+
+### OPTIONS
+
+**--apply**
+: Execute the deletion. Without this flag, the command only reports what it would do.
+
+**--remove-files**
+: Also delete physical files (variant media and recipe files) from disk. Requires `--apply`. Skips files on offline volumes with a warning.
+
+`--json` outputs a `DeleteResult` with `deleted`, `not_found`, `files_removed`, `previews_removed`, `dry_run`, and `errors`.
+
+`--log` prints per-asset status to stderr.
+
+### EXAMPLES
+
+Preview what would be deleted (report-only):
+
+```bash
+dam delete a1b2c3d4
+```
+
+Delete an asset:
+
+```bash
+dam delete --apply a1b2c3d4
+```
+
+Delete multiple assets at once:
+
+```bash
+dam delete --apply a1b2c3d4 e5f6a7b8
+```
+
+Delete an asset and its files from disk:
+
+```bash
+dam delete --apply --remove-files a1b2c3d4
+```
+
+Delete all orphaned assets (no file locations):
+
+```bash
+dam search -q "orphan:true" | dam delete --apply
+```
+
+Delete with JSON output for scripting:
+
+```bash
+dam delete --apply a1b2c3d4 --json | jq '.deleted'
+```
+
+Use a short ID prefix:
+
+```bash
+dam delete --apply a1b2
+```
+
+### SEE ALSO
+
+[cleanup](05-maintain-commands.md#dam-cleanup) -- remove stale location records and orphaned assets automatically.
+[search](04-retrieve-commands.md#dam-search) -- find assets to delete (`orphan:true`, `missing:true`).
+[show](04-retrieve-commands.md#dam-show) -- inspect an asset before deleting it.
+
+---
+
 ## dam tag
 
 ### NAME

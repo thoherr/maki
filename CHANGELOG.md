@@ -2,6 +2,11 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v1.8.7
+
+### New Features
+- **Delete command** — `dam delete <ASSET_IDS...> [--apply] [--remove-files]` removes assets from the catalog. Default is report-only mode (shows what would be deleted). `--apply` executes deletion (asset rows, variants, file locations, recipes, previews, sidecar YAML, collection memberships, stack membership). `--remove-files` (requires `--apply`) also deletes physical files from disk. Supports stdin piping (`dam search -q "orphan:true" | dam delete --apply`), asset ID prefix matching, `--json`, `--log`, `--time`.
+
 ## v1.8.6
 
 ### New Features

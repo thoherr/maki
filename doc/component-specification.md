@@ -174,6 +174,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 - `refresh(paths, volume, asset_id, dry_run, media) -> RefreshResult` — re-read metadata from changed recipe/sidecar files. Iterates recipe file locations, compares on-disk hash to stored hash, and for changed files re-extracts XMP metadata and updates catalog + sidecar. Reports `Unchanged`, `Refreshed`, `Missing`, or `Offline`. When `media` is true, also scans JPEG/TIFF variant files and re-extracts embedded XMP metadata. Lighter than `sync` — only touches metadata, never file locations.
 - `fix_roles(paths, volume, asset, apply) -> FixRolesResult` — scan multi-variant assets with a RAW variant and re-role non-RAW variants from `Original` to `Export`. Assets with only non-RAW variants are untouched. Dry-run by default; `--apply` writes changes to both sidecar YAML and SQLite catalog.
 - `cleanup(volume, apply) -> CleanupResult` — remove stale location/recipe records, orphaned assets, and orphaned previews.
+- `delete_assets(asset_ids, apply, remove_files) -> DeleteResult` — remove assets from the catalog. Report-only by default; `apply` executes deletion (asset rows, variants, file locations, recipes, previews, sidecar YAML, collection memberships, stack membership). `remove_files` (requires `apply`) also deletes physical files from disk. Supports ID prefix matching and stdin piping.
 - `sync(paths, volume, apply, remove_stale) -> SyncResult` — reconcile catalog with disk after external file moves/renames/modifications.
 
 ### 6. Query Engine
@@ -400,6 +401,7 @@ dam search <query> [--format F] [-q]              # search assets (label:Red fil
 dam show <asset-id>                               # show asset details
 dam tag <asset-id> [--remove] <tags...>           # add/remove tags
 dam edit <id> [--name N] [--description T] [--rating R] [--label C] [--clear-*]  # edit metadata
+dam delete <ids...> [--apply] [--remove-files]    # remove assets from catalog
 dam group <variant-hashes...>                     # group variants into one asset
 dam relocate <id> <vol> [--remove-source] [--dry-run]  # copy/move asset
 dam verify [PATHS...] [--volume V] [--asset ID] [--include G] [--skip G] [--max-age N] [--force]  # check file integrity
