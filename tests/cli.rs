@@ -7282,3 +7282,149 @@ fn search_negated_text_excludes_matching() {
     assert!(stdout.contains("sunset_beach"), "should include beach");
     assert!(!stdout.contains("sunset_mountain"), "should exclude mountain");
 }
+
+// ── Verify data-flow tests ──────────────────────────────────────────
+
+#[test]
+fn verify_json_output() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "check.jpg", b"verify json test data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "verify"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output).unwrap()).expect("valid JSON");
+    assert!(json["verified"].as_u64().unwrap() > 0, "should verify at least one file");
+}
+
+#[test]
+fn verify_max_age_skips_recent() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "recent.jpg", b"max-age skip test data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // First verify sets timestamps
+    dam()
+        .current_dir(&root)
+        .arg("verify")
+        .assert()
+        .success();
+
+    // Second verify with --max-age should skip recently verified
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "verify", "--max-age", "1"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output).unwrap()).expect("valid JSON");
+    assert!(json["skipped_recent"].as_u64().unwrap() > 0, "should skip recently verified");
+    assert_eq!(json["verified"].as_u64().unwrap(), 0, "nothing should need re-verifying");
+}
+
+#[test]
+fn verify_force_overrides_max_age() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "force.jpg", b"force override test data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // First verify sets timestamps
+    dam()
+        .current_dir(&root)
+        .arg("verify")
+        .assert()
+        .success();
+
+    // --force should override --max-age and re-verify everything
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "verify", "--force", "--max-age", "1"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output).unwrap()).expect("valid JSON");
+    assert!(json["verified"].as_u64().unwrap() > 0, "should re-verify with --force");
+    assert_eq!(json["skipped_recent"].as_u64().unwrap(), 0, "nothing should be skipped with --force");
+}
+
+#[test]
+fn verify_recipe_verified_at_round_trip() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let photos = root.join("photos");
+    std::fs::create_dir_all(&photos).unwrap();
+    create_test_file(&photos, "DSC_500.nef", b"raw image for recipe verify round trip");
+    create_test_file(&photos, "DSC_500.xmp", b"xmp recipe for verify round trip");
+
+    // Import NEF + XMP (recipe attached)
+    dam()
+        .current_dir(&root)
+        .args(["import", photos.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("1 imported")
+                .and(predicate::str::contains("1 recipe")),
+        );
+
+    // First verify — sets verified_at on both variant location and recipe location
+    dam()
+        .current_dir(&root)
+        .arg("verify")
+        .assert()
+        .success();
+
+    // Second verify with --max-age — both should be skipped as recently verified
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "verify", "--max-age", "1"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output).unwrap()).expect("valid JSON");
+    assert_eq!(
+        json["skipped_recent"].as_u64().unwrap(),
+        2,
+        "both variant location and recipe location should be skipped"
+    );
+    assert_eq!(json["verified"].as_u64().unwrap(), 0, "nothing should need re-verifying");
+}

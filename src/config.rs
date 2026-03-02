@@ -540,4 +540,11 @@ max_edge = 1000
         assert_eq!(loaded.preview, original.preview);
         assert_eq!(loaded.import.exclude, original.import.exclude);
     }
+
+    #[test]
+    fn parse_verify_config() {
+        let input = "[verify]\nmax_age_days = 30\n";
+        let config: CatalogConfig = toml::from_str(input).unwrap();
+        assert_eq!(config.verify.max_age_days, Some(30));
+    }
 }

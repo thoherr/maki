@@ -6027,4 +6027,26 @@ mod tests {
         let result = merge_hierarchical_keywords(&flat, &hier);
         assert_eq!(result, vec!["animals|birds", "portrait", "studio"]);
     }
+
+    #[test]
+    fn is_recently_verified_none_returns_false() {
+        assert!(!is_recently_verified(None, 30));
+    }
+
+    #[test]
+    fn is_recently_verified_recent_returns_true() {
+        let now = chrono::Utc::now().to_rfc3339();
+        assert!(is_recently_verified(Some(&now), 30));
+    }
+
+    #[test]
+    fn is_recently_verified_old_returns_false() {
+        let old = (chrono::Utc::now() - chrono::Duration::days(60)).to_rfc3339();
+        assert!(!is_recently_verified(Some(&old), 30));
+    }
+
+    #[test]
+    fn is_recently_verified_invalid_returns_false() {
+        assert!(!is_recently_verified(Some("not-a-date"), 30));
+    }
 }

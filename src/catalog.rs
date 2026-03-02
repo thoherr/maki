@@ -6263,4 +6263,67 @@ mod tests {
         assert_eq!(results[0].0, a1.id.to_string());
         assert!(results[0].1.is_none()); // not stacked
     }
+
+    #[test]
+    fn get_location_verified_at_returns_timestamp() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let volume = crate::models::Volume::new(
+            "vol".to_string(),
+            std::path::PathBuf::from("/mnt/vol"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:gv1");
+        catalog.insert_asset(&asset).unwrap();
+
+        let variant = crate::models::Variant {
+            content_hash: "sha256:gv1".to_string(),
+            asset_id: asset.id,
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 100,
+            original_filename: "photo.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        catalog.insert_variant(&variant).unwrap();
+
+        let loc = crate::models::FileLocation {
+            volume_id: volume.id,
+            relative_path: std::path::PathBuf::from("photos/photo.jpg"),
+            verified_at: None,
+        };
+        catalog.insert_file_location(&variant.content_hash, &loc).unwrap();
+
+        // Before verify: should be None
+        let before = catalog
+            .get_location_verified_at(&volume.id.to_string(), "photos/photo.jpg")
+            .unwrap();
+        assert!(before.is_none());
+
+        // Set verified_at
+        catalog
+            .update_verified_at("sha256:gv1", &volume.id.to_string(), "photos/photo.jpg")
+            .unwrap();
+
+        // After verify: should have a timestamp
+        let after = catalog
+            .get_location_verified_at(&volume.id.to_string(), "photos/photo.jpg")
+            .unwrap();
+        assert!(after.is_some());
+    }
+
+    #[test]
+    fn get_location_verified_at_returns_none_for_unknown() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let result = catalog
+            .get_location_verified_at("nonexistent-vol", "no/such/path.jpg")
+            .unwrap();
+        assert!(result.is_none());
+    }
 }
