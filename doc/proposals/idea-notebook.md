@@ -12,7 +12,7 @@ data is probably ways to complicated, maybe a "last one wins" approach is suffic
 
 ## UX / UI
 
-### ~~Text field with chips~~ — **DONE** (v1.8.7, format filter)
+### ~~Text field with chips~~ — **DONE** (v1.8.8, format filter)
 
 Implemented as a **grouped multi-select dropdown panel** for the format filter on the browse page. A compact trigger button opens a scrollable panel with formats organized into five categories (RAW, Image, Video, Audio, Other). Each category has a group-level toggle checkbox ("All RAW", etc.) and individual format checkboxes with variant counts (e.g., `NEF (42)`). Selected formats are OR-combined in the backend query (`format=jpg,nef,mp4`).
 
