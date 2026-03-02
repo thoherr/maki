@@ -125,6 +125,7 @@ pub struct DuplicateEntry {
 /// Recipe details within an `AssetDetails`.
 #[derive(Debug, serde::Serialize)]
 pub struct RecipeDetails {
+    pub variant_hash: String,
     pub software: String,
     pub recipe_type: String,
     pub content_hash: String,
@@ -1246,7 +1247,7 @@ impl Catalog {
 
         // Load recipes linked to any variant of this asset
         let mut rstmt = self.conn.prepare(
-            "SELECT r.software, r.recipe_type, r.content_hash, r.volume_id, \
+            "SELECT r.variant_hash, r.software, r.recipe_type, r.content_hash, r.volume_id, \
                     vol.label, r.relative_path \
              FROM recipes r \
              JOIN variants v ON r.variant_hash = v.content_hash \
@@ -1256,12 +1257,13 @@ impl Catalog {
         let recipes: Vec<RecipeDetails> = rstmt
             .query_map(rusqlite::params![asset_id], |rrow| {
                 Ok(RecipeDetails {
-                    software: rrow.get(0)?,
-                    recipe_type: rrow.get(1)?,
-                    content_hash: rrow.get(2)?,
-                    volume_id: rrow.get(3)?,
-                    volume_label: rrow.get(4)?,
-                    relative_path: rrow.get(5)?,
+                    variant_hash: rrow.get(0)?,
+                    software: rrow.get(1)?,
+                    recipe_type: rrow.get(2)?,
+                    content_hash: rrow.get(3)?,
+                    volume_id: rrow.get(4)?,
+                    volume_label: rrow.get(5)?,
+                    relative_path: rrow.get(6)?,
                 })
             })?
             .filter_map(|r| r.ok())

@@ -1387,9 +1387,11 @@ fn main() {
                 if !details.recipes.is_empty() {
                     println!("\nRecipes:");
                     for r in &details.recipes {
-                        println!("  [{}] {} ({})", r.recipe_type, r.software, r.content_hash);
+                        let short_variant = &r.variant_hash[r.variant_hash.len().saturating_sub(8)..];
+                        println!("  [{}] {} → …{} ({})", r.recipe_type, r.software, short_variant, r.content_hash);
                         if let Some(path) = &r.relative_path {
-                            println!("    Path: {path}");
+                            let label = r.volume_label.as_deref().unwrap_or("?");
+                            println!("    Location: {label}:{path}");
                         }
                     }
                 }
