@@ -3857,6 +3857,30 @@ impl Catalog {
         Ok(changed)
     }
 
+    /// Delete all collection memberships for an asset.
+    pub fn delete_collection_memberships_for_asset(&self, asset_id: &str) -> Result<usize> {
+        let changed = self.conn.execute(
+            "DELETE FROM collection_assets WHERE asset_id = ?1",
+            rusqlite::params![asset_id],
+        )?;
+        Ok(changed)
+    }
+
+    /// List all variant content hashes for an asset.
+    pub fn list_variant_hashes_for_asset(&self, asset_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT content_hash FROM variants WHERE asset_id = ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![asset_id], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let mut hashes = Vec::new();
+        for row in rows {
+            hashes.push(row?);
+        }
+        Ok(hashes)
+    }
+
     /// Return asset IDs where all variants would have zero file_locations
     /// if the given set of stale locations were removed.
     /// Each stale location is `(content_hash, volume_id, relative_path)`.
@@ -4433,6 +4457,89 @@ mod tests {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
         assert!(catalog.delete_asset("nonexistent").is_err());
+    }
+
+    #[test]
+    fn delete_collection_memberships_for_asset_removes_rows() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        crate::collection::CollectionStore::initialize(&catalog.conn).unwrap();
+
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:colmem1");
+        let asset_id = asset.id.to_string();
+        catalog.insert_asset(&asset).unwrap();
+
+        let store = crate::collection::CollectionStore::new(&catalog.conn);
+        store.create("TestCol", None).unwrap();
+        store.add_assets("TestCol", &[asset_id.clone()]).unwrap();
+
+        let removed = catalog.delete_collection_memberships_for_asset(&asset_id).unwrap();
+        assert_eq!(removed, 1);
+
+        // Verify membership is gone
+        let count: i64 = catalog.conn.query_row(
+            "SELECT COUNT(*) FROM collection_assets WHERE asset_id = ?1",
+            rusqlite::params![asset_id],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn delete_collection_memberships_noop_for_no_memberships() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        crate::collection::CollectionStore::initialize(&catalog.conn).unwrap();
+
+        let removed = catalog.delete_collection_memberships_for_asset("nonexistent").unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn list_variant_hashes_for_asset_returns_hashes() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:vh1");
+        let asset_id = asset.id.to_string();
+
+        let v1 = crate::models::Variant {
+            content_hash: "sha256:vh1".to_string(),
+            asset_id: asset.id,
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 100,
+            original_filename: "test.jpg".to_string(),
+            source_metadata: std::collections::HashMap::new(),
+            locations: vec![],
+        };
+        let v2 = crate::models::Variant {
+            content_hash: "sha256:vh2".to_string(),
+            asset_id: asset.id,
+            role: crate::models::VariantRole::Export,
+            format: "tif".to_string(),
+            file_size: 200,
+            original_filename: "test.tif".to_string(),
+            source_metadata: std::collections::HashMap::new(),
+            locations: vec![],
+        };
+        asset.variants = vec![v1.clone(), v2.clone()];
+        catalog.insert_asset(&asset).unwrap();
+        catalog.insert_variant(&v1).unwrap();
+        catalog.insert_variant(&v2).unwrap();
+
+        let mut hashes = catalog.list_variant_hashes_for_asset(&asset_id).unwrap();
+        hashes.sort();
+        assert_eq!(hashes, vec!["sha256:vh1", "sha256:vh2"]);
+    }
+
+    #[test]
+    fn list_variant_hashes_for_asset_empty_for_unknown() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let hashes = catalog.list_variant_hashes_for_asset("nonexistent").unwrap();
+        assert!(hashes.is_empty());
     }
 
     #[test]

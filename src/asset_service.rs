@@ -367,6 +367,24 @@ pub struct FixRolesResult {
     pub errors: Vec<String>,
 }
 
+/// Result of a delete operation.
+#[derive(Debug, serde::Serialize)]
+pub struct DeleteResult {
+    pub deleted: usize,
+    pub not_found: Vec<String>,
+    pub files_removed: usize,
+    pub previews_removed: usize,
+    pub dry_run: bool,
+    pub errors: Vec<String>,
+}
+
+/// Status of a single asset during delete.
+pub enum DeleteStatus {
+    Deleted,
+    NotFound,
+    Error(String),
+}
+
 /// Status of a single asset during fix-dates.
 pub enum FixDatesStatus {
     AlreadyCorrect,
@@ -2690,6 +2708,203 @@ impl AssetService {
                         }
                     }
                 }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Delete assets from the catalog. Report-only by default; `apply` executes deletion.
+    /// `remove_files` (requires `apply`) also deletes physical media and recipe files from disk.
+    pub fn delete_assets(
+        &self,
+        asset_ids: &[String],
+        apply: bool,
+        remove_files: bool,
+        on_asset: impl Fn(&str, &DeleteStatus, Duration),
+    ) -> Result<DeleteResult> {
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let metadata_store = MetadataStore::new(&self.catalog_root);
+        let registry = DeviceRegistry::new(&self.catalog_root);
+        let preview_gen = crate::preview::PreviewGenerator::new(
+            &self.catalog_root,
+            self.debug,
+            &self.preview_config,
+        );
+
+        // Build volume lookup for file deletion
+        let volumes = registry.list().unwrap_or_default();
+        let volume_map: std::collections::HashMap<String, &Volume> = volumes
+            .iter()
+            .map(|v| (v.id.to_string(), v))
+            .collect();
+
+        let stack_store = crate::stack::StackStore::new(catalog.conn());
+        let mut stacks_changed = false;
+        let mut collections_changed = false;
+
+        let mut result = DeleteResult {
+            deleted: 0,
+            not_found: Vec::new(),
+            files_removed: 0,
+            previews_removed: 0,
+            dry_run: !apply,
+            errors: Vec::new(),
+        };
+
+        for raw_id in asset_ids {
+            let asset_start = Instant::now();
+
+            // 1. Resolve ID (prefix match)
+            let asset_id = match catalog.resolve_asset_id(raw_id) {
+                Ok(Some(id)) => id,
+                Ok(None) => {
+                    result.not_found.push(raw_id.clone());
+                    on_asset(raw_id, &DeleteStatus::NotFound, asset_start.elapsed());
+                    continue;
+                }
+                Err(e) => {
+                    let msg = format!("{raw_id}: {e}");
+                    result.errors.push(msg.clone());
+                    on_asset(raw_id, &DeleteStatus::Error(msg), asset_start.elapsed());
+                    continue;
+                }
+            };
+
+            // 2. Gather variant hashes (before deleting variants)
+            let variant_hashes = catalog.list_variant_hashes_for_asset(&asset_id)
+                .unwrap_or_default();
+
+            // 3. Gather file + recipe locations (for --remove-files and report)
+            let file_locations = catalog.list_file_locations_for_asset(&asset_id)
+                .unwrap_or_default();
+            let recipe_locations = catalog.list_recipes_for_asset(&asset_id)
+                .unwrap_or_default();
+
+            if apply {
+                // 4a. Delete physical files (only if remove_files)
+                if remove_files {
+                    for (_hash, rel_path, vol_id) in &file_locations {
+                        if let Some(vol) = volume_map.get(vol_id.as_str()) {
+                            if vol.is_online {
+                                let full_path = vol.mount_point.join(rel_path);
+                                if full_path.exists() {
+                                    if let Err(e) = std::fs::remove_file(&full_path) {
+                                        result.errors.push(format!(
+                                            "Failed to remove file {}: {e}",
+                                            full_path.display()
+                                        ));
+                                    } else {
+                                        result.files_removed += 1;
+                                    }
+                                }
+                            } else {
+                                eprintln!(
+                                    "  Warning: volume '{}' is offline, skipping file {}",
+                                    vol.label, rel_path
+                                );
+                            }
+                        }
+                    }
+                    for (_recipe_id, _content_hash, _variant_hash, rel_path, vol_id) in &recipe_locations {
+                        if let Some(vol) = volume_map.get(vol_id.as_str()) {
+                            if vol.is_online {
+                                let full_path = vol.mount_point.join(rel_path);
+                                if full_path.exists() {
+                                    if let Err(e) = std::fs::remove_file(&full_path) {
+                                        result.errors.push(format!(
+                                            "Failed to remove recipe file {}: {e}",
+                                            full_path.display()
+                                        ));
+                                    } else {
+                                        result.files_removed += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 4b. Remove from stacks
+                if stack_store.remove(&[asset_id.clone()]).unwrap_or(0) > 0 {
+                    stacks_changed = true;
+                }
+
+                // 4c. Remove collection memberships
+                if catalog.delete_collection_memberships_for_asset(&asset_id).unwrap_or(0) > 0 {
+                    collections_changed = true;
+                }
+
+                // 4d. Delete recipes
+                if let Err(e) = catalog.delete_recipes_for_asset(&asset_id) {
+                    result.errors.push(format!("{asset_id}: failed to delete recipes: {e}"));
+                    on_asset(&asset_id, &DeleteStatus::Error(e.to_string()), asset_start.elapsed());
+                    continue;
+                }
+
+                // 4e. Delete file locations
+                if let Err(e) = catalog.delete_file_locations_for_asset(&asset_id) {
+                    result.errors.push(format!("{asset_id}: failed to delete locations: {e}"));
+                    on_asset(&asset_id, &DeleteStatus::Error(e.to_string()), asset_start.elapsed());
+                    continue;
+                }
+
+                // 4f. Delete variants
+                if let Err(e) = catalog.delete_variants_for_asset(&asset_id) {
+                    result.errors.push(format!("{asset_id}: failed to delete variants: {e}"));
+                    on_asset(&asset_id, &DeleteStatus::Error(e.to_string()), asset_start.elapsed());
+                    continue;
+                }
+
+                // 4g. Delete asset
+                if let Err(e) = catalog.delete_asset(&asset_id) {
+                    result.errors.push(format!("{asset_id}: failed to delete asset: {e}"));
+                    on_asset(&asset_id, &DeleteStatus::Error(e.to_string()), asset_start.elapsed());
+                    continue;
+                }
+
+                // 4h. Delete sidecar YAML
+                if let Ok(uuid) = Uuid::parse_str(&asset_id) {
+                    if let Err(e) = metadata_store.delete(uuid) {
+                        result.errors.push(format!("{asset_id}: failed to delete sidecar: {e}"));
+                    }
+                }
+
+                // 4i. Delete previews
+                for hash in &variant_hashes {
+                    let preview_path = preview_gen.preview_path(hash);
+                    if preview_path.exists() {
+                        if std::fs::remove_file(&preview_path).is_ok() {
+                            result.previews_removed += 1;
+                        }
+                    }
+                    let smart_path = preview_gen.smart_preview_path(hash);
+                    if smart_path.exists() {
+                        if std::fs::remove_file(&smart_path).is_ok() {
+                            result.previews_removed += 1;
+                        }
+                    }
+                }
+
+                result.deleted += 1;
+                on_asset(&asset_id, &DeleteStatus::Deleted, asset_start.elapsed());
+            } else {
+                // Report mode: count what would be affected
+                result.deleted += 1;
+                on_asset(&asset_id, &DeleteStatus::Deleted, asset_start.elapsed());
+            }
+        }
+
+        // Persist stack/collection changes
+        if apply && stacks_changed {
+            if let Ok(yaml) = stack_store.export_all() {
+                let _ = crate::stack::save_yaml(&self.catalog_root, &yaml);
+            }
+        }
+        if apply && collections_changed {
+            let col_store = crate::collection::CollectionStore::new(catalog.conn());
+            if let Ok(yaml) = col_store.export_all() {
+                let _ = crate::collection::save_yaml(&self.catalog_root, &yaml);
             }
         }
 

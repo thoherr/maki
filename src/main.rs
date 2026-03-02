@@ -13,7 +13,7 @@ use dam::query::QueryEngine;
     after_help = "\
 Quick Reference:
   Setup:      init, volume
-  Ingest:     import, tag, edit, group, auto-group
+  Ingest:     import, delete, tag, edit, group, auto-group
   Organize:   collection (col), saved-search (ss), stack (st)
   Retrieve:   search, show, duplicates, stats, backup-status, serve
   Maintain:   verify, sync, refresh, cleanup, dedup, relocate,
@@ -166,6 +166,19 @@ enum Commands {
         /// Apply grouping (default: report-only)
         #[arg(long)]
         apply: bool,
+    },
+
+    /// Delete assets from the catalog
+    #[command(display_order = 15)]
+    Delete {
+        /// Asset IDs to delete (reads from stdin if empty)
+        asset_ids: Vec<String>,
+        /// Execute deletion (default: report-only)
+        #[arg(long)]
+        apply: bool,
+        /// Also delete physical files from disk (requires --apply)
+        #[arg(long)]
+        remove_files: bool,
     },
 
     // --- Organize ---
@@ -1540,6 +1553,89 @@ fn main() {
                     println!("  Merged {} donor asset(s)", result.donors_removed);
                 } else {
                     println!("  Already grouped (no changes)");
+                }
+            }
+            Ok(())
+        }
+        Commands::Delete { asset_ids, apply, remove_files } => {
+            if remove_files && !apply {
+                anyhow::bail!("--remove-files requires --apply");
+            }
+
+            // Read from stdin if no IDs provided
+            let ids: Vec<String> = if asset_ids.is_empty() {
+                use std::io::BufRead;
+                std::io::stdin().lock().lines()
+                    .filter_map(|l| l.ok())
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect()
+            } else {
+                asset_ids
+            };
+            if ids.is_empty() {
+                anyhow::bail!("No asset IDs specified.");
+            }
+
+            let catalog_root = dam::config::find_catalog_root()?;
+            let config = CatalogConfig::load(&catalog_root)?;
+            let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
+
+            let show_log = cli.log;
+            let result = service.delete_assets(
+                &ids,
+                apply,
+                remove_files,
+                |id, status, elapsed| {
+                    if show_log {
+                        let short_id = &id[..8.min(id.len())];
+                        match status {
+                            dam::asset_service::DeleteStatus::Deleted => {
+                                eprintln!("  {short_id} — deleted ({})", format_duration(elapsed));
+                            }
+                            dam::asset_service::DeleteStatus::NotFound => {
+                                eprintln!("  {short_id} — not found");
+                            }
+                            dam::asset_service::DeleteStatus::Error(msg) => {
+                                eprintln!("  {short_id} — error: {msg}");
+                            }
+                        }
+                    }
+                },
+            )?;
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                for err in &result.errors {
+                    eprintln!("  {err}");
+                }
+
+                if apply {
+                    let mut parts = vec![
+                        format!("{} deleted", result.deleted),
+                    ];
+                    if !result.not_found.is_empty() {
+                        parts.push(format!("{} not found", result.not_found.len()));
+                    }
+                    if result.files_removed > 0 {
+                        parts.push(format!("{} files removed", result.files_removed));
+                    }
+                    if result.previews_removed > 0 {
+                        parts.push(format!("{} previews removed", result.previews_removed));
+                    }
+                    println!("Delete complete: {}", parts.join(", "));
+                } else {
+                    let mut parts = vec![
+                        format!("{} would be deleted", result.deleted),
+                    ];
+                    if !result.not_found.is_empty() {
+                        parts.push(format!("{} not found", result.not_found.len()));
+                    }
+                    println!("Delete (dry run): {}", parts.join(", "));
+                    if result.deleted > 0 {
+                        println!("  Run with --apply to delete.");
+                    }
                 }
             }
             Ok(())

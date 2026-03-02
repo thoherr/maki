@@ -7428,3 +7428,272 @@ fn verify_recipe_verified_at_round_trip() {
     );
     assert_eq!(json["verified"].as_u64().unwrap(), 0, "nothing should need re-verifying");
 }
+
+// ── delete command ──────────────────────────────────────────────────
+
+#[test]
+fn delete_report_only_by_default() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["del_report.jpg"]);
+
+    dam()
+        .current_dir(&root)
+        .args(["delete", &ids[0]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would be deleted"));
+
+    // Asset should still exist
+    dam()
+        .current_dir(&root)
+        .args(["show", &ids[0]])
+        .assert()
+        .success();
+}
+
+#[test]
+fn delete_apply_removes_asset() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["del_apply.jpg"]);
+
+    dam()
+        .current_dir(&root)
+        .args(["delete", "--apply", &ids[0]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 deleted"));
+
+    // Asset should be gone
+    dam()
+        .current_dir(&root)
+        .args(["show", &ids[0]])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn delete_json_output() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["del_json.jpg"]);
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "delete", "--apply", &ids[0]])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output).unwrap()).expect("valid JSON");
+    assert_eq!(json["deleted"].as_u64().unwrap(), 1);
+    assert_eq!(json["dry_run"].as_bool().unwrap(), false);
+    assert!(json["not_found"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn delete_prefix_matching() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["del_prefix.jpg"]);
+
+    // Use first 8 chars as prefix
+    let prefix = &ids[0][..8];
+
+    dam()
+        .current_dir(&root)
+        .args(["delete", "--apply", prefix])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 deleted"));
+
+    dam()
+        .current_dir(&root)
+        .args(["show", &ids[0]])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn delete_not_found() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    dam()
+        .current_dir(&root)
+        .args(["--json", "delete", "--apply", "nonexistent-id-12345"])
+        .assert()
+        .success();
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["--json", "delete", "--apply", "nonexistent-id-12345"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output).unwrap()).expect("valid JSON");
+    assert_eq!(json["deleted"].as_u64().unwrap(), 0);
+    assert_eq!(json["not_found"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn delete_multiple_assets() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["del_multi_a.jpg", "del_multi_b.jpg"]);
+
+    dam()
+        .current_dir(&root)
+        .args(["delete", "--apply", &ids[0], &ids[1]])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 deleted"));
+
+    // Both should be gone
+    for id in &ids {
+        dam()
+            .current_dir(&root)
+            .args(["show", id])
+            .assert()
+            .failure();
+    }
+}
+
+#[test]
+fn delete_stdin_piping() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["del_stdin.jpg"]);
+
+    dam()
+        .current_dir(&root)
+        .args(["delete", "--apply"])
+        .write_stdin(format!("{}\n", ids[0]))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 deleted"));
+
+    dam()
+        .current_dir(&root)
+        .args(["show", &ids[0]])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn delete_remove_files() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "del_rm.jpg", b"delete-me-file");
+    let file_path = file.clone();
+
+    dam()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["search", "--format", "ids", "del_rm"])
+        .output()
+        .unwrap();
+    let asset_id = String::from_utf8(output.stdout).unwrap().trim().to_string();
+
+    assert!(file_path.exists(), "file should exist before delete");
+
+    dam()
+        .current_dir(&root)
+        .args(["delete", "--apply", "--remove-files", &asset_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 deleted"))
+        .stdout(predicate::str::contains("files removed"));
+
+    assert!(!file_path.exists(), "file should be removed from disk");
+}
+
+#[test]
+fn delete_remove_files_requires_apply() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    dam()
+        .current_dir(&root)
+        .args(["delete", "--remove-files", "some-id"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--remove-files requires --apply"));
+}
+
+#[test]
+fn delete_removes_from_collection() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["del_col.jpg"]);
+
+    // Add to a collection
+    dam()
+        .current_dir(&root)
+        .args(["col", "create", "TestCol"])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .args(["col", "add", "TestCol", &ids[0]])
+        .assert()
+        .success();
+
+    // Delete the asset
+    dam()
+        .current_dir(&root)
+        .args(["delete", "--apply", &ids[0]])
+        .assert()
+        .success();
+
+    // Collection should now be empty
+    dam()
+        .current_dir(&root)
+        .args(["col", "show", "TestCol"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("empty"));
+}
+
+#[test]
+fn delete_removes_from_stack() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["del_stack_a.jpg", "del_stack_b.jpg", "del_stack_c.jpg"]);
+
+    // Create a stack with all three
+    dam()
+        .current_dir(&root)
+        .args(["stack", "create", &ids[0], &ids[1], &ids[2]])
+        .assert()
+        .success();
+
+    // Delete one member
+    dam()
+        .current_dir(&root)
+        .args(["delete", "--apply", &ids[1]])
+        .assert()
+        .success();
+
+    // Stack should still exist with 2 members
+    dam()
+        .current_dir(&root)
+        .args(["stack", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 assets"));
+}
