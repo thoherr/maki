@@ -2,6 +2,16 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v2.1.0
+
+### New Features
+- **Web UI AI auto-tagging** — two new integration points for AI-powered tag suggestions, feature-gated behind `--features ai`:
+  - **"Suggest tags" button on asset detail page** — click to analyze the asset image with SigLIP, then review suggested tags as interactive chips with confidence percentages. Accept individual tags (✓), dismiss them (×), or "Accept all" at once. Accepted tags are applied via the existing tag API and appear immediately in the tag list. The button shows "Analyzing..." while the model processes.
+  - **"Auto-tag" button in batch toolbar** — select assets in the browse grid and click "Auto-tag" to bulk-apply AI tag suggestions above the configured confidence threshold. A confirmation dialog shows the count of selected assets. Results report how many tags were applied to how many assets. Selection clears and the grid refreshes after the operation.
+  - **Lazy model loading** — the SigLIP model and label embeddings are loaded on first request and cached in server memory for the lifetime of the process. Subsequent requests reuse the cached model with no loading delay.
+  - **Two new API endpoints** — `POST /api/asset/{id}/suggest-tags` returns JSON suggestions with tag name and confidence score; `POST /api/batch/auto-tag` accepts `{asset_ids}` and returns `{succeeded, failed, tags_applied, errors}`.
+  - **Zero impact without AI feature** — when compiled without `--features ai`, the buttons are absent from the UI and the endpoints are not registered. No additional dependencies, no binary size increase.
+
 ## v2.0.1
 
 ### New Features

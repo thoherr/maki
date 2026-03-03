@@ -688,6 +688,44 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
     line-height: 1;
 }
 .tag-chip .remove-tag:hover { opacity: 1; }
+
+/* AI tag suggestion chips */
+.ai-suggestions-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.3rem;
+}
+.ai-tag-suggestion {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0.2rem 0.5rem;
+    border-radius: 12px;
+    background: var(--tag-bg);
+    border: 1px dashed var(--accent, #3498db);
+    margin: 0.15rem;
+    font-size: 0.8rem;
+}
+.ai-tag-confidence {
+    font-size: 0.7em;
+    opacity: 0.6;
+    margin-left: 2px;
+}
+.ai-tag-accept {
+    color: #27ae60;
+    cursor: pointer;
+    font-weight: bold;
+    margin-left: 2px;
+}
+.ai-tag-accept:hover { opacity: 0.7; }
+.ai-tag-dismiss {
+    color: #e74c3c;
+    cursor: pointer;
+    font-weight: bold;
+}
+.ai-tag-dismiss:hover { opacity: 0.7; }
+
 .edit-pencil {
     all: unset;
     cursor: pointer;

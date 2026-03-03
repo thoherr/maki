@@ -230,6 +230,7 @@ pub struct BrowsePage {
     pub path: String,
     pub saved_searches: Vec<SavedSearchChip>,
     pub collapse_stacks: bool,
+    pub ai_enabled: bool,
 }
 
 #[derive(Template)]
@@ -276,6 +277,7 @@ pub struct AssetPage {
     pub is_stack_pick: bool,
     pub prev_id: Option<String>,
     pub next_id: Option<String>,
+    pub ai_enabled: bool,
 }
 
 /// Collections the asset belongs to, shown on asset detail page.
@@ -386,6 +388,7 @@ impl AssetPage {
             is_stack_pick,
             prev_id: None,
             next_id: None,
+            ai_enabled: false,
         }
     }
 }

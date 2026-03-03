@@ -1,6 +1,6 @@
-# Proposal: AI Auto-Tagging — IMPLEMENTED (v2.0.1)
+# Proposal: AI Auto-Tagging — IMPLEMENTED (v2.0.1 CLI, v2.1.0 Web UI)
 
-> **Status**: Implemented in v2.0.1 using SigLIP ViT-B/16-256 (Option A with ONNX Runtime). The implementation uses a single model tier (`standard` = SigLIP ViT-B/16-256), feature-gated behind `--features ai`. Multi-tier model selection and Ollama integration are deferred to a future version. See `dam auto-tag --help` for usage.
+> **Status**: Core CLI implemented in v2.0.1 using SigLIP ViT-B/16-256 (Option A with ONNX Runtime). Web UI integration added in v2.1.0: "Suggest tags" button on the asset detail page with interactive accept/dismiss chips, and "Auto-tag" batch button in the browse toolbar. The implementation uses a single model tier (`standard` = SigLIP ViT-B/16-256), feature-gated behind `--features ai`. Multi-tier model selection and Ollama integration are deferred to a future version. See `dam auto-tag --help` for CLI usage.
 
 Zero-shot image classification using CLIP/SigLIP embeddings for automated tag suggestions, plus visual similarity search as a bonus feature.
 

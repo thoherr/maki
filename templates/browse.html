@@ -229,6 +229,10 @@
         <button class="batch-btn batch-btn-danger" id="batch-unstack">Unstack</button>
         <span class="batch-sep"></span>
         <button class="batch-btn" id="batch-compare" title="Compare 2–4 selected assets (c)">Compare</button>
+        {% if ai_enabled %}
+        <span class="batch-sep"></span>
+        <button class="batch-btn" id="batch-autotag">Auto-tag</button>
+        {% endif %}
     </div>
 </div>
 
@@ -1384,6 +1388,32 @@
         }
         window.location.href = '/compare?ids=' + Array.from(selected).join(',');
     });
+
+    var autotagBtn = document.getElementById('batch-autotag');
+    if (autotagBtn) {
+        autotagBtn.addEventListener('click', function() {
+            if (selected.size === 0 || batchBusy) return;
+            if (!confirm('Auto-tag ' + selected.size + ' selected asset(s)? Tags above the configured confidence threshold will be applied.')) return;
+            setButtonsBusy(true);
+            fetch('/api/batch/auto-tag', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({asset_ids: Array.from(selected)})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                setButtonsBusy(false);
+                alert(data.tags_applied + ' tag(s) applied to ' + data.succeeded + ' asset(s).' +
+                    (data.failed > 0 ? ' ' + data.failed + ' failed.' : ''));
+                clearSelection();
+                htmx.ajax('GET', buildSearchUrl(), {target: '#results', swap: 'innerHTML'});
+            })
+            .catch(function(err) {
+                setButtonsBusy(false);
+                alert('Auto-tag failed: ' + err.message);
+            });
+        });
+    }
 
     // Persist selection to sessionStorage so it survives fresh page loads (back-nav)
     window.addEventListener('pagehide', function() {

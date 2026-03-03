@@ -16,6 +16,9 @@ use crate::config::PreviewConfig;
 use crate::preview::PreviewGenerator;
 use crate::query::QueryEngine;
 
+#[cfg(feature = "ai")]
+use crate::config::AiConfig;
+
 /// Cached dropdown data for the browse page filter controls.
 /// Populated lazily on first access, invalidated by write endpoints.
 struct DropdownCacheInner {
@@ -118,9 +121,37 @@ pub struct AppState {
     pub dedup_prefer: Option<String>,
     pub smart_on_demand: bool,
     pub per_page: u32,
+    pub ai_enabled: bool,
+    #[cfg(feature = "ai")]
+    pub ai_model: tokio::sync::Mutex<Option<crate::ai::SigLipModel>>,
+    #[cfg(feature = "ai")]
+    pub ai_label_cache: tokio::sync::RwLock<Option<(Vec<String>, Vec<Vec<f32>>)>>,
+    #[cfg(feature = "ai")]
+    pub ai_config: AiConfig,
 }
 
 impl AppState {
+    #[cfg(feature = "ai")]
+    pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>, per_page: u32, ai_config: AiConfig) -> Self {
+        let preview_ext = preview_config.format.extension().to_string();
+        let smart_on_demand = preview_config.generate_on_demand;
+        Self {
+            catalog_root,
+            preview_config,
+            preview_ext,
+            log_requests,
+            dropdown_cache: DropdownCache::new(),
+            dedup_prefer,
+            smart_on_demand,
+            per_page,
+            ai_enabled: true,
+            ai_model: tokio::sync::Mutex::new(None),
+            ai_label_cache: tokio::sync::RwLock::new(None),
+            ai_config,
+        }
+    }
+
+    #[cfg(not(feature = "ai"))]
     pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>, per_page: u32) -> Self {
         let preview_ext = preview_config.format.extension().to_string();
         let smart_on_demand = preview_config.generate_on_demand;
@@ -133,6 +164,7 @@ impl AppState {
             dedup_prefer,
             smart_on_demand,
             per_page,
+            ai_enabled: false,
         }
     }
 
@@ -161,7 +193,8 @@ impl AppState {
 fn build_router(state: Arc<AppState>) -> Router {
     let preview_dir = state.catalog_root.join("previews");
 
-    Router::new()
+    #[allow(unused_mut)]
+    let mut router = Router::new()
         .route("/", axum::routing::get(routes::browse_page))
         .route("/asset/{id}", axum::routing::get(routes::asset_page))
         .route("/compare", axum::routing::get(routes::compare_page))
@@ -280,7 +313,22 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/facets", axum::routing::get(routes::facets_api))
         .route("/api/page-ids", axum::routing::get(routes::page_ids_api))
         .route("/api/open-location", axum::routing::post(routes::open_location))
-        .route("/api/open-terminal", axum::routing::post(routes::open_terminal))
+        .route("/api/open-terminal", axum::routing::post(routes::open_terminal));
+
+    #[cfg(feature = "ai")]
+    {
+        router = router
+            .route(
+                "/api/asset/{id}/suggest-tags",
+                axum::routing::post(routes::suggest_tags),
+            )
+            .route(
+                "/api/batch/auto-tag",
+                axum::routing::post(routes::batch_auto_tag),
+            );
+    }
+
+    router
         .route("/static/htmx.min.js", axum::routing::get(static_assets::htmx_js))
         .route("/static/style.css", axum::routing::get(static_assets::style_css))
         .route("/static/leaflet.min.js", axum::routing::get(static_assets::leaflet_js))
@@ -329,6 +377,28 @@ async fn log_request(
 }
 
 /// Start the web server.
+#[cfg(feature = "ai")]
+pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config: PreviewConfig, log: bool, dedup_prefer: Option<String>, per_page: u32, ai_config: AiConfig) -> Result<()> {
+    let state = Arc::new(AppState::new(catalog_root, preview_config, log, dedup_prefer, per_page, ai_config));
+
+    // Verify catalog is accessible and run schema migrations once at startup
+    Catalog::open(&state.catalog_root)?;
+
+    let app = build_router(state);
+
+    let addr: SocketAddr = format!("{bind}:{port}").parse()?;
+    eprintln!("dam v{} web UI: http://{addr}", env!("CARGO_PKG_VERSION"));
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    Ok(())
+}
+
+/// Start the web server.
+#[cfg(not(feature = "ai"))]
 pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config: PreviewConfig, log: bool, dedup_prefer: Option<String>, per_page: u32) -> Result<()> {
     let state = Arc::new(AppState::new(catalog_root, preview_config, log, dedup_prefer, per_page));
 

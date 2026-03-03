@@ -3288,6 +3288,9 @@ fn main() {
             let port = port.unwrap_or(config.serve.port);
             let bind = bind.unwrap_or_else(|| config.serve.bind.clone());
             let rt = tokio::runtime::Runtime::new()?;
+            #[cfg(feature = "ai")]
+            rt.block_on(dam::web::serve(catalog_root, &bind, port, config.preview, cli.log, config.dedup.prefer, config.serve.per_page, config.ai))?;
+            #[cfg(not(feature = "ai"))]
             rt.block_on(dam::web::serve(catalog_root, &bind, port, config.preview, cli.log, config.dedup.prefer, config.serve.per_page))?;
             Ok(())
         }

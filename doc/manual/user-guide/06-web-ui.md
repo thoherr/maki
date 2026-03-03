@@ -361,6 +361,8 @@ The right side contains the asset's metadata, all editable inline:
 
 **Tags** -- displayed as removable chips. Click the x on a chip to remove that tag. Use the text input below to add new tags -- it offers autocomplete suggestions from your catalog's tag list as you type. Changes are written back to XMP recipe files on disk with operation-level deltas (tags added independently in CaptureOne or Lightroom are preserved).
 
+**Suggest tags** (requires `--features ai`) -- a "Suggest tags" button appears below the tag input when the server is compiled with AI support. Click it to analyze the asset image with the SigLIP vision model. The button shows "Analyzing..." while the model processes (the first request may take a few seconds while the model loads). Results appear as suggestion chips, each showing the tag name and a confidence percentage. Click ✓ to accept a tag (it is added immediately), click × to dismiss it, or click "Accept all" to apply all suggestions at once. Tags already on the asset are filtered out automatically.
+
 ### Asset information
 
 Below the editable fields:
@@ -429,6 +431,8 @@ A fixed toolbar appears at the bottom of the screen whenever one or more assets 
 **Group by name**: merges the selected assets by filename stem. A confirmation dialog explains the action. Assets whose filenames share a common prefix (e.g., `DSC_001.nef` and `DSC_001.jpg`) are merged into a single asset with multiple variants. This cannot be undone.
 
 **Compare**: opens a side-by-side compare view with the selected assets (2–4). See [Compare View](#compare-view) below.
+
+**Auto-tag** (requires `--features ai`): analyzes each selected asset with the SigLIP vision model and applies suggested tags above the configured confidence threshold. A confirmation dialog shows the count of selected assets. After processing, a summary reports how many tags were applied. This button only appears when the server is compiled with the `ai` feature.
 
 After every batch operation, the selection clears and the results grid refreshes to reflect the changes. All toolbar buttons are disabled during the operation to prevent double submissions.
 

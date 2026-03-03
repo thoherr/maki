@@ -604,6 +604,77 @@ curl -X DELETE http://localhost:8080/api/batch/stack \
   -d '{"asset_ids": ["uuid-1", "uuid-2"]}'
 ```
 
+### `POST /api/asset/{id}/suggest-tags` -- AI Tag Suggestions
+
+*Requires `--features ai` compilation.*
+
+Analyzes the asset's preview image with SigLIP and returns suggested tags with confidence scores. Tags already on the asset are filtered out. The model is lazy-loaded on first request and cached in server memory.
+
+| Parameter | Type   | Description             |
+|-----------|--------|-------------------------|
+| `id`      | string | Asset UUID (path param) |
+
+**Response**: `application/json`
+
+```json
+[
+  {"tag": "landscape", "confidence": 0.85},
+  {"tag": "mountain", "confidence": 0.42},
+  {"tag": "nature", "confidence": 0.31}
+]
+```
+
+| Field       | Type   | Description                         |
+|-------------|--------|-------------------------------------|
+| `tag`       | string | Suggested tag name                  |
+| `confidence`| float  | Confidence score (0.0–1.0)          |
+
+```bash
+curl -X POST http://localhost:8080/api/asset/550e8400-e29b-41d4-a716-446655440000/suggest-tags
+```
+
+### `POST /api/batch/auto-tag` -- Batch AI Auto-Tag
+
+*Requires `--features ai` compilation.*
+
+Auto-tags selected assets using SigLIP. For each asset, encodes the preview image, classifies against the configured label vocabulary, and applies tags above the threshold. Existing tags are not duplicated.
+
+**Content-Type**: `application/json`
+
+**Request body**:
+```json
+{
+  "asset_ids": ["uuid-1", "uuid-2", "uuid-3"]
+}
+```
+
+| Field      | Type     | Description            |
+|------------|----------|------------------------|
+| `asset_ids` | string[] | Array of asset UUIDs  |
+
+**Response**:
+```json
+{
+  "succeeded": 3,
+  "failed": 0,
+  "tags_applied": 12,
+  "errors": []
+}
+```
+
+| Field          | Type     | Description                                  |
+|----------------|----------|----------------------------------------------|
+| `succeeded`    | u32      | Assets successfully processed                |
+| `failed`       | u32      | Assets that failed                           |
+| `tags_applied` | u32      | Total new tags applied across all assets     |
+| `errors`       | string[] | Error messages for failed assets             |
+
+```bash
+curl -X POST http://localhost:8080/api/batch/auto-tag \
+  -H "Content-Type: application/json" \
+  -d '{"asset_ids": ["uuid-1", "uuid-2", "uuid-3"]}'
+```
+
 ### `POST /api/batch/auto-group` -- Auto-Group by Stem
 
 Groups selected assets by filename stem using fuzzy prefix matching. Merges donor variants into target assets (shortest stem, preferring RAW originals).

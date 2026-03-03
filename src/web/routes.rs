@@ -209,6 +209,7 @@ pub async fn browse_page(
             path: path_str.to_string(),
             saved_searches,
             collapse_stacks,
+            ai_enabled: state.ai_enabled,
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
@@ -563,6 +564,7 @@ pub async fn asset_page(
         let mut tmpl = AssetPage::from_details(details, preview_url, smart_preview_url, has_smart_preview, collections, stack_members, is_stack_pick, &volume_online);
         tmpl.prev_id = nav_params.prev;
         tmpl.next_id = nav_params.next;
+        tmpl.ai_enabled = state.ai_enabled;
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
     .await;
@@ -3079,4 +3081,333 @@ async fn serve_smart_file(path: &std::path::Path, filename: &str) -> Response {
         }
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+// --- AI auto-tag endpoints (feature-gated) ---
+
+#[cfg(feature = "ai")]
+#[derive(Debug, serde::Serialize)]
+pub struct SuggestTagsResponse {
+    pub tag: String,
+    pub confidence: f32,
+}
+
+/// POST /api/asset/{id}/suggest-tags — suggest tags for an asset using AI.
+#[cfg(feature = "ai")]
+pub async fn suggest_tags(
+    State(state): State<Arc<AppState>>,
+    Path(asset_id): Path<String>,
+) -> Response {
+    let state = state.clone();
+    let result: Result<Result<Vec<SuggestTagsResponse>, String>, _> =
+        tokio::task::spawn_blocking(move || {
+            suggest_tags_inner(&state, &asset_id)
+        })
+        .await;
+
+    match result {
+        Ok(Ok(suggestions)) => Json(suggestions).into_response(),
+        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+#[cfg(feature = "ai")]
+fn resolve_model_dir(config: &crate::config::AiConfig) -> std::path::PathBuf {
+    let model_dir_str = &config.model_dir;
+    let model_base = if model_dir_str.starts_with("~/") {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| ".".to_string());
+        std::path::PathBuf::from(home).join(&model_dir_str[2..])
+    } else {
+        std::path::PathBuf::from(model_dir_str)
+    };
+    model_base.join("siglip-vit-b16-256")
+}
+
+#[cfg(feature = "ai")]
+fn resolve_labels(config: &crate::config::AiConfig) -> Result<Vec<String>, String> {
+    if let Some(ref labels_path) = config.labels {
+        crate::ai::load_labels_from_file(std::path::Path::new(labels_path))
+            .map_err(|e| format!("Failed to load labels: {e}"))
+    } else {
+        Ok(crate::ai::DEFAULT_LABELS.iter().map(|s| s.to_string()).collect())
+    }
+}
+
+#[cfg(feature = "ai")]
+fn suggest_tags_inner(
+    state: &AppState,
+    asset_id: &str,
+) -> Result<Vec<SuggestTagsResponse>, String> {
+    use crate::ai;
+    use crate::device_registry::DeviceRegistry;
+
+    let engine = state.query_engine();
+    let details = engine.show(asset_id).map_err(|e| format!("{e:#}"))?;
+
+    // Find image to process
+    let preview_gen = state.preview_generator();
+    let registry = DeviceRegistry::new(&state.catalog_root);
+    let volumes = registry.list().map_err(|e| format!("{e:#}"))?;
+    let online_volumes: std::collections::HashMap<String, &crate::models::Volume> = volumes
+        .iter()
+        .filter(|v| v.is_online)
+        .map(|v| (v.id.to_string(), v))
+        .collect();
+
+    let service = state.asset_service();
+    let image_path = service
+        .find_image_for_ai(&details, &preview_gen, &online_volumes)
+        .ok_or_else(|| "No processable image found for this asset".to_string())?;
+
+    let ext = image_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    if !ai::is_supported_image(ext) {
+        return Err(format!("Unsupported image format: {ext}"));
+    }
+
+    // Lazy-load model
+    let model_dir = resolve_model_dir(&state.ai_config);
+    let model_guard = state.ai_model.blocking_lock();
+    let mut model_opt = model_guard;
+    if model_opt.is_none() {
+        let m = ai::SigLipModel::load(&model_dir)
+            .map_err(|e| format!("Failed to load AI model: {e:#}"))?;
+        *model_opt = Some(m);
+    }
+    let model = model_opt.as_mut().unwrap();
+
+    // Lazy-compute label embeddings
+    let labels = resolve_labels(&state.ai_config)?;
+    let label_cache_read = state.ai_label_cache.blocking_read();
+    let cached = label_cache_read.is_some();
+    drop(label_cache_read);
+
+    let (label_list, label_embs) = if cached {
+        let guard = state.ai_label_cache.blocking_read();
+        let (l, e) = guard.as_ref().unwrap();
+        (l.clone(), e.clone())
+    } else {
+        let prompt_template = &state.ai_config.prompt;
+        let prompted: Vec<String> = labels
+            .iter()
+            .map(|l| ai::apply_prompt_template(prompt_template, l))
+            .collect();
+        let embs = model
+            .encode_texts(&prompted)
+            .map_err(|e| format!("Failed to encode labels: {e:#}"))?;
+        let mut guard = state.ai_label_cache.blocking_write();
+        *guard = Some((labels.clone(), embs.clone()));
+        (labels, embs)
+    };
+
+    // Encode image
+    let image_emb = model
+        .encode_image(&image_path)
+        .map_err(|e| format!("Failed to encode image: {e:#}"))?;
+
+    // Classify
+    let threshold = state.ai_config.threshold;
+    let suggestions = model.classify(&image_emb, &label_list, &label_embs, threshold);
+
+    // Filter out tags already on the asset
+    let existing: std::collections::HashSet<String> = details
+        .tags
+        .iter()
+        .map(|t| t.to_lowercase())
+        .collect();
+
+    let result: Vec<SuggestTagsResponse> = suggestions
+        .into_iter()
+        .filter(|s| !existing.contains(&s.tag.to_lowercase()))
+        .map(|s| SuggestTagsResponse {
+            tag: s.tag,
+            confidence: s.confidence,
+        })
+        .collect();
+
+    Ok(result)
+}
+
+#[cfg(feature = "ai")]
+#[derive(Debug, serde::Deserialize)]
+pub struct BatchAutoTagRequest {
+    pub asset_ids: Vec<String>,
+}
+
+#[cfg(feature = "ai")]
+#[derive(Debug, serde::Serialize)]
+pub struct BatchAutoTagResponse {
+    pub succeeded: u32,
+    pub failed: u32,
+    pub tags_applied: u32,
+    pub errors: Vec<String>,
+}
+
+/// POST /api/batch/auto-tag — auto-tag selected assets.
+#[cfg(feature = "ai")]
+pub async fn batch_auto_tag(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BatchAutoTagRequest>,
+) -> Response {
+    let log = state.log_requests;
+    let count = req.asset_ids.len();
+    let state2 = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        batch_auto_tag_inner(&state2, req.asset_ids)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(resp)) => {
+            if log {
+                eprintln!(
+                    "batch_auto_tag: {} assets ({} ok, {} err, {} tags)",
+                    count, resp.succeeded, resp.failed, resp.tags_applied
+                );
+            }
+            if resp.succeeded > 0 {
+                state.dropdown_cache.invalidate_tags();
+            }
+            Json(resp).into_response()
+        }
+        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+#[cfg(feature = "ai")]
+fn batch_auto_tag_inner(
+    state: &AppState,
+    asset_ids: Vec<String>,
+) -> Result<BatchAutoTagResponse, String> {
+    use crate::ai;
+    use crate::device_registry::DeviceRegistry;
+
+    let engine = state.query_engine();
+    let preview_gen = state.preview_generator();
+    let registry = DeviceRegistry::new(&state.catalog_root);
+    let volumes = registry.list().map_err(|e| format!("{e:#}"))?;
+    let online_volumes: std::collections::HashMap<String, &crate::models::Volume> = volumes
+        .iter()
+        .filter(|v| v.is_online)
+        .map(|v| (v.id.to_string(), v))
+        .collect();
+
+    // Lazy-load model
+    let model_dir = resolve_model_dir(&state.ai_config);
+    let mut model_guard = state.ai_model.blocking_lock();
+    if model_guard.is_none() {
+        let m = ai::SigLipModel::load(&model_dir)
+            .map_err(|e| format!("Failed to load AI model: {e:#}"))?;
+        *model_guard = Some(m);
+    }
+    let model = model_guard.as_mut().unwrap();
+
+    // Lazy-compute label embeddings
+    let labels = resolve_labels(&state.ai_config)?;
+    let label_cache_read = state.ai_label_cache.blocking_read();
+    let cached = label_cache_read.is_some();
+    drop(label_cache_read);
+
+    let (label_list, label_embs) = if cached {
+        let guard = state.ai_label_cache.blocking_read();
+        let (l, e) = guard.as_ref().unwrap();
+        (l.clone(), e.clone())
+    } else {
+        let prompt_template = &state.ai_config.prompt;
+        let prompted: Vec<String> = labels
+            .iter()
+            .map(|l| ai::apply_prompt_template(prompt_template, l))
+            .collect();
+        let embs = model
+            .encode_texts(&prompted)
+            .map_err(|e| format!("Failed to encode labels: {e:#}"))?;
+        let mut guard = state.ai_label_cache.blocking_write();
+        *guard = Some((labels.clone(), embs.clone()));
+        (labels, embs)
+    };
+
+    let threshold = state.ai_config.threshold;
+    let service = state.asset_service();
+    let mut resp = BatchAutoTagResponse {
+        succeeded: 0,
+        failed: 0,
+        tags_applied: 0,
+        errors: Vec::new(),
+    };
+
+    for aid in &asset_ids {
+        let details = match engine.show(aid) {
+            Ok(d) => d,
+            Err(e) => {
+                resp.failed += 1;
+                resp.errors.push(format!("{}: {e:#}", &aid[..8.min(aid.len())]));
+                continue;
+            }
+        };
+
+        let image_path = match service.find_image_for_ai(&details, &preview_gen, &online_volumes) {
+            Some(p) => p,
+            None => {
+                // Skip assets with no processable image (not an error)
+                continue;
+            }
+        };
+
+        let ext = image_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        if !ai::is_supported_image(ext) {
+            continue;
+        }
+
+        let image_emb = match model.encode_image(&image_path) {
+            Ok(emb) => emb,
+            Err(e) => {
+                resp.failed += 1;
+                resp.errors.push(format!("{}: {e:#}", &aid[..8.min(aid.len())]));
+                continue;
+            }
+        };
+
+        let suggestions = model.classify(&image_emb, &label_list, &label_embs, threshold);
+
+        // Filter out existing tags
+        let existing: std::collections::HashSet<String> = details
+            .tags
+            .iter()
+            .map(|t| t.to_lowercase())
+            .collect();
+
+        let new_tags: Vec<String> = suggestions
+            .into_iter()
+            .filter(|s| !existing.contains(&s.tag.to_lowercase()))
+            .map(|s| s.tag)
+            .collect();
+
+        if new_tags.is_empty() {
+            resp.succeeded += 1;
+            continue;
+        }
+
+        // Apply tags
+        match engine.tag(aid, &new_tags, false) {
+            Ok(_) => {
+                resp.tags_applied += new_tags.len() as u32;
+                resp.succeeded += 1;
+            }
+            Err(e) => {
+                resp.failed += 1;
+                resp.errors.push(format!("{}: {e:#}", &aid[..8.min(aid.len())]));
+            }
+        }
+    }
+
+    Ok(resp)
 }
