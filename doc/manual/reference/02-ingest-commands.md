@@ -626,6 +626,9 @@ The model files (~207 MB quantized ONNX) are downloaded from HuggingFace on firs
 **--list-models**
 : Show model download status and file sizes. Returns early.
 
+**--list-labels**
+: Print the active label list (one per line) and exit. Shows the built-in defaults, or the labels from `--labels` / `[ai] labels` config if set. Works without a catalog when using defaults. Pipe to a file to create a custom labels blueprint: `dam auto-tag --list-labels > my-labels.txt`. Supports `--json` (outputs a JSON array).
+
 **--similar \<ASSET_ID\>**
 : Find the 20 most visually similar assets to the given asset, using stored embeddings. The target asset must have been previously processed by `auto-tag`.
 
@@ -669,6 +672,14 @@ Find visually similar images:
 
 ```bash
 dam auto-tag --similar a1b2c3d4
+```
+
+Export default labels as a blueprint for customization:
+
+```bash
+dam auto-tag --list-labels > my-labels.txt
+# Edit the file, then use it:
+dam auto-tag --labels my-labels.txt --apply
 ```
 
 Show model status:

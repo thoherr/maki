@@ -221,6 +221,10 @@ enum Commands {
         #[arg(long, display_order = 32)]
         list_models: bool,
 
+        /// Print the active label list (default or from --labels / config)
+        #[arg(long, display_order = 33)]
+        list_labels: bool,
+
         /// Find visually similar assets (by asset ID)
         #[arg(long, display_order = 40)]
         similar: Option<String>,
@@ -1730,9 +1734,40 @@ fn main() {
             download,
             remove_model,
             list_models,
+            list_labels,
             similar,
         } => {
             use dam::model_manager::{ModelManager, format_size};
+
+            // List labels can work without a catalog (uses defaults)
+            if list_labels {
+                use dam::ai::{DEFAULT_LABELS, load_labels_from_file};
+
+                let label_list: Vec<String> = if let Some(ref path) = labels {
+                    load_labels_from_file(std::path::Path::new(path))?
+                } else {
+                    // Try config if catalog exists, fall back to defaults
+                    let config_labels = dam::config::find_catalog_root()
+                        .ok()
+                        .and_then(|root| CatalogConfig::load(&root).ok())
+                        .and_then(|c| c.ai.labels.clone());
+                    if let Some(ref path) = config_labels {
+                        load_labels_from_file(std::path::Path::new(path))?
+                    } else {
+                        DEFAULT_LABELS.iter().map(|s| s.to_string()).collect()
+                    }
+                };
+
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&label_list)?);
+                } else {
+                    for label in &label_list {
+                        println!("{label}");
+                    }
+                    eprintln!("\n{} labels", label_list.len());
+                }
+                return Ok(());
+            }
 
             let catalog_root = dam::config::find_catalog_root()?;
             let config = CatalogConfig::load(&catalog_root)?;
