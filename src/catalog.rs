@@ -622,6 +622,11 @@ impl Catalog {
         // Preview rotation override
         let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN preview_rotation INTEGER");
         self.backfill_gps_columns();
+        // Embeddings table for AI features
+        #[cfg(feature = "ai")]
+        {
+            let _ = crate::embedding_store::EmbeddingStore::initialize(&self.conn);
+        }
     }
 
     /// Initialize the database schema.

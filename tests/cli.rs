@@ -8068,3 +8068,425 @@ fn export_no_results() {
         .success()
         .stdout(predicate::str::contains("No assets matched"));
 }
+
+// ===========================================================================
+// auto-tag (AI) — only compiled with --features ai
+// ===========================================================================
+
+#[cfg(feature = "ai")]
+mod auto_tag {
+    use super::*;
+
+    /// Check if the SigLIP model is downloaded.
+    fn model_available() -> bool {
+        let model_dir = dirs_model_dir();
+        model_dir.join("onnx").join("vision_model_quantized.onnx").exists()
+            && model_dir.join("onnx").join("text_model_quantized.onnx").exists()
+            && model_dir.join("tokenizer.json").exists()
+    }
+
+    fn dirs_model_dir() -> PathBuf {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap();
+        PathBuf::from(home)
+            .join(".dam")
+            .join("models")
+            .join("siglip-vit-b16-256")
+    }
+
+    #[test]
+    fn auto_tag_list_models_no_model() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        // Use a custom empty model dir so we don't depend on real model
+        dam()
+            .current_dir(&root)
+            .args(["auto-tag", "--list-models"])
+            .assert()
+            .success();
+    }
+
+    #[test]
+    fn auto_tag_list_models_json() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        let output = dam()
+            .current_dir(&root)
+            .args(["auto-tag", "--list-models", "--json"])
+            .assert()
+            .success();
+
+        let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert!(parsed.get("model_dir").is_some());
+        assert!(parsed.get("exists").is_some());
+        assert!(parsed.get("files").is_some());
+    }
+
+    #[test]
+    fn auto_tag_no_model_errors() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        // Override model dir to an empty location
+        let config_path = root.join("dam.toml");
+        let model_tmp = tempdir().unwrap();
+        std::fs::write(
+            &config_path,
+            format!(
+                "[ai]\nmodel_dir = \"{}\"\n",
+                model_tmp.path().display()
+            ),
+        )
+        .unwrap();
+
+        dam()
+            .current_dir(&root)
+            .args(["auto-tag"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("Model not downloaded"));
+    }
+
+    #[test]
+    fn auto_tag_remove_model_nonexistent() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        // Override model dir to a temp location
+        let config_path = root.join("dam.toml");
+        let model_tmp = tempdir().unwrap();
+        std::fs::write(
+            &config_path,
+            format!(
+                "[ai]\nmodel_dir = \"{}\"\n",
+                model_tmp.path().display()
+            ),
+        )
+        .unwrap();
+
+        dam()
+            .current_dir(&root)
+            .args(["auto-tag", "--remove-model"])
+            .assert()
+            .success();
+    }
+
+    // The following tests require the model to be downloaded.
+    // They are skipped gracefully if the model is not available.
+
+    #[test]
+    fn auto_tag_dry_run() {
+        if !model_available() {
+            eprintln!("Skipping auto_tag_dry_run: model not downloaded");
+            return;
+        }
+
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        // Create a real JPEG (small 2x2 image)
+        let img = image::RgbImage::from_fn(2, 2, |_, _| image::Rgb([128, 64, 200]));
+        let img_path = root.join("test.jpg");
+        img.save(&img_path).unwrap();
+
+        // Import
+        dam()
+            .current_dir(&root)
+            .args(["import", img_path.to_str().unwrap()])
+            .assert()
+            .success();
+
+        // Auto-tag dry run
+        dam()
+            .current_dir(&root)
+            .args(["auto-tag", "--query", "type:image"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("dry run"));
+    }
+
+    #[test]
+    fn auto_tag_apply() {
+        if !model_available() {
+            eprintln!("Skipping auto_tag_apply: model not downloaded");
+            return;
+        }
+
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        let img = image::RgbImage::from_fn(2, 2, |_, _| image::Rgb([128, 64, 200]));
+        let img_path = root.join("test.jpg");
+        img.save(&img_path).unwrap();
+
+        dam()
+            .current_dir(&root)
+            .args(["import", img_path.to_str().unwrap()])
+            .assert()
+            .success();
+
+        dam()
+            .current_dir(&root)
+            .args([
+                "auto-tag",
+                "--query",
+                "type:image",
+                "--apply",
+                "--threshold",
+                "0.01",
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("processed"));
+    }
+
+    #[test]
+    fn auto_tag_json_output() {
+        if !model_available() {
+            eprintln!("Skipping auto_tag_json_output: model not downloaded");
+            return;
+        }
+
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        let img = image::RgbImage::from_fn(2, 2, |_, _| image::Rgb([128, 64, 200]));
+        let img_path = root.join("test.jpg");
+        img.save(&img_path).unwrap();
+
+        dam()
+            .current_dir(&root)
+            .args(["import", img_path.to_str().unwrap()])
+            .assert()
+            .success();
+
+        let output = dam()
+            .current_dir(&root)
+            .args(["auto-tag", "--query", "type:image", "--json"])
+            .assert()
+            .success();
+
+        let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert!(parsed.get("assets_processed").is_some());
+        assert!(parsed.get("dry_run").is_some());
+        assert!(parsed.get("suggestions").is_some());
+    }
+
+    #[test]
+    fn auto_tag_custom_labels() {
+        if !model_available() {
+            eprintln!("Skipping auto_tag_custom_labels: model not downloaded");
+            return;
+        }
+
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        let img = image::RgbImage::from_fn(2, 2, |_, _| image::Rgb([128, 64, 200]));
+        let img_path = root.join("test.jpg");
+        img.save(&img_path).unwrap();
+
+        dam()
+            .current_dir(&root)
+            .args(["import", img_path.to_str().unwrap()])
+            .assert()
+            .success();
+
+        // Create custom labels file
+        let labels_path = root.join("my_labels.txt");
+        std::fs::write(&labels_path, "purple\nblue\nred\n").unwrap();
+
+        dam()
+            .current_dir(&root)
+            .args([
+                "auto-tag",
+                "--query",
+                "type:image",
+                "--labels",
+                labels_path.to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+    }
+
+    #[test]
+    fn auto_tag_threshold_high() {
+        if !model_available() {
+            eprintln!("Skipping auto_tag_threshold_high: model not downloaded");
+            return;
+        }
+
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        let img = image::RgbImage::from_fn(2, 2, |_, _| image::Rgb([128, 64, 200]));
+        let img_path = root.join("test.jpg");
+        img.save(&img_path).unwrap();
+
+        dam()
+            .current_dir(&root)
+            .args(["import", img_path.to_str().unwrap()])
+            .assert()
+            .success();
+
+        // High threshold = fewer/no suggestions
+        let output = dam()
+            .current_dir(&root)
+            .args([
+                "auto-tag",
+                "--query",
+                "type:image",
+                "--threshold",
+                "0.99",
+                "--json",
+            ])
+            .assert()
+            .success();
+
+        let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(parsed["tags_suggested"].as_u64().unwrap(), 0);
+    }
+
+    #[test]
+    fn auto_tag_specific_asset() {
+        if !model_available() {
+            eprintln!("Skipping auto_tag_specific_asset: model not downloaded");
+            return;
+        }
+
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        let img = image::RgbImage::from_fn(2, 2, |_, _| image::Rgb([128, 64, 200]));
+        let img_path = root.join("test.jpg");
+        img.save(&img_path).unwrap();
+
+        // Import and get asset ID
+        let import_output = dam()
+            .current_dir(&root)
+            .args(["import", img_path.to_str().unwrap(), "--json"])
+            .assert()
+            .success();
+
+        let import_stdout = String::from_utf8_lossy(&import_output.get_output().stdout);
+        let import_json: serde_json::Value = serde_json::from_str(&import_stdout).unwrap();
+        let asset_id = import_json["assets"][0]["asset_id"]
+            .as_str()
+            .unwrap();
+        let short_id = &asset_id[..8];
+
+        dam()
+            .current_dir(&root)
+            .args(["auto-tag", "--asset", short_id])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("processed"));
+    }
+
+    #[test]
+    fn auto_tag_similar() {
+        if !model_available() {
+            eprintln!("Skipping auto_tag_similar: model not downloaded");
+            return;
+        }
+
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        // Create two images
+        let img1 = image::RgbImage::from_fn(2, 2, |_, _| image::Rgb([128, 64, 200]));
+        let img_path1 = root.join("test1.jpg");
+        img1.save(&img_path1).unwrap();
+
+        let img2 = image::RgbImage::from_fn(2, 2, |_, _| image::Rgb([200, 100, 50]));
+        let img_path2 = root.join("test2.jpg");
+        img2.save(&img_path2).unwrap();
+
+        dam()
+            .current_dir(&root)
+            .args(["import", img_path1.to_str().unwrap(), img_path2.to_str().unwrap()])
+            .assert()
+            .success();
+
+        // Auto-tag both to generate embeddings
+        dam()
+            .current_dir(&root)
+            .args(["auto-tag", "--query", "type:image"])
+            .assert()
+            .success();
+
+        // Get first asset ID
+        let search_output = dam()
+            .current_dir(&root)
+            .args(["search", "type:image", "--format", "ids"])
+            .assert()
+            .success();
+
+        let search_stdout = String::from_utf8_lossy(&search_output.get_output().stdout);
+        let first_id = search_stdout.lines().next().unwrap().trim();
+        let short_id = &first_id[..8];
+
+        // Find similar
+        dam()
+            .current_dir(&root)
+            .args(["auto-tag", "--similar", short_id])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("similarity"));
+    }
+
+    #[test]
+    fn auto_tag_no_results() {
+        if !model_available() {
+            eprintln!("Skipping auto_tag_no_results: model not downloaded");
+            return;
+        }
+
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        // No assets to tag
+        dam()
+            .current_dir(&root)
+            .args(["auto-tag", "--query", "type:image", "--json"])
+            .assert()
+            .success();
+    }
+
+    #[test]
+    fn auto_tag_skip_non_image() {
+        if !model_available() {
+            eprintln!("Skipping auto_tag_skip_non_image: model not downloaded");
+            return;
+        }
+
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        // Create a non-image file
+        create_test_file(&root, "document.txt", b"hello world");
+
+        dam()
+            .current_dir(&root)
+            .args(["import", root.join("document.txt").to_str().unwrap()])
+            .assert()
+            .success();
+
+        let output = dam()
+            .current_dir(&root)
+            .args(["auto-tag", "--json"])
+            .assert()
+            .success();
+
+        let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        // Should skip non-image assets
+        assert!(parsed["assets_skipped"].as_u64().unwrap() > 0 || parsed["assets_processed"].as_u64().unwrap() == 0);
+    }
+}

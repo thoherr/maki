@@ -16,3 +16,10 @@ pub mod stack;
 pub mod tag_util;
 pub mod web;
 pub mod xmp_reader;
+
+#[cfg(feature = "ai")]
+pub mod ai;
+#[cfg(feature = "ai")]
+pub mod embedding_store;
+#[cfg(feature = "ai")]
+pub mod model_manager;

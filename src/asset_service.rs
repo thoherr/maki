@@ -4803,6 +4803,251 @@ impl AssetService {
 
         Ok(result)
     }
+
+    /// Auto-tag assets using SigLIP zero-shot classification.
+    #[cfg(feature = "ai")]
+    pub fn auto_tag(
+        &self,
+        query: Option<&str>,
+        asset_id: Option<&str>,
+        volume: Option<&str>,
+        threshold: f32,
+        labels: &[String],
+        prompt_template: &str,
+        apply: bool,
+        model_dir: &std::path::Path,
+        on_asset: impl Fn(&str, &crate::ai::AutoTagStatus, Duration),
+    ) -> Result<crate::ai::AutoTagResult> {
+        use crate::ai::{self, AutoTagResult, AutoTagStatus, AssetSuggestions, SigLipModel};
+        use crate::catalog::Catalog;
+        use crate::embedding_store::EmbeddingStore;
+        use crate::preview::PreviewGenerator;
+
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let engine = crate::query::QueryEngine::new(&self.catalog_root);
+        let preview_gen = PreviewGenerator::new(&self.catalog_root, self.debug, &self.preview_config);
+        let registry = DeviceRegistry::new(&self.catalog_root);
+        let volumes = registry.list()?;
+        let online_volumes: std::collections::HashMap<String, &crate::models::Volume> = volumes
+            .iter()
+            .filter(|v| v.is_online)
+            .map(|v| (v.id.to_string(), v))
+            .collect();
+
+        // Load model
+        let mut model = SigLipModel::load(model_dir)?;
+
+        // Prepare label texts with prompt template
+        let prompted_labels: Vec<String> = labels
+            .iter()
+            .map(|l| ai::apply_prompt_template(prompt_template, l))
+            .collect();
+
+        // Pre-encode all label texts
+        let label_embs = model.encode_texts(&prompted_labels)?;
+
+        // Resolve target assets
+        let asset_ids: Vec<String> = if let Some(id) = asset_id {
+            let full_id = catalog
+                .resolve_asset_id(id)?
+                .ok_or_else(|| anyhow::anyhow!("No asset found matching '{id}'"))?;
+            vec![full_id]
+        } else {
+            let q = if let Some(query) = query {
+                let volume_part = volume.map(|v| format!(" volume:{v}")).unwrap_or_default();
+                format!("{query}{volume_part}")
+            } else if let Some(v) = volume {
+                format!("volume:{v}")
+            } else {
+                "*".to_string()
+            };
+            let results = engine.search(&q)?;
+            results.into_iter().map(|r| r.asset_id).collect()
+        };
+
+        let mut result = AutoTagResult {
+            assets_processed: 0,
+            assets_skipped: 0,
+            tags_suggested: 0,
+            tags_applied: 0,
+            errors: Vec::new(),
+            dry_run: !apply,
+            suggestions: Vec::new(),
+        };
+
+        // Initialize embedding store
+        let _ = EmbeddingStore::initialize(catalog.conn());
+        let emb_store = EmbeddingStore::new(catalog.conn());
+
+        for aid in &asset_ids {
+            let asset_start = Instant::now();
+
+            // Load asset details to find preview/image file
+            let details = match catalog.load_asset_details(aid)? {
+                Some(d) => d,
+                None => {
+                    let msg = format!("Asset {} not found", &aid[..8.min(aid.len())]);
+                    result.errors.push(msg.clone());
+                    on_asset(aid, &AutoTagStatus::Error(msg), asset_start.elapsed());
+                    continue;
+                }
+            };
+
+            // Find an image to process: smart preview > regular preview > original on online volume
+            let image_path = self.find_image_for_ai(&details, &preview_gen, &online_volumes);
+
+            let image_path = match image_path {
+                Some(p) => p,
+                None => {
+                    let msg = format!(
+                        "No processable image for asset {}",
+                        &aid[..8.min(aid.len())]
+                    );
+                    result.assets_skipped += 1;
+                    on_asset(aid, &AutoTagStatus::Skipped(msg), asset_start.elapsed());
+                    continue;
+                }
+            };
+
+            // Check if the image format is supported
+            let ext = image_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            if !ai::is_supported_image(ext) {
+                let msg = format!(
+                    "Unsupported format '{}' for asset {}",
+                    ext,
+                    &aid[..8.min(aid.len())]
+                );
+                result.assets_skipped += 1;
+                on_asset(aid, &AutoTagStatus::Skipped(msg), asset_start.elapsed());
+                continue;
+            }
+
+            // Encode image
+            let image_emb = match model.encode_image(&image_path) {
+                Ok(emb) => emb,
+                Err(e) => {
+                    let msg = format!(
+                        "Failed to encode image for {}: {e}",
+                        &aid[..8.min(aid.len())]
+                    );
+                    result.errors.push(msg.clone());
+                    on_asset(aid, &AutoTagStatus::Error(msg), asset_start.elapsed());
+                    continue;
+                }
+            };
+
+            // Store embedding
+            if let Err(e) = emb_store.store(aid, &image_emb) {
+                eprintln!("Warning: failed to store embedding for {}: {e}", &aid[..8.min(aid.len())]);
+            }
+
+            // Classify
+            let suggestions = model.classify(&image_emb, labels, &label_embs, threshold);
+
+            // Filter out tags already on the asset
+            let existing_tags: HashSet<String> = details
+                .tags
+                .iter()
+                .map(|t| t.to_lowercase())
+                .collect();
+            let new_suggestions: Vec<_> = suggestions
+                .into_iter()
+                .filter(|s| !existing_tags.contains(&s.tag.to_lowercase()))
+                .collect();
+
+            result.tags_suggested += new_suggestions.len();
+
+            if apply && !new_suggestions.is_empty() {
+                let new_tags: Vec<String> = new_suggestions.iter().map(|s| s.tag.clone()).collect();
+                match engine.tag(aid, &new_tags, false) {
+                    Ok(_) => {
+                        result.tags_applied += new_tags.len();
+                    }
+                    Err(e) => {
+                        let msg = format!(
+                            "Failed to apply tags to {}: {e}",
+                            &aid[..8.min(aid.len())]
+                        );
+                        result.errors.push(msg.clone());
+                    }
+                }
+            }
+
+            result.assets_processed += 1;
+            result.suggestions.push(AssetSuggestions {
+                asset_id: aid.clone(),
+                suggested_tags: new_suggestions.clone(),
+                applied: apply,
+            });
+
+            let status = if apply {
+                AutoTagStatus::Applied(new_suggestions)
+            } else {
+                AutoTagStatus::Suggested(new_suggestions)
+            };
+            on_asset(aid, &status, asset_start.elapsed());
+        }
+
+        Ok(result)
+    }
+
+    /// Find the best image file for AI processing.
+    /// Priority: smart preview > regular preview > original on online volume.
+    #[cfg(feature = "ai")]
+    pub fn find_image_for_ai(
+        &self,
+        details: &crate::catalog::AssetDetails,
+        preview_gen: &crate::preview::PreviewGenerator,
+        online_volumes: &std::collections::HashMap<String, &crate::models::Volume>,
+    ) -> Option<PathBuf> {
+        // Try smart preview of best variant
+        if let Some(best) = crate::models::variant::best_preview_index_details(&details.variants) {
+            let variant = &details.variants[best];
+            let smart_path = preview_gen.smart_preview_path(&variant.content_hash);
+            if smart_path.exists() {
+                return Some(smart_path);
+            }
+            let preview_path = preview_gen.preview_path(&variant.content_hash);
+            if preview_path.exists() {
+                return Some(preview_path);
+            }
+        }
+
+        // Fall back to any preview we can find
+        for variant in &details.variants {
+            let smart_path = preview_gen.smart_preview_path(&variant.content_hash);
+            if smart_path.exists() {
+                return Some(smart_path);
+            }
+            let preview_path = preview_gen.preview_path(&variant.content_hash);
+            if preview_path.exists() {
+                return Some(preview_path);
+            }
+        }
+
+        // Fall back to original file on an online volume
+        for variant in &details.variants {
+            for loc in &variant.locations {
+                if let Some(vol) = online_volumes.get(&loc.volume_id) {
+                    let full_path = vol.mount_point.join(&loc.relative_path);
+                    if full_path.exists() {
+                        let ext = full_path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("");
+                        if crate::ai::is_supported_image(ext) {
+                            return Some(full_path);
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
 }
 
 /// Compute directory prefixes from scanned paths relative to the volume mount point.

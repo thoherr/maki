@@ -152,6 +152,46 @@ fn is_default_verify(v: &VerifyConfig) -> bool {
     *v == VerifyConfig::default()
 }
 
+/// AI auto-tagging configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AiConfig {
+    #[serde(default = "default_ai_threshold")]
+    pub threshold: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<String>,
+    #[serde(default = "default_ai_model_dir")]
+    pub model_dir: String,
+    #[serde(default = "default_ai_prompt")]
+    pub prompt: String,
+}
+
+fn default_ai_threshold() -> f32 {
+    0.25
+}
+
+fn default_ai_model_dir() -> String {
+    "~/.dam/models".to_string()
+}
+
+fn default_ai_prompt() -> String {
+    "a photograph of {}".to_string()
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            threshold: 0.25,
+            labels: None,
+            model_dir: "~/.dam/models".to_string(),
+            prompt: "a photograph of {}".to_string(),
+        }
+    }
+}
+
+fn is_default_ai(a: &AiConfig) -> bool {
+    *a == AiConfig::default()
+}
+
 /// Catalog configuration stored in dam.toml.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogConfig {
@@ -167,6 +207,8 @@ pub struct CatalogConfig {
     pub dedup: DedupConfig,
     #[serde(default, skip_serializing_if = "is_default_verify")]
     pub verify: VerifyConfig,
+    #[serde(default, skip_serializing_if = "is_default_ai")]
+    pub ai: AiConfig,
 }
 
 impl Default for CatalogConfig {
@@ -178,6 +220,7 @@ impl Default for CatalogConfig {
             import: ImportConfig::default(),
             dedup: DedupConfig::default(),
             verify: VerifyConfig::default(),
+            ai: AiConfig::default(),
         }
     }
 }
@@ -220,6 +263,9 @@ impl CatalogConfig {
         }
         if self.serve.per_page == 0 || self.serve.per_page > 1000 {
             anyhow::bail!("serve.per_page must be between 1 and 1000");
+        }
+        if self.ai.threshold < 0.0 || self.ai.threshold > 1.0 {
+            anyhow::bail!("ai.threshold must be between 0.0 and 1.0");
         }
         Ok(())
     }
@@ -389,6 +435,7 @@ max_edge = 1000
             },
             dedup: DedupConfig::default(),
             verify: VerifyConfig::default(),
+            ai: AiConfig::default(),
         };
         let toml_str = toml::to_string_pretty(&original).unwrap();
         let parsed: CatalogConfig = toml::from_str(&toml_str).unwrap();
@@ -534,6 +581,7 @@ max_edge = 1000
             },
             dedup: DedupConfig::default(),
             verify: VerifyConfig::default(),
+            ai: AiConfig::default(),
         };
         original.save(dir.path()).unwrap();
         let loaded = CatalogConfig::load(dir.path()).unwrap();

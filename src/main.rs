@@ -13,7 +13,7 @@ use dam::query::QueryEngine;
     after_help = "\
 Quick Reference:
   Setup:      init, volume
-  Ingest:     import, delete, tag, edit, group, auto-group
+  Ingest:     import, delete, tag, edit, group, auto-group, auto-tag
   Organize:   collection (col), saved-search (ss), stack (st)
   Retrieve:   search, show, export, duplicates, stats, backup-status, serve
   Maintain:   verify, sync, refresh, cleanup, dedup, relocate,
@@ -179,6 +179,51 @@ enum Commands {
         /// Also delete physical files from disk (requires --apply)
         #[arg(long)]
         remove_files: bool,
+    },
+
+    /// Auto-tag assets using AI vision model (requires --features ai)
+    #[cfg(feature = "ai")]
+    #[command(display_order = 16)]
+    AutoTag {
+        /// Search query to scope assets
+        #[arg(long, display_order = 1)]
+        query: Option<String>,
+
+        /// Process a specific asset (ID or prefix)
+        #[arg(long, display_order = 2)]
+        asset: Option<String>,
+
+        /// Limit to assets on a specific volume
+        #[arg(long, display_order = 3)]
+        volume: Option<String>,
+
+        /// Confidence threshold (0.0–1.0, default from dam.toml or 0.25)
+        #[arg(long, display_order = 10)]
+        threshold: Option<f32>,
+
+        /// Path to custom labels file (one label per line)
+        #[arg(long, display_order = 11)]
+        labels: Option<String>,
+
+        /// Apply suggested tags (default: report-only)
+        #[arg(long, display_order = 20)]
+        apply: bool,
+
+        /// Download the AI model
+        #[arg(long, display_order = 30)]
+        download: bool,
+
+        /// Remove cached AI model files
+        #[arg(long, display_order = 31)]
+        remove_model: bool,
+
+        /// Show model file info
+        #[arg(long, display_order = 32)]
+        list_models: bool,
+
+        /// Find visually similar assets (by asset ID)
+        #[arg(long, display_order = 40)]
+        similar: Option<String>,
     },
 
     // --- Organize ---
@@ -1670,6 +1715,273 @@ fn main() {
                     if result.deleted > 0 {
                         println!("  Run with --apply to delete.");
                     }
+                }
+            }
+            Ok(())
+        }
+        #[cfg(feature = "ai")]
+        Commands::AutoTag {
+            query,
+            asset,
+            volume,
+            threshold,
+            labels,
+            apply,
+            download,
+            remove_model,
+            list_models,
+            similar,
+        } => {
+            use dam::model_manager::{ModelManager, format_size};
+
+            let catalog_root = dam::config::find_catalog_root()?;
+            let config = CatalogConfig::load(&catalog_root)?;
+
+            // Resolve model directory
+            let model_dir_str = &config.ai.model_dir;
+            let model_base = if model_dir_str.starts_with("~/") {
+                let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
+                PathBuf::from(home).join(&model_dir_str[2..])
+            } else {
+                PathBuf::from(model_dir_str)
+            };
+            let model_dir = model_base.join("siglip-vit-b16-256");
+            let mgr = ModelManager::new(&model_dir);
+
+            // Model management commands
+            if download {
+                eprintln!("Downloading SigLIP model...");
+                mgr.ensure_model(|file, current, total| {
+                    eprintln!("  [{current}/{total}] {file}");
+                })?;
+                let total = mgr.total_size();
+                if cli.json {
+                    println!("{}", serde_json::json!({
+                        "status": "downloaded",
+                        "model_dir": model_dir.display().to_string(),
+                        "total_size": total,
+                    }));
+                } else {
+                    println!("Model downloaded to {}", model_dir.display());
+                    println!("  Total size: {}", format_size(total));
+                }
+                return Ok(());
+            }
+
+            if remove_model {
+                mgr.remove_model()?;
+                if cli.json {
+                    println!("{}", serde_json::json!({
+                        "status": "removed",
+                        "model_dir": model_dir.display().to_string(),
+                    }));
+                } else {
+                    println!("Model removed from {}", model_dir.display());
+                }
+                return Ok(());
+            }
+
+            if list_models {
+                let files = mgr.list_files();
+                if cli.json {
+                    let json_files: Vec<serde_json::Value> = files
+                        .iter()
+                        .map(|(name, size)| {
+                            serde_json::json!({
+                                "file": name,
+                                "size": size,
+                            })
+                        })
+                        .collect();
+                    println!("{}", serde_json::json!({
+                        "model_dir": model_dir.display().to_string(),
+                        "exists": mgr.model_exists(),
+                        "files": json_files,
+                        "total_size": mgr.total_size(),
+                    }));
+                } else if files.is_empty() {
+                    println!("No model files found at {}", model_dir.display());
+                    println!("  Run 'dam auto-tag --download' to download the model.");
+                } else {
+                    println!("Model: SigLIP ViT-B/16-256");
+                    println!("  Directory: {}", model_dir.display());
+                    for (name, size) in &files {
+                        println!("  {name}: {}", format_size(*size));
+                    }
+                    println!("  Total: {}", format_size(mgr.total_size()));
+                }
+                return Ok(());
+            }
+
+            // Similar search mode
+            if let Some(ref similar_id) = similar {
+                if !mgr.model_exists() {
+                    anyhow::bail!(
+                        "Model not downloaded. Run 'dam auto-tag --download' first."
+                    );
+                }
+
+                let catalog = dam::catalog::Catalog::open(&catalog_root)?;
+                let _ = dam::embedding_store::EmbeddingStore::initialize(catalog.conn());
+                let emb_store = dam::embedding_store::EmbeddingStore::new(catalog.conn());
+
+                let full_id = catalog
+                    .resolve_asset_id(similar_id)?
+                    .ok_or_else(|| anyhow::anyhow!("No asset found matching '{similar_id}'"))?;
+
+                let query_emb = match emb_store.get(&full_id)? {
+                    Some(emb) => emb,
+                    None => {
+                        // No stored embedding — encode it now
+                        let config_preview = &config.preview;
+                        let service = AssetService::new(&catalog_root, cli.debug, config_preview);
+                        let mut model = dam::ai::SigLipModel::load(&model_dir)?;
+                        let registry = DeviceRegistry::new(&catalog_root);
+                        let volumes = registry.list()?;
+                        let online_volumes: std::collections::HashMap<String, &dam::models::Volume> =
+                            volumes
+                                .iter()
+                                .filter(|v| v.is_online)
+                                .map(|v| (v.id.to_string(), v))
+                                .collect();
+                        let preview_gen = dam::preview::PreviewGenerator::new(
+                            &catalog_root,
+                            cli.debug,
+                            config_preview,
+                        );
+                        let details = catalog
+                            .load_asset_details(&full_id)?
+                            .ok_or_else(|| anyhow::anyhow!("Asset not found"))?;
+                        let image_path = service
+                            .find_image_for_ai(&details, &preview_gen, &online_volumes)
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("No processable image for asset {}", &full_id[..8])
+                            })?;
+                        let emb = model.encode_image(&image_path)?;
+                        emb_store.store(&full_id, &emb)?;
+                        emb
+                    }
+                };
+
+                let results = emb_store.find_similar(&query_emb, 20, Some(&full_id))?;
+
+                if cli.json {
+                    let json_results: Vec<serde_json::Value> = results
+                        .iter()
+                        .map(|(id, sim)| {
+                            serde_json::json!({
+                                "asset_id": id,
+                                "similarity": sim,
+                            })
+                        })
+                        .collect();
+                    println!("{}", serde_json::to_string_pretty(&json_results)?);
+                } else if results.is_empty() {
+                    println!("No similar assets found. Run 'dam auto-tag' on more assets to build embeddings.");
+                } else {
+                    println!(
+                        "Assets similar to {} ({} results):",
+                        &full_id[..8],
+                        results.len()
+                    );
+                    for (id, sim) in &results {
+                        let short_id = &id[..8.min(id.len())];
+                        println!("  {short_id}  similarity: {sim:.3}");
+                    }
+                }
+                return Ok(());
+            }
+
+            // Main auto-tag flow
+            if !mgr.model_exists() {
+                anyhow::bail!(
+                    "Model not downloaded. Run 'dam auto-tag --download' first."
+                );
+            }
+
+            let threshold = threshold.unwrap_or(config.ai.threshold);
+
+            // Resolve labels
+            let label_list: Vec<String> = if let Some(ref labels_path) = labels {
+                dam::ai::load_labels_from_file(std::path::Path::new(labels_path))?
+            } else if let Some(ref config_labels) = config.ai.labels {
+                dam::ai::load_labels_from_file(std::path::Path::new(config_labels))?
+            } else {
+                dam::ai::DEFAULT_LABELS.iter().map(|s| s.to_string()).collect()
+            };
+
+            let prompt = &config.ai.prompt;
+            let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
+
+            let show_log = cli.log;
+            let result = service.auto_tag(
+                query.as_deref(),
+                asset.as_deref(),
+                volume.as_deref(),
+                threshold,
+                &label_list,
+                prompt,
+                apply,
+                &model_dir,
+                |id, status, elapsed| {
+                    if show_log {
+                        let short_id = &id[..8.min(id.len())];
+                        match status {
+                            dam::ai::AutoTagStatus::Suggested(tags) => {
+                                let tag_names: Vec<&str> =
+                                    tags.iter().map(|t| t.tag.as_str()).collect();
+                                eprintln!(
+                                    "  {short_id} — {} tags suggested: {} ({})",
+                                    tags.len(),
+                                    tag_names.join(", "),
+                                    format_duration(elapsed)
+                                );
+                            }
+                            dam::ai::AutoTagStatus::Applied(tags) => {
+                                let tag_names: Vec<&str> =
+                                    tags.iter().map(|t| t.tag.as_str()).collect();
+                                eprintln!(
+                                    "  {short_id} — {} tags applied: {} ({})",
+                                    tags.len(),
+                                    tag_names.join(", "),
+                                    format_duration(elapsed)
+                                );
+                            }
+                            dam::ai::AutoTagStatus::Skipped(msg) => {
+                                eprintln!("  {short_id} — skipped: {msg}");
+                            }
+                            dam::ai::AutoTagStatus::Error(msg) => {
+                                eprintln!("  {short_id} — error: {msg}");
+                            }
+                        }
+                    }
+                },
+            )?;
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                for err in &result.errors {
+                    eprintln!("  {err}");
+                }
+
+                let mode = if apply { "Auto-tag" } else { "Auto-tag (dry run)" };
+                let mut parts = vec![
+                    format!("{} processed", result.assets_processed),
+                ];
+                if result.assets_skipped > 0 {
+                    parts.push(format!("{} skipped", result.assets_skipped));
+                }
+                parts.push(format!("{} tags suggested", result.tags_suggested));
+                if apply {
+                    parts.push(format!("{} tags applied", result.tags_applied));
+                }
+                if !result.errors.is_empty() {
+                    parts.push(format!("{} errors", result.errors.len()));
+                }
+                println!("{mode}: {}", parts.join(", "));
+                if !apply && result.tags_suggested > 0 {
+                    println!("  Run with --apply to apply suggested tags.");
                 }
             }
             Ok(())
