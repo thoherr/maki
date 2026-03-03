@@ -10,8 +10,12 @@ Referenced from [enhancements.md](enhancements.md) item 15 and [roadmap.md](road
 
 ```
 dam auto-tag [--asset <id>] [--volume <label>] [--query <QUERY>]
-             [--model clip|siglip] [--threshold 0.5] [--labels <file>]
+             [--model mobile|standard|accurate|ollama:<name>]
+             [--threshold 0.5] [--labels <file>]
              [--apply] [--json] [--log] [--time]
+dam auto-tag --list-models
+dam auto-tag --download <model>
+dam auto-tag --remove-model <model>
 ```
 
 Given a configurable label vocabulary (e.g., `landscape`, `portrait`, `architecture`, `animals/birds`), the model scores each image against every label and suggests tags above the threshold. Report-only by default (`--apply` writes tags).
@@ -51,18 +55,187 @@ Shell out to a Python script that uses `transformers` + `onnx_clip` or `open_cli
 | **CPU inference** | Similar speed (same ONNX Runtime underneath), but ~500 ms startup penalty per invocation |
 | **User friction** | Requires Python installed. Version conflicts. Virtual env management. Not self-contained |
 
-### Option C: External API (Ollama / Local LLaVA)
+### Option C: External API (Ollama / Local VLM)
 
-Shell out to a local vision-language model server (Ollama with LLaVA, or similar).
+Shell out to a local vision-language model server (Ollama with Qwen2.5-VL, Gemma 3, Moondream, etc.).
 
 | Aspect | Impact |
 |--------|--------|
-| **New dependency** | Ollama or similar installed and running |
-| **Binary size increase** | ~0 |
-| **Model files** | 4-8 GB for LLaVA (managed by Ollama, not by dam) |
-| **Runtime memory** | 4-8 GB (full VLM in memory) |
-| **Accuracy** | Higher (natural language understanding), but slower and less predictable output format |
-| **Latency** | 1-5 seconds per image on CPU |
+| **New dependency** | Ollama installed and running (`ollama serve`) |
+| **Binary size increase** | ~0 (HTTP client only, `reqwest` already used or trivial to add) |
+| **Model files** | 1-6 GB per model (managed by Ollama, not by dam) |
+| **Runtime memory** | 2-8 GB depending on model (Moondream 2B: ~2 GB, Qwen 7B: ~6 GB) |
+| **Accuracy** | Higher for descriptions and subjective tags; can discover novel tags. Qwen2.5-VL 7B: 0.33% hallucination rate |
+| **Latency** | 5-36 seconds per image on CPU (Moondream ~5s, Qwen 3B ~24s, Qwen 7B ~36s) |
+| **Structured output** | Ollama supports JSON schema constraints natively |
+
+---
+
+## Models
+
+This section compares the models available for Option A (embedded ONNX) and Option C (Ollama VLM), their sizes, accuracy, speed, and trade-offs. Understanding the model landscape is important because it drives the user-facing `--model` flag, the download/disk budget, and the accuracy expectations.
+
+### Option A Models: CLIP-Family (Zero-Shot Classification via ONNX)
+
+All CLIP-family models work the same way: encode the image and a set of text labels into a shared embedding space, then rank labels by cosine similarity. The user defines a tag vocabulary; the model scores each tag. No training required -- new tags work instantly.
+
+#### OpenAI CLIP (Original)
+
+| Model | Total Params | Image Encoder | Input Res | Embed Dim | ImageNet ZS | ONNX Vision Size (FP32) | CPU Inference |
+|-------|-------------|---------------|-----------|-----------|-------------|------------------------|---------------|
+| ViT-B/32 | 151M | 87M | 224x224 | 512 | 63.0% | ~340 MB | ~117 ms |
+| ViT-B/16 | 150M | 86M | 224x224 | 512 | 68.3% | ~340 MB | ~200 ms |
+| ViT-L/14 | 428M | 303M | 224x224 | 768 | 75.5% | ~1.2 GB | ~500 ms |
+| ViT-L/14@336 | 428M | 303M | 336x336 | 768 | 76.2% | ~1.2 GB | ~800 ms |
+
+Well-tested ONNX exports: [Qdrant split encoders](https://huggingface.co/Qdrant/clip-ViT-B-32-vision), [immich-app collection](https://huggingface.co/immich-app), [lakeraai/onnx_clip](https://github.com/lakeraai/onnx_clip). INT8 quantized variants reduce vision encoder to ~85 MB (ViT-B/32) or ~300 MB (ViT-L/14).
+
+**Strengths**: Most widely deployed, best ecosystem support, well-documented ONNX exports, used by Immich.
+**Weaknesses**: Lowest accuracy of the CLIP family. Training data (WIT-400M) is smaller than newer datasets.
+
+#### OpenCLIP (LAION-Trained)
+
+Community-trained CLIP models on larger datasets (LAION-2B, DataComp).
+
+| Model | Training Data | ImageNet ZS | Notes |
+|-------|--------------|-------------|-------|
+| ViT-B/32 | LAION-2B | 66.6% | +3.6% over OpenAI ViT-B/32 |
+| ViT-B/16 | LAION-400M | 67.1% | |
+| ViT-L/14 | LAION-2B | 75.2% | Matches OpenAI |
+| ViT-H/14 | LAION-2B | 78.0% | Best open CLIP (2023) |
+| ViT-bigG/14 | LAION-2B | 80.1% | ~1.8B params, very large |
+
+ONNX exports available via OpenCLIP tooling. Same architecture as OpenAI CLIP, so file sizes are comparable.
+
+**Multilingual variants**: XLM-RoBERTa text encoders support 100+ languages. Relevant if tag vocabularies include non-English labels.
+
+**Strengths**: Better accuracy than OpenAI CLIP at same model size. Open training data. Multilingual options.
+**Weaknesses**: Larger models (ViT-H, ViT-G) are impractical for a CLI tool. ONNX exports less standardized than OpenAI's.
+
+#### Google SigLIP
+
+Replaces CLIP's softmax contrastive loss with a pairwise sigmoid loss. Consistently outperforms CLIP at equivalent model sizes.
+
+| Model | Params | Input Res | ImageNet ZS | ONNX Vision Size (est.) |
+|-------|--------|-----------|-------------|------------------------|
+| ViT-B/16-256 | 86M | 256x256 | 74.1% (v1) / 79.1% (v2) | ~340 MB |
+| ViT-B/16-384 | 86M | 384x384 | 76.7% (v1) | ~340 MB |
+| ViT-L/16-256 | 303M | 256x256 | ~82% (v2) | ~1.2 GB |
+| ViT-SO400M/14-384 | 400M | 384x384 | 83-84% (v2) | ~1.6 GB |
+
+ONNX exports: [deepghs/siglip_onnx](https://huggingface.co/deepghs/siglip_onnx) (split image/text encoders), [Xenova/siglip-base-patch16-384](https://huggingface.co/Xenova/siglip-base-patch16-384), [immich-app collection](https://huggingface.co/immich-app).
+
+**Strengths**: Best accuracy-to-size ratio. SigLIP ViT-B/16-256 (86M params) matches OpenAI ViT-L/14 (428M params) -- same accuracy at 1/5 the size and ~2x the speed. SigLIP 2 adds native multilingual support (140+ languages). Used by Moondream as the vision backbone.
+**Weaknesses**: Different tokenizer than CLIP (SentencePiece vs BPE). Fewer pre-built ONNX exports than CLIP, though this is improving. Higher input resolution variants (384, 512) are slower.
+
+#### Apple MobileCLIP
+
+Distilled CLIP models optimized for edge/mobile deployment. Dramatically smaller image encoders.
+
+| Model | Vision Params | ImageNet ZS | ONNX Vision Size (est.) | CPU Latency |
+|-------|--------------|-------------|------------------------|-------------|
+| MobileCLIP-S0 | 11.4M | 67.8% | ~46 MB (FP32) / ~12 MB (INT8) | ~3 ms (mobile) |
+| MobileCLIP-S1 | 21.5M | 72.6% | ~86 MB (FP32) | ~5 ms |
+| MobileCLIP-S2 | 35.7M | 74.4% | ~143 MB (FP32) | ~7 ms |
+| MobileCLIP-B | 86.3M | 76.8% | ~340 MB (FP32) | ~14 ms |
+| MobileCLIP2-S0 | 11.4M | 71.5% | ~46 MB (FP32) | ~3 ms |
+| MobileCLIP2-S2 | 35.7M | 77.2% | ~143 MB (FP32) | ~7 ms |
+
+Integrated into [OpenCLIP](https://huggingface.co/apple/MobileCLIP-S1-OpenCLIP). CoreML exports officially supported; ONNX export via standard PyTorch paths.
+
+**Strengths**: Tiny image encoders. MobileCLIP-S0 at 11.4M vision params gets 67.8% ImageNet -- matching OpenAI ViT-B/16 at ~7.5x smaller. MobileCLIP2-S2 at 35.7M params beats SigLIP ViT-B/16 while being 2.3x faster. INT8-quantized S0 vision encoder would be ~12 MB -- negligible disk impact.
+**Weaknesses**: Less community adoption for ONNX deployment. Accuracy gap widens on fine-grained categories. Still uses CLIP's BPE tokenizer (text encoder is standard CLIP).
+
+#### TinyCLIP (Microsoft)
+
+Knowledge-distilled tiny CLIP models, extremely small but lower accuracy.
+
+| Model | Total Params | ImageNet ZS | Notes |
+|-------|-------------|-------------|-------|
+| ViT-8M/16-Text-3M | 11M | 41.1% | Smallest, but too weak for practical tagging |
+| ViT-39M/16-Text-19M | 58M | 63.5% | Approaching usability |
+| ViT-61M/32-Text-29M | 90M | 64.8% | Comparable to OpenAI ViT-B/32 |
+
+**Strengths**: Very small. Fast. **Weaknesses**: Accuracy too low for most variants. MobileCLIP achieves better accuracy at similar sizes.
+
+### Option C Models: Vision-Language Models (via Ollama)
+
+VLMs generate free-form text descriptions of images. For tagging, the model is prompted to output a structured list (JSON via Ollama's structured output mode). Fundamentally different approach: the model *describes* the image rather than scoring it against a fixed vocabulary.
+
+| Model | Params | Download | RAM (Q4) | CPU Speed | Hallucination Rate | Tag Quality |
+|-------|--------|----------|----------|-----------|-------------------|-------------|
+| Moondream 2 | 1.86B | ~1.1 GB | ~2 GB | ~5-15 s/img | Higher | Basic |
+| Qwen2.5-VL 3B | 3B | ~2 GB | ~3 GB | ~24 s/img | 1.33% | Good |
+| Gemma 3 4B | 4B | ~2.7 GB | ~4 GB | ~31 s/img | 2.0% | Good |
+| LLaVA 1.6 7B | 7B | ~4.1 GB | ~6 GB | ~30 s/img | Moderate | Good |
+| Qwen2.5-VL 7B | 7B | ~4.3 GB | ~6 GB | ~36 s/img | 0.33% | Best |
+| Llama 3.2 Vision 11B | 11B | ~6.4 GB | ~8 GB+ | ~50 s/img | Moderate | Good |
+
+Benchmarks from [PhotoPrism's model comparison](https://docs.photoprism.app/developer-guide/vision/model-comparison/) (AMD Ryzen AI 9, CPU-only). Ollama supports [structured JSON output](https://ollama.com/blog/structured-outputs) natively, enabling schema-constrained responses like `{"tags": [...], "description": "..."}`.
+
+**Strengths**: Can discover tags not in any predefined vocabulary. Understands complex scenes compositionally ("woman walking dog in park at sunset"). Can provide descriptions alongside tags. Better at specific object identification. Qwen2.5-VL 7B has remarkably low hallucination (0.33%).
+**Weaknesses**: 100-300x slower than CLIP on CPU. Requires 2-8 GB RAM while running. Output can be inconsistent (same image may get different tags on different runs). Requires Ollama as external dependency. Not practical for batch-processing thousands of images during import.
+
+### Accuracy for Photography Tagging Specifically
+
+The ImageNet zero-shot accuracy numbers above measure general object classification. For photography-specific tags (landscape, portrait, macro, street, architecture, golden hour, etc.), the picture is more nuanced:
+
+**CLIP-family (zero-shot, ~100 photography tags)**:
+- Broad categories (landscape, portrait, architecture, food, animals): 80-90% precision
+- Medium categories (sunset, beach, forest, city, studio): 70-80% precision
+- Subjective/aesthetic tags (moody, cinematic, editorial, dreamy): 40-60% precision
+- Fine-grained (specific bird species, architectural styles, camera techniques): 30-50% precision
+
+**VLMs (prompted for tags)**:
+- Broad categories: 85-95% precision (slightly better)
+- Medium categories: 75-85% precision
+- Subjective/aesthetic: 60-75% precision (significantly better -- understands "mood")
+- Fine-grained: 50-70% precision (better compositional understanding)
+
+The CLIP accuracy improves significantly with prompt engineering: `"a photograph of a landscape"` works much better than just `"landscape"`. The text encoder prompt template is configurable.
+
+### Model Selection Strategy
+
+#### Should the user choose models?
+
+Yes, but with sensible defaults and simple choices. The `--model` flag and `[ai] model` config accept a model identifier. Recommended tiers:
+
+| Identifier | Model | Use Case |
+|------------|-------|----------|
+| `mobile` | MobileCLIP2-S0 (11.4M) | Fastest, smallest download (~50 MB). Good enough for broad categories |
+| `standard` (default) | SigLIP ViT-B/16-256 (86M) | Best accuracy-to-speed ratio. ~340 MB download |
+| `accurate` | SigLIP ViT-SO400M/14-384 (400M) | Highest accuracy. ~1.6 GB download. Slower (~500 ms/img) |
+| `ollama:<model>` | Any Ollama vision model | VLM mode. e.g., `ollama:qwen2.5vl:3b`. Requires Ollama running |
+
+The `mobile`, `standard`, and `accurate` tiers use Option A (embedded ONNX). The `ollama:*` prefix switches to Option C (HTTP API to Ollama). This way a single `--model` flag covers both approaches, and the user can experiment without recompiling.
+
+#### Model management
+
+```
+dam auto-tag --list-models          # show available / downloaded models
+dam auto-tag --download <model>     # pre-download a model
+dam auto-tag --remove-model <model> # delete cached model files
+```
+
+Models are cached in `~/.dam/models/<model-id>/` (or `[ai] model_dir` from config). Each model directory contains the ONNX file(s) and a `manifest.json` with the expected SHA-256 hashes. On first use, the model is downloaded from HuggingFace with a progress bar. Integrity is verified before loading.
+
+When the user switches models, embeddings stored from a different model are invalidated (the `model` column in the `embeddings` table tracks this). Re-tagging with a new model recomputes embeddings. Similarity search only compares embeddings from the same model.
+
+### Recommendation
+
+**Default: SigLIP ViT-B/16-256 (`standard`)**
+
+This model hits the sweet spot:
+- 79.1% ImageNet zero-shot (SigLIP 2) -- matches CLIP ViT-L/14 accuracy at 1/5 the parameter count
+- ~340 MB download (FP32), ~85 MB with INT8 quantization
+- ~200 ms per image on CPU -- fast enough for batch import
+- 512-dimension embeddings -- compact for storage
+- ONNX exports available via [deepghs/siglip_onnx](https://huggingface.co/deepghs/siglip_onnx) and [immich-app](https://huggingface.co/immich-app)
+- Multilingual text encoder (SigLIP 2) -- tag vocabularies can include non-English labels
+
+For users with constrained disk or who want maximum speed, `mobile` (MobileCLIP2-S0) is a compelling alternative at ~50 MB with 71.5% accuracy. For users who already run Ollama, `ollama:qwen2.5vl:3b` provides the highest quality with no additional disk cost to dam.
+
+The hybrid approach (ONNX for bulk tagging + optional Ollama for on-demand enrichment) gives users the best of both worlds without forcing either dependency.
 
 ---
 
@@ -75,13 +248,15 @@ Shell out to a local vision-language model server (Ollama with LLaVA, or similar
 4. **Controllable size** -- use Cargo feature flag (`--features ai`) so users who don't want it pay zero cost. The ONNX Runtime library is only linked when the feature is enabled.
 5. **Model download on demand** -- model files (~150 MB quantized) are downloaded on first `dam auto-tag` invocation, not bundled in the binary.
 
-**Recommended model**: CLIP ViT-B/32 (OpenAI) via Qdrant's split ONNX exports (huggingface.co/Qdrant/clip-ViT-B-32-vision).
+**Recommended default model**: SigLIP ViT-B/16-256 (`standard` tier). See the [Models](#models) section for the full comparison.
 
-- Best ratio of speed to accuracy for a tagging use case
-- Well-tested ONNX exports available
+- 79.1% ImageNet zero-shot -- matches CLIP ViT-L/14 (a 5x larger model)
+- ~340 MB download (FP32), ~85 MB with INT8 quantization
+- ~200 ms/image on CPU -- fast enough for batch import
 - 512-dimensional embeddings (compact for storage)
-- INT8 quantized variant available (~85 MB vision encoder)
-- SigLIP is more memory-efficient and slightly better accuracy, but fewer ready-made ONNX exports and less ecosystem tooling in Rust
+- ONNX exports available via deepghs/siglip_onnx and immich-app
+- SigLIP 2 adds native multilingual support (140+ languages)
+- Hybrid `ollama:<model>` tier allows VLM enrichment without additional compile-time cost
 
 ---
 
@@ -204,10 +379,11 @@ Recommendation: embed minimal BPE. Label vocabularies are short (50-200 labels),
 
 ```toml
 [ai]
-model = "clip-vit-b32"          # or "clip-vit-b32-int8" for quantized
+model = "standard"              # mobile | standard | accurate | ollama:<name>
 labels = "labels.txt"           # custom label vocabulary file (one per line)
 threshold = 0.25                # minimum confidence to suggest
 model_dir = "~/.dam/models"     # where to cache downloaded models
+prompt = "a photograph of a {}"  # text encoder prompt template ({} = tag name)
 ```
 
 Default label vocabulary (~100 common photography categories) would be embedded in the binary, with `labels.txt` as an override.
@@ -233,13 +409,40 @@ A lower-effort first step (2-3 days) would be to shell out to Ollama's API (`POS
 
 ## References
 
+### ONNX Runtime & Rust Integration
 - [pykeio/ort -- Rust ONNX Runtime bindings](https://github.com/pykeio/ort)
 - [ort documentation](https://ort.pyke.io/)
+- [ONNX Runtime shared library size discussion](https://github.com/microsoft/onnxruntime/issues/6160)
+
+### CLIP Models
+- [OpenAI CLIP](https://github.com/openai/CLIP)
+- [OpenCLIP (LAION)](https://github.com/mlfoundations/open_clip)
 - [CLIP ViT-B/32 ONNX models (sayantan47)](https://huggingface.co/sayantan47/clip-vit-b32-onnx)
 - [Qdrant CLIP ViT-B/32 vision encoder](https://huggingface.co/Qdrant/clip-ViT-B-32-vision)
 - [Qdrant CLIP ViT-B/32 text encoder](https://huggingface.co/Qdrant/clip-ViT-B-32-text)
-- [SigLIP vs CLIP memory comparison](https://github.com/mlfoundations/open_clip/discussions/872)
-- [SigLIP 2 announcement](https://huggingface.co/blog/siglip2)
-- [ONNX Runtime shared library size discussion](https://github.com/microsoft/onnxruntime/issues/6160)
 - [onnx_clip -- lightweight CLIP without PyTorch](https://github.com/lakeraai/onnx_clip)
 - [CLIP-ONNX -- 3x speedup library](https://github.com/Lednik7/CLIP-ONNX)
+- [immich-app ONNX model collection](https://huggingface.co/immich-app)
+
+### SigLIP Models
+- [SigLIP paper](https://arxiv.org/pdf/2303.15343)
+- [SigLIP 2 announcement](https://huggingface.co/blog/siglip2)
+- [SigLIP vs CLIP memory comparison](https://github.com/mlfoundations/open_clip/discussions/872)
+- [SigLIP vs CLIP detailed comparison](https://blog.ritwikraha.dev/choosing-between-siglip-and-clip-for-language-image-pretraining)
+- [deepghs/siglip_onnx -- split ONNX exports](https://huggingface.co/deepghs/siglip_onnx)
+
+### MobileCLIP & TinyCLIP
+- [Apple MobileCLIP](https://github.com/apple/ml-mobileclip)
+- [MobileCLIP paper](https://arxiv.org/html/2311.17049v2)
+- [MobileCLIP2 paper](https://arxiv.org/html/2508.20691v1)
+- [TinyCLIP (Microsoft)](https://github.com/wkcn/TinyCLIP)
+
+### Vision-Language Models (Ollama)
+- [Ollama vision models](https://ollama.com/search?c=vision)
+- [Ollama structured outputs](https://ollama.com/blog/structured-outputs)
+- [PhotoPrism vision model comparison](https://docs.photoprism.app/developer-guide/vision/model-comparison/)
+- [Moondream](https://moondream.ai/)
+
+### Real-World Implementations
+- [Immich smart search (uses CLIP)](https://docs.immich.app/features/searching/)
+- [PhotoPrism AI classification](https://docs.photoprism.app/developer-guide/vision/)
