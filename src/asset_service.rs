@@ -4816,6 +4816,7 @@ impl AssetService {
         prompt_template: &str,
         apply: bool,
         model_dir: &std::path::Path,
+        model_id: &str,
         on_asset: impl Fn(&str, &crate::ai::AutoTagStatus, Duration),
     ) -> Result<crate::ai::AutoTagResult> {
         use crate::ai::{self, AutoTagResult, AutoTagStatus, AssetSuggestions, SigLipModel};
@@ -4835,7 +4836,7 @@ impl AssetService {
             .collect();
 
         // Load model
-        let mut model = SigLipModel::load_with_debug(model_dir, self.debug)?;
+        let mut model = SigLipModel::load_with_debug(model_dir, model_id, self.debug)?;
 
         // Prepare label texts with prompt template
         let prompted_labels: Vec<String> = labels
@@ -4940,7 +4941,7 @@ impl AssetService {
             };
 
             // Store embedding
-            if let Err(e) = emb_store.store(aid, &image_emb) {
+            if let Err(e) = emb_store.store(aid, &image_emb, model_id) {
                 eprintln!("Warning: failed to store embedding for {}: {e}", &aid[..8.min(aid.len())]);
             }
 

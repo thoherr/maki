@@ -8122,8 +8122,30 @@ mod auto_tag {
         let stdout = String::from_utf8_lossy(&output.get_output().stdout);
         let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
         assert!(parsed.get("model_dir").is_some());
-        assert!(parsed.get("exists").is_some());
-        assert!(parsed.get("files").is_some());
+        assert!(parsed.get("active_model").is_some());
+        let models = parsed.get("models").unwrap().as_array().unwrap();
+        assert!(models.len() >= 2, "Expected at least 2 models");
+        // Check that each model has expected fields
+        for m in models {
+            assert!(m.get("id").is_some());
+            assert!(m.get("name").is_some());
+            assert!(m.get("downloaded").is_some());
+            assert!(m.get("embedding_dim").is_some());
+        }
+    }
+
+    #[test]
+    fn auto_tag_model_flag() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        // Use --model with an unknown model
+        dam()
+            .current_dir(&root)
+            .args(["auto-tag", "--model", "nonexistent-model", "--list-models"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("Unknown model"));
     }
 
     #[test]

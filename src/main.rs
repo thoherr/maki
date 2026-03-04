@@ -197,6 +197,10 @@ enum Commands {
         #[arg(long, display_order = 3)]
         volume: Option<String>,
 
+        /// AI model to use (default from dam.toml or siglip-vit-b16-256)
+        #[arg(long, display_order = 4)]
+        model: Option<String>,
+
         /// Confidence threshold (0.0–1.0, default from dam.toml or 0.1)
         #[arg(long, display_order = 10)]
         threshold: Option<f32>,
@@ -217,7 +221,7 @@ enum Commands {
         #[arg(long, display_order = 31)]
         remove_model: bool,
 
-        /// Show model file info
+        /// Show available AI models
         #[arg(long, display_order = 32)]
         list_models: bool,
 
@@ -1728,6 +1732,7 @@ fn main() {
             query,
             asset,
             volume,
+            model,
             threshold,
             labels,
             apply,
@@ -1772,7 +1777,14 @@ fn main() {
             let catalog_root = dam::config::find_catalog_root()?;
             let config = CatalogConfig::load(&catalog_root)?;
 
-            // Resolve model directory
+            // Resolve model ID: CLI --model > config ai.model > default
+            let model_id = model.as_deref().unwrap_or(&config.ai.model);
+            let _spec = dam::ai::get_model_spec(model_id)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Unknown model: {model_id}. Run 'dam auto-tag --list-models' to see available models."
+                ))?;
+
+            // Resolve model base directory
             let model_dir_str = &config.ai.model_dir;
             let model_base = if model_dir_str.starts_with("~/") {
                 let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
@@ -1780,12 +1792,12 @@ fn main() {
             } else {
                 PathBuf::from(model_dir_str)
             };
-            let model_dir = model_base.join("siglip-vit-b16-256");
-            let mgr = ModelManager::new(&model_dir);
+            let model_dir = model_base.join(model_id);
+            let mgr = ModelManager::new(&model_dir, model_id)?;
 
             // Model management commands
             if download {
-                eprintln!("Downloading SigLIP model...");
+                eprintln!("Downloading {} ...", mgr.spec().display_name);
                 mgr.ensure_model(|file, current, total| {
                     eprintln!("  [{current}/{total}] {file}");
                 })?;
@@ -1793,6 +1805,7 @@ fn main() {
                 if cli.json {
                     println!("{}", serde_json::json!({
                         "status": "downloaded",
+                        "model": model_id,
                         "model_dir": model_dir.display().to_string(),
                         "total_size": total,
                     }));
@@ -1808,6 +1821,7 @@ fn main() {
                 if cli.json {
                     println!("{}", serde_json::json!({
                         "status": "removed",
+                        "model": model_id,
                         "model_dir": model_dir.display().to_string(),
                     }));
                 } else {
@@ -1817,33 +1831,38 @@ fn main() {
             }
 
             if list_models {
-                let files = mgr.list_files();
+                let models = ModelManager::list_available_models(&model_base);
                 if cli.json {
-                    let json_files: Vec<serde_json::Value> = files
+                    let json_models: Vec<serde_json::Value> = models
                         .iter()
-                        .map(|(name, size)| {
+                        .map(|(spec, exists, size)| {
                             serde_json::json!({
-                                "file": name,
+                                "id": spec.id,
+                                "name": spec.display_name,
+                                "downloaded": exists,
                                 "size": size,
+                                "active": spec.id == model_id,
+                                "embedding_dim": spec.embedding_dim,
                             })
                         })
                         .collect();
                     println!("{}", serde_json::json!({
-                        "model_dir": model_dir.display().to_string(),
-                        "exists": mgr.model_exists(),
-                        "files": json_files,
-                        "total_size": mgr.total_size(),
+                        "model_dir": model_base.display().to_string(),
+                        "active_model": model_id,
+                        "models": json_models,
                     }));
-                } else if files.is_empty() {
-                    println!("No model files found at {}", model_dir.display());
-                    println!("  Run 'dam auto-tag --download' to download the model.");
                 } else {
-                    println!("Model: SigLIP ViT-B/16-256");
-                    println!("  Directory: {}", model_dir.display());
-                    for (name, size) in &files {
-                        println!("  {name}: {}", format_size(*size));
+                    println!("Available models (directory: {}):", model_base.display());
+                    for (spec, exists, size) in &models {
+                        let status = if *exists {
+                            format!("downloaded ({})", format_size(*size))
+                        } else {
+                            "not downloaded".to_string()
+                        };
+                        let active = if spec.id == model_id { " [active]" } else { "" };
+                        println!("  {} — {}{active}", spec.display_name, status);
+                        println!("    ID: {}  Embedding dim: {}  Image size: {}px", spec.id, spec.embedding_dim, spec.image_size);
                     }
-                    println!("  Total: {}", format_size(mgr.total_size()));
                 }
                 return Ok(());
             }
@@ -1852,7 +1871,7 @@ fn main() {
             if let Some(ref similar_id) = similar {
                 if !mgr.model_exists() {
                     anyhow::bail!(
-                        "Model not downloaded. Run 'dam auto-tag --download' first."
+                        "Model not downloaded. Run 'dam auto-tag --download --model {model_id}' first."
                     );
                 }
 
@@ -1864,13 +1883,13 @@ fn main() {
                     .resolve_asset_id(similar_id)?
                     .ok_or_else(|| anyhow::anyhow!("No asset found matching '{similar_id}'"))?;
 
-                let query_emb = match emb_store.get(&full_id)? {
+                let query_emb = match emb_store.get(&full_id, model_id)? {
                     Some(emb) => emb,
                     None => {
                         // No stored embedding — encode it now
                         let config_preview = &config.preview;
                         let service = AssetService::new(&catalog_root, cli.debug, config_preview);
-                        let mut model = dam::ai::SigLipModel::load_with_debug(&model_dir, cli.debug)?;
+                        let mut ai_model = dam::ai::SigLipModel::load_with_debug(&model_dir, model_id, cli.debug)?;
                         let registry = DeviceRegistry::new(&catalog_root);
                         let volumes = registry.list()?;
                         let online_volumes: std::collections::HashMap<String, &dam::models::Volume> =
@@ -1892,13 +1911,13 @@ fn main() {
                             .ok_or_else(|| {
                                 anyhow::anyhow!("No processable image for asset {}", &full_id[..8])
                             })?;
-                        let emb = model.encode_image(&image_path)?;
-                        emb_store.store(&full_id, &emb)?;
+                        let emb = ai_model.encode_image(&image_path)?;
+                        emb_store.store(&full_id, &emb, model_id)?;
                         emb
                     }
                 };
 
-                let results = emb_store.find_similar(&query_emb, 20, Some(&full_id))?;
+                let results = emb_store.find_similar(&query_emb, 20, Some(&full_id), model_id)?;
 
                 if cli.json {
                     let json_results: Vec<serde_json::Value> = results
@@ -1930,7 +1949,7 @@ fn main() {
             // Main auto-tag flow
             if !mgr.model_exists() {
                 anyhow::bail!(
-                    "Model not downloaded. Run 'dam auto-tag --download' first."
+                    "Model not downloaded. Run 'dam auto-tag --download --model {model_id}' first."
                 );
             }
 
@@ -1958,6 +1977,7 @@ fn main() {
                 prompt,
                 apply,
                 &model_dir,
+                model_id,
                 |id, status, elapsed| {
                     if show_log {
                         let short_id = &id[..8.min(id.len())];

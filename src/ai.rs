@@ -1,4 +1,4 @@
-//! SigLIP ViT-B/16-256 model for zero-shot image classification.
+//! SigLIP vision-language models for zero-shot image classification.
 //!
 //! Only compiled when the `ai` feature is enabled.
 
@@ -11,23 +11,55 @@ use ort::value::Tensor;
 use serde::Serialize;
 use tokenizers::Tokenizer;
 
-/// SigLIP sigmoid scoring parameters (trained weights from google/siglip-base-patch16-256).
-/// `LOGIT_SCALE` is stored as log(scale) — must be exponentiated before use:
-///   logit = exp(LOGIT_SCALE) * dot_product + LOGIT_BIAS
-const LOGIT_SCALE: f32 = 4.713;
-const LOGIT_BIAS: f32 = -12.928;
+/// Model specification — defines all parameters for a SigLIP model variant.
+#[derive(Debug, Clone)]
+pub struct ModelSpec {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub hf_repo: &'static str,
+    pub embedding_dim: usize,
+    pub image_size: usize,
+    /// Stored as log(scale) — must be exponentiated before use:
+    ///   logit = exp(logit_scale) * dot_product + logit_bias
+    pub logit_scale: f32,
+    pub logit_bias: f32,
+    pub max_text_len: usize,
+    pub pad_token_id: u32,
+}
 
-/// Embedding dimensionality.
-pub const EMBEDDING_DIM: usize = 768;
+/// All known model variants.
+pub const MODEL_SPECS: &[ModelSpec] = &[
+    ModelSpec {
+        id: "siglip-vit-b16-256",
+        display_name: "SigLIP ViT-B/16-256",
+        hf_repo: "Xenova/siglip-base-patch16-256",
+        embedding_dim: 768,
+        image_size: 256,
+        logit_scale: 4.7129,
+        logit_bias: -12.9283,
+        max_text_len: 64,
+        pad_token_id: 1,
+    },
+    ModelSpec {
+        id: "siglip-vit-l16-256",
+        display_name: "SigLIP ViT-L/16-256",
+        hf_repo: "Xenova/siglip-large-patch16-256",
+        embedding_dim: 1024,
+        image_size: 256,
+        logit_scale: 4.7007,
+        logit_bias: -12.6546,
+        max_text_len: 64,
+        pad_token_id: 1,
+    },
+];
 
-/// Image input size (pixels).
-const IMAGE_SIZE: usize = 256;
+/// Default model ID.
+pub const DEFAULT_MODEL_ID: &str = "siglip-vit-b16-256";
 
-/// Maximum text token length.
-const MAX_TEXT_LEN: usize = 64;
-
-/// Padding token ID for SentencePiece tokenizer.
-const PAD_TOKEN_ID: u32 = 1;
+/// Look up a model spec by ID.
+pub fn get_model_spec(id: &str) -> Option<&'static ModelSpec> {
+    MODEL_SPECS.iter().find(|s| s.id == id)
+}
 
 /// A suggested tag with confidence score.
 #[derive(Debug, Clone, Serialize)]
@@ -79,16 +111,19 @@ pub struct SigLipModel {
     debug: bool,
     vision_outputs: Vec<OutputInfo>,
     text_outputs: Vec<OutputInfo>,
+    spec: &'static ModelSpec,
 }
 
 impl SigLipModel {
     /// Load ONNX sessions and tokenizer from the model directory.
-    pub fn load(model_dir: &Path) -> Result<Self> {
-        Self::load_with_debug(model_dir, false)
+    pub fn load(model_dir: &Path, model_id: &str) -> Result<Self> {
+        Self::load_with_debug(model_dir, model_id, false)
     }
 
     /// Load ONNX sessions with debug logging enabled.
-    pub fn load_with_debug(model_dir: &Path, debug: bool) -> Result<Self> {
+    pub fn load_with_debug(model_dir: &Path, model_id: &str, debug: bool) -> Result<Self> {
+        let spec = get_model_spec(model_id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown model: {model_id}"))?;
         let vision_path = model_dir.join("onnx").join("vision_model_quantized.onnx");
         let text_path = model_dir.join("onnx").join("text_model_quantized.onnx");
         let tokenizer_path = model_dir.join("tokenizer.json");
@@ -178,12 +213,28 @@ impl SigLipModel {
             debug,
             vision_outputs,
             text_outputs,
+            spec,
         })
     }
 
-    /// Encode an image file into a 768-dimensional embedding.
+    /// Return the model ID.
+    pub fn model_id(&self) -> &'static str {
+        self.spec.id
+    }
+
+    /// Return the embedding dimensionality.
+    pub fn embedding_dim(&self) -> usize {
+        self.spec.embedding_dim
+    }
+
+    /// Return the model spec.
+    pub fn spec(&self) -> &'static ModelSpec {
+        self.spec
+    }
+
+    /// Encode an image file into an embedding vector.
     pub fn encode_image(&mut self, image_path: &Path) -> Result<Vec<f32>> {
-        let tensor = preprocess_image(image_path)?;
+        let tensor = preprocess_image(image_path, self.spec.image_size)?;
         let input_value = Tensor::from_array(tensor)
             .context("Failed to create vision input tensor")?;
         let outputs = self.vision.run(
@@ -194,13 +245,13 @@ impl SigLipModel {
         Ok(l2_normalize(&emb))
     }
 
-    /// Encode a batch of text strings into 768-dimensional embeddings.
+    /// Encode a batch of text strings into embedding vectors.
     pub fn encode_texts(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
 
-        let input_ids = tokenize_batch(&self.tokenizer, texts)?;
+        let input_ids = tokenize_batch(&self.tokenizer, texts, self.spec.max_text_len, self.spec.pad_token_id)?;
         let input_value = Tensor::from_array(input_ids)
             .context("Failed to create text input tensor")?;
         let outputs = self.text.run(
@@ -232,7 +283,7 @@ impl SigLipModel {
         label_embs: &[Vec<f32>],
         threshold: f32,
     ) -> Vec<AutoTagSuggestion> {
-        Self::classify_impl(image_emb, labels, label_embs, threshold, false)
+        self.classify_impl(image_emb, labels, label_embs, threshold, false)
     }
 
     /// Classify with optional debug output showing per-label scoring details.
@@ -243,20 +294,23 @@ impl SigLipModel {
         label_embs: &[Vec<f32>],
         threshold: f32,
     ) -> Vec<AutoTagSuggestion> {
-        Self::classify_impl(image_emb, labels, label_embs, threshold, true)
+        self.classify_impl(image_emb, labels, label_embs, threshold, true)
     }
 
     fn classify_impl(
+        &self,
         image_emb: &[f32],
         labels: &[String],
         label_embs: &[Vec<f32>],
         threshold: f32,
         debug: bool,
     ) -> Vec<AutoTagSuggestion> {
-        let scale = LOGIT_SCALE.exp();
+        let logit_scale = self.spec.logit_scale;
+        let logit_bias = self.spec.logit_bias;
+        let scale = logit_scale.exp();
 
         if debug {
-            eprintln!("  [debug] scoring: exp({LOGIT_SCALE:.3}) = {scale:.1}, bias = {LOGIT_BIAS:.3}, threshold = {threshold:.3}");
+            eprintln!("  [debug] scoring: exp({logit_scale:.3}) = {scale:.1}, bias = {logit_bias:.3}, threshold = {threshold:.3}");
         }
 
         // Collect all scores for debug sorting
@@ -271,7 +325,7 @@ impl SigLipModel {
                     .zip(label_emb.iter())
                     .map(|(a, b)| a * b)
                     .sum();
-                let logit = scale * dot + LOGIT_BIAS;
+                let logit = scale * dot + logit_bias;
                 let confidence = sigmoid(logit);
 
                 if debug {
@@ -376,23 +430,22 @@ fn extract_pooled_embedding(
     )
 }
 
-/// Preprocess an image for SigLIP: resize to 256x256, normalize to [-1, 1].
-fn preprocess_image(path: &Path) -> Result<Array4<f32>> {
+/// Preprocess an image for SigLIP: resize to NxN, normalize to [-1, 1].
+fn preprocess_image(path: &Path, image_size: usize) -> Result<Array4<f32>> {
     let img = image::open(path)
         .with_context(|| format!("Failed to open image: {}", path.display()))?;
 
-    // Squash resize to exactly 256x256 (no crop)
     let resized = img.resize_exact(
-        IMAGE_SIZE as u32,
-        IMAGE_SIZE as u32,
+        image_size as u32,
+        image_size as u32,
         image::imageops::FilterType::CatmullRom,
     );
 
     let rgb = resized.to_rgb8();
-    let mut tensor = Array4::<f32>::zeros((1, 3, IMAGE_SIZE, IMAGE_SIZE));
+    let mut tensor = Array4::<f32>::zeros((1, 3, image_size, image_size));
 
-    for y in 0..IMAGE_SIZE {
-        for x in 0..IMAGE_SIZE {
+    for y in 0..image_size {
+        for x in 0..image_size {
             let pixel = rgb.get_pixel(x as u32, y as u32);
             for c in 0..3 {
                 tensor[[0, c, y, x]] = (pixel[c] as f32 / 255.0 - 0.5) / 0.5;
@@ -403,10 +456,10 @@ fn preprocess_image(path: &Path) -> Result<Array4<f32>> {
     Ok(tensor)
 }
 
-/// Tokenize a batch of texts, padding to MAX_TEXT_LEN.
-fn tokenize_batch(tokenizer: &Tokenizer, texts: &[String]) -> Result<Array2<i64>> {
+/// Tokenize a batch of texts, padding to max_text_len.
+fn tokenize_batch(tokenizer: &Tokenizer, texts: &[String], max_text_len: usize, pad_token_id: u32) -> Result<Array2<i64>> {
     let batch_size = texts.len();
-    let mut input_ids = Array2::<i64>::from_elem((batch_size, MAX_TEXT_LEN), PAD_TOKEN_ID as i64);
+    let mut input_ids = Array2::<i64>::from_elem((batch_size, max_text_len), pad_token_id as i64);
 
     for (i, text) in texts.iter().enumerate() {
         let encoding = tokenizer
@@ -414,7 +467,7 @@ fn tokenize_batch(tokenizer: &Tokenizer, texts: &[String]) -> Result<Array2<i64>
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {e}"))?;
 
         let ids = encoding.get_ids();
-        let len = ids.len().min(MAX_TEXT_LEN);
+        let len = ids.len().min(max_text_len);
         for j in 0..len {
             input_ids[[i, j]] = ids[j] as i64;
         }
@@ -706,58 +759,70 @@ mod tests {
         assert!(!is_supported_image("pdf"));
     }
 
+    fn default_spec() -> &'static ModelSpec {
+        get_model_spec(DEFAULT_MODEL_ID).unwrap()
+    }
+
     #[test]
     fn classify_empty_labels() {
-        // Can't run full model in unit tests, but test the classify logic
-        let image_emb = l2_normalize(&vec![1.0; EMBEDDING_DIM]);
+        let spec = default_spec();
+        let image_emb = l2_normalize(&vec![1.0; spec.embedding_dim]);
         let labels: Vec<String> = Vec::new();
         let label_embs: Vec<Vec<f32>> = Vec::new();
 
-        // We test the scoring math directly since we can't load the model
-        let suggestions = score_and_filter(&image_emb, &labels, &label_embs, 0.25);
+        let suggestions = score_and_filter(spec, &image_emb, &labels, &label_embs, 0.25);
         assert!(suggestions.is_empty());
     }
 
     #[test]
     fn classify_threshold_filters() {
-        let image_emb = l2_normalize(&vec![1.0; EMBEDDING_DIM]);
+        let spec = default_spec();
+        let image_emb = l2_normalize(&vec![1.0; spec.embedding_dim]);
 
-        // Create a label embedding very similar to the image embedding
-        let similar_emb = l2_normalize(&vec![1.0; EMBEDDING_DIM]);
-        // Create an orthogonal-ish embedding
-        let mut different = vec![0.0f32; EMBEDDING_DIM];
+        let similar_emb = l2_normalize(&vec![1.0; spec.embedding_dim]);
+        let mut different = vec![0.0f32; spec.embedding_dim];
         different[0] = 1.0;
         let different_emb = l2_normalize(&different);
 
         let labels = vec!["similar".to_string(), "different".to_string()];
         let label_embs = vec![similar_emb, different_emb];
 
-        // Identical unit vectors: dot=1.0, logit=exp(4.713)*1.0-12.928≈98.7, sigmoid≈1.0
-        // Orthogonal-ish: dot≈0.036, logit=exp(4.713)*0.036-12.928≈-8.9, sigmoid≈0.0001
-        let all = score_and_filter(&image_emb, &labels, &label_embs, 0.0);
+        let all = score_and_filter(spec, &image_emb, &labels, &label_embs, 0.0);
         assert_eq!(all.len(), 2);
         assert!(
             all[0].confidence > all[1].confidence,
             "Expected 'similar' to score higher than 'different'"
         );
         assert_eq!(all[0].tag, "similar");
-        // Identical vectors should produce a high confidence
         assert!(all[0].confidence > 0.99, "Expected high confidence for identical vectors, got {}", all[0].confidence);
 
-        // With a medium threshold, only the similar label matches
-        let some = score_and_filter(&image_emb, &labels, &label_embs, 0.5);
+        let some = score_and_filter(spec, &image_emb, &labels, &label_embs, 0.5);
         assert_eq!(some.len(), 1, "Expected only 'similar' at threshold 0.5");
         assert_eq!(some[0].tag, "similar");
     }
 
+    #[test]
+    fn model_spec_registry() {
+        assert!(MODEL_SPECS.len() >= 2);
+        assert!(get_model_spec("siglip-vit-b16-256").is_some());
+        assert!(get_model_spec("siglip-vit-l16-256").is_some());
+        assert!(get_model_spec("nonexistent").is_none());
+
+        let b16 = get_model_spec("siglip-vit-b16-256").unwrap();
+        assert_eq!(b16.embedding_dim, 768);
+        let l16 = get_model_spec("siglip-vit-l16-256").unwrap();
+        assert_eq!(l16.embedding_dim, 1024);
+    }
+
     /// Standalone scoring function for testing (mirrors SigLipModel::classify_impl logic).
     fn score_and_filter(
+        spec: &ModelSpec,
         image_emb: &[f32],
         labels: &[String],
         label_embs: &[Vec<f32>],
         threshold: f32,
     ) -> Vec<AutoTagSuggestion> {
-        let scale = LOGIT_SCALE.exp();
+        let scale = spec.logit_scale.exp();
         let mut results: Vec<AutoTagSuggestion> = labels
             .iter()
             .zip(label_embs.iter())
@@ -767,7 +832,7 @@ mod tests {
                     .zip(label_emb.iter())
                     .map(|(a, b)| a * b)
                     .sum();
-                let logit = scale * dot + LOGIT_BIAS;
+                let logit = scale * dot + spec.logit_bias;
                 let confidence = sigmoid(logit);
                 if confidence >= threshold {
                     Some(AutoTagSuggestion {

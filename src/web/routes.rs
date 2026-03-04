@@ -3123,7 +3123,7 @@ fn resolve_model_dir(config: &crate::config::AiConfig) -> std::path::PathBuf {
     } else {
         std::path::PathBuf::from(model_dir_str)
     };
-    model_base.join("siglip-vit-b16-256")
+    model_base.join(&config.model)
 }
 
 #[cfg(feature = "ai")]
@@ -3172,10 +3172,11 @@ fn suggest_tags_inner(
 
     // Lazy-load model
     let model_dir = resolve_model_dir(&state.ai_config);
+    let model_id = &state.ai_config.model;
     let model_guard = state.ai_model.blocking_lock();
     let mut model_opt = model_guard;
     if model_opt.is_none() {
-        let m = ai::SigLipModel::load(&model_dir)
+        let m = ai::SigLipModel::load(&model_dir, model_id)
             .map_err(|e| format!("Failed to load AI model: {e:#}"))?;
         *model_opt = Some(m);
     }
@@ -3300,9 +3301,10 @@ fn batch_auto_tag_inner(
 
     // Lazy-load model
     let model_dir = resolve_model_dir(&state.ai_config);
+    let model_id = &state.ai_config.model;
     let mut model_guard = state.ai_model.blocking_lock();
     if model_guard.is_none() {
-        let m = ai::SigLipModel::load(&model_dir)
+        let m = ai::SigLipModel::load(&model_dir, model_id)
             .map_err(|e| format!("Failed to load AI model: {e:#}"))?;
         *model_guard = Some(m);
     }

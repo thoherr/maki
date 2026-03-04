@@ -155,6 +155,8 @@ fn is_default_verify(v: &VerifyConfig) -> bool {
 /// AI auto-tagging configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AiConfig {
+    #[serde(default = "default_ai_model")]
+    pub model: String,
     #[serde(default = "default_ai_threshold")]
     pub threshold: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -163,6 +165,10 @@ pub struct AiConfig {
     pub model_dir: String,
     #[serde(default = "default_ai_prompt")]
     pub prompt: String,
+}
+
+fn default_ai_model() -> String {
+    "siglip-vit-b16-256".to_string()
 }
 
 fn default_ai_threshold() -> f32 {
@@ -180,6 +186,7 @@ fn default_ai_prompt() -> String {
 impl Default for AiConfig {
     fn default() -> Self {
         Self {
+            model: "siglip-vit-b16-256".to_string(),
             threshold: 0.1,
             labels: None,
             model_dir: "~/.dam/models".to_string(),
