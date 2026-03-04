@@ -234,6 +234,11 @@ enum Commands {
         similar: Option<String>,
     },
 
+    /// Face detection and recognition (requires --features ai)
+    #[cfg(feature = "ai")]
+    #[command(subcommand, display_order = 17)]
+    Faces(FacesCommands),
+
     // --- Organize ---
 
     /// Manage collections (static albums)
@@ -852,6 +857,43 @@ enum StackCommands {
         #[arg(long)]
         apply: bool,
     },
+}
+
+#[cfg(feature = "ai")]
+#[derive(Subcommand)]
+enum FacesCommands {
+    /// Detect faces in assets
+    Detect {
+        /// Search query to scope assets
+        #[arg(long)]
+        query: Option<String>,
+
+        /// Process a specific asset (ID or prefix)
+        #[arg(long)]
+        asset: Option<String>,
+
+        /// Limit to assets on a specific volume
+        #[arg(long)]
+        volume: Option<String>,
+
+        /// Minimum detection confidence (0.0–1.0, default 0.5)
+        #[arg(long, default_value = "0.5")]
+        min_confidence: f32,
+
+        /// Apply detections to catalog (default: report-only)
+        #[arg(long)]
+        apply: bool,
+
+        /// Force re-detection even if faces already exist for an asset
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Download face detection and recognition models
+    Download,
+
+    /// Show face detection status
+    Status,
 }
 
 fn main() {
@@ -2051,6 +2093,219 @@ fn main() {
                 }
             }
             Ok(())
+        }
+        #[cfg(feature = "ai")]
+        Commands::Faces(cmd) => {
+            let catalog_root = dam::config::find_catalog_root()?;
+            let config = dam::config::CatalogConfig::load(&catalog_root)?;
+
+            let face_model_dir = dam::face::resolve_face_model_dir(&config.ai);
+
+            match cmd {
+                FacesCommands::Download => {
+                    dam::face::FaceDetector::download_models(&face_model_dir, |name, i, total| {
+                        eprintln!("  Downloading {name} ({i}/{total})...");
+                    })?;
+                    println!("Face models downloaded to {}", face_model_dir.display());
+                    Ok(())
+                }
+                FacesCommands::Status => {
+                    let exists = dam::face::FaceDetector::models_exist(&face_model_dir);
+                    println!("Face model directory: {}", face_model_dir.display());
+                    println!("Models downloaded: {}", if exists { "yes" } else { "no" });
+
+                    let catalog = dam::catalog::Catalog::open(&catalog_root)?;
+                    let _ = dam::face_store::FaceStore::initialize(catalog.conn());
+                    let store = dam::face_store::FaceStore::new(catalog.conn());
+                    println!("Total faces detected: {}", store.total_faces());
+                    println!("Total people: {}", store.total_people());
+
+                    if cli.json {
+                        let json = serde_json::json!({
+                            "model_dir": face_model_dir.to_string_lossy(),
+                            "models_downloaded": exists,
+                            "total_faces": store.total_faces(),
+                            "total_people": store.total_people(),
+                        });
+                        println!("{}", serde_json::to_string_pretty(&json)?);
+                    }
+                    Ok(())
+                }
+                FacesCommands::Detect { query, asset, volume, min_confidence, apply, force } => {
+                    if !dam::face::FaceDetector::models_exist(&face_model_dir) {
+                        anyhow::bail!(
+                            "Face models not downloaded. Run 'dam faces download' first."
+                        );
+                    }
+
+                    if query.is_none() && asset.is_none() && volume.is_none() {
+                        anyhow::bail!(
+                            "No scope specified. Use --query, --asset, or --volume to select assets.\n  \
+                             Examples:\n    \
+                             dam faces detect --query '*' --apply    # all assets\n    \
+                             dam faces detect --asset <id> --apply   # single asset\n    \
+                             dam faces detect --volume <label> --apply"
+                        );
+                    }
+
+                    let catalog = dam::catalog::Catalog::open(&catalog_root)?;
+                    let _ = dam::face_store::FaceStore::initialize(catalog.conn());
+                    let face_store = dam::face_store::FaceStore::new(catalog.conn());
+
+                    let engine = QueryEngine::new(&catalog_root);
+                    let config_preview = &config.preview;
+                    let service = AssetService::new(&catalog_root, cli.debug, config_preview);
+                    let preview_gen = dam::preview::PreviewGenerator::new(&catalog_root, false, config_preview);
+                    let registry = DeviceRegistry::new(&catalog_root);
+                    let volumes = registry.list()?;
+                    let online_volumes: std::collections::HashMap<String, &dam::models::Volume> = volumes
+                        .iter()
+                        .filter(|v| v.is_online)
+                        .map(|v| (v.id.to_string(), v))
+                        .collect();
+
+                    // Resolve target assets
+                    let search_query = if let Some(ref aid) = asset {
+                        let catalog2 = dam::catalog::Catalog::open(&catalog_root)?;
+                        let full_id = catalog2.resolve_asset_id(aid)?
+                            .ok_or_else(|| anyhow::anyhow!("No asset found matching '{aid}'"))?;
+                        format!("id:{full_id}")
+                    } else {
+                        let mut q = query.unwrap_or_default();
+                        if let Some(ref vol) = volume {
+                            if !q.is_empty() {
+                                q.push(' ');
+                            }
+                            q.push_str(&format!("volume:{vol}"));
+                        }
+                        q
+                    };
+
+                    let results = engine.search(&search_query)?;
+                    let asset_ids: Vec<String> = {
+                        let mut seen = std::collections::HashSet::new();
+                        results.iter()
+                            .filter(|r| seen.insert(r.asset_id.clone()))
+                            .map(|r| r.asset_id.clone())
+                            .collect()
+                    };
+
+                    let mut detector = dam::face::FaceDetector::load(&face_model_dir, cli.debug)?;
+
+                    let mut total_faces = 0u32;
+                    let mut total_assets = 0u32;
+                    let mut total_skipped = 0u32;
+                    let mut errors: Vec<String> = Vec::new();
+
+                    for aid in &asset_ids {
+                        let t0 = std::time::Instant::now();
+                        let short_id = &aid[..8.min(aid.len())];
+
+                        // Skip if already detected (unless --force)
+                        if !force && face_store.has_faces(aid) {
+                            if cli.log {
+                                eprintln!("  {short_id} — skipped (already detected)");
+                            }
+                            total_skipped += 1;
+                            continue;
+                        }
+
+                        let details = match engine.show(aid) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                errors.push(format!("{short_id}: {e:#}"));
+                                continue;
+                            }
+                        };
+
+                        let image_path = match service.find_image_for_ai(&details, &preview_gen, &online_volumes) {
+                            Some(p) => p,
+                            None => {
+                                if cli.log {
+                                    eprintln!("  {short_id} — skipped (no image)");
+                                }
+                                total_skipped += 1;
+                                continue;
+                            }
+                        };
+
+                        match detector.detect_and_embed(&image_path, min_confidence) {
+                            Ok(face_results) => {
+                                let n = face_results.len();
+                                if apply {
+                                    // Clear existing faces if forcing
+                                    if force {
+                                        let _ = face_store.delete_faces_for_asset(aid);
+                                    }
+                                    for (face, embedding) in &face_results {
+                                        let face_id = uuid::Uuid::new_v4().to_string();
+                                        if let Err(e) = face_store.store_face(
+                                            &face_id,
+                                            aid,
+                                            face.bbox_x,
+                                            face.bbox_y,
+                                            face.bbox_w,
+                                            face.bbox_h,
+                                            embedding,
+                                            face.confidence,
+                                        ) {
+                                            errors.push(format!("{short_id}: store error: {e:#}"));
+                                        }
+                                    }
+                                }
+                                total_faces += n as u32;
+                                total_assets += 1;
+                                if cli.log {
+                                    let elapsed = t0.elapsed();
+                                    eprintln!(
+                                        "  {short_id} — {} face{} detected ({})",
+                                        n,
+                                        if n == 1 { "" } else { "s" },
+                                        format_duration(elapsed)
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                errors.push(format!("{short_id}: {e:#}"));
+                                if cli.log {
+                                    eprintln!("  {short_id} — error: {e:#}");
+                                }
+                            }
+                        }
+                    }
+
+                    if cli.json {
+                        let json = serde_json::json!({
+                            "assets_processed": total_assets,
+                            "assets_skipped": total_skipped,
+                            "faces_detected": total_faces,
+                            "errors": errors,
+                            "dry_run": !apply,
+                        });
+                        println!("{}", serde_json::to_string_pretty(&json)?);
+                    } else {
+                        for err in &errors {
+                            eprintln!("  {err}");
+                        }
+                        let mode = if apply { "Face detect" } else { "Face detect (dry run)" };
+                        let mut parts = vec![
+                            format!("{total_assets} assets processed"),
+                        ];
+                        if total_skipped > 0 {
+                            parts.push(format!("{total_skipped} skipped"));
+                        }
+                        parts.push(format!("{total_faces} faces detected"));
+                        if !errors.is_empty() {
+                            parts.push(format!("{} errors", errors.len()));
+                        }
+                        println!("{mode}: {}", parts.join(", "));
+                        if !apply && total_faces > 0 {
+                            println!("  Run with --apply to store face detections.");
+                        }
+                    }
+                    Ok(())
+                }
+            }
         }
         Commands::AutoGroup { query, apply } => {
             let catalog_root = dam::config::find_catalog_root()?;

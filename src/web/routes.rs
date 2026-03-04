@@ -3345,3 +3345,155 @@ fn batch_auto_tag_inner(
 
     Ok(resp)
 }
+
+// --- Visual similarity search endpoint (feature-gated) ---
+
+#[cfg(feature = "ai")]
+#[derive(Debug, serde::Serialize)]
+pub struct SimilarAssetResponse {
+    pub asset_id: String,
+    pub similarity: f32,
+    pub preview_url: Option<String>,
+    pub name: String,
+}
+
+/// POST /api/asset/{id}/similar — find visually similar assets.
+#[cfg(feature = "ai")]
+pub async fn find_similar(
+    State(state): State<Arc<AppState>>,
+    Path(asset_id): Path<String>,
+) -> Response {
+    let state = state.clone();
+    let result: Result<Result<Vec<SimilarAssetResponse>, String>, _> =
+        tokio::task::spawn_blocking(move || find_similar_inner(&state, &asset_id))
+            .await;
+
+    match result {
+        Ok(Ok(results)) => Json(results).into_response(),
+        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+#[cfg(feature = "ai")]
+fn find_similar_inner(
+    state: &AppState,
+    asset_id: &str,
+) -> Result<Vec<SimilarAssetResponse>, String> {
+    use crate::ai;
+    use crate::device_registry::DeviceRegistry;
+    use crate::embedding_store::EmbeddingStore;
+
+    let engine = state.query_engine();
+    let details = engine.show(asset_id).map_err(|e| format!("{e:#}"))?;
+
+    // Find image to process
+    let preview_gen = state.preview_generator();
+    let registry = DeviceRegistry::new(&state.catalog_root);
+    let volumes = registry.list().map_err(|e| format!("{e:#}"))?;
+    let online_volumes: std::collections::HashMap<String, &crate::models::Volume> = volumes
+        .iter()
+        .filter(|v| v.is_online)
+        .map(|v| (v.id.to_string(), v))
+        .collect();
+
+    let service = state.asset_service();
+    let image_path = service
+        .find_image_for_ai(&details, &preview_gen, &online_volumes)
+        .ok_or_else(|| "No processable image found for this asset".to_string())?;
+
+    let ext = image_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    if !ai::is_supported_image(ext) {
+        return Err(format!("Unsupported image format: {ext}"));
+    }
+
+    // Lazy-load model
+    let model_dir = resolve_model_dir(&state.ai_config);
+    let model_id = &state.ai_config.model;
+    let mut model_guard = state.ai_model.blocking_lock();
+    if model_guard.is_none() {
+        let m = ai::SigLipModel::load(&model_dir, model_id)
+            .map_err(|e| format!("Failed to load AI model: {e:#}"))?;
+        *model_guard = Some(m);
+    }
+    let model = model_guard.as_mut().unwrap();
+
+    // Get or generate embedding
+    let catalog = state.catalog().map_err(|e| format!("{e:#}"))?;
+    let _ = EmbeddingStore::initialize(catalog.conn());
+    let emb_store = EmbeddingStore::new(catalog.conn());
+
+    let query_emb = match emb_store.get(asset_id, model_id).map_err(|e| format!("{e:#}"))? {
+        Some(emb) => emb,
+        None => {
+            let emb = model
+                .encode_image(&image_path)
+                .map_err(|e| format!("Failed to encode image: {e:#}"))?;
+            emb_store
+                .store(asset_id, &emb, model_id)
+                .map_err(|e| format!("Failed to store embedding: {e:#}"))?;
+            emb
+        }
+    };
+
+    // Find similar
+    let results = emb_store
+        .find_similar(&query_emb, 20, Some(asset_id), model_id)
+        .map_err(|e| format!("{e:#}"))?;
+
+    // Build response with preview URLs and names
+    let preview_ext = &state.preview_ext;
+    let response: Vec<SimilarAssetResponse> = results
+        .into_iter()
+        .filter_map(|(id, similarity)| {
+            let name = match engine.show(&id) {
+                Ok(d) => d
+                    .name
+                    .unwrap_or_else(|| {
+                        // Use filename from first variant
+                        d.variants
+                            .first()
+                            .and_then(|v| {
+                                v.locations
+                                    .first()
+                                    .map(|fl| {
+                                        std::path::Path::new(&fl.relative_path)
+                                            .file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy()
+                                            .to_string()
+                                    })
+                            })
+                            .unwrap_or_else(|| id[..8.min(id.len())].to_string())
+                    }),
+                Err(_) => return None,
+            };
+
+            // Build preview URL from best variant hash
+            let preview_url = {
+                let d = engine.show(&id).ok()?;
+                let best_idx = crate::models::variant::best_preview_index_details(&d.variants);
+                best_idx.and_then(|i| {
+                    let v = &d.variants[i];
+                    if preview_gen.has_preview(&v.content_hash) {
+                        Some(super::templates::preview_url(&v.content_hash, preview_ext))
+                    } else {
+                        None
+                    }
+                })
+            };
+
+            Some(SimilarAssetResponse {
+                asset_id: id,
+                similarity,
+                preview_url,
+                name,
+            })
+        })
+        .collect();
+
+    Ok(response)
+}

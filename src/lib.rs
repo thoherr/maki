@@ -22,4 +22,8 @@ pub mod ai;
 #[cfg(feature = "ai")]
 pub mod embedding_store;
 #[cfg(feature = "ai")]
+pub mod face;
+#[cfg(feature = "ai")]
+pub mod face_store;
+#[cfg(feature = "ai")]
 pub mod model_manager;

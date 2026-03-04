@@ -57,6 +57,14 @@
             {% endif %}
         </details>
 
+        {% if ai_enabled %}
+        <details>
+            <summary>Similar images</summary>
+            <button id="find-similar-btn" class="btn btn-sm" onclick="findSimilar()">Find similar</button>
+            <div id="similar-results" style="display:none"></div>
+        </details>
+        {% endif %}
+
         {% if !collections.is_empty() %}
         <div class="asset-collections" id="asset-collections">
             <span class="collections-label">Collections:</span>
@@ -698,6 +706,56 @@
             document.getElementById('tag-suggestions').style.display = 'none';
         })
         .catch(function(err) { console.error('Accept all tags error:', err); });
+    };
+
+    // --- Find similar images ---
+    window.findSimilar = function() {
+        var btn = document.getElementById('find-similar-btn');
+        var container = document.getElementById('similar-results');
+        if (!btn || !container) return;
+        btn.textContent = 'Searching...';
+        btn.disabled = true;
+        container.style.display = 'none';
+
+        fetch('/api/asset/' + assetId + '/similar', { method: 'POST' })
+        .then(function(r) {
+            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            return r.json();
+        })
+        .then(function(results) {
+            btn.textContent = 'Find similar';
+            btn.disabled = false;
+            if (!results || results.length === 0) {
+                container.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem;">No similar images found. Run auto-tag on more assets to build embeddings.</span>';
+                container.style.display = 'block';
+                return;
+            }
+            var html = '<div class="similar-grid">';
+            results.forEach(function(r) {
+                var pct = Math.round(r.similarity * 100);
+                var imgSrc = r.preview_url || '';
+                var safeName = r.name.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                html += '<a href="/asset/' + r.asset_id + '" class="similar-card" title="' + safeName + '">';
+                if (imgSrc) {
+                    html += '<img src="' + imgSrc + '" alt="" loading="lazy">';
+                } else {
+                    html += '<div class="similar-card-noimg">No preview</div>';
+                }
+                html += '<div class="similar-card-info">';
+                html += '<span class="similar-card-name">' + safeName + '</span>';
+                html += '<span class="similar-card-pct">' + pct + '%</span>';
+                html += '</div></a>';
+            });
+            html += '</div>';
+            container.innerHTML = html;
+            container.style.display = 'block';
+        })
+        .catch(function(err) {
+            btn.textContent = 'Find similar';
+            btn.disabled = false;
+            container.innerHTML = '<span style="color:#e74c3c;font-size:0.85rem;">Error: ' + err.message + '</span>';
+            container.style.display = 'block';
+        });
     };
 
     if (window.damHelp) {
