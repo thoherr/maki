@@ -418,7 +418,7 @@ This is useful for identifying redundant copies, verifying backups, or cleaning 
 After importing, you can use AI to automatically suggest tags for your images:
 
 ```
-# First time: download the SigLIP model (~207 MB)
+# First time: download the default SigLIP model (~207 MB)
 dam auto-tag --download
 
 # Preview suggested tags (report-only)
@@ -428,15 +428,23 @@ dam auto-tag --query "type:image"
 dam auto-tag --query "type:image" --apply
 ```
 
-The command uses SigLIP ViT-B/16-256 for zero-shot classification against ~100 built-in photography categories (landscape, portrait, architecture, animals, etc.). Tags above the confidence threshold (default 0.1) are suggested. Use `--threshold` to adjust sensitivity.
+The command uses SigLIP vision-language models for zero-shot classification against ~100 built-in photography categories (landscape, portrait, architecture, animals, etc.). Tags above the confidence threshold (default 0.1) are suggested. Use `--threshold` to adjust sensitivity.
+
+Two models are available: the default ViT-B/16-256 (~207 MB) and the larger ViT-L/16-256 (~670 MB) for higher accuracy. Switch with `--model` or set `[ai] model` in `dam.toml`:
+
+```
+# Download and use the larger model
+dam auto-tag --download --model siglip-vit-l16-256
+dam auto-tag --query "type:image" --model siglip-vit-l16-256 --apply
+```
 
 You can provide a custom label vocabulary:
 
 ```
-dam auto-tag --labels my-labels.txt --apply
+dam auto-tag --labels my-labels.txt --query "*" --apply
 ```
 
-Image embeddings are stored in the catalog, enabling visual similarity search:
+Image embeddings are stored per model in the catalog, enabling visual similarity search:
 
 ```
 dam auto-tag --similar <asset-id>

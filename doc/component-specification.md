@@ -258,7 +258,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 - `PUT /api/asset/{id}/rating` — set/clear rating (form: `rating=N`), returns rating fragment
 - `PUT /api/asset/{id}/description` — set/clear description, returns description fragment
 - `PUT /api/asset/{id}/label` — set/clear color label (form: `label=Red`), returns label fragment
-- `POST /api/asset/{id}/preview` — generate preview on demand
+- `POST /api/asset/{id}/preview` — regenerate preview and smart preview (cache-busted)
 - `POST /api/asset/{id}/rotate` — cycle preview rotation 90° CW, regenerate previews
 - `PUT /api/batch/rating` — batch set/clear rating for multiple assets
 - `POST /api/batch/tags` — batch add/remove tags for multiple assets

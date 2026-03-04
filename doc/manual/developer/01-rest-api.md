@@ -293,13 +293,13 @@ curl -X POST http://localhost:8080/api/open-terminal \
   -d '{"volume_id":"abc-123","relative_path":"Photos/DSC_001.nef"}'
 ```
 
-### `POST /api/asset/{id}/preview` -- Regenerate Preview
+### `POST /api/asset/{id}/preview` -- Regenerate Previews
 
-Regenerates the preview thumbnail for the asset's primary variant. Requires the source file to be on an online volume.
+Regenerates both the regular preview thumbnail and the smart preview for the asset's best variant. Requires the source file to be on an online volume. Returns cache-busted URLs so the browser displays the newly generated images without requiring a page reload.
 
 **Content-Type**: None (no body required)
 
-**Response**: HTML partial -- updated preview fragment.
+**Response**: HTML partial -- updated preview fragment with cache-busted URLs.
 
 ```bash
 curl -X POST http://localhost:8080/api/asset/{id}/preview
@@ -608,7 +608,7 @@ curl -X DELETE http://localhost:8080/api/batch/stack \
 
 *Requires `--features ai` compilation.*
 
-Analyzes the asset's preview image with SigLIP and returns suggested tags with confidence scores. Tags already on the asset are filtered out. The model is lazy-loaded on first request and cached in server memory.
+Analyzes the asset's preview image with SigLIP and returns suggested tags with confidence scores. Tags already on the asset are included but marked with `existing: true`. The model is lazy-loaded on first request and cached in server memory.
 
 | Parameter | Type   | Description             |
 |-----------|--------|-------------------------|
@@ -618,9 +618,9 @@ Analyzes the asset's preview image with SigLIP and returns suggested tags with c
 
 ```json
 [
-  {"tag": "landscape", "confidence": 0.85},
-  {"tag": "mountain", "confidence": 0.42},
-  {"tag": "nature", "confidence": 0.31}
+  {"tag": "landscape", "confidence": 0.85, "existing": false},
+  {"tag": "mountain", "confidence": 0.42, "existing": false},
+  {"tag": "nature", "confidence": 0.31, "existing": true}
 ]
 ```
 
@@ -628,6 +628,7 @@ Analyzes the asset's preview image with SigLIP and returns suggested tags with c
 |-------------|--------|-------------------------------------|
 | `tag`       | string | Suggested tag name                  |
 | `confidence`| float  | Confidence score (0.0–1.0)          |
+| `existing`  | bool   | Whether the tag is already on the asset |
 
 ```bash
 curl -X POST http://localhost:8080/api/asset/550e8400-e29b-41d4-a716-446655440000/suggest-tags

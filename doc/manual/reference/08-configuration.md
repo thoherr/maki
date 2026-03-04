@@ -250,6 +250,13 @@ max_age_days = 30
 
 Controls AI auto-tagging behavior for `dam auto-tag`.
 
+### model
+
+- **Type:** string
+- **Default:** `"siglip-vit-b16-256"`
+
+Which SigLIP model to use. Available models: `siglip-vit-b16-256` (768-dim, ~207 MB, good balance) and `siglip-vit-l16-256` (1024-dim, ~670 MB, higher accuracy). The CLI `--model` flag overrides this value. Embeddings are stored per model, so switching models doesn't corrupt existing data.
+
 ### threshold
 
 - **Type:** float (0.0--1.0)
@@ -342,6 +349,7 @@ max_age_days = 30
 
 # AI auto-tagging settings (only with --features ai).
 [ai]
+model = "siglip-vit-b16-256"
 threshold = 0.3
 # labels = "my-labels.txt"
 model_dir = "~/.dam/models"
@@ -398,6 +406,7 @@ When a field is absent from `dam.toml`, these defaults apply:
 | `import.smart_previews` | `false` |
 | `dedup.prefer` | none |
 | `verify.max_age_days` | none |
+| `ai.model` | `"siglip-vit-b16-256"` |
 | `ai.threshold` | `0.1` |
 | `ai.labels` | none |
 | `ai.model_dir` | `"~/.dam/models"` |

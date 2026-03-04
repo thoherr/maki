@@ -569,29 +569,42 @@ dam auto-group --apply --json | jq '{merged: .total_donors_merged, moved: .total
 
 ### NAME
 
-dam-auto-tag -- suggest or apply tags to images using AI (SigLIP zero-shot classification)
+dam-auto-tag -- suggest or apply tags to images using AI (SigLIP zero-shot classification, multi-model)
 
 ### SYNOPSIS
 
 ```
-dam [GLOBAL FLAGS] auto-tag [OPTIONS]
-dam [GLOBAL FLAGS] auto-tag --download
-dam [GLOBAL FLAGS] auto-tag --remove-model
+dam [GLOBAL FLAGS] auto-tag [OPTIONS] --query <QUERY>
+dam [GLOBAL FLAGS] auto-tag [OPTIONS] --asset <ID>
+dam [GLOBAL FLAGS] auto-tag [OPTIONS] --volume <LABEL>
+dam [GLOBAL FLAGS] auto-tag --download [--model <ID>]
+dam [GLOBAL FLAGS] auto-tag --remove-model [--model <ID>]
 dam [GLOBAL FLAGS] auto-tag --list-models
 dam [GLOBAL FLAGS] auto-tag --similar <ASSET_ID>
 ```
 
 ### DESCRIPTION
 
-Uses SigLIP ViT-B/16-256 (a vision-language model) to classify images against a configurable tag vocabulary via zero-shot classification. Each image is encoded into a 768-dimensional embedding, scored against all label embeddings using sigmoid scoring, and labels above the confidence threshold are suggested as tags.
+Uses SigLIP vision-language models to classify images against a configurable tag vocabulary via zero-shot classification. Each image is encoded into an embedding, scored against all label embeddings using sigmoid scoring, and labels above the confidence threshold are suggested as tags.
+
+Two models are available:
+
+| Model ID | Name | Embedding | Size | Notes |
+|----------|------|-----------|------|-------|
+| `siglip-vit-b16-256` | SigLIP ViT-B/16-256 | 768-dim | ~207 MB | Default, good balance |
+| `siglip-vit-l16-256` | SigLIP ViT-L/16-256 | 1024-dim | ~670 MB | Higher accuracy |
+
+Select with `--model <id>` or set `[ai] model` in `dam.toml`. The default is `siglip-vit-b16-256`.
 
 By default runs in **report-only mode** -- shows suggested tags without applying them. Use `--apply` to write suggested tags to assets.
 
-The model files (~207 MB quantized ONNX) are downloaded from HuggingFace on first use. Use `--download` to pre-download, `--remove-model` to delete cached files, and `--list-models` to show model status and file sizes.
+**Scope required**: at least one scope filter (`--query`, `--asset`, or `--volume`) must be specified to prevent accidental full-catalog processing. Use `--query "*"` to explicitly process all assets.
+
+Model files are downloaded from HuggingFace on first use. Use `--download` to pre-download, `--remove-model` to delete cached files, and `--list-models` to show all known models with download status, size, and active indicator.
 
 **Image selection**: For each asset, the command looks for the best available image in this order: smart preview (2560px) → regular preview (800px) → original file on an online volume. Non-image assets (video, audio, documents) are skipped.
 
-**Embedding storage**: Image embeddings are stored in the SQLite catalog (`embeddings` table) for reuse. The `--similar` flag uses these stored embeddings to find visually similar assets by cosine similarity.
+**Embedding storage**: Image embeddings are stored in the SQLite catalog (`embeddings` table) per model. Switching models does not corrupt existing embeddings; each model's embeddings are stored separately. The `--similar` flag uses stored embeddings from the active model to find visually similar assets by cosine similarity.
 
 **Default labels**: ~100 photography categories are built in (landscape, portrait, architecture, animals, food, etc.). Override with a custom labels file via `--labels`.
 
@@ -607,6 +620,9 @@ The model files (~207 MB quantized ONNX) are downloaded from HuggingFace on firs
 
 **--volume \<LABEL\>**
 : Process only assets on a specific volume.
+
+**--model \<ID\>**
+: Select which SigLIP model to use. Available: `siglip-vit-b16-256` (default), `siglip-vit-l16-256`. Overrides `[ai] model` in `dam.toml`. Also applies to `--download` and `--remove-model`.
 
 **--threshold \<FLOAT\>**
 : Minimum confidence score to suggest a tag (default: 0.1). Range: 0.0 to 1.0. Higher values produce fewer but more confident suggestions.
@@ -638,16 +654,22 @@ The model files (~207 MB quantized ONNX) are downloaded from HuggingFace on firs
 
 ### EXAMPLES
 
-Download the model (first-time setup):
+Download the default model (first-time setup):
 
 ```bash
 dam auto-tag --download
 ```
 
+Download the larger model for higher accuracy:
+
+```bash
+dam auto-tag --download --model siglip-vit-l16-256
+```
+
 Preview suggested tags for all images (report-only):
 
 ```bash
-dam auto-tag
+dam auto-tag --query "*"
 ```
 
 Auto-tag a specific asset and apply the tags:
@@ -662,10 +684,16 @@ Auto-tag images matching a search query with a higher threshold:
 dam auto-tag --query "type:image rating:4+" --threshold 0.4 --apply
 ```
 
+Use the larger model for a specific query:
+
+```bash
+dam auto-tag --query "tag:unreviewed" --model siglip-vit-l16-256 --apply
+```
+
 Use a custom labels file:
 
 ```bash
-dam auto-tag --labels my-labels.txt --apply
+dam auto-tag --labels my-labels.txt --query "*" --apply
 ```
 
 Find visually similar images:
