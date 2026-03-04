@@ -285,7 +285,6 @@ impl PreviewGenerator {
         ensure_parent(dest)?;
 
         // Strategy 1: dcraw -e -c extracts the embedded JPEG preview to stdout
-        // The embedded JPEG is typically already oriented, so skip EXIF auto-orient.
         if tool_available("dcraw") {
             let output = Command::new("dcraw")
                 .args(["-e", "-c"])
@@ -301,7 +300,16 @@ impl PreviewGenerator {
             if output.status.success() && !output.stdout.is_empty() {
                 let img = image::load_from_memory(&output.stdout)
                     .context("Failed to decode dcraw output")?;
-                // Only apply manual rotation (embedded JPEG is pre-oriented)
+                // Apply EXIF orientation from the embedded JPEG.
+                // Some cameras (e.g. Nikon Z9) store the embedded preview in sensor
+                // orientation with an EXIF tag indicating the correct rotation.
+                // Cameras that pixel-rotate set orientation to 1, making this a no-op.
+                let img = if let Some(orient) = crate::exif_reader::orientation_from_bytes(&output.stdout) {
+                    crate::exif_reader::apply_exif_orientation(img, orient)
+                } else {
+                    img
+                };
+                // Apply manual rotation override if set
                 let img = if let Some(degrees) = manual_rotation {
                     crate::exif_reader::apply_rotation(img, degrees)
                 } else {
@@ -329,13 +337,15 @@ impl PreviewGenerator {
                 eprintln!("[debug] dcraw_emu stderr: {}", String::from_utf8_lossy(&output.stderr));
             }
             if output.status.success() && temp_tiff.exists() {
+                // Read EXIF orientation from the output TIFF (not the source RAW).
+                // dcraw_emu may already pixel-rotate the output, in which case
+                // the TIFF has no orientation tag and this is a no-op.
+                let tiff_exif = crate::exif_reader::extract(&temp_tiff);
                 let img = image::open(&temp_tiff).with_context(|| {
                     format!("Failed to open dcraw_emu output {}", temp_tiff.display())
                 })?;
                 std::fs::remove_file(&temp_tiff).ok();
-                // Apply EXIF orientation from the source RAW file
-                let exif_data = crate::exif_reader::extract(source);
-                let img = if let Some(orient) = exif_data.orientation {
+                let img = if let Some(orient) = tiff_exif.orientation {
                     crate::exif_reader::apply_exif_orientation(img, orient)
                 } else {
                     img

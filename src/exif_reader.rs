@@ -88,6 +88,18 @@ fn parse_gps_decimal(field: &exif::Field, ref_val: &str) -> Option<f64> {
     None
 }
 
+/// Read EXIF orientation from in-memory image bytes (e.g. embedded JPEG from dcraw).
+/// Returns None if EXIF data is missing or has no orientation tag.
+pub fn orientation_from_bytes(data: &[u8]) -> Option<u16> {
+    let mut cursor = std::io::Cursor::new(data);
+    let exif = exif::Reader::new().read_from_container(&mut cursor).ok()?;
+    exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)
+        .and_then(|f| match f.value {
+            exif::Value::Short(ref v) => v.first().copied(),
+            _ => None,
+        })
+}
+
 /// Extract EXIF metadata from a file. Infallible — returns empty data on any error.
 pub fn extract(path: &Path) -> ExifData {
     let file = match std::fs::File::open(path) {
