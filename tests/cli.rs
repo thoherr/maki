@@ -8149,6 +8149,20 @@ mod auto_tag {
     }
 
     #[test]
+    fn auto_tag_no_scope_errors() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        // Running auto-tag without --query/--asset/--volume should fail
+        dam()
+            .current_dir(&root)
+            .args(["auto-tag"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("No scope specified"));
+    }
+
+    #[test]
     fn auto_tag_no_model_errors() {
         let tmp = tempdir().unwrap();
         let root = init_catalog(tmp.path());
@@ -8167,7 +8181,7 @@ mod auto_tag {
 
         dam()
             .current_dir(&root)
-            .args(["auto-tag"])
+            .args(["auto-tag", "--query", "*"])
             .assert()
             .failure()
             .stderr(predicate::str::contains("Model not downloaded"));
@@ -8508,7 +8522,7 @@ mod auto_tag {
 
         let output = dam()
             .current_dir(&root)
-            .args(["auto-tag", "--json"])
+            .args(["auto-tag", "--query", "*", "--json"])
             .assert()
             .success();
 

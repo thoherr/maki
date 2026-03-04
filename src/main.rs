@@ -1946,7 +1946,18 @@ fn main() {
                 return Ok(());
             }
 
-            // Main auto-tag flow
+            // Main auto-tag flow — require at least one scope filter
+            if query.is_none() && asset.is_none() && volume.is_none() && similar.is_none() {
+                anyhow::bail!(
+                    "No scope specified. Use --query, --asset, or --volume to select assets.\n  \
+                     Examples:\n    \
+                     dam auto-tag --query '*'           # all assets\n    \
+                     dam auto-tag --asset <id>          # single asset\n    \
+                     dam auto-tag --volume <label>      # one volume\n    \
+                     dam auto-tag --query 'tag:landscape' --apply"
+                );
+            }
+
             if !mgr.model_exists() {
                 anyhow::bail!(
                     "Model not downloaded. Run 'dam auto-tag --download --model {model_id}' first."
