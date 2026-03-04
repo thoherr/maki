@@ -21,14 +21,7 @@
         hx-swap="innerHTML"
         hx-indicator="#preview-spinner">
     {% match primary_preview_url %}
-    {% when Some with (_url) %}Regenerate preview{% when None %}Generate preview{% endmatch %}
-</button>
-<button class="preview-generate-btn"
-        hx-post="/api/asset/{{ asset_id }}/smart-preview"
-        hx-target="#preview"
-        hx-swap="innerHTML"
-        hx-indicator="#preview-spinner">
-    {% if has_smart_preview %}Regenerate smart preview{% else %}Generate smart preview{% endif %}
+    {% when Some with (_url) %}Regenerate previews{% when None %}Generate previews{% endmatch %}
 </button>
 <button class="preview-generate-btn"
         hx-post="/api/asset/{{ asset_id }}/rotate"

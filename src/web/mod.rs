@@ -235,10 +235,6 @@ fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::post(routes::generate_preview),
         )
         .route(
-            "/api/asset/{id}/smart-preview",
-            axum::routing::post(routes::generate_smart_preview),
-        )
-        .route(
             "/api/asset/{id}/rotate",
             axum::routing::post(routes::set_rotation),
         )

@@ -1247,89 +1247,8 @@ pub async fn batch_tags(
     }
 }
 
-/// POST /api/asset/{id}/preview — generate preview, return preview fragment.
+/// POST /api/asset/{id}/preview — regenerate preview + smart preview, return preview fragment.
 pub async fn generate_preview(
-    State(state): State<Arc<AppState>>,
-    Path(asset_id): Path<String>,
-) -> Response {
-    let preview_ext = state.preview_ext.clone();
-    let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let engine = state.query_engine();
-        let details = engine.show(&asset_id)?;
-
-        let primary = details
-            .variants
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("Asset has no variants"))?;
-
-        let content_hash = &primary.content_hash;
-        let format = &primary.format;
-
-        // Resolve the source file path from the first online location
-        let registry = DeviceRegistry::new(&state.catalog_root);
-        let volumes = registry.list()?;
-
-        let source_path = primary
-            .locations
-            .iter()
-            .find_map(|loc| {
-                let vol = volumes.iter().find(|v| v.label == loc.volume_label)?;
-                if !vol.is_online {
-                    return None;
-                }
-                let path = vol.mount_point.join(&loc.relative_path);
-                if path.exists() {
-                    Some(path)
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| {
-                anyhow::anyhow!("No online file location found for primary variant")
-            })?;
-
-        let preview_gen = state.preview_generator();
-        preview_gen.regenerate(content_hash, &source_path, format)?;
-
-        let preview_url = if preview_gen.has_preview(content_hash) {
-            Some(super::templates::preview_url(content_hash, &preview_ext))
-        } else {
-            None
-        };
-
-        let best = crate::models::variant::best_preview_index_details(&details.variants);
-        let best_hash = best.map(|i| details.variants[i].content_hash.clone());
-        let has_smart = best_hash.as_ref().map_or(false, |h| preview_gen.has_smart_preview(h));
-        let smart_url = best_hash.as_ref().and_then(|h| {
-            if has_smart {
-                Some(super::templates::smart_preview_url(h, &preview_ext))
-            } else {
-                None
-            }
-        });
-
-        let tmpl = PreviewFragment {
-            asset_id,
-            primary_preview_url: preview_url,
-            smart_preview_url: smart_url,
-            has_smart_preview: has_smart,
-        };
-        Ok::<_, anyhow::Error>(tmpl.render()?)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
-}
-
-/// POST /api/asset/{id}/smart-preview — generate smart preview, return preview fragment.
-pub async fn generate_smart_preview(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
 ) -> Response {
@@ -1369,17 +1288,26 @@ pub async fn generate_smart_preview(
             })?;
 
         let preview_gen = state.preview_generator();
+        preview_gen.regenerate(content_hash, &source_path, format)?;
         preview_gen.regenerate_smart(content_hash, &source_path, format)?;
 
+        // Cache-bust URLs so browser shows the newly generated images
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
         let preview_url = if preview_gen.has_preview(content_hash) {
-            Some(super::templates::preview_url(content_hash, &preview_ext))
+            let url = super::templates::preview_url(content_hash, &preview_ext);
+            Some(format!("{url}?t={ts}"))
         } else {
             None
         };
 
         let has_smart = preview_gen.has_smart_preview(content_hash);
         let smart_url = if has_smart {
-            Some(super::templates::smart_preview_url(content_hash, &preview_ext))
+            let url = super::templates::smart_preview_url(content_hash, &preview_ext);
+            Some(format!("{url}?t={ts}"))
         } else {
             None
         };
