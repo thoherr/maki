@@ -175,6 +175,128 @@ impl<'a> EmbeddingStore<'a> {
     }
 }
 
+/// In-memory embedding index for fast similarity search.
+///
+/// Stores all embeddings for a single model in a contiguous f32 buffer.
+/// Since SigLIP embeddings are already L2-normalized, similarity = dot product.
+/// For 100k assets × 768 dims ≈ 300MB RAM, search takes <10ms.
+pub struct EmbeddingIndex {
+    ids: Vec<String>,
+    data: Vec<f32>, // contiguous [N × dim] row-major
+    dim: usize,
+}
+
+impl EmbeddingIndex {
+    /// Load all embeddings for a model from SQLite into a contiguous buffer.
+    pub fn load(conn: &Connection, model: &str, dim: usize) -> Result<Self> {
+        let mut stmt = conn
+            .prepare("SELECT asset_id, embedding FROM embeddings WHERE model = ?1")?;
+        let rows = stmt.query_map(rusqlite::params![model], |row| {
+            let id: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((id, blob))
+        })?;
+
+        let mut ids = Vec::new();
+        let mut data = Vec::new();
+        for row in rows {
+            let (id, blob) = row?;
+            let emb = blob_to_embedding(&blob);
+            if emb.len() == dim {
+                ids.push(id);
+                data.extend_from_slice(&emb);
+            }
+        }
+        Ok(Self { ids, data, dim })
+    }
+
+    /// Find top-K most similar by dot product (embeddings are L2-normalized).
+    pub fn search(
+        &self,
+        query: &[f32],
+        limit: usize,
+        exclude_id: Option<&str>,
+    ) -> Vec<(String, f32)> {
+        use std::collections::BinaryHeap;
+        use std::cmp::Reverse;
+
+        let n = self.ids.len();
+        if n == 0 || query.len() != self.dim {
+            return Vec::new();
+        }
+
+        // Min-heap of (similarity, index) — keeps top-K
+        let mut heap: BinaryHeap<Reverse<(OrderedF32, usize)>> = BinaryHeap::with_capacity(limit + 1);
+
+        for i in 0..n {
+            if exclude_id == Some(self.ids[i].as_str()) {
+                continue;
+            }
+            let offset = i * self.dim;
+            let row = &self.data[offset..offset + self.dim];
+            let dot = dot_product(query, row);
+
+            if heap.len() < limit {
+                heap.push(Reverse((OrderedF32(dot), i)));
+            } else if let Some(&Reverse((OrderedF32(min_sim), _))) = heap.peek() {
+                if dot > min_sim {
+                    heap.pop();
+                    heap.push(Reverse((OrderedF32(dot), i)));
+                }
+            }
+        }
+
+        let mut results: Vec<(String, f32)> = heap
+            .into_iter()
+            .map(|Reverse((OrderedF32(sim), idx))| (self.ids[idx].clone(), sim))
+            .collect();
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        results
+    }
+
+    /// Add or update an embedding in the index.
+    pub fn upsert(&mut self, asset_id: &str, embedding: &[f32]) {
+        if embedding.len() != self.dim {
+            return;
+        }
+        if let Some(pos) = self.ids.iter().position(|id| id == asset_id) {
+            // Update in place
+            let offset = pos * self.dim;
+            self.data[offset..offset + self.dim].copy_from_slice(embedding);
+        } else {
+            // Append
+            self.ids.push(asset_id.to_string());
+            self.data.extend_from_slice(embedding);
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+}
+
+/// Wrapper for f32 that implements Ord (for BinaryHeap).
+#[derive(PartialEq, PartialOrd)]
+struct OrderedF32(f32);
+
+impl Eq for OrderedF32 {}
+
+impl Ord for OrderedF32 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
+/// Dot product of two equal-length slices.
+#[inline]
+fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+}
+
 /// Convert a float embedding to a byte blob (little-endian).
 fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
     embedding
@@ -390,5 +512,73 @@ mod tests {
         let blob = embedding_to_blob(&original);
         let recovered = blob_to_embedding(&blob);
         assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn index_load_and_search() {
+        let conn = setup_db();
+        let store = EmbeddingStore::new(&conn);
+
+        // Store some normalized embeddings (dim=4 for simplicity)
+        let a = vec![1.0f32, 0.0, 0.0, 0.0];
+        let mut b = vec![0.9, 0.1, 0.0, 0.0];
+        let c = vec![0.0, 0.0, 0.0, 1.0];
+        // Normalize
+        let norm_b = (b.iter().map(|x| x * x).sum::<f32>()).sqrt();
+        b.iter_mut().for_each(|x| *x /= norm_b);
+
+        store.store("a", &a, TEST_MODEL).unwrap();
+        store.store("b", &b, TEST_MODEL).unwrap();
+        store.store("c", &c, TEST_MODEL).unwrap();
+
+        let index = EmbeddingIndex::load(&conn, TEST_MODEL, 4).unwrap();
+        assert_eq!(index.len(), 3);
+
+        let results = index.search(&a, 2, Some("a"));
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "b"); // most similar to a
+        assert!(results[0].1 > results[1].1);
+    }
+
+    #[test]
+    fn index_upsert() {
+        let conn = setup_db();
+        let store = EmbeddingStore::new(&conn);
+        store.store("a", &vec![1.0, 0.0, 0.0], TEST_MODEL).unwrap();
+
+        let mut index = EmbeddingIndex::load(&conn, TEST_MODEL, 3).unwrap();
+        assert_eq!(index.len(), 1);
+
+        // Insert new
+        index.upsert("b", &[0.0, 1.0, 0.0]);
+        assert_eq!(index.len(), 2);
+
+        // Update existing
+        index.upsert("a", &[0.0, 0.0, 1.0]);
+        assert_eq!(index.len(), 2);
+
+        // Search should reflect update
+        let results = index.search(&[0.0, 0.0, 1.0], 2, None);
+        assert_eq!(results[0].0, "a");
+    }
+
+    #[test]
+    fn index_search_empty() {
+        let conn = setup_db();
+        let index = EmbeddingIndex::load(&conn, TEST_MODEL, 768).unwrap();
+        assert!(index.is_empty());
+        let results = index.search(&vec![1.0; 768], 10, None);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn index_skips_wrong_dim() {
+        let conn = setup_db();
+        let store = EmbeddingStore::new(&conn);
+        store.store("a", &vec![1.0; 768], TEST_MODEL).unwrap();
+        store.store("b", &vec![1.0; 1024], TEST_MODEL).unwrap(); // wrong dim for 768 index
+
+        let index = EmbeddingIndex::load(&conn, TEST_MODEL, 768).unwrap();
+        assert_eq!(index.len(), 1); // only 'a' loaded
     }
 }

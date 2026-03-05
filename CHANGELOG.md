@@ -2,6 +2,16 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v2.1.2
+
+### New Features
+- **`dam embed` command** (feature-gated: `--features ai`) — batch-generate image embeddings for visual similarity search without tagging. `dam embed [--query <Q>] [--asset <id>] [--volume <label>] [--model <id>] [--force]`. Requires at least one scope filter. `--force` regenerates even if an embedding already exists. Reports embedded/skipped/error counts. Supports `--json`, `--log`, `--time`.
+
+### Enhancements
+- **In-memory embedding index** — similarity search (`dam auto-tag --similar`, web UI "Find similar") now uses a contiguous in-memory float buffer (`EmbeddingIndex`) instead of per-query SQLite blob scanning. The index is loaded lazily on first query and cached for the server lifetime. At 100k assets, search drops from seconds to <10ms. Top-K selection uses a min-heap instead of full sort.
+- **Opportunistic embedding storage** — the web UI "Suggest tags" and batch "Auto-tag" endpoints now store image embeddings as a side effect, building up the similarity search index without requiring a separate `dam embed` step.
+- **Deferred model loading in similarity search** — `find_similar_inner` no longer acquires the AI model lock when the query embedding already exists in the store, avoiding unnecessary contention and startup latency on repeat searches.
+
 ## v2.1.1
 
 ### New Features

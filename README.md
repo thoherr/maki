@@ -44,9 +44,9 @@ dam serve
 
 ## Commands
 
-29 commands covering setup, import, search, editing, maintenance, and more:
+30 commands covering setup, import, search, editing, maintenance, and more:
 
-`init` · `volume add/list/combine/remove` · `import` · `delete` · `export` · `search` · `show` · `edit` · `tag` · `group` · `auto-group` · `auto-tag` · `stack` · `duplicates` · `dedup` · `generate-previews` · `relocate` · `verify` · `sync` · `refresh` · `cleanup` · `stats` · `backup-status` · `fix-roles` · `fix-dates` · `rebuild-catalog` · `saved-search` · `collection` · `serve`
+`init` · `volume add/list/combine/remove` · `import` · `delete` · `export` · `search` · `show` · `edit` · `tag` · `group` · `auto-group` · `auto-tag` · `embed` · `stack` · `duplicates` · `dedup` · `generate-previews` · `relocate` · `verify` · `sync` · `refresh` · `cleanup` · `stats` · `backup-status` · `fix-roles` · `fix-dates` · `rebuild-catalog` · `saved-search` · `collection` · `serve`
 
 **Global flags**: `--json`, `--log`, `--debug`, `--time`. Run `dam --help` or `dam <command> --help` for usage.
 
@@ -83,7 +83,7 @@ These are optional. When missing, RAW and video files get an info card preview i
 
 ## AI Auto-Tagging (Optional Feature)
 
-Build with `cargo build --features ai` to enable the `dam auto-tag` command. This uses SigLIP vision-language models (via ONNX Runtime) for zero-shot image classification against a configurable tag vocabulary. Two models are available: ViT-B/16-256 (~207 MB, default) and ViT-L/16-256 (~670 MB, higher accuracy). Select with `--model` or `[ai] model` in `dam.toml`. Model files are downloaded from HuggingFace on first use. Embeddings are stored per-model for visual similarity search (`dam auto-tag --similar <asset-id>`). See the [Configuration Reference](doc/manual/reference/08-configuration.md) for `[ai]` settings.
+Build with `cargo build --features ai` to enable AI-powered commands. This uses SigLIP vision-language models (via ONNX Runtime) for zero-shot image classification against a configurable tag vocabulary. Two models are available: ViT-B/16-256 (~207 MB, default) and ViT-L/16-256 (~670 MB, higher accuracy). Select with `--model` or `[ai] model` in `dam.toml`. Model files are downloaded from HuggingFace on first use. Commands: `dam auto-tag` for tag suggestion/application, `dam embed` for batch embedding generation, and `dam auto-tag --similar <id>` for visual similarity search. The web UI "Suggest tags" and "Auto-tag" buttons also store embeddings opportunistically. Similarity search uses an in-memory index for sub-millisecond results at any scale. See the [Configuration Reference](doc/manual/reference/08-configuration.md) for `[ai]` settings.
 
 ## Technology
 

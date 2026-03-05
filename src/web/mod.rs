@@ -128,6 +128,8 @@ pub struct AppState {
     pub ai_label_cache: tokio::sync::RwLock<Option<(Vec<String>, Vec<Vec<f32>>)>>,
     #[cfg(feature = "ai")]
     pub ai_config: AiConfig,
+    #[cfg(feature = "ai")]
+    pub ai_embedding_index: std::sync::RwLock<Option<crate::embedding_store::EmbeddingIndex>>,
 }
 
 impl AppState {
@@ -148,6 +150,7 @@ impl AppState {
             ai_model: tokio::sync::Mutex::new(None),
             ai_label_cache: tokio::sync::RwLock::new(None),
             ai_config,
+            ai_embedding_index: std::sync::RwLock::new(None),
         }
     }
 

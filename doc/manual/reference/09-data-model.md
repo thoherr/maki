@@ -260,7 +260,7 @@ A named query (smart album) stored in `searches.toml`. Re-evaluated every time i
 
 > Only present when built with `--features ai`.
 
-A stored image embedding vector for an asset, used by `dam auto-tag` for classification and `--similar` for visual similarity search.
+A stored image embedding vector for an asset, used by `dam auto-tag` for classification, `--similar` for visual similarity search, and `dam embed` for batch generation.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -269,6 +269,10 @@ A stored image embedding vector for an asset, used by `dam auto-tag` for classif
 | `model` | String | Model identifier (default: `siglip-vit-b16-256`). Ensures embeddings from different models are not compared. |
 
 Storage overhead: ~3 KB per asset. For 100,000 assets: ~300 MB in SQLite.
+
+**In-memory index**: For fast similarity search, the web server loads all embeddings into an `EmbeddingIndex` — a contiguous `Vec<f32>` buffer — on first query. Search uses dot product (SigLIP embeddings are L2-normalized) with a min-heap for top-K selection. At 100k assets, search completes in <10ms. The index is updated in-place when new embeddings are stored.
+
+**Opportunistic storage**: Embeddings are stored not only by `dam auto-tag` and `dam embed`, but also opportunistically by the web UI "Suggest tags" and batch "Auto-tag" endpoints. This means using AI features in the web UI gradually builds up the similarity search index.
 
 ---
 

@@ -244,7 +244,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 **Module**: `src/web/` — axum server with askama templates and htmx interactivity.
 
 **Architecture**:
-- `AppState` holds the catalog root path, preview config, and `log_requests` flag. Schema migrations run once at server startup via `Catalog::open()`. Each request opens a fresh connection via `Catalog::open_fast()` (skips migrations) through `tokio::task::spawn_blocking` (since `rusqlite::Connection` is not `Send`). When `--log` is enabled, a middleware layer logs each request's method, URI, status, and duration to stderr.
+- `AppState` holds the catalog root path, preview config, `log_requests` flag, and (with `--features ai`) an in-memory `EmbeddingIndex` cache for fast similarity search. Schema migrations run once at server startup via `Catalog::open()`. Each request opens a fresh connection via `Catalog::open_fast()` (skips migrations) through `tokio::task::spawn_blocking` (since `rusqlite::Connection` is not `Send`). When `--log` is enabled, a middleware layer logs each request's method, URI, status, and duration to stderr.
 - Static assets (htmx.min.js, style.css) are embedded at compile time via `include_bytes!`/`include_str!`.
 - Preview images are served directly from the catalog's `previews/` directory via `tower-http::ServeDir`.
 
@@ -414,6 +414,7 @@ dam dedup [--volume V] [--prefer S] [--filter-format F] [--path P] [--min-copies
 dam generate-previews [PATHS...] [--asset ID] [--volume V] [--include G] [--skip G] [--force]  # generate thumbnails
 dam stats [--types] [--volumes] [--tags] [--verified] [--all] [--limit N]  # catalog statistics
 dam auto-group [QUERY] [--apply]                  # group assets by filename stem
+dam embed [--query Q] [--asset ID] [--volume V] [--model M] [--force]  # generate embeddings (ai feature)
 dam fix-roles [PATHS...] [--volume V] [--asset ID] [--apply]  # fix variant roles in RAW+non-RAW groups
 dam saved-search save|list|run|delete             # manage saved searches (alias: ss, save supports --favorite)
 dam collection create|list|show|add|remove|delete # manage collections (alias: col)

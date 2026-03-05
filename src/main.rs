@@ -234,9 +234,34 @@ enum Commands {
         similar: Option<String>,
     },
 
+    /// Generate embeddings for visual similarity search (requires --features ai)
+    #[cfg(feature = "ai")]
+    #[command(display_order = 17)]
+    Embed {
+        /// Search query to scope assets
+        #[arg(long, display_order = 1)]
+        query: Option<String>,
+
+        /// Process a specific asset (ID or prefix)
+        #[arg(long, display_order = 2)]
+        asset: Option<String>,
+
+        /// Limit to assets on a specific volume
+        #[arg(long, display_order = 3)]
+        volume: Option<String>,
+
+        /// AI model to use (default from dam.toml or siglip-vit-b16-256)
+        #[arg(long, display_order = 4)]
+        model: Option<String>,
+
+        /// Re-generate even if embedding already exists
+        #[arg(long, display_order = 10)]
+        force: bool,
+    },
+
     /// Face detection and recognition (requires --features ai)
     #[cfg(feature = "ai")]
-    #[command(subcommand, display_order = 17)]
+    #[command(subcommand, display_order = 18)]
     Faces(FacesCommands),
 
     // --- Organize ---
@@ -2091,6 +2116,182 @@ fn main() {
                 if !apply && result.tags_suggested > 0 {
                     println!("  Run with --apply to apply suggested tags.");
                 }
+            }
+            Ok(())
+        }
+        #[cfg(feature = "ai")]
+        Commands::Embed {
+            query,
+            asset,
+            volume,
+            model,
+            force,
+        } => {
+            use dam::model_manager::ModelManager;
+
+            if query.is_none() && asset.is_none() && volume.is_none() {
+                anyhow::bail!(
+                    "No scope specified. Use --query, --asset, or --volume to select assets.\n  \
+                     Examples:\n    \
+                     dam embed --query '*'           # all assets\n    \
+                     dam embed --asset <id>          # single asset\n    \
+                     dam embed --volume <label>      # one volume"
+                );
+            }
+
+            let catalog_root = dam::config::find_catalog_root()?;
+            let config = CatalogConfig::load(&catalog_root)?;
+
+            let model_id = model.as_deref().unwrap_or(&config.ai.model);
+            let _spec = dam::ai::get_model_spec(model_id)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Unknown model: {model_id}. Run 'dam auto-tag --list-models' to see available models."
+                ))?;
+
+            let model_dir_str = &config.ai.model_dir;
+            let model_base = if model_dir_str.starts_with("~/") {
+                let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
+                PathBuf::from(home).join(&model_dir_str[2..])
+            } else {
+                PathBuf::from(model_dir_str)
+            };
+            let model_dir = model_base.join(model_id);
+            let mgr = ModelManager::new(&model_dir, model_id)?;
+
+            if !mgr.model_exists() {
+                anyhow::bail!(
+                    "Model not downloaded. Run 'dam auto-tag --download --model {model_id}' first."
+                );
+            }
+
+            let catalog = dam::catalog::Catalog::open(&catalog_root)?;
+            let engine = QueryEngine::new(&catalog_root);
+
+            // Resolve target assets
+            let asset_ids: Vec<String> = if let Some(ref id) = asset {
+                let full_id = catalog
+                    .resolve_asset_id(id)?
+                    .ok_or_else(|| anyhow::anyhow!("No asset found matching '{id}'"))?;
+                vec![full_id]
+            } else {
+                let q = if let Some(ref query) = query {
+                    let volume_part = volume.as_deref().map(|v| format!(" volume:{v}")).unwrap_or_default();
+                    format!("{query}{volume_part}")
+                } else if let Some(ref v) = volume {
+                    format!("volume:{v}")
+                } else {
+                    "*".to_string()
+                };
+                let results = engine.search(&q)?;
+                results.into_iter().map(|r| r.asset_id).collect()
+            };
+
+            let _ = dam::embedding_store::EmbeddingStore::initialize(catalog.conn());
+            let emb_store = dam::embedding_store::EmbeddingStore::new(catalog.conn());
+
+            let registry = DeviceRegistry::new(&catalog_root);
+            let volumes_list = registry.list()?;
+            let online_volumes: std::collections::HashMap<String, &dam::models::Volume> =
+                volumes_list
+                    .iter()
+                    .filter(|v| v.is_online)
+                    .map(|v| (v.id.to_string(), v))
+                    .collect();
+
+            let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
+            let preview_gen = dam::preview::PreviewGenerator::new(
+                &catalog_root,
+                cli.debug,
+                &config.preview,
+            );
+
+            let mut ai_model = dam::ai::SigLipModel::load_with_debug(&model_dir, model_id, cli.debug)?;
+
+            let mut embedded: u32 = 0;
+            let mut skipped: u32 = 0;
+            let mut errors: Vec<String> = Vec::new();
+
+            for aid in &asset_ids {
+                let short_id = &aid[..8_usize.min(aid.len())];
+                let asset_start = std::time::Instant::now();
+
+                // Skip if embedding already exists (unless --force)
+                if !force && emb_store.has_embedding(aid, model_id) {
+                    skipped += 1;
+                    if cli.log {
+                        eprintln!("  {short_id} — skipped: already exists ({})", format_duration(asset_start.elapsed()));
+                    }
+                    continue;
+                }
+
+                let details = match catalog.load_asset_details(aid)? {
+                    Some(d) => d,
+                    None => {
+                        errors.push(format!("{short_id}: asset not found"));
+                        continue;
+                    }
+                };
+
+                let image_path = match service.find_image_for_ai(&details, &preview_gen, &online_volumes) {
+                    Some(p) => p,
+                    None => {
+                        skipped += 1;
+                        if cli.log {
+                            eprintln!("  {short_id} — skipped: no processable image");
+                        }
+                        continue;
+                    }
+                };
+
+                let ext = image_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+                if !dam::ai::is_supported_image(ext) {
+                    skipped += 1;
+                    if cli.log {
+                        eprintln!("  {short_id} — skipped: unsupported format '{ext}'");
+                    }
+                    continue;
+                }
+
+                match ai_model.encode_image(&image_path) {
+                    Ok(emb) => {
+                        if let Err(e) = emb_store.store(aid, &emb, model_id) {
+                            errors.push(format!("{short_id}: failed to store: {e}"));
+                            continue;
+                        }
+                        embedded += 1;
+                        if cli.log {
+                            eprintln!("  {short_id} — embedded ({})", format_duration(asset_start.elapsed()));
+                        }
+                    }
+                    Err(e) => {
+                        errors.push(format!("{short_id}: {e:#}"));
+                    }
+                }
+            }
+
+            if cli.json {
+                println!("{}", serde_json::json!({
+                    "embedded": embedded,
+                    "skipped": skipped,
+                    "errors": errors,
+                    "model": model_id,
+                    "force": force,
+                }));
+            } else {
+                for err in &errors {
+                    eprintln!("  {err}");
+                }
+                let mut parts = vec![
+                    format!("{embedded} embedded"),
+                    format!("{skipped} skipped"),
+                ];
+                if !errors.is_empty() {
+                    parts.push(format!("{} errors", errors.len()));
+                }
+                println!("Embed: {}", parts.join(", "));
             }
             Ok(())
         }

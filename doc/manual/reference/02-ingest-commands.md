@@ -604,7 +604,7 @@ Model files are downloaded from HuggingFace on first use. Use `--download` to pr
 
 **Image selection**: For each asset, the command looks for the best available image in this order: smart preview (2560px) → regular preview (800px) → original file on an online volume. Non-image assets (video, audio, documents) are skipped.
 
-**Embedding storage**: Image embeddings are stored in the SQLite catalog (`embeddings` table) per model. Switching models does not corrupt existing embeddings; each model's embeddings are stored separately. The `--similar` flag uses stored embeddings from the active model to find visually similar assets by cosine similarity.
+**Embedding storage**: Image embeddings are stored in the SQLite catalog (`embeddings` table) per model. Switching models does not corrupt existing embeddings; each model's embeddings are stored separately. The `--similar` flag uses stored embeddings from the active model to find visually similar assets via an in-memory index (dot product on L2-normalized vectors). Embeddings are also stored opportunistically by the web UI "Suggest tags" and batch "Auto-tag" endpoints. Use `dam embed` to batch-generate embeddings without tagging.
 
 **Default labels**: ~100 photography categories are built in (landscape, portrait, architecture, animals, food, etc.). Override with a custom labels file via `--labels`.
 
@@ -646,7 +646,7 @@ Model files are downloaded from HuggingFace on first use. Use `--download` to pr
 : Print the active label list (one per line) and exit. Shows the built-in defaults, or the labels from `--labels` / `[ai] labels` config if set. Works without a catalog when using defaults. Pipe to a file to create a custom labels blueprint: `dam auto-tag --list-labels > my-labels.txt`. Supports `--json` (outputs a JSON array).
 
 **--similar \<ASSET_ID\>**
-: Find the 20 most visually similar assets to the given asset, using stored embeddings. The target asset must have been previously processed by `auto-tag`.
+: Find the 20 most visually similar assets to the given asset, using stored embeddings. If the target asset has no stored embedding, it is encoded on-the-fly. Other assets must have been previously processed by `auto-tag` or `dam embed`.
 
 `--json` outputs an `AutoTagResult` with `assets_processed`, `assets_skipped`, `tags_suggested`, `tags_applied`, `errors`, `dry_run`, and per-asset `suggestions`.
 
@@ -724,9 +724,104 @@ dam auto-tag --query "tag:unreviewed" --json | jq '.suggestions[] | {asset: .ass
 
 ### SEE ALSO
 
+[embed](#dam-embed) -- batch-generate embeddings for similarity search.
 [tag](#dam-tag) -- manually add or remove tags.
 [search](04-retrieve-commands.md#dam-search) -- `tag:` filter for finding tagged assets.
 [Configuration](08-configuration.md#ai-section) -- `[ai]` section for default threshold, labels, and prompt template.
+
+---
+
+## dam embed
+
+> **Feature-gated**: requires building with `--features ai`. Not available in default builds.
+
+### NAME
+
+dam-embed -- batch-generate image embeddings for visual similarity search
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] embed --query <QUERY> [OPTIONS]
+dam [GLOBAL FLAGS] embed --asset <ID> [OPTIONS]
+dam [GLOBAL FLAGS] embed --volume <LABEL> [OPTIONS]
+```
+
+### DESCRIPTION
+
+Pre-computes image embeddings for visual similarity search (`dam auto-tag --similar` and the web UI "Find similar" button) without applying any tags. This is useful for building up the similarity search index across your catalog.
+
+For each matching asset, the command finds the best available image (smart preview → regular preview → original file on an online volume), encodes it with SigLIP, and stores the embedding in the SQLite catalog's `embeddings` table.
+
+By default, assets that already have a stored embedding for the active model are skipped. Use `--force` to re-generate embeddings (e.g., after switching to a higher-resolution preview).
+
+**Scope required**: at least one scope filter (`--query`, `--asset`, or `--volume`) must be specified to prevent accidental full-catalog processing. Use `--query "*"` to explicitly process all assets.
+
+**Non-destructive**: embedding generation does not modify any asset metadata, tags, or files. It only writes to the `embeddings` table.
+
+### OPTIONS
+
+**--query \<QUERY\>**
+: Filter which assets to process using the same search syntax as `dam search`.
+
+**--asset \<ID\>**
+: Process a single asset by ID (supports prefix matching).
+
+**--volume \<LABEL\>**
+: Process only assets on a specific volume.
+
+**--model \<ID\>**
+: Select which SigLIP model to use. Available: `siglip-vit-b16-256` (default), `siglip-vit-l16-256`. Overrides `[ai] model` in `dam.toml`.
+
+**--force**
+: Re-generate embeddings even if they already exist for the active model.
+
+`--json` outputs `{embedded, skipped, errors, model, force}`.
+
+`--log` prints per-asset status to stderr.
+
+### EXAMPLES
+
+Generate embeddings for all assets:
+
+```bash
+dam embed --query "*"
+```
+
+Generate embeddings for a single asset:
+
+```bash
+dam embed --asset a1b2c3d4
+```
+
+Generate embeddings for a specific volume:
+
+```bash
+dam embed --volume "Photos 2024"
+```
+
+Force re-generation with a different model:
+
+```bash
+dam embed --query "*" --model siglip-vit-l16-256 --force
+```
+
+Generate embeddings for untagged images only:
+
+```bash
+dam embed --query "tag:none type:image"
+```
+
+Check progress with JSON output:
+
+```bash
+dam embed --query "*" --json | jq '{embedded, skipped}'
+```
+
+### SEE ALSO
+
+[auto-tag](#dam-auto-tag) -- AI tag suggestion and visual similarity search.
+[Configuration](08-configuration.md#ai-section) -- `[ai]` section for model and model directory settings.
 
 ---
 
