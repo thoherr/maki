@@ -4057,6 +4057,30 @@ pub async fn list_people_api(
     }
 }
 
+/// POST /api/people — create a new person. Body: `{"name": "..."}`.
+#[cfg(feature = "ai")]
+pub async fn create_person_api(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if name.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "name is required"}))).into_response();
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+        let face_store = crate::face_store::FaceStore::new(catalog.conn());
+        let id = face_store.create_person(Some(&name))?;
+        Ok::<_, anyhow::Error>(serde_json::json!({"id": id, "name": name}))
+    }).await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e:#}")}))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e}")}))).into_response(),
+    }
+}
+
 /// PUT /api/people/{id}/name — rename a person.
 #[cfg(feature = "ai")]
 pub async fn name_person_api(

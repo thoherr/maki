@@ -123,9 +123,22 @@
                     if (personId === '__new__') {
                         var name = prompt('Enter person name:');
                         if (!name) { this.value = ''; return; }
-                        fetch('/api/faces/cluster', {method: 'POST'})
-                            .then(function() { window.location.reload(); })
-                            .catch(function() { window.location.reload(); });
+                        fetch('/api/people', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({name: name})
+                        })
+                        .then(function(r) { return r.json(); })
+                        .then(function(data) {
+                            if (!data.id) { alert('Failed to create person'); window.location.reload(); return; }
+                            return fetch('/api/faces/' + faceId + '/assign', {
+                                method: 'PUT',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({person_id: data.id})
+                            });
+                        })
+                        .then(function() { window.location.reload(); })
+                        .catch(function(err) { alert('Failed: ' + err.message); window.location.reload(); });
                         return;
                     }
                     fetch('/api/faces/' + faceId + '/assign', {

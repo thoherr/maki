@@ -384,7 +384,7 @@ fn build_router(state: Arc<AppState>) -> Router {
                 axum::routing::delete(routes::unassign_face_api),
             )
             .route("/people", axum::routing::get(routes::people_page))
-            .route("/api/people", axum::routing::get(routes::list_people_api))
+            .route("/api/people", axum::routing::get(routes::list_people_api).post(routes::create_person_api))
             .route(
                 "/api/people/{id}/name",
                 axum::routing::put(routes::name_person_api),
