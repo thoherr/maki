@@ -2422,28 +2422,25 @@ fn main() {
                         .collect();
 
                     // Resolve target assets
-                    let search_query = if let Some(ref aid) = asset {
-                        let catalog2 = dam::catalog::Catalog::open(&catalog_root)?;
-                        let full_id = catalog2.resolve_asset_id(aid)?
+                    let asset_ids: Vec<String> = if let Some(ref aid) = asset {
+                        let full_id = catalog
+                            .resolve_asset_id(aid)?
                             .ok_or_else(|| anyhow::anyhow!("No asset found matching '{aid}'"))?;
-                        format!("id:{full_id}")
+                        vec![full_id]
                     } else {
-                        let mut q = query.unwrap_or_default();
-                        if let Some(ref vol) = volume {
-                            if !q.is_empty() {
-                                q.push(' ');
-                            }
-                            q.push_str(&format!("volume:{vol}"));
-                        }
-                        q
-                    };
-
-                    let results = engine.search(&search_query)?;
-                    let asset_ids: Vec<String> = {
+                        let q = if let Some(ref query) = query {
+                            let volume_part = volume.as_deref().map(|v| format!(" volume:{v}")).unwrap_or_default();
+                            format!("{query}{volume_part}")
+                        } else if let Some(ref v) = volume {
+                            format!("volume:{v}")
+                        } else {
+                            "*".to_string()
+                        };
+                        let results = engine.search(&q)?;
                         let mut seen = std::collections::HashSet::new();
-                        results.iter()
+                        results.into_iter()
                             .filter(|r| seen.insert(r.asset_id.clone()))
-                            .map(|r| r.asset_id.clone())
+                            .map(|r| r.asset_id)
                             .collect()
                     };
 
