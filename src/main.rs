@@ -922,6 +922,18 @@ enum FacesCommands {
 
     /// Auto-cluster unassigned faces into unnamed people
     Cluster {
+        /// Search query to scope which assets' faces to cluster
+        #[arg(long)]
+        query: Option<String>,
+
+        /// Process faces from a specific asset (ID or prefix)
+        #[arg(long)]
+        asset: Option<String>,
+
+        /// Limit to faces on assets from a specific volume
+        #[arg(long)]
+        volume: Option<String>,
+
         /// Similarity threshold for clustering (0.0–1.0)
         #[arg(long)]
         threshold: Option<f32>,
@@ -2559,15 +2571,40 @@ fn main() {
                     }
                     Ok(())
                 }
-                FacesCommands::Cluster { threshold, apply } => {
+                FacesCommands::Cluster { query, asset, volume, threshold, apply } => {
                     let catalog = dam::catalog::Catalog::open(&catalog_root)?;
                     let _ = dam::face_store::FaceStore::initialize(catalog.conn());
                     let face_store = dam::face_store::FaceStore::new(catalog.conn());
 
                     let thresh = threshold.unwrap_or(config.ai.face_cluster_threshold);
 
+                    // Resolve scope to asset IDs (same pattern as dam embed)
+                    let scoped_ids: Option<Vec<String>> = if query.is_some() || asset.is_some() || volume.is_some() {
+                        let engine = QueryEngine::new(&catalog_root);
+                        if let Some(ref a) = asset {
+                            let full_id = catalog
+                                .resolve_asset_id(a)?
+                                .ok_or_else(|| anyhow::anyhow!("No asset found matching '{a}'"))?;
+                            Some(vec![full_id])
+                        } else {
+                            let q = if let Some(ref query) = query {
+                                let volume_part = volume.as_deref().map(|v| format!(" volume:{v}")).unwrap_or_default();
+                                format!("{query}{volume_part}")
+                            } else if let Some(ref v) = volume {
+                                format!("volume:{v}")
+                            } else {
+                                "*".to_string()
+                            };
+                            let rows = engine.search(&q)?;
+                            Some(rows.into_iter().map(|r| r.asset_id).collect())
+                        }
+                    } else {
+                        None
+                    };
+                    let scope = scoped_ids.as_deref();
+
                     if apply {
-                        let result = face_store.auto_cluster(thresh)?;
+                        let result = face_store.auto_cluster(thresh, scope)?;
                         if cli.json {
                             println!("{}", serde_json::to_string_pretty(&result)?);
                         } else {
@@ -2577,7 +2614,7 @@ fn main() {
                             );
                         }
                     } else {
-                        let clusters = face_store.cluster_faces(thresh)?;
+                        let (clusters, _unassigned) = face_store.cluster_faces(thresh, scope)?;
                         let total_faces: usize = clusters.iter().map(|c| c.len()).sum();
                         if cli.json {
                             println!("{}", serde_json::json!({

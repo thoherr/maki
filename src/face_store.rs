@@ -357,10 +357,31 @@ impl<'a> FaceStore<'a> {
     /// Get all face embeddings grouped by person (for clustering).
     /// Returns (face_id, person_id, embedding) tuples.
     pub fn all_face_embeddings(&self) -> Result<Vec<(String, Option<String>, Vec<f32>)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, person_id, embedding FROM faces")?;
-        let rows = stmt.query_map([], |row| {
+        self.face_embeddings_scoped(None)
+    }
+
+    /// Get face embeddings, optionally scoped to specific asset IDs.
+    /// Returns (face_id, person_id, embedding) tuples.
+    pub fn face_embeddings_scoped(&self, asset_ids: Option<&[String]>) -> Result<Vec<(String, Option<String>, Vec<f32>)>> {
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match asset_ids {
+            Some(ids) if !ids.is_empty() => {
+                let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+                let sql = format!(
+                    "SELECT id, person_id, embedding FROM faces WHERE asset_id IN ({})",
+                    placeholders.join(",")
+                );
+                let params: Vec<Box<dyn rusqlite::types::ToSql>> = ids.iter()
+                    .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>)
+                    .collect();
+                (sql, params)
+            }
+            _ => {
+                ("SELECT id, person_id, embedding FROM faces".to_string(), Vec::new())
+            }
+        };
+        let mut stmt = self.conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(param_refs.as_slice(), |row| {
             let id: String = row.get(0)?;
             let person_id: Option<String> = row.get(1)?;
             let blob: Vec<u8> = row.get(2)?;
@@ -429,18 +450,20 @@ impl<'a> FaceStore<'a> {
 
     /// Cluster unassigned faces into groups using greedy single-linkage.
     ///
-    /// Returns clusters (each is a list of face_ids) where each cluster has ≥2 faces.
-    pub fn cluster_faces(&self, threshold: f32) -> Result<Vec<Vec<String>>> {
-        let all = self.all_face_embeddings()?;
+    /// If `asset_ids` is provided, only faces from those assets are considered.
+    /// Returns (clusters, unassigned_count) where each cluster is a list of face_ids with ≥2 faces.
+    pub fn cluster_faces(&self, threshold: f32, asset_ids: Option<&[String]>) -> Result<(Vec<Vec<String>>, usize)> {
+        let all = self.face_embeddings_scoped(asset_ids)?;
         // Only cluster unassigned faces
         let unassigned: Vec<(String, Vec<f32>)> = all
             .into_iter()
             .filter(|(_, pid, _)| pid.is_none())
             .map(|(id, _, emb)| (id, emb))
             .collect();
+        let unassigned_count = unassigned.len();
 
         if unassigned.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), 0));
         }
 
         // Greedy clustering: each cluster has a centroid (average embedding)
@@ -473,29 +496,23 @@ impl<'a> FaceStore<'a> {
         }
 
         // Return only clusters with ≥2 faces
-        Ok(clusters
+        let result: Vec<Vec<String>> = clusters
             .into_iter()
             .filter(|(ids, _)| ids.len() >= 2)
             .map(|(ids, _)| ids)
-            .collect())
+            .collect();
+        Ok((result, unassigned_count))
     }
 
     /// Auto-cluster unassigned faces and create people for each cluster.
-    pub fn auto_cluster(&self, threshold: f32) -> Result<AutoClusterResult> {
-        let clusters = self.cluster_faces(threshold)?;
+    ///
+    /// If `asset_ids` is provided, only faces from those assets are considered.
+    pub fn auto_cluster(&self, threshold: f32, asset_ids: Option<&[String]>) -> Result<AutoClusterResult> {
+        let (clusters, total_unassigned) = self.cluster_faces(threshold, asset_ids)?;
 
         let mut people_created = 0u32;
         let mut faces_assigned = 0u32;
 
-        // Count unassigned singletons (faces not in any cluster with ≥2 members)
-        let total_unassigned: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM faces WHERE person_id IS NULL",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
         let clustered_count: usize = clusters.iter().map(|c| c.len()).sum();
         let singletons_skipped = (total_unassigned - clustered_count) as u32;
 

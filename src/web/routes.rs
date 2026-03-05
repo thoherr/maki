@@ -4142,7 +4142,7 @@ pub async fn cluster_faces_api(
         let _ = crate::face_store::FaceStore::initialize(catalog.conn());
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         let threshold = state.ai_config.face_cluster_threshold;
-        let result = face_store.auto_cluster(threshold)?;
+        let result = face_store.auto_cluster(threshold, None)?;
         state.dropdown_cache.invalidate_people();
         Ok::<_, anyhow::Error>(result)
     }).await;
