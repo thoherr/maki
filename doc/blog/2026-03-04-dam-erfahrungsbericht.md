@@ -125,11 +125,11 @@ Das DAM-Projekt ist [Open Source auf GitHub](https://github.com/thoherr/simple-d
 
 ## Weiterlesen
 
-- [Mein KI-Praktikant Claude: Erfahrungen aus der täglichen Softwareentwicklung](/tipps/2025/10/14/claude_experience.html) — ein persönlicher Erfahrungsbericht über den Einsatz von Claude in der täglichen Entwicklungsarbeit.
-- [Whitepaper: Agentic Coding](/concepts/2026/01/28/agentic_coding_whitepaper.html) — unser kostenloses Whitepaper erklärt, was Agentic Coding bedeutet und wie es sich vom klassischen Prompting unterscheidet.
-- [Schneller als man prompten kann: Die Entwicklung von Coding-Modellen am Beispiel Claude](/concepts/2026/02/24/claude-history.html) — die rasante Entwicklung der KI-Modelle für die Softwareentwicklung nachgezeichnet an der Claude-Familie.
+- [Mein KI-Praktikant Claude: Erfahrungen aus der täglichen Softwareentwicklung]({% post_url 2025-10-14-claude_experience %}) — ein persönlicher Erfahrungsbericht über den Einsatz von Claude in der täglichen Entwicklungsarbeit.
+- [Whitepaper: Agentic Coding]({% post_url 2026-01-28-agentic_coding_whitepaper %}) — unser kostenloses Whitepaper erklärt, was Agentic Coding bedeutet und wie es sich vom klassischen Prompting unterscheidet.
+- [Schneller als man prompten kann: Die Entwicklung von Coding-Modellen am Beispiel Claude]({% post_url 2026-02-24-claude-history %}) — die rasante Entwicklung der KI-Modelle für die Softwareentwicklung nachgezeichnet an der Claude-Familie.
 
-Sie möchten KI-gestützte Entwicklung in Ihrem Team einführen? [Sprechen Sie uns an](https://42ways.de) — wir unterstützen Sie bei der Auswahl und dem Einsatz der richtigen Tools.
+Sie möchten KI-gestützte Entwicklung in Ihrem Team einführen? [Sprechen Sie uns an](/contact/) — wir unterstützen Sie bei der Auswahl und dem Einsatz der richtigen Tools.
 
 ---
 
