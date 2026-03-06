@@ -88,6 +88,11 @@ enum Commands {
         /// Generate smart previews (2560px) alongside regular previews
         #[arg(long, display_order = 22)]
         smart: bool,
+
+        /// Generate image embeddings for visual similarity search (requires --features ai)
+        #[cfg(feature = "ai")]
+        #[arg(long, display_order = 23)]
+        embed: bool,
     },
 
     /// Add or remove tags on an asset
@@ -1271,6 +1276,8 @@ fn main() {
             dry_run,
             auto_group,
             smart,
+            #[cfg(feature = "ai")]
+            embed,
         } => {
             use dam::asset_service::FileTypeFilter;
 
@@ -1400,10 +1407,116 @@ fn main() {
                 None
             };
 
+            // Post-import embedding phase (AI feature)
+            #[cfg(feature = "ai")]
+            let embed_result = if !dry_run
+                && (embed || config.import.embeddings)
+                && !result.new_asset_ids.is_empty()
+            {
+                use dam::model_manager::ModelManager;
+
+                let model_id = &config.ai.model;
+                let model_dir_str = &config.ai.model_dir;
+                let model_base = if model_dir_str.starts_with("~/") {
+                    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
+                    PathBuf::from(home).join(&model_dir_str[2..])
+                } else {
+                    PathBuf::from(model_dir_str)
+                };
+                let model_dir = model_base.join(model_id);
+                let mgr = ModelManager::new(&model_dir, model_id)?;
+
+                if mgr.model_exists() {
+                    let catalog = dam::catalog::Catalog::open(&catalog_root)?;
+                    let _ = dam::embedding_store::EmbeddingStore::initialize(catalog.conn());
+                    let emb_store = dam::embedding_store::EmbeddingStore::new(catalog.conn());
+
+                    let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
+                    let preview_gen = dam::preview::PreviewGenerator::new(
+                        &catalog_root,
+                        cli.debug,
+                        &config.preview,
+                    );
+
+                    let registry = DeviceRegistry::new(&catalog_root);
+                    let volumes_list = registry.list()?;
+                    let online_volumes: std::collections::HashMap<String, &dam::models::Volume> =
+                        volumes_list
+                            .iter()
+                            .filter(|v| v.is_online)
+                            .map(|v| (v.id.to_string(), v))
+                            .collect();
+
+                    let mut ai_model = dam::ai::SigLipModel::load_with_debug(&model_dir, model_id, cli.debug)?;
+
+                    let mut embedded = 0u32;
+                    let mut embed_skipped = 0u32;
+                    for aid in &result.new_asset_ids {
+                        let short_id = &aid[..8_usize.min(aid.len())];
+
+                        if emb_store.has_embedding(aid, model_id) {
+                            embed_skipped += 1;
+                            continue;
+                        }
+
+                        let details = match catalog.load_asset_details(aid)? {
+                            Some(d) => d,
+                            None => continue,
+                        };
+
+                        let image_path = match service.find_image_for_ai(&details, &preview_gen, &online_volumes) {
+                            Some(p) => p,
+                            None => { embed_skipped += 1; continue; }
+                        };
+
+                        let ext = image_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        if !dam::ai::is_supported_image(ext) {
+                            embed_skipped += 1;
+                            continue;
+                        }
+
+                        match ai_model.encode_image(&image_path) {
+                            Ok(emb) => {
+                                if let Err(e) = emb_store.store(aid, &emb, model_id) {
+                                    if cli.log {
+                                        eprintln!("  {short_id} — embed error: {e}");
+                                    }
+                                    continue;
+                                }
+                                let _ = dam::embedding_store::write_embedding_binary(&catalog_root, model_id, aid, &emb);
+                                embedded += 1;
+                                if cli.log {
+                                    eprintln!("  {short_id} — embedded");
+                                }
+                            }
+                            Err(e) => {
+                                if cli.log {
+                                    eprintln!("  {short_id} — embed error: {e:#}");
+                                }
+                            }
+                        }
+                    }
+                    Some((embedded, embed_skipped))
+                } else {
+                    if cli.log {
+                        eprintln!("  Skipping embeddings: model not downloaded. Run 'dam auto-tag --download' first.");
+                    }
+                    None
+                }
+            } else {
+                None
+            };
+
             if cli.json {
+                #[allow(unused_mut)]
                 let mut json_val = serde_json::to_value(&result)?;
                 if let Some(ref ag) = auto_group_result {
                     json_val["auto_group"] = serde_json::to_value(ag)?;
+                }
+                #[cfg(feature = "ai")]
+                if let Some((embedded, skipped_embed)) = embed_result {
+                    json_val["embeddings_generated"] = serde_json::json!(embedded);
+                    json_val["embeddings_skipped"] = serde_json::json!(skipped_embed);
                 }
                 println!("{}", serde_json::to_string_pretty(&json_val)?);
             } else {
@@ -1428,6 +1541,12 @@ fn main() {
                 }
                 if result.smart_previews_generated > 0 {
                     parts.push(format!("{} smart preview(s) generated", result.smart_previews_generated));
+                }
+                #[cfg(feature = "ai")]
+                if let Some((embedded, _)) = embed_result {
+                    if embedded > 0 {
+                        parts.push(format!("{} embedding(s) generated", embedded));
+                    }
                 }
                 if parts.is_empty() {
                     println!("Import: nothing to import");
@@ -2837,7 +2956,6 @@ fn main() {
                     face_store.save_all_yaml(&catalog_root)?;
                     let faces_file = face_store.export_all_faces()?;
                     let people_file = face_store.export_all_people()?;
-                    println!("Exported {} faces, {} people to YAML", faces_file.faces.len(), people_file.people.len());
 
                     // Export ArcFace embedding binaries
                     let mut arcface_count = 0u32;
@@ -2852,7 +2970,6 @@ fn main() {
                             }
                         }
                     }
-                    println!("Exported {arcface_count} ArcFace embedding binaries");
 
                     if cli.json {
                         println!("{}", serde_json::json!({
@@ -2860,6 +2977,9 @@ fn main() {
                             "people": people_file.people.len(),
                             "arcface_binaries": arcface_count,
                         }));
+                    } else {
+                        println!("Exported {} faces, {} people to YAML", faces_file.faces.len(), people_file.people.len());
+                        println!("Exported {arcface_count} ArcFace embedding binaries");
                     }
                     Ok(())
                 }

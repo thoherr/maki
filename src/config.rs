@@ -116,6 +116,8 @@ pub struct ImportConfig {
     pub auto_tags: Vec<String>,
     #[serde(default)]
     pub smart_previews: bool,
+    #[serde(default)]
+    pub embeddings: bool,
 }
 
 fn is_default_preview(p: &PreviewConfig) -> bool {

@@ -764,4 +764,64 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, "asset-1");
     }
+
+    #[test]
+    fn list_models_empty() {
+        let conn = setup_db();
+        let store = EmbeddingStore::new(&conn);
+        let models = store.list_models().unwrap();
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn list_models_returns_distinct_sorted() {
+        let conn = setup_db();
+        let store = EmbeddingStore::new(&conn);
+
+        store.store("a1", &vec![1.0; 768], "siglip-vit-b16-256").unwrap();
+        store.store("a2", &vec![1.0; 768], "siglip-vit-b16-256").unwrap();
+        store.store("a1", &vec![1.0; 1024], "siglip-vit-l16-256").unwrap();
+
+        let models = store.list_models().unwrap();
+        assert_eq!(models, vec!["siglip-vit-b16-256", "siglip-vit-l16-256"]);
+    }
+
+    #[test]
+    fn all_embeddings_for_model_empty() {
+        let conn = setup_db();
+        let store = EmbeddingStore::new(&conn);
+        let results = store.all_embeddings_for_model(TEST_MODEL).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn all_embeddings_for_model_returns_correct_data() {
+        let conn = setup_db();
+        let store = EmbeddingStore::new(&conn);
+
+        let emb1 = vec![1.0f32; 768];
+        let emb2 = vec![2.0f32; 768];
+        let emb_other = vec![3.0f32; 1024];
+
+        store.store("asset-a", &emb1, TEST_MODEL).unwrap();
+        store.store("asset-b", &emb2, TEST_MODEL).unwrap();
+        store.store("asset-a", &emb_other, "other-model").unwrap();
+
+        let results = store.all_embeddings_for_model(TEST_MODEL).unwrap();
+        assert_eq!(results.len(), 2);
+
+        let ids: std::collections::HashSet<&str> = results.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(ids.contains("asset-a"));
+        assert!(ids.contains("asset-b"));
+
+        // Verify embedding data is correct
+        for (id, emb) in &results {
+            assert_eq!(emb.len(), 768);
+            if id == "asset-a" {
+                assert!((emb[0] - 1.0).abs() < 1e-6);
+            } else {
+                assert!((emb[0] - 2.0).abs() < 1e-6);
+            }
+        }
+    }
 }

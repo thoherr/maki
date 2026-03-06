@@ -8070,6 +8070,131 @@ fn export_no_results() {
 }
 
 // ===========================================================================
+// migrate
+// ===========================================================================
+
+#[test]
+fn migrate_runs_successfully() {
+    let tmp = tempdir().unwrap();
+    let root = init_catalog(tmp.path());
+
+    dam()
+        .current_dir(&root)
+        .arg("migrate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Schema migrations applied successfully"));
+}
+
+#[test]
+fn migrate_json_output() {
+    let tmp = tempdir().unwrap();
+    let root = init_catalog(tmp.path());
+
+    let output = dam()
+        .current_dir(&root)
+        .args(["migrate", "--json"])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["status"], "ok");
+}
+
+#[test]
+fn migrate_idempotent() {
+    let tmp = tempdir().unwrap();
+    let root = init_catalog(tmp.path());
+
+    // Run twice — should succeed both times
+    dam()
+        .current_dir(&root)
+        .arg("migrate")
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .arg("migrate")
+        .assert()
+        .success();
+}
+
+// ===========================================================================
+// faces export / embed --export (AI) — only compiled with --features ai
+// ===========================================================================
+
+#[cfg(feature = "ai")]
+mod export_ai_data {
+    use super::*;
+
+    #[test]
+    fn faces_export_empty_catalog() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        dam()
+            .current_dir(&root)
+            .args(["faces", "export"])
+            .assert()
+            .success();
+
+        // YAML files should be created even if empty
+        assert!(root.join("faces.yaml").exists());
+        assert!(root.join("people.yaml").exists());
+    }
+
+    #[test]
+    fn faces_export_json_output() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        let output = dam()
+            .current_dir(&root)
+            .args(["faces", "export", "--json"])
+            .assert()
+            .success();
+
+        let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert!(parsed.get("faces").is_some());
+        assert!(parsed.get("people").is_some());
+        assert!(parsed.get("arcface_binaries").is_some());
+    }
+
+    #[test]
+    fn embed_export_empty_catalog() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        dam()
+            .current_dir(&root)
+            .args(["embed", "--export"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Exported 0 embedding binaries"));
+    }
+
+    #[test]
+    fn embed_export_json_output() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        let output = dam()
+            .current_dir(&root)
+            .args(["embed", "--export", "--json"])
+            .assert()
+            .success();
+
+        let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(parsed["exported"], 0);
+        assert!(parsed["models"].is_array());
+    }
+}
+
+// ===========================================================================
 // auto-tag (AI) — only compiled with --features ai
 // ===========================================================================
 

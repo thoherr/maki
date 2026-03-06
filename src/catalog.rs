@@ -6576,4 +6576,71 @@ mod tests {
             .unwrap();
         assert!(result.is_none());
     }
+
+    #[test]
+    fn search_paginated_with_count_returns_total() {
+        let catalog = setup_search_catalog();
+
+        // Page 1 with per_page=1: should return 1 row but total_count=2
+        let opts = SearchOptions {
+            per_page: 1,
+            page: 1,
+            ..Default::default()
+        };
+        let (rows, total) = catalog.search_paginated_with_count(&opts).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(total, 2);
+
+        // Page 2: should return 1 row, same total
+        let opts2 = SearchOptions {
+            per_page: 1,
+            page: 2,
+            ..Default::default()
+        };
+        let (rows2, total2) = catalog.search_paginated_with_count(&opts2).unwrap();
+        assert_eq!(rows2.len(), 1);
+        assert_eq!(total2, 2);
+
+        // All on one page
+        let opts3 = SearchOptions {
+            per_page: 100,
+            page: 1,
+            ..Default::default()
+        };
+        let (rows3, total3) = catalog.search_paginated_with_count(&opts3).unwrap();
+        assert_eq!(rows3.len(), 2);
+        assert_eq!(total3, 2);
+    }
+
+    #[test]
+    fn search_paginated_with_count_empty_results() {
+        let catalog = setup_search_catalog();
+
+        let opts = SearchOptions {
+            text: Some("nonexistent_query_xyz"),
+            per_page: 10,
+            page: 1,
+            ..Default::default()
+        };
+        let (rows, total) = catalog.search_paginated_with_count(&opts).unwrap();
+        assert!(rows.is_empty());
+        assert_eq!(total, 0);
+    }
+
+    #[test]
+    fn search_paginated_with_count_filtered() {
+        let catalog = setup_search_catalog();
+
+        // Filter to only images (1 of 2 assets)
+        let tags = vec!["landscape".to_string()];
+        let opts = SearchOptions {
+            tags: &tags,
+            per_page: 100,
+            page: 1,
+            ..Default::default()
+        };
+        let (rows, total) = catalog.search_paginated_with_count(&opts).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(total, 1);
+    }
 }
