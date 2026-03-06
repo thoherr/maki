@@ -574,7 +574,7 @@ impl<'a> FaceStore<'a> {
 }
 
 /// Convert a float embedding to a byte blob (little-endian).
-fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
+pub fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
     embedding
         .iter()
         .flat_map(|f| f.to_le_bytes())
@@ -582,35 +582,260 @@ fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
 }
 
 /// Convert a byte blob back to a float embedding.
-fn blob_to_embedding(blob: &[u8]) -> Vec<f32> {
+pub fn blob_to_embedding(blob: &[u8]) -> Vec<f32> {
     blob.chunks_exact(4)
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
 }
 
-/// Serialize people to YAML for persistence.
-pub fn save_people_yaml(
-    people: &[(Person, Vec<StoredFace>)],
-    catalog_root: &std::path::Path,
-) -> Result<()> {
-    let path = catalog_root.join("people.yaml");
-    let yaml = serde_yaml::to_string(
-        &people
-            .iter()
-            .map(|(p, faces)| {
-                serde_yaml::to_value(serde_json::json!({
-                    "id": p.id,
-                    "name": p.name,
-                    "representative_face_id": p.representative_face_id,
-                    "created_at": p.created_at,
-                    "face_ids": faces.iter().map(|f| &f.id).collect::<Vec<_>>(),
-                }))
-                .unwrap()
-            })
-            .collect::<Vec<_>>(),
-    )?;
-    std::fs::write(&path, yaml).with_context(|| format!("Failed to write {}", path.display()))?;
+// ── YAML persistence for faces and people ────────────────────────────
+
+/// A face record for YAML persistence (no embedding — stored as binary).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FaceRecord {
+    pub id: String,
+    pub asset_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub person_id: Option<String>,
+    pub bbox_x: f32,
+    pub bbox_y: f32,
+    pub bbox_w: f32,
+    pub bbox_h: f32,
+    pub confidence: f32,
+    pub created_at: String,
+}
+
+/// A person record for YAML persistence.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PersonRecord {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub representative_face_id: Option<String>,
+    pub created_at: String,
+}
+
+/// Wrapper for faces.yaml.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct FacesFile {
+    pub faces: Vec<FaceRecord>,
+}
+
+/// Wrapper for people.yaml.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct PeopleFile {
+    pub people: Vec<PersonRecord>,
+}
+
+/// Load faces from the YAML file. Returns empty list if file doesn't exist.
+pub fn load_faces_yaml(catalog_root: &std::path::Path) -> Result<FacesFile> {
+    let path = catalog_root.join("faces.yaml");
+    if path.exists() {
+        let contents = std::fs::read_to_string(&path)?;
+        let file: FacesFile = serde_yaml::from_str(&contents)?;
+        Ok(file)
+    } else {
+        Ok(FacesFile::default())
+    }
+}
+
+/// Save faces to the YAML file.
+pub fn save_faces_yaml(catalog_root: &std::path::Path, file: &FacesFile) -> Result<()> {
+    let path = catalog_root.join("faces.yaml");
+    let contents = serde_yaml::to_string(file)?;
+    std::fs::write(&path, contents)?;
     Ok(())
+}
+
+/// Load people from the YAML file. Returns empty list if file doesn't exist.
+pub fn load_people_yaml(catalog_root: &std::path::Path) -> Result<PeopleFile> {
+    let path = catalog_root.join("people.yaml");
+    if path.exists() {
+        let contents = std::fs::read_to_string(&path)?;
+        let file: PeopleFile = serde_yaml::from_str(&contents)?;
+        Ok(file)
+    } else {
+        Ok(PeopleFile::default())
+    }
+}
+
+/// Save people to the YAML file.
+pub fn save_people_yaml(catalog_root: &std::path::Path, file: &PeopleFile) -> Result<()> {
+    let path = catalog_root.join("people.yaml");
+    let contents = serde_yaml::to_string(file)?;
+    std::fs::write(&path, contents)?;
+    Ok(())
+}
+
+// ── ArcFace binary embedding I/O ────────────────────────────────────
+
+/// Compute the path for an ArcFace face embedding binary file.
+/// Layout: `embeddings/arcface/<2-char prefix>/<face_id>.bin`
+pub fn arcface_binary_path(
+    catalog_root: &std::path::Path,
+    face_id: &str,
+) -> std::path::PathBuf {
+    let prefix = &face_id[..2.min(face_id.len())];
+    catalog_root
+        .join("embeddings")
+        .join("arcface")
+        .join(prefix)
+        .join(format!("{face_id}.bin"))
+}
+
+/// Write a face embedding as raw little-endian f32 bytes.
+pub fn write_arcface_binary(
+    catalog_root: &std::path::Path,
+    face_id: &str,
+    embedding: &[f32],
+) -> Result<()> {
+    let path = arcface_binary_path(catalog_root, face_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let bytes = embedding_to_blob(embedding);
+    std::fs::write(&path, bytes)?;
+    Ok(())
+}
+
+/// Delete an ArcFace embedding binary file (if it exists).
+pub fn delete_arcface_binary(catalog_root: &std::path::Path, face_id: &str) {
+    let path = arcface_binary_path(catalog_root, face_id);
+    let _ = std::fs::remove_file(path);
+}
+
+/// Scan all ArcFace embedding binaries.
+/// Returns `(face_id, embedding)` pairs.
+pub fn scan_arcface_binaries(
+    catalog_root: &std::path::Path,
+) -> Result<Vec<(String, Vec<f32>)>> {
+    let base = catalog_root.join("embeddings").join("arcface");
+    let mut results = Vec::new();
+    if !base.exists() {
+        return Ok(results);
+    }
+    for prefix_entry in std::fs::read_dir(&base)? {
+        let prefix_entry = prefix_entry?;
+        if !prefix_entry.file_type()?.is_dir() {
+            continue;
+        }
+        for file_entry in std::fs::read_dir(prefix_entry.path())? {
+            let file_entry = file_entry?;
+            let path = file_entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("bin") {
+                continue;
+            }
+            let face_id = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            if face_id.is_empty() {
+                continue;
+            }
+            let bytes = std::fs::read(&path)?;
+            let embedding = blob_to_embedding(&bytes);
+            results.push((face_id, embedding));
+        }
+    }
+    Ok(results)
+}
+
+// ── FaceStore export/import methods ─────────────────────────────────
+
+impl<'a> FaceStore<'a> {
+    /// Export all faces from SQLite to a FacesFile struct.
+    pub fn export_all_faces(&self) -> Result<FacesFile> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, asset_id, person_id, bbox_x, bbox_y, bbox_w, bbox_h, confidence, created_at
+             FROM faces ORDER BY asset_id, bbox_x",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(FaceRecord {
+                id: row.get(0)?,
+                asset_id: row.get(1)?,
+                person_id: row.get(2)?,
+                bbox_x: row.get(3)?,
+                bbox_y: row.get(4)?,
+                bbox_w: row.get(5)?,
+                bbox_h: row.get(6)?,
+                confidence: row.get(7)?,
+                created_at: row.get(8)?,
+            })
+        })?;
+        let faces = rows.collect::<Result<Vec<_>, _>>()?;
+        Ok(FacesFile { faces })
+    }
+
+    /// Export all people from SQLite to a PeopleFile struct.
+    pub fn export_all_people(&self) -> Result<PeopleFile> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, representative_face_id, created_at FROM people ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PersonRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                representative_face_id: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?;
+        let people = rows.collect::<Result<Vec<_>, _>>()?;
+        Ok(PeopleFile { people })
+    }
+
+    /// Import faces from a FacesFile into SQLite (INSERT OR REPLACE).
+    /// Inserts with an empty embedding blob placeholder.
+    pub fn import_faces_from_yaml(&self, file: &FacesFile) -> Result<u32> {
+        let empty_blob = embedding_to_blob(&[]);
+        let mut count = 0u32;
+        for f in &file.faces {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO faces (id, asset_id, person_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, confidence, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                rusqlite::params![
+                    f.id, f.asset_id, f.person_id, f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h,
+                    empty_blob, f.confidence, f.created_at
+                ],
+            )?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Import people from a PeopleFile into SQLite (INSERT OR REPLACE).
+    pub fn import_people_from_yaml(&self, file: &PeopleFile) -> Result<u32> {
+        let mut count = 0u32;
+        for p in &file.people {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO people (id, name, representative_face_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![p.id, p.name, p.representative_face_id, p.created_at],
+            )?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Update the embedding blob for a face by ID (used during rebuild-catalog).
+    pub fn import_face_embedding(&self, face_id: &str, embedding: &[f32]) -> Result<()> {
+        let blob = embedding_to_blob(embedding);
+        self.conn.execute(
+            "UPDATE faces SET embedding = ?1 WHERE id = ?2",
+            rusqlite::params![blob, face_id],
+        )?;
+        Ok(())
+    }
+
+    /// Convenience: export all faces+people from SQLite and save both YAML files.
+    pub fn save_all_yaml(&self, catalog_root: &std::path::Path) -> Result<()> {
+        let faces_file = self.export_all_faces()?;
+        save_faces_yaml(catalog_root, &faces_file)?;
+        let people_file = self.export_all_people()?;
+        save_people_yaml(catalog_root, &people_file)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -886,5 +1111,163 @@ mod tests {
         let blob = embedding_to_blob(&original);
         let recovered = blob_to_embedding(&blob);
         assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn faces_yaml_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let faces_file = FacesFile {
+            faces: vec![
+                FaceRecord {
+                    id: "face-1".into(),
+                    asset_id: "asset-1".into(),
+                    person_id: Some("person-1".into()),
+                    bbox_x: 0.1,
+                    bbox_y: 0.2,
+                    bbox_w: 0.3,
+                    bbox_h: 0.4,
+                    confidence: 0.95,
+                    created_at: "2024-01-01T00:00:00Z".into(),
+                },
+                FaceRecord {
+                    id: "face-2".into(),
+                    asset_id: "asset-1".into(),
+                    person_id: None,
+                    bbox_x: 0.5,
+                    bbox_y: 0.6,
+                    bbox_w: 0.1,
+                    bbox_h: 0.1,
+                    confidence: 0.8,
+                    created_at: "2024-01-02T00:00:00Z".into(),
+                },
+            ],
+        };
+        save_faces_yaml(dir.path(), &faces_file).unwrap();
+        let loaded = load_faces_yaml(dir.path()).unwrap();
+        assert_eq!(loaded.faces.len(), 2);
+        assert_eq!(loaded.faces[0].id, "face-1");
+        assert_eq!(loaded.faces[0].person_id, Some("person-1".into()));
+        assert_eq!(loaded.faces[1].person_id, None);
+        assert!((loaded.faces[0].confidence - 0.95).abs() < 1e-6);
+    }
+
+    #[test]
+    fn people_yaml_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let people_file = PeopleFile {
+            people: vec![
+                PersonRecord {
+                    id: "person-1".into(),
+                    name: Some("Alice".into()),
+                    representative_face_id: Some("face-1".into()),
+                    created_at: "2024-01-01T00:00:00Z".into(),
+                },
+                PersonRecord {
+                    id: "person-2".into(),
+                    name: None,
+                    representative_face_id: None,
+                    created_at: "2024-01-02T00:00:00Z".into(),
+                },
+            ],
+        };
+        save_people_yaml(dir.path(), &people_file).unwrap();
+        let loaded = load_people_yaml(dir.path()).unwrap();
+        assert_eq!(loaded.people.len(), 2);
+        assert_eq!(loaded.people[0].name, Some("Alice".into()));
+        assert_eq!(loaded.people[1].name, None);
+    }
+
+    #[test]
+    fn export_import_round_trip() {
+        let conn = setup_db();
+        let store = FaceStore::new(&conn);
+
+        // Create test data
+        let emb = vec![0.5f32; 512];
+        store.store_face("face-1", "asset-1", 0.1, 0.2, 0.3, 0.4, &emb, 0.95).unwrap();
+        store.store_face("face-2", "asset-2", 0.5, 0.6, 0.1, 0.1, &emb, 0.80).unwrap();
+        let person_id = store.create_person(Some("Alice")).unwrap();
+        store.assign_face_to_person("face-1", &person_id).unwrap();
+
+        // Export
+        let faces_file = store.export_all_faces().unwrap();
+        let people_file = store.export_all_people().unwrap();
+        assert_eq!(faces_file.faces.len(), 2);
+        assert_eq!(people_file.people.len(), 1);
+        assert_eq!(people_file.people[0].name, Some("Alice".into()));
+
+        // Clear and reimport
+        conn.execute_batch("DELETE FROM faces; DELETE FROM people;").unwrap();
+        assert_eq!(store.total_faces(), 0);
+        assert_eq!(store.total_people(), 0);
+
+        let people_imported = store.import_people_from_yaml(&people_file).unwrap();
+        let faces_imported = store.import_faces_from_yaml(&faces_file).unwrap();
+        assert_eq!(people_imported, 1);
+        assert_eq!(faces_imported, 2);
+
+        // Verify data restored (with empty embedding placeholder)
+        let faces = store.faces_for_asset("asset-1").unwrap();
+        assert_eq!(faces.len(), 1);
+        assert_eq!(faces[0].person_id.as_deref(), Some(person_id.as_str()));
+
+        // Import embedding for a face
+        store.import_face_embedding("face-1", &emb).unwrap();
+        let restored_emb = store.get_face_embedding("face-1").unwrap().unwrap();
+        assert_eq!(restored_emb.len(), 512);
+    }
+
+    #[test]
+    fn arcface_binary_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let embedding = vec![0.1f32, 0.2, 0.3, -0.5, std::f32::consts::PI];
+
+        write_arcface_binary(dir.path(), "face-abc123", &embedding).unwrap();
+
+        // Verify file exists at expected path
+        let path = arcface_binary_path(dir.path(), "face-abc123");
+        assert!(path.exists());
+        assert!(path.to_str().unwrap().contains("arcface/fa/face-abc123.bin"));
+
+        // Read it back via scan
+        let entries = scan_arcface_binaries(dir.path()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "face-abc123");
+        assert_eq!(entries[0].1, embedding);
+
+        // Delete
+        delete_arcface_binary(dir.path(), "face-abc123");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn save_all_yaml_convenience() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = setup_db();
+        let store = FaceStore::new(&conn);
+
+        let emb = vec![0.5f32; 512];
+        store.store_face("face-1", "asset-1", 0.1, 0.2, 0.3, 0.4, &emb, 0.95).unwrap();
+        store.create_person(Some("Bob")).unwrap();
+
+        store.save_all_yaml(dir.path()).unwrap();
+
+        // Verify both files written
+        assert!(dir.path().join("faces.yaml").exists());
+        assert!(dir.path().join("people.yaml").exists());
+
+        let faces = load_faces_yaml(dir.path()).unwrap();
+        let people = load_people_yaml(dir.path()).unwrap();
+        assert_eq!(faces.faces.len(), 1);
+        assert_eq!(people.people.len(), 1);
+    }
+
+    #[test]
+    fn load_yaml_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let faces = load_faces_yaml(dir.path()).unwrap();
+        let people = load_people_yaml(dir.path()).unwrap();
+        assert!(faces.faces.is_empty());
+        assert!(people.people.is_empty());
     }
 }

@@ -298,7 +298,7 @@ fn dot_product(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Convert a float embedding to a byte blob (little-endian).
-fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
+pub fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
     embedding
         .iter()
         .flat_map(|f| f.to_le_bytes())
@@ -306,10 +306,105 @@ fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
 }
 
 /// Convert a byte blob back to a float embedding.
-fn blob_to_embedding(blob: &[u8]) -> Vec<f32> {
+pub fn blob_to_embedding(blob: &[u8]) -> Vec<f32> {
     blob.chunks_exact(4)
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
+}
+
+// ── SigLIP binary embedding I/O ──────────────────────────────────────
+
+/// Compute the path for a SigLIP embedding binary file.
+/// Layout: `embeddings/<model>/<2-char prefix>/<asset_id>.bin`
+pub fn embedding_binary_path(
+    catalog_root: &std::path::Path,
+    model: &str,
+    asset_id: &str,
+) -> std::path::PathBuf {
+    let prefix = &asset_id[..2.min(asset_id.len())];
+    catalog_root
+        .join("embeddings")
+        .join(model)
+        .join(prefix)
+        .join(format!("{asset_id}.bin"))
+}
+
+/// Write an embedding as raw little-endian f32 bytes.
+pub fn write_embedding_binary(
+    catalog_root: &std::path::Path,
+    model: &str,
+    asset_id: &str,
+    embedding: &[f32],
+) -> Result<()> {
+    let path = embedding_binary_path(catalog_root, model, asset_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let bytes = embedding_to_blob(embedding);
+    std::fs::write(&path, bytes)?;
+    Ok(())
+}
+
+/// Delete an embedding binary file (if it exists).
+pub fn delete_embedding_binary(
+    catalog_root: &std::path::Path,
+    model: &str,
+    asset_id: &str,
+) {
+    let path = embedding_binary_path(catalog_root, model, asset_id);
+    let _ = std::fs::remove_file(path);
+}
+
+/// Read an embedding from a binary file.
+pub fn read_embedding_binary(
+    catalog_root: &std::path::Path,
+    model: &str,
+    asset_id: &str,
+) -> Result<Option<Vec<f32>>> {
+    let path = embedding_binary_path(catalog_root, model, asset_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path)?;
+    Ok(Some(blob_to_embedding(&bytes)))
+}
+
+/// Scan all embedding binaries for a given model.
+/// Returns `(asset_id, embedding)` pairs.
+pub fn scan_embedding_binaries(
+    catalog_root: &std::path::Path,
+    model: &str,
+) -> Result<Vec<(String, Vec<f32>)>> {
+    let base = catalog_root.join("embeddings").join(model);
+    let mut results = Vec::new();
+    if !base.exists() {
+        return Ok(results);
+    }
+    for prefix_entry in std::fs::read_dir(&base)? {
+        let prefix_entry = prefix_entry?;
+        if !prefix_entry.file_type()?.is_dir() {
+            continue;
+        }
+        for file_entry in std::fs::read_dir(prefix_entry.path())? {
+            let file_entry = file_entry?;
+            let path = file_entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("bin") {
+                continue;
+            }
+            let asset_id = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            if asset_id.is_empty() {
+                continue;
+            }
+            let bytes = std::fs::read(&path)?;
+            let embedding = blob_to_embedding(&bytes);
+            results.push((asset_id, embedding));
+        }
+    }
+    Ok(results)
 }
 
 #[cfg(test)]
@@ -580,5 +675,62 @@ mod tests {
 
         let index = EmbeddingIndex::load(&conn, TEST_MODEL, 768).unwrap();
         assert_eq!(index.len(), 1); // only 'a' loaded
+    }
+
+    #[test]
+    fn embedding_binary_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let embedding = vec![0.1f32, 0.2, 0.3, -0.5, std::f32::consts::PI];
+
+        write_embedding_binary(dir.path(), TEST_MODEL, "asset-abc123", &embedding).unwrap();
+
+        // Verify file exists at expected path
+        let path = embedding_binary_path(dir.path(), TEST_MODEL, "asset-abc123");
+        assert!(path.exists());
+        assert!(path.to_str().unwrap().contains(&format!("{TEST_MODEL}/as/asset-abc123.bin")));
+
+        // Read it back
+        let loaded = read_embedding_binary(dir.path(), TEST_MODEL, "asset-abc123").unwrap().unwrap();
+        assert_eq!(loaded, embedding);
+
+        // Delete
+        delete_embedding_binary(dir.path(), TEST_MODEL, "asset-abc123");
+        assert!(!path.exists());
+        assert!(read_embedding_binary(dir.path(), TEST_MODEL, "asset-abc123").unwrap().is_none());
+    }
+
+    #[test]
+    fn scan_embedding_binaries_multiple() {
+        let dir = tempfile::tempdir().unwrap();
+        let emb1 = vec![1.0f32; 768];
+        let emb2 = vec![2.0f32; 768];
+
+        write_embedding_binary(dir.path(), TEST_MODEL, "asset-aaa", &emb1).unwrap();
+        write_embedding_binary(dir.path(), TEST_MODEL, "asset-bbb", &emb2).unwrap();
+
+        let entries = scan_embedding_binaries(dir.path(), TEST_MODEL).unwrap();
+        assert_eq!(entries.len(), 2);
+
+        let ids: std::collections::HashSet<&str> = entries.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(ids.contains("asset-aaa"));
+        assert!(ids.contains("asset-bbb"));
+    }
+
+    #[test]
+    fn scan_embedding_binaries_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let entries = scan_embedding_binaries(dir.path(), TEST_MODEL).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn scan_embedding_binaries_ignores_other_models() {
+        let dir = tempfile::tempdir().unwrap();
+        write_embedding_binary(dir.path(), TEST_MODEL, "asset-1", &vec![1.0; 768]).unwrap();
+        write_embedding_binary(dir.path(), "other-model", "asset-2", &vec![2.0; 512]).unwrap();
+
+        let entries = scan_embedding_binaries(dir.path(), TEST_MODEL).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "asset-1");
     }
 }

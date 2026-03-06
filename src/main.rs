@@ -1791,6 +1791,22 @@ fn main() {
             let config = CatalogConfig::load(&catalog_root)?;
             let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
 
+            // Collect face IDs for deleted assets before deletion (for AI cleanup)
+            #[cfg(feature = "ai")]
+            let ai_cleanup_info: Vec<(String, Vec<String>)> = if apply {
+                let catalog = dam::catalog::Catalog::open(&catalog_root)?;
+                let _ = dam::face_store::FaceStore::initialize(catalog.conn());
+                let face_store = dam::face_store::FaceStore::new(catalog.conn());
+                ids.iter().filter_map(|id| {
+                    let full_id = catalog.resolve_asset_id(id).ok().flatten()?;
+                    let faces = face_store.faces_for_asset(&full_id).unwrap_or_default();
+                    let face_ids: Vec<String> = faces.into_iter().map(|f| f.id).collect();
+                    Some((full_id, face_ids))
+                }).collect()
+            } else {
+                Vec::new()
+            };
+
             let show_log = cli.log;
             let result = service.delete_assets(
                 &ids,
@@ -1813,6 +1829,25 @@ fn main() {
                     }
                 },
             )?;
+
+            // Clean up AI files for deleted assets
+            #[cfg(feature = "ai")]
+            if apply && result.deleted > 0 {
+                for (asset_id, face_ids) in &ai_cleanup_info {
+                    // Delete ArcFace binaries for each face
+                    for face_id in face_ids {
+                        dam::face_store::delete_arcface_binary(&catalog_root, face_id);
+                    }
+                    // Delete SigLIP embedding binary
+                    dam::embedding_store::delete_embedding_binary(&catalog_root, "siglip-vit-b16-256", asset_id);
+                    dam::embedding_store::delete_embedding_binary(&catalog_root, "siglip-vit-l16-256", asset_id);
+                }
+                // Update faces/people YAML
+                let catalog = dam::catalog::Catalog::open(&catalog_root)?;
+                let _ = dam::face_store::FaceStore::initialize(catalog.conn());
+                let face_store = dam::face_store::FaceStore::new(catalog.conn());
+                let _ = face_store.save_all_yaml(&catalog_root);
+            }
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -2317,6 +2352,12 @@ fn main() {
                             errors.push(format!("{short_id}: failed to store: {e}"));
                             continue;
                         }
+                        // Write SigLIP embedding binary
+                        if let Err(e) = dam::embedding_store::write_embedding_binary(&catalog_root, model_id, aid, &emb) {
+                            if cli.debug {
+                                eprintln!("  {short_id}: embedding binary error: {e:#}");
+                            }
+                        }
                         embedded += 1;
                         if cli.log {
                             eprintln!("  {short_id} — embedded ({})", format_duration(asset_start.elapsed()));
@@ -2511,6 +2552,12 @@ fn main() {
                                                     eprintln!("  {short_id}: face crop error: {e:#}");
                                                 }
                                             }
+                                            // Write ArcFace embedding binary
+                                            if let Err(e) = dam::face_store::write_arcface_binary(&catalog_root, &face_id, embedding) {
+                                                if cli.debug {
+                                                    eprintln!("  {short_id}: arcface binary error: {e:#}");
+                                                }
+                                            }
                                         }
                                     }
                                     // Update denormalized face_count
@@ -2534,6 +2581,13 @@ fn main() {
                                     eprintln!("  {short_id} — error: {e:#}");
                                 }
                             }
+                        }
+                    }
+
+                    // Persist faces/people YAML after all detections
+                    if apply && total_faces > 0 {
+                        if let Err(e) = face_store.save_all_yaml(&catalog_root) {
+                            eprintln!("  Warning: failed to save faces/people YAML: {e:#}");
                         }
                     }
 
@@ -2602,6 +2656,10 @@ fn main() {
 
                     if apply {
                         let result = face_store.auto_cluster(thresh, scope)?;
+                        // Persist faces/people YAML
+                        if let Err(e) = face_store.save_all_yaml(&catalog_root) {
+                            eprintln!("  Warning: failed to save faces/people YAML: {e:#}");
+                        }
                         if cli.json {
                             println!("{}", serde_json::to_string_pretty(&result)?);
                         } else {
@@ -2670,6 +2728,7 @@ fn main() {
                     // Resolve person ID prefix
                     let full_id = resolve_person_id(&face_store, &person_id)?;
                     face_store.name_person(&full_id, &name)?;
+                    let _ = face_store.save_all_yaml(&catalog_root);
                     let short = &full_id[..8.min(full_id.len())];
                     println!("Named person {short} as \"{name}\"");
                     Ok(())
@@ -2682,6 +2741,7 @@ fn main() {
                     let target = resolve_person_id(&face_store, &target_id)?;
                     let source = resolve_person_id(&face_store, &source_id)?;
                     let moved = face_store.merge_people(&target, &source)?;
+                    let _ = face_store.save_all_yaml(&catalog_root);
                     let short_t = &target[..8.min(target.len())];
                     let short_s = &source[..8.min(source.len())];
                     println!("Merged {short_s} into {short_t}: {moved} faces moved");
@@ -2694,6 +2754,7 @@ fn main() {
 
                     let full_id = resolve_person_id(&face_store, &person_id)?;
                     face_store.delete_person(&full_id)?;
+                    let _ = face_store.save_all_yaml(&catalog_root);
                     let short = &full_id[..8.min(full_id.len())];
                     println!("Deleted person {short} (faces unassigned)");
                     Ok(())
@@ -2706,6 +2767,7 @@ fn main() {
                     // Resolve face ID prefix
                     let full_id = resolve_face_id(&face_store, &face_id)?;
                     face_store.unassign_face(&full_id)?;
+                    let _ = face_store.save_all_yaml(&catalog_root);
                     let short = &full_id[..8.min(full_id.len())];
                     println!("Unassigned face {short} from its person");
                     Ok(())
@@ -3952,13 +4014,90 @@ fn main() {
                 }
             };
 
+            // Restore faces, people, and embeddings from files
+            #[cfg(feature = "ai")]
+            let (people_restored, faces_restored, face_embeddings_restored, embeddings_restored) = {
+                let _ = dam::face_store::FaceStore::initialize(catalog.conn());
+                let _ = dam::embedding_store::EmbeddingStore::initialize(catalog.conn());
+                let face_store = dam::face_store::FaceStore::new(catalog.conn());
+
+                // Import people first (faces reference people via FK)
+                let people_file = dam::face_store::load_people_yaml(&catalog_root).unwrap_or_default();
+                let people_restored = if !people_file.people.is_empty() {
+                    face_store.import_people_from_yaml(&people_file).unwrap_or(0)
+                } else {
+                    0
+                };
+
+                // Import faces (with empty embedding placeholder)
+                let faces_file = dam::face_store::load_faces_yaml(&catalog_root).unwrap_or_default();
+                let faces_restored = if !faces_file.faces.is_empty() {
+                    face_store.import_faces_from_yaml(&faces_file).unwrap_or(0)
+                } else {
+                    0
+                };
+
+                // Restore ArcFace embeddings from binary files
+                let mut face_embeddings_restored = 0u32;
+                if let Ok(arcface_entries) = dam::face_store::scan_arcface_binaries(&catalog_root) {
+                    for (face_id, embedding) in &arcface_entries {
+                        if face_store.import_face_embedding(face_id, embedding).is_ok() {
+                            face_embeddings_restored += 1;
+                        }
+                    }
+                }
+
+                // Restore SigLIP embeddings from binary files
+                let mut embeddings_restored = 0u32;
+                let emb_store = dam::embedding_store::EmbeddingStore::new(catalog.conn());
+                // Scan all model directories under embeddings/ (skip "arcface")
+                let emb_base = catalog_root.join("embeddings");
+                if emb_base.exists() {
+                    if let Ok(entries) = std::fs::read_dir(&emb_base) {
+                        for entry in entries.flatten() {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            if name == "arcface" || !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                                continue;
+                            }
+                            if let Ok(model_entries) = dam::embedding_store::scan_embedding_binaries(&catalog_root, &name) {
+                                for (asset_id, embedding) in &model_entries {
+                                    if emb_store.store(asset_id, embedding, &name).is_ok() {
+                                        embeddings_restored += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Backfill face_count denormalized column
+                if faces_restored > 0 {
+                    let _ = catalog.conn().execute_batch(
+                        "UPDATE assets SET face_count = (
+                            SELECT COUNT(*) FROM faces WHERE faces.asset_id = assets.id
+                        ) WHERE id IN (SELECT DISTINCT asset_id FROM faces)"
+                    );
+                }
+
+                (people_restored, faces_restored, face_embeddings_restored, embeddings_restored)
+            };
+
             if cli.json {
-                println!("{}", serde_json::json!({
+                #[allow(unused_mut)]
+                let mut json = serde_json::json!({
                     "synced": result.synced,
                     "errors": result.errors,
                     "collections_restored": collections_restored,
                     "stacks_restored": stacks_restored,
-                }));
+                });
+                #[cfg(feature = "ai")]
+                {
+                    json["people_restored"] = serde_json::json!(people_restored);
+                    json["faces_restored"] = serde_json::json!(faces_restored);
+                    json["face_embeddings_restored"] = serde_json::json!(face_embeddings_restored);
+                    json["embeddings_restored"] = serde_json::json!(embeddings_restored);
+                }
+                println!("{}", json);
             } else {
                 println!("Rebuild complete: {} asset(s) synced", result.synced);
                 if collections_restored > 0 {
@@ -3966,6 +4105,18 @@ fn main() {
                 }
                 if stacks_restored > 0 {
                     println!("  {} stack(s) restored", stacks_restored);
+                }
+                #[cfg(feature = "ai")]
+                {
+                    if people_restored > 0 {
+                        println!("  {} people restored", people_restored);
+                    }
+                    if faces_restored > 0 {
+                        println!("  {} face(s) restored ({} embeddings)", faces_restored, face_embeddings_restored);
+                    }
+                    if embeddings_restored > 0 {
+                        println!("  {} embedding(s) restored", embeddings_restored);
+                    }
                 }
                 if result.errors > 0 {
                     println!("  {} error(s) encountered", result.errors);

@@ -3381,6 +3381,8 @@ fn suggest_tags_inner(
             let emb_store = crate::embedding_store::EmbeddingStore::new(catalog.conn());
             let _ = emb_store.store(asset_id, &image_emb, model_id);
         }
+        // Write SigLIP embedding binary
+        let _ = crate::embedding_store::write_embedding_binary(&state.catalog_root, model_id, asset_id, &image_emb);
         // Update in-memory index if loaded
         if let Ok(mut idx_guard) = state.ai_embedding_index.write() {
             if let Some(ref mut idx) = *idx_guard {
@@ -3567,6 +3569,8 @@ fn batch_auto_tag_inner(
                 let es = crate::embedding_store::EmbeddingStore::new(cat.conn());
                 let _ = es.store(aid, &image_emb, model_id);
             }
+            // Write SigLIP embedding binary
+            let _ = crate::embedding_store::write_embedding_binary(&state.catalog_root, model_id, aid, &image_emb);
             // Update in-memory index if loaded
             if let Ok(mut idx_guard) = state.ai_embedding_index.write() {
                 if let Some(ref mut idx) = *idx_guard {
@@ -3707,6 +3711,8 @@ fn find_similar_inner(
         emb_store
             .store(asset_id, &emb, model_id)
             .map_err(|e| format!("Failed to store embedding: {e:#}"))?;
+        // Write SigLIP embedding binary
+        let _ = crate::embedding_store::write_embedding_binary(&state.catalog_root, model_id, asset_id, &emb);
         emb
     };
 
@@ -3923,6 +3929,7 @@ fn detect_faces_inner(state: &AppState, asset_ids: &[String]) -> Result<serde_js
                         errors.push(format!("{}: store error: {e:#}", &aid[..8.min(aid.len())]));
                     } else {
                         let _ = crate::face::save_face_crop(&image_path, face, &face_id, &state.catalog_root);
+                        let _ = crate::face_store::write_arcface_binary(&state.catalog_root, &face_id, embedding);
                     }
                 }
                 let _ = catalog.update_face_count(aid);
@@ -3933,6 +3940,11 @@ fn detect_faces_inner(state: &AppState, asset_ids: &[String]) -> Result<serde_js
                 errors.push(format!("{}: {e:#}", &aid[..8.min(aid.len())]));
             }
         }
+    }
+
+    // Persist faces/people YAML
+    if total_faces > 0 {
+        let _ = face_store.save_all_yaml(&state.catalog_root);
     }
 
     Ok(serde_json::json!({
@@ -3958,6 +3970,7 @@ pub async fn assign_face(
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         face_store.assign_face_to_person(&face_id, &person_id)?;
+        let _ = face_store.save_all_yaml(&state.catalog_root);
         state.dropdown_cache.invalidate_people();
         Ok::<_, anyhow::Error>(())
     }).await;
@@ -3979,6 +3992,7 @@ pub async fn unassign_face_api(
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         face_store.unassign_face(&face_id)?;
+        let _ = face_store.save_all_yaml(&state.catalog_root);
         state.dropdown_cache.invalidate_people();
         Ok::<_, anyhow::Error>(())
     }).await;
@@ -4006,7 +4020,10 @@ pub async fn delete_face_api(
             let prefix = &face_id[..2.min(face_id.len())];
             let crop = catalog_root.join("faces").join(prefix).join(format!("{face_id}.jpg"));
             let _ = std::fs::remove_file(crop);
+            // Remove ArcFace binary
+            crate::face_store::delete_arcface_binary(&catalog_root, &face_id);
         }
+        let _ = face_store.save_all_yaml(&catalog_root);
         Ok::<_, anyhow::Error>(())
     }).await;
 
@@ -4098,6 +4115,7 @@ pub async fn create_person_api(
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         let id = face_store.create_person(Some(&name))?;
+        let _ = face_store.save_all_yaml(&state.catalog_root);
         Ok::<_, anyhow::Error>(serde_json::json!({"id": id, "name": name}))
     }).await;
 
@@ -4124,6 +4142,7 @@ pub async fn name_person_api(
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         face_store.name_person(&person_id, &name)?;
+        let _ = face_store.save_all_yaml(&state.catalog_root);
         state.dropdown_cache.invalidate_people();
         Ok::<_, anyhow::Error>(())
     }).await;
@@ -4151,6 +4170,7 @@ pub async fn merge_person_api(
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         let moved = face_store.merge_people(&target_id, &source_id)?;
+        let _ = face_store.save_all_yaml(&state.catalog_root);
         state.dropdown_cache.invalidate_people();
         Ok::<_, anyhow::Error>(moved)
     }).await;
@@ -4172,6 +4192,7 @@ pub async fn delete_person_api(
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         face_store.delete_person(&person_id)?;
+        let _ = face_store.save_all_yaml(&state.catalog_root);
         state.dropdown_cache.invalidate_people();
         Ok::<_, anyhow::Error>(())
     }).await;
@@ -4194,6 +4215,7 @@ pub async fn cluster_faces_api(
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         let threshold = state.ai_config.face_cluster_threshold;
         let result = face_store.auto_cluster(threshold, None)?;
+        let _ = face_store.save_all_yaml(&state.catalog_root);
         state.dropdown_cache.invalidate_people();
         Ok::<_, anyhow::Error>(result)
     }).await;

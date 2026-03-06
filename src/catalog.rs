@@ -1964,7 +1964,10 @@ impl Catalog {
     /// Keeps the volumes table intact. Ensures the schema is up to date.
     pub fn rebuild(&self) -> Result<()> {
         self.conn.execute_batch(
-            "DROP TABLE IF EXISTS collection_assets;
+            "DROP TABLE IF EXISTS faces;
+             DROP TABLE IF EXISTS people;
+             DROP TABLE IF EXISTS embeddings;
+             DROP TABLE IF EXISTS collection_assets;
              DROP TABLE IF EXISTS collections;
              DROP TABLE IF EXISTS file_locations;
              DROP TABLE IF EXISTS recipes;
