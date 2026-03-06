@@ -278,7 +278,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 **Module**: `src/web/` — axum server with askama templates and htmx interactivity.
 
 **Architecture**:
-- `AppState` holds the catalog root path, preview config, `log_requests` flag, and (with `--features ai`) an in-memory `EmbeddingIndex` cache for fast similarity search. Schema migrations run once at server startup via `Catalog::open()`. Each request opens a fresh connection via `Catalog::open_fast()` (skips migrations) through `tokio::task::spawn_blocking` (since `rusqlite::Connection` is not `Send`). When `--log` is enabled, a middleware layer logs each request's method, URI, status, and duration to stderr.
+- `AppState` holds the catalog root path, preview config, `log_requests` flag, dropdown cache, and (with `--features ai`) an in-memory `EmbeddingIndex` cache for fast similarity search. Schema migrations run once at program startup (before command dispatch). Each request opens a fresh SQLite connection via `Catalog::open()` (with WAL, mmap, and tuned pragmas but no migrations) through `tokio::task::spawn_blocking` (since `rusqlite::Connection` is not `Send`). Dropdown caches (tags, formats, volumes, collections, people) are warmed at server startup. When `--log` is enabled, a middleware layer logs each request's method, URI, status, and duration to stderr.
 - Static assets (htmx.min.js, style.css) are embedded at compile time via `include_bytes!`/`include_str!`.
 - Preview images are served directly from the catalog's `previews/` directory via `tower-http::ServeDir`.
 

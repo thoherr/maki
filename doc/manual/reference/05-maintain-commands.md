@@ -1051,4 +1051,46 @@ dam rebuild-catalog --log --time
 
 ---
 
+## dam migrate
+
+### NAME
+
+dam-migrate -- run database schema migrations
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] migrate
+```
+
+### DESCRIPTION
+
+Runs all pending database schema migrations. Migrations are idempotent (safe to run repeatedly) and add new columns, indexes, and tables needed by newer versions of dam.
+
+Migrations also run automatically once at program startup for all commands, so this command is primarily useful for:
+
+- Explicit migration after a version upgrade
+- Scripting and automation
+- Verifying the schema is up to date
+
+### EXAMPLES
+
+Run migrations:
+
+```bash
+dam migrate
+```
+
+Verify with JSON:
+
+```bash
+dam migrate --json
+```
+
+### SEE ALSO
+
+[rebuild-catalog](#dam-rebuild-catalog) -- full catalog rebuild from sidecar files.
+
+---
+
 Previous: [Retrieve Commands](04-retrieve-commands.md) -- `search`, `show`, `duplicates`, `stats`, `serve`.
