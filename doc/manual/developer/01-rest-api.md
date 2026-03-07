@@ -1034,12 +1034,12 @@ curl "http://localhost:8080/api/calendar?year=2026&tag=landscape&rating=4%2B"
 
 *Requires `--features ai` compilation.*
 
-Returns the nearest neighbors of an asset by SigLIP embedding similarity. Used by the Stroll page for visual exploration.
+Returns the nearest neighbors of an asset by SigLIP embedding similarity. Used by the Stroll page for visual exploration and by the level-2 depth feature, which fetches transitive neighbors when a satellite is focused (L2 neighbors-of-neighbors).
 
 | Parameter | Type   | Default | Description                              |
 |-----------|--------|---------|------------------------------------------|
 | `id`      | string | --      | Asset UUID to find neighbors for (required) |
-| `n`       | u32    | `12`    | Number of neighbors to return            |
+| `n`       | u32    | `12`    | Number of neighbors to return (range: 5–25) |
 | `q`       | string | `""`    | Optional search query to scope neighbors |
 
 **Response**: `application/json`

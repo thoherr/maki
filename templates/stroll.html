@@ -48,6 +48,11 @@
             <input type="range" id="stroll-n" min="5" max="25" value="{{ neighbor_count }}">
             <span id="stroll-n-val">{{ neighbor_count }}</span>
         </label>
+        <label class="stroll-n-label" title="Depth: show neighbors-of-neighbors (0 = off)">
+            <span>Depth:</span>
+            <input type="range" id="stroll-depth" min="0" max="8" value="0">
+            <span id="stroll-depth-val">0</span>
+        </label>
     </div>
 
     {% if neighbors.is_empty() %}
@@ -87,10 +92,27 @@ function onFilterChange() {
     var nVal = document.getElementById('stroll-n-val');
     var currentN = parseInt(nSlider.value, 10);
 
+    // Depth slider (level-2 neighbors)
+    var depthSlider = document.getElementById('stroll-depth');
+    var depthVal = document.getElementById('stroll-depth-val');
+    var currentDepth = parseInt(depthSlider.value, 10);
+    var l2Cache = {}; // cache: satellite asset_id -> neighbor data array
+    var l2Elements = []; // currently rendered L2 elements
+    var l2FetchingFor = null; // asset_id currently being fetched
+
     nSlider.addEventListener('input', function() { nVal.textContent = nSlider.value; });
     nSlider.addEventListener('change', function() {
         currentN = parseInt(nSlider.value, 10);
         navigate(centerId);
+    });
+
+    depthSlider.addEventListener('input', function() { depthVal.textContent = depthSlider.value; });
+    depthSlider.addEventListener('change', function() {
+        currentDepth = parseInt(depthSlider.value, 10);
+        clearL2();
+        if (currentDepth > 0 && focusIndex >= 0 && focusIndex < satellites.length) {
+            showL2ForSatellite(focusIndex);
+        }
     });
 
     // Compute adaptive sizes based on viewport
@@ -170,7 +192,139 @@ function onFilterChange() {
     window.addEventListener('resize', function() {
         applyCenterSize();
         layoutSatellites();
+        // Re-render L2 at new positions if visible
+        if (currentDepth > 0 && focusIndex >= 0 && focusIndex < satellites.length) {
+            var satId = satellites[focusIndex].dataset.id;
+            if (l2Cache[satId]) renderL2(focusIndex, l2Cache[satId]);
+        }
     });
+
+    // Level-2 neighbor helpers
+    function getVisibleIds() {
+        var ids = new Set();
+        ids.add(centerId);
+        satellites.forEach(function(s) { ids.add(s.dataset.id); });
+        return ids;
+    }
+
+    function clearL2() {
+        l2Elements.forEach(function(el) { el.remove(); });
+        l2Elements = [];
+        // Remove L2 SVG lines
+        var oldLines = svgEl.querySelectorAll('.stroll-line-l2');
+        oldLines.forEach(function(l) { l.remove(); });
+    }
+
+    function showL2ForSatellite(satIdx) {
+        if (currentDepth <= 0) return;
+        var sat = satellites[satIdx];
+        if (!sat) return;
+        var satId = sat.dataset.id;
+
+        // Already have cached data?
+        if (l2Cache[satId]) {
+            renderL2(satIdx, l2Cache[satId]);
+            return;
+        }
+
+        // Fetch neighbors for this satellite
+        l2FetchingFor = satId;
+        var fetchN = currentDepth;
+        var currentQuery = window.damFilterQuery ? window.damFilterQuery() : '';
+        var apiUrl = '/api/stroll/neighbors?id=' + encodeURIComponent(satId) + '&n=' + (fetchN + satellites.length + 1);
+        if (currentQuery) apiUrl += '&q=' + encodeURIComponent(currentQuery);
+
+        fetch(apiUrl)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (l2FetchingFor !== satId) return; // focus changed, discard
+                var visible = getVisibleIds();
+                var filtered = data.neighbors.filter(function(n) {
+                    return !visible.has(n.asset_id);
+                });
+                filtered = filtered.slice(0, currentDepth);
+                l2Cache[satId] = filtered;
+                // Only render if this satellite is still focused
+                if (focusIndex === satIdx) {
+                    renderL2(satIdx, filtered);
+                }
+            })
+            .catch(function() { /* ignore fetch errors for L2 */ });
+    }
+
+    function renderL2(satIdx, neighbors) {
+        clearL2();
+        if (neighbors.length === 0) return;
+
+        var sat = satellites[satIdx];
+        var rect = container.getBoundingClientRect();
+        var sizes = getSizes();
+        var satRect = sat.getBoundingClientRect();
+        var satX = satRect.left - rect.left + satRect.width / 2;
+        var satY = satRect.top - rect.top + satRect.height / 2;
+        var cx = rect.width / 2;
+        var cy = rect.height / 2;
+
+        // Direction from center to this satellite
+        var dx = satX - cx;
+        var dy = satY - cy;
+        var baseAngle = Math.atan2(dy, dx);
+
+        // L2 size: ~60% of satellite size
+        var l2Size = Math.round(sizes.satSize * 0.6);
+        // L2 radius: distance from satellite outward
+        var l2Radius = sizes.satSize * 0.5 + l2Size * 0.5 + 15;
+
+        // Fan angle: spread L2 neighbors in an arc centered on the outward direction
+        var fanSpread = Math.PI * 0.5; // 90 degrees total spread
+        var count = neighbors.length;
+
+        for (var i = 0; i < count; i++) {
+            var n = neighbors[i];
+            // Spread evenly within the fan
+            var angleOffset = count === 1 ? 0 : (i / (count - 1) - 0.5) * fanSpread;
+            var angle = baseAngle + angleOffset;
+            var x = satX + l2Radius * Math.cos(angle);
+            var y = satY + l2Radius * Math.sin(angle);
+
+            // SVG line from satellite to L2
+            var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            line.setAttribute('x1', satX);
+            line.setAttribute('y1', satY);
+            line.setAttribute('x2', x);
+            line.setAttribute('y2', y);
+            line.setAttribute('class', 'stroll-line-l2');
+            svgEl.appendChild(line);
+
+            // L2 thumbnail element
+            var div = document.createElement('div');
+            div.className = 'stroll-satellite stroll-l2';
+            div.dataset.id = n.asset_id;
+            div.style.left = x + 'px';
+            div.style.top = y + 'px';
+            var img = document.createElement('img');
+            img.src = n.preview_url;
+            img.alt = n.name;
+            img.loading = 'lazy';
+            img.style.width = l2Size + 'px';
+            img.style.height = l2Size + 'px';
+            div.appendChild(img);
+
+            // Score badge
+            var score = document.createElement('span');
+            score.className = 'stroll-sat-score';
+            score.textContent = Math.round(n.similarity * 100) + '%';
+            div.appendChild(score);
+
+            // Click navigates
+            (function(id) {
+                div.addEventListener('click', function() { navigate(id); });
+            })(n.asset_id);
+
+            container.appendChild(div);
+            l2Elements.push(div);
+        }
+    }
 
     // Focus management
     function setFocus(idx) {
@@ -190,6 +344,7 @@ function onFilterChange() {
 
         if (idx === -1) {
             centerEl.classList.add('focused');
+            clearL2();
         } else if (idx >= 0 && idx < satellites.length) {
             satellites[idx].classList.add('focused');
             var newImg = satellites[idx].querySelector('img');
@@ -197,6 +352,9 @@ function onFilterChange() {
                 newImg.style.width = sizes.focSize + 'px';
                 newImg.style.height = sizes.focSize + 'px';
             }
+            // Show L2 neighbors for focused satellite
+            clearL2();
+            showL2ForSatellite(idx);
         }
     }
 
@@ -345,7 +503,9 @@ function onFilterChange() {
                 }
                 overlay.innerHTML = nameHtml;
 
-                // Remove old satellites
+                // Remove old satellites and L2
+                clearL2();
+                l2Cache = {};
                 satellites.forEach(function(s) { s.remove(); });
                 satellites = [];
 

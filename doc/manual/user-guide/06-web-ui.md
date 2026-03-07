@@ -645,6 +645,10 @@ A slider control (5--25, default 12) lets you adjust how many neighbor thumbnail
 
 The stroll page includes the same collapsible filter bar as the browse page. When filters are active, only assets matching the filters are considered as neighbors. Press **Shift+F** to toggle the filter bar visibility.
 
+### Depth slider (transitive neighbors)
+
+A depth slider in the bottom-left corner (range 0--8, default off) controls level-2 neighbor exploration. When depth is greater than 0 and you hover over or arrow-key to a satellite thumbnail, smaller thumbnails fan out from it showing that satellite's own nearest visual neighbors (excluding assets already visible on the page). Click any level-2 thumbnail to navigate to it as the new center. Results are cached per satellite, so moving focus back to a previously explored neighbor re-displays its fan instantly without another query.
+
 ### Keyboard shortcuts
 
 | Key | Action |
