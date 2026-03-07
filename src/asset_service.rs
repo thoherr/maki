@@ -5147,6 +5147,23 @@ fn merge_hierarchical_keywords(
     result
 }
 
+/// Normalize a rating value: convert MicrosoftPhoto:Rating percentage scale (1-100)
+/// to xmp:Rating 1-5 scale. Values already in 1-5 range pass through unchanged.
+pub fn normalize_rating(r: u8) -> u8 {
+    if r <= 5 {
+        r
+    } else {
+        // MicrosoftPhoto:Rating percentages: 1→1, 25→2, 50→3, 75→4, 99/100→5
+        match r {
+            1..=12 => 1,
+            13..=37 => 2,
+            38..=62 => 3,
+            63..=87 => 4,
+            _ => 5,
+        }
+    }
+}
+
 fn apply_xmp_data(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant_hash: &str) {
     let merged = merge_hierarchical_keywords(&xmp.keywords, &xmp.hierarchical_keywords);
     for kw in &merged {
@@ -5163,7 +5180,7 @@ fn apply_xmp_data(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant_h
     if asset.rating.is_none() {
         if let Some(rating_str) = xmp.source_metadata.get("rating") {
             if let Ok(r) = rating_str.parse::<u8>() {
-                asset.rating = Some(r.min(5));
+                asset.rating = Some(normalize_rating(r));
             }
         }
     }
@@ -5207,7 +5224,7 @@ fn reapply_xmp_data(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant
     // Overwrite rating on re-import (matches overwrite semantics)
     if let Some(rating_str) = xmp.source_metadata.get("rating") {
         if let Ok(r) = rating_str.parse::<u8>() {
-            asset.rating = Some(r.min(5));
+            asset.rating = Some(normalize_rating(r));
         }
     }
 

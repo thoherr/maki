@@ -5159,11 +5159,37 @@ fn main() {
                 let _ = dam::face_store::FaceStore::initialize(catalog.conn());
                 let _ = dam::embedding_store::EmbeddingStore::initialize(catalog.conn());
             }
+            // Fix sidecar YAML files with MicrosoftPhoto:Rating percentage values
+            let store = dam::metadata_store::MetadataStore::new(&catalog_root);
+            let mut fixed_sidecars = 0u32;
+            let mut stmt = catalog.conn().prepare(
+                "SELECT id FROM assets WHERE rating IS NOT NULL",
+            )?;
+            let ids: Vec<String> = stmt.query_map([], |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+            drop(stmt);
+            for id_str in &ids {
+                if let Ok(uuid) = id_str.parse::<uuid::Uuid>() {
+                    if let Ok(mut asset) = store.load_raw(uuid) {
+                        if let Some(r) = asset.rating {
+                            if r > 5 {
+                                asset.rating = Some(dam::asset_service::normalize_rating(r));
+                                let _ = store.save(&asset);
+                                fixed_sidecars += 1;
+                            }
+                        }
+                    }
+                }
+            }
             let version = catalog.schema_version();
             if cli.json {
-                println!("{}", serde_json::json!({"status": "ok", "schema_version": version}));
+                println!("{}", serde_json::json!({"status": "ok", "schema_version": version, "fixed_ratings": fixed_sidecars}));
             } else {
                 println!("Schema migrations applied successfully (schema version {version}).");
+                if fixed_sidecars > 0 {
+                    println!("Fixed {fixed_sidecars} sidecar files with out-of-range rating values.");
+                }
             }
             Ok(())
         }

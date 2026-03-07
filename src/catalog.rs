@@ -684,6 +684,17 @@ impl Catalog {
             let _ = crate::face_store::FaceStore::initialize(&self.conn);
         }
 
+        // Fix MicrosoftPhoto:Rating percentage values (1-100) → xmp:Rating scale (1-5)
+        let _ = self.conn.execute_batch(
+            "UPDATE assets SET rating = CASE
+                WHEN rating BETWEEN 1 AND 12 THEN 1
+                WHEN rating BETWEEN 13 AND 37 THEN 2
+                WHEN rating BETWEEN 38 AND 62 THEN 3
+                WHEN rating BETWEEN 63 AND 87 THEN 4
+                ELSE 5
+             END WHERE rating > 5",
+        );
+
         // Record schema version
         let _ = self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);

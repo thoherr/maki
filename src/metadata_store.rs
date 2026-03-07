@@ -55,6 +55,20 @@ impl MetadataStore {
     pub fn load(&self, asset_id: Uuid) -> Result<Asset> {
         let path = self.sidecar_path(asset_id);
         let contents = std::fs::read_to_string(&path)?;
+        let mut asset: Asset = serde_yaml::from_str(&contents)?;
+        // Normalize MicrosoftPhoto:Rating percentage values (>5) to 1-5 scale
+        if let Some(r) = asset.rating {
+            if r > 5 {
+                asset.rating = Some(crate::asset_service::normalize_rating(r));
+            }
+        }
+        Ok(asset)
+    }
+
+    /// Read sidecar YAML without any normalization (for migration checks).
+    pub fn load_raw(&self, asset_id: Uuid) -> Result<Asset> {
+        let path = self.sidecar_path(asset_id);
+        let contents = std::fs::read_to_string(&path)?;
         let asset: Asset = serde_yaml::from_str(&contents)?;
         Ok(asset)
     }
