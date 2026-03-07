@@ -4403,12 +4403,45 @@ fn stroll_page_inner(
         Vec::new()
     };
 
+    // Filter bar data (same as browse page)
+    let all_tags: Vec<TagOption> = state.dropdown_cache.get_tags(&catalog)
+        .into_iter()
+        .map(|(name, count)| TagOption { name, count })
+        .collect();
+    let format_groups = build_format_groups(state.dropdown_cache.get_formats(&catalog));
+    let all_volumes: Vec<VolumeOption> = state.dropdown_cache.get_volumes(&catalog)
+        .into_iter()
+        .map(|(id, label)| VolumeOption { id, label })
+        .collect();
+    let all_collections: Vec<CollectionOption> = state.dropdown_cache.get_collections(&catalog)
+        .into_iter()
+        .map(|name| CollectionOption { name })
+        .collect();
+    let all_people: Vec<PersonOption> = state.dropdown_cache.get_people(&catalog)
+        .into_iter()
+        .map(|(id, name)| PersonOption { id, name })
+        .collect();
+
     Ok(StrollPage {
         center,
         neighbors,
         query: query.unwrap_or("").to_string(),
         neighbor_count,
         ai_enabled: state.ai_enabled,
+        tag: String::new(),
+        rating: String::new(),
+        label: String::new(),
+        asset_type: String::new(),
+        format_filter: String::new(),
+        format_groups,
+        all_tags,
+        all_volumes,
+        all_collections,
+        all_people,
+        volume: String::new(),
+        collection: String::new(),
+        path: String::new(),
+        person: String::new(),
     })
 }
 

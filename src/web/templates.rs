@@ -643,6 +643,21 @@ pub struct StrollPage {
     pub query: String,
     pub neighbor_count: u32,
     pub ai_enabled: bool,
+    // Filter bar data (shared with browse page)
+    pub tag: String,
+    pub rating: String,
+    pub label: String,
+    pub asset_type: String,
+    pub format_filter: String,
+    pub format_groups: Vec<FormatGroup>,
+    pub all_tags: Vec<TagOption>,
+    pub all_volumes: Vec<VolumeOption>,
+    pub all_collections: Vec<CollectionOption>,
+    pub all_people: Vec<PersonOption>,
+    pub volume: String,
+    pub collection: String,
+    pub path: String,
+    pub person: String,
 }
 
 /// Custom askama filters for templates.
