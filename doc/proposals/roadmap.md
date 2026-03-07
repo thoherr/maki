@@ -1,6 +1,6 @@
 # Roadmap: Planned & Proposed Features
 
-Consolidated list of unimplemented features and new ideas, organized by theme. Items from `enhancements.md` and `proposal-future-enhancements.md` are merged here with updated priorities reflecting the current state of the project (v2.1.0).
+Consolidated list of unimplemented features and new ideas, organized by theme. Items from `enhancements.md` and `proposal-future-enhancements.md` are merged here with updated priorities reflecting the current state of the project (v2.3.0).
 
 The main focus is on an **optimized workflow for finding, evaluating, and managing the best images** from a large multi-year archive, and on getting a **clear overview of assets** across volumes.
 
@@ -58,7 +58,7 @@ Current previews are 800px thumbnails — enough for browse cards but too small 
 
 ### 4. AI-Assisted Tagging & Visual Similarity
 
-> **Status (v2.1.0):** Core functionality implemented. `dam auto-tag` uses SigLIP ViT-B/16-256 via ONNX Runtime for zero-shot classification against ~100 built-in photography categories. Feature-gated behind `--features ai`. Model files (~207 MB quantized) downloaded from HuggingFace on first use. Embeddings stored for `--similar` visual similarity search. Configurable via `[ai]` section in `dam.toml`. **Web UI** (v2.1.0): "Suggest tags" button on asset detail page with interactive accept/dismiss chips and confidence badges; "Auto-tag" batch button in browse toolbar for bulk tagging selected assets. Model lazy-loaded on first request and cached in server memory. **Not yet implemented**: multi-tier model selection (mobile/standard/accurate), Ollama VLM integration.
+> **Status (v2.3.0):** Core functionality implemented. `dam auto-tag` uses SigLIP ViT-B/16-256 via ONNX Runtime for zero-shot classification against ~100 built-in photography categories. Feature-gated behind `--features ai`. Model files (~207 MB quantized) downloaded from HuggingFace on first use. Embeddings stored for `--similar` visual similarity search and the stroll page's graph-based visual exploration. Configurable via `[ai]` section in `dam.toml`. **Web UI** (v2.1.0): "Suggest tags" button on asset detail page with interactive accept/dismiss chips and confidence badges; "Auto-tag" batch button in browse toolbar for bulk tagging selected assets. Model lazy-loaded on first request and cached in server memory. **Stroll page** (v2.3.0): `/stroll` radial graph exploration using SigLIP embeddings — navigate visually similar assets with keyboard and mouse, collapsible filter bar. **`similar:` search filter** (v2.3.0): `similar:<asset-id>` or `similar:<asset-id>:<limit>` in CLI and web UI. **Not yet implemented**: multi-tier model selection (mobile/standard/accurate), Ollama VLM integration.
 
 Integrate with a local vision model to suggest tags from image content and enable visual similarity search.
 
@@ -230,7 +230,7 @@ Each facet updates counts in real time based on the current filter combination (
 | 1 | Side-by-side compare | Medium | Very high | Evaluation | **Done** (v1.7.0) |
 | 2 | Map view | Medium | High | Overview / browsing | **Done** (v1.8.0) |
 | 3 | Smart previews | Medium | High | Offline evaluation | **Done** (v1.7.0) |
-| 4 | AI tagging & similarity | High | Very high | Discovery / organization | **Done** (v2.0.1 CLI, v2.1.0 Web UI) |
+| 4 | AI tagging & similarity | High | Very high | Discovery / organization | **Done** (v2.0.1 CLI, v2.1.0 Web UI, v2.3.0 Stroll + similar: filter) |
 | 5 | Import profiles | Low | Medium | Workflow convenience | |
 | 6 | Watch mode | Medium | Medium | Workflow automation | |
 | 7 | Export command | Medium | Medium | Delivery | **Done** (v1.8.9) |
@@ -240,4 +240,4 @@ Each facet updates counts in real time based on the current filter combination (
 | 11 | Statistics dashboard | Medium | Medium | Overview / insights | |
 | 12 | Faceted browse sidebar | Medium | High | Overview / discovery | **Done** (v1.8.1) |
 
-Items 1, 2, 3, 4, 7, and 12 are complete as of v2.1.0, delivering the core "find and evaluate the best images" workflow with compare view, smart previews, spatial browsing via the map view, faceted overview sidebar, file export for delivery, and AI-assisted tagging with web UI integration. The highest-priority remaining items are 5 (import profiles) and 6 (watch mode). Item 11 provides additional "overview of assets" dimension.
+Items 1, 2, 3, 4, 7, and 12 are complete as of v2.3.0, delivering the core "find and evaluate the best images" workflow with compare view, smart previews, spatial browsing via the map view, faceted overview sidebar, file export for delivery, AI-assisted tagging with web UI integration, the stroll page for graph-based visual exploration, and the `similar:` search filter. The highest-priority remaining items are 5 (import profiles) and 6 (watch mode). Item 11 provides additional "overview of assets" dimension.

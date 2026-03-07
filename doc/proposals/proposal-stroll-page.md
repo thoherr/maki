@@ -1,6 +1,6 @@
 # Proposal: Stroll Page — Graph-Based Visual Exploration
 
-> **Status**: Proposal
+> **Status**: Implemented (v2.3.0) — Phase 1 (visual similarity) and Phase 2 (filter integration) are complete.
 
 A new `/stroll` page for navigating the catalog by traversing connections between assets — primarily visual similarity, but extensible to shared tags, nearby dates, nearby GPS locations, and more.
 

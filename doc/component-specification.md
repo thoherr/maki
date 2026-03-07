@@ -220,6 +220,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 - Location health filters: `orphan:true` (no file locations), `missing:true` (files missing from disk), `stale:N` (not verified in N days), `volume:none` (no locations on online volumes)
 - Negation: `-` prefix excludes matches (`-tag:rejected`, `-sunset`)
 - OR within filters: comma operator (`tag:alice,bob`, `format:nef,cr3`, `label:Red,Orange`)
+- Visual similarity: `similar:<asset-id>` or `similar:<asset-id>:<limit>` (feature-gated: `--features ai`)
 - Full-text search over name, filename, description, and source metadata
 - Sort by: date, name, file size, import date
 - Output: asset list with summary info, or detailed asset view
@@ -320,6 +321,8 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 - `GET /duplicates` — duplicates page with summary cards, mode tabs (all/same/cross), filters (path/format/volume), preview thumbnails, lightbox overlay, per-location remove buttons, and auto-resolve
 - `POST /api/dedup/resolve` — auto-resolve same-volume duplicates with optional filters and prefer (deletes files and co-located recipes, returns `DedupResult` with `locations_removed, recipes_removed, bytes_freed, errors`)
 - `DELETE /api/dedup/location` — remove a specific file location and co-located recipes (JSON: `{content_hash, volume_id, relative_path}`)
+- `GET /stroll` — stroll page for graph-based visual similarity exploration (feature-gated: `--features ai`). Optional `?id=<asset-id>` parameter; without it, picks a random asset with an embedding. Radial layout with center asset and satellite neighbors.
+- `GET /api/stroll/neighbors` — returns center asset metadata and neighbor list with preview URLs and similarity scores (JSON: `{center: {...}, neighbors: [{asset_id, preview_url, similarity, ...}, ...]}`). Params: `id` (asset ID), `limit` (5–25, default 12), `q` (optional search query to filter neighbors)
 
 **Catalog extensions** (in `src/catalog.rs`):
 - `SearchOptions` / `SearchSort` / `SearchPage` — paginated search with volume filter, date filters, and dynamic sort
@@ -359,7 +362,7 @@ All sections and fields are optional — missing fields use defaults.
 
 **Module**: `src/xmp_reader.rs` — uses `quick-xml` crate for parsing, string-based find/replace for write-back.
 
-**Read operations**: `extract_xmp_metadata(path)` — parses `dc:subject` (keywords/tags), `dc:description`, `xmp:Rating`, `xmp:Label`, `dc:creator`, `dc:rights` from XMP sidecar files.
+**Read operations**: `extract_xmp_metadata(path)` — parses `dc:subject` (keywords/tags), `dc:description`, `xmp:Rating`, `xmp:Label`, `dc:creator`, `dc:rights` from XMP sidecar files. When `xmp:Rating` is absent, `MicrosoftPhoto:Rating` (percentage scale: 1, 25, 50, 75, 99) is read and normalized to 1–5 via `normalize_rating()`.
 
 **Write operations** (all preserve existing XMP structure):
 - `update_rating(path, rating)` — write `xmp:Rating` value

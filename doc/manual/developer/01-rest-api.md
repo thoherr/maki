@@ -99,6 +99,24 @@ Returns an HTML page showing backup health: summary cards (total assets, at-risk
 curl http://localhost:8080/backup
 ```
 
+### `GET /stroll` -- Stroll Page
+
+*Requires `--features ai` compilation.*
+
+Returns an interactive visual similarity exploration page. Centers on a randomly selected asset (or a specific asset via query parameter) and displays its nearest neighbors by SigLIP embedding distance. Clicking a neighbor re-centers the view on that asset.
+
+| Parameter | Type   | Default  | Description                              |
+|-----------|--------|----------|------------------------------------------|
+| `id`      | string | (random) | Asset UUID to center on (optional)       |
+
+```bash
+# Random starting point
+curl http://localhost:8080/stroll
+
+# Start from a specific asset
+curl "http://localhost:8080/stroll?id=550e8400-e29b-41d4-a716-446655440000"
+```
+
 ---
 
 ## Search API
@@ -1010,6 +1028,56 @@ curl http://localhost:8080/api/calendar?year=2026
 
 # With filters
 curl "http://localhost:8080/api/calendar?year=2026&tag=landscape&rating=4%2B"
+```
+
+### `GET /api/stroll/neighbors` -- Embedding Neighbors
+
+*Requires `--features ai` compilation.*
+
+Returns the nearest neighbors of an asset by SigLIP embedding similarity. Used by the Stroll page for visual exploration.
+
+| Parameter | Type   | Default | Description                              |
+|-----------|--------|---------|------------------------------------------|
+| `id`      | string | --      | Asset UUID to find neighbors for (required) |
+| `n`       | u32    | `12`    | Number of neighbors to return            |
+| `q`       | string | `""`    | Optional search query to scope neighbors |
+
+**Response**: `application/json`
+
+```json
+{
+  "center": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "name": "DSC_001",
+    "preview_hash": "a1b2c3d4..."
+  },
+  "neighbors": [
+    {
+      "id": "660f9511-f30c-52e5-b827-557766551111",
+      "name": "DSC_002",
+      "preview_hash": "b2c3d4e5...",
+      "similarity": 0.87
+    }
+  ]
+}
+```
+
+| Field              | Type   | Description                         |
+|--------------------|--------|-------------------------------------|
+| `center.id`        | string | Asset UUID of the center asset      |
+| `center.name`      | string | Display name or filename            |
+| `center.preview_hash` | string | Content hash for preview URL     |
+| `neighbors[].id`   | string | Neighbor asset UUID                 |
+| `neighbors[].name` | string | Display name or filename            |
+| `neighbors[].preview_hash` | string | Content hash for preview URL |
+| `neighbors[].similarity` | float | Cosine similarity score (0.0–1.0) |
+
+```bash
+# Get 12 nearest neighbors
+curl "http://localhost:8080/api/stroll/neighbors?id=550e8400-e29b-41d4-a716-446655440000"
+
+# Get 24 neighbors, scoped to landscapes
+curl "http://localhost:8080/api/stroll/neighbors?id=550e8400-e29b-41d4-a716-446655440000&n=24&q=tag:landscape"
 ```
 
 ### `GET /api/tags` -- List All Tags

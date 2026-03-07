@@ -53,6 +53,10 @@ Searches the catalog for assets matching the given query. The query string suppo
 | `volume:none` | Assets not on any online volume | `volume:none` |
 | `stacked:true` | Assets in a stack | `stacked:true` |
 | `stacked:false` | Assets not in any stack | `stacked:false` |
+| `geo:` | GPS geolocation | `geo:any`, `geo:none`, `geo:52.5,13.4,10` |
+| `faces:` | Face count (ai feature) | `faces:any`, `faces:none`, `faces:2+` |
+| `person:` | Named person (ai feature) | `person:Alice`, `person:"John Smith"` |
+| `similar:` | Visual similarity (ai feature) | `similar:72a0bb4b`, `similar:72a0bb4b:50` |
 
 Filters can be freely combined. Free-text tokens that do not match a filter prefix are joined as a text search against filenames and metadata.
 
@@ -139,6 +143,14 @@ Find orphaned assets (no file locations):
 
 ```bash
 dam search "orphan:true"
+```
+
+Find visually similar assets (requires ai feature + embeddings):
+
+```bash
+dam search "similar:72a0bb4b"
+dam search "similar:72a0bb4b:50"
+dam search "similar:72a0bb4b rating:4+ tag:landscape"
 ```
 
 ### SEE ALSO

@@ -7012,4 +7012,43 @@ mod tests {
         // Different hash with same name (case-insensitive) should get suffix
         assert!(r2.file_name().unwrap().to_str().unwrap().contains("bbbb"));
     }
+
+    #[test]
+    fn normalize_rating_passthrough_1_to_5() {
+        assert_eq!(normalize_rating(0), 0);
+        assert_eq!(normalize_rating(1), 1);
+        assert_eq!(normalize_rating(2), 2);
+        assert_eq!(normalize_rating(3), 3);
+        assert_eq!(normalize_rating(4), 4);
+        assert_eq!(normalize_rating(5), 5);
+    }
+
+    #[test]
+    fn normalize_rating_microsoft_percentage_scale() {
+        // MicrosoftPhoto:Rating values: 1→1★, 25→2★, 50→3★, 75→4★, 99/100→5★
+        assert_eq!(normalize_rating(1), 1); // edge: also valid as xmp:Rating
+        assert_eq!(normalize_rating(20), 2);
+        assert_eq!(normalize_rating(25), 2);
+        assert_eq!(normalize_rating(40), 3);
+        assert_eq!(normalize_rating(50), 3);
+        assert_eq!(normalize_rating(60), 3);
+        assert_eq!(normalize_rating(75), 4);
+        assert_eq!(normalize_rating(80), 4);
+        assert_eq!(normalize_rating(99), 5);
+        assert_eq!(normalize_rating(100), 5);
+        assert_eq!(normalize_rating(255), 5);
+    }
+
+    #[test]
+    fn normalize_rating_boundary_values() {
+        assert_eq!(normalize_rating(6), 1);   // just above xmp range
+        assert_eq!(normalize_rating(12), 1);  // upper boundary of 1★
+        assert_eq!(normalize_rating(13), 2);  // lower boundary of 2★
+        assert_eq!(normalize_rating(37), 2);  // upper boundary of 2★
+        assert_eq!(normalize_rating(38), 3);  // lower boundary of 3★
+        assert_eq!(normalize_rating(62), 3);  // upper boundary of 3★
+        assert_eq!(normalize_rating(63), 4);  // lower boundary of 4★
+        assert_eq!(normalize_rating(87), 4);  // upper boundary of 4★
+        assert_eq!(normalize_rating(88), 5);  // lower boundary of 5★
+    }
 }

@@ -140,7 +140,7 @@ dam search "format:tif tag:processed"
 
 **Values:** 1 through 5
 
-**Description:** Filters by the asset's star rating. Use a bare number for exact match, or append `+` for "this rating or higher."
+**Description:** Filters by the asset's star rating (1--5 scale). Use a bare number for exact match, or append `+` for "this rating or higher." Ratings are extracted from XMP during import. Microsoft Photo ratings (percentage values 1--99) are automatically normalized to the 1--5 scale (1=1, 25=2, 50=3, 75=4, 99=5).
 
 **Examples:**
 

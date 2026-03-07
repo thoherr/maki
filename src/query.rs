@@ -2624,7 +2624,6 @@ mod tests {
 
     #[test]
     #[cfg(feature = "ai")]
-    #[test]
     fn parse_similar_basic() {
         let p = parse_search_query("similar:abc12345");
         assert_eq!(p.similar.as_deref(), Some("abc12345"));

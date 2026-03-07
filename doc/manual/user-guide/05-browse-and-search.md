@@ -98,6 +98,7 @@ All filters can be combined in a single query. Remaining tokens become free-text
 | Stacked | `stacked:true` or `stacked:false` | `stacked:true` |
 | Face count | `faces:any`, `faces:none`, `faces:N`, `faces:N+` | `faces:2+` |
 | Person | `person:<name>` | `person:Alice`, `person:"John Smith"` |
+| Visual similarity (ai) | `similar:<id>` or `similar:<id>:<limit>` | `similar:72a0bb4b`, `similar:72a0bb4b:50` |
 
 **Hierarchical tag matching**: The `tag:` filter matches hierarchically. Searching for `tag:animals` finds assets tagged `animals`, `animals/birds`, `animals/birds/eagles`, and any other descendant of `animals`. To match only the exact tag, use the full path (e.g., `tag:animals/birds/eagles`).
 
@@ -544,6 +545,22 @@ dam export "rating:4+" /tmp/test/ --dry-run
 Re-running an export skips files that already exist with matching content. Use `--overwrite` to force re-copy.
 
 For the full command reference, see [export](../reference/04-retrieve-commands.md#dam-export).
+
+---
+
+## Visual Similarity
+
+With the `ai` feature and image embeddings generated (via `dam embed` or `dam import --embed`), you can find visually similar assets:
+
+```
+dam search "similar:72a0bb4b"              # top 20 similar assets
+dam search "similar:72a0bb4b:50"           # top 50 similar
+dam search "similar:72a0bb4b rating:4+"    # similar AND 4+ stars
+```
+
+The `similar:` filter uses SigLIP image embeddings for fast dot-product similarity search. It composes with all other filters.
+
+For an interactive visual exploration experience, the web UI offers a **Stroll page** (`/stroll`) where you can navigate through your collection by clicking visually similar neighbors arranged around a center image. See [Web UI -- Stroll Page](06-web-ui.md#stroll-page) for details.
 
 ---
 

@@ -1067,11 +1067,15 @@ dam [GLOBAL FLAGS] migrate
 
 Runs all pending database schema migrations. Migrations are idempotent (safe to run repeatedly) and add new columns, indexes, and tables needed by newer versions of dam.
 
+A `schema_version` table tracks the current schema version. On startup, dam performs a single-query fast-check against this version number and skips migration logic entirely when the schema is already up to date, avoiding the overhead of running dozens of idempotent `ALTER TABLE` statements on every launch.
+
 Migrations also run automatically once at program startup for all commands, so this command is primarily useful for:
 
 - Explicit migration after a version upgrade
 - Scripting and automation
 - Verifying the schema is up to date
+
+**Rating repair**: The migration includes a `MicrosoftPhoto:Rating` normalization pass. Windows Photo Gallery and some other tools write a percentage-based rating scale (1/13/25/50/75/99) into `MicrosoftPhoto:Rating` instead of the standard `xmp:Rating` (1–5). The `normalize_rating()` function maps these values to the 1–5 scale. The migration fixes affected ratings in both the SQLite catalog and YAML sidecar files.
 
 ### EXAMPLES
 

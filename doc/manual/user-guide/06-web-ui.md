@@ -79,6 +79,8 @@ The search bar has two rows:
 
 **Row 1** -- a full-width text input for free-text search. Type any keyword, filename, or structured filter (like `camera:"Canon EOS R5"`) and results update as you type with a 300ms debounce. Press Enter to search immediately without waiting for the debounce.
 
+The filter bar is collapsible. Press **Shift+F** to toggle its visibility on the browse page. Your preference is saved in the browser. This is useful for maximizing screen space when you want to focus on the grid without changing filters.
+
 **Row 2** -- a row of filter controls, left to right:
 
 - **Tag filter**: a chip-based input with autocomplete. Type to see tag suggestions, click or press Enter to add a tag chip. Multiple tags narrow the results (AND logic). Remove a tag by clicking the x on its chip, or press Backspace in an empty input to remove the last chip. Adding or removing a tag triggers an immediate search.
@@ -488,6 +490,8 @@ The focused card has a blue outline, visually distinct from the selection highli
 | p | Set Pink label |
 | u | Set Purple label |
 | x | Clear label |
+| Shift+F | Toggle filter bar visibility |
+| s | Open the stroll page for the focused card (visual similarity exploration) |
 
 Single-letter label shortcuts and number keys for rating operate on the focused card when no batch selection is active. When assets are selected (selection count > 0), rating keys apply to the entire batch.
 
@@ -619,6 +623,37 @@ On the asset detail page, a "Faces" section appears when faces have been detecte
 - **Person dropdown**: in the browse filter row, a person dropdown (when people exist) lets you filter to assets containing a specific person.
 - **Face count badge**: browse cards show a face count badge next to the variant count badge.
 - **Query filters**: `faces:any`, `faces:none`, `faces:N`, `faces:N+`, `person:<name>` work in the query input.
+
+
+## Stroll Page
+
+> Requires `--features ai` compilation and image embeddings (generated via `dam embed` or `dam import --embed`).
+
+The stroll page provides a visual similarity exploration experience. Instead of browsing a flat grid, you start with a center image and see its most visually similar neighbors arranged in a radial layout around it. Click any neighbor to make it the new center, and the neighbors update -- letting you "stroll" through your collection by visual similarity.
+
+Navigate to `/stroll` or click "Stroll" in the navigation bar. You can also press `s` on the browse page (when a card is focused) or click the "Stroll" button on the asset detail page to start strolling from a specific asset.
+
+### Layout
+
+The center image is displayed prominently in the middle of the page. Surrounding it, satellite thumbnails show the most similar assets based on SigLIP embedding similarity (dot-product distance). Each neighbor shows a preview thumbnail, and clicking it navigates to that asset as the new center.
+
+### Neighbor count
+
+A slider control (5--25, default 12) lets you adjust how many neighbor thumbnails are shown around the center image. Fewer neighbors give a cleaner view; more neighbors let you see a wider range of similar assets.
+
+### Filter bar
+
+The stroll page includes the same collapsible filter bar as the browse page. When filters are active, only assets matching the filters are considered as neighbors. Press **Shift+F** to toggle the filter bar visibility.
+
+### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| Arrow keys | Navigate focus between neighbor thumbnails |
+| Enter | Make the focused neighbor the new center |
+| Shift+F | Toggle filter bar visibility |
+| Escape | Return to the browse page |
+| ? | Open keyboard help |
 
 
 ## Backup Status Page
