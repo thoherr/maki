@@ -99,6 +99,7 @@ function onFilterChange() {
     var l2Cache = {}; // cache: satellite asset_id -> neighbor data array
     var l2Elements = []; // currently rendered L2 elements
     var l2FetchingFor = null; // asset_id currently being fetched
+    var l2FocusIndex = -1; // -1 = no L2 focused
 
     nSlider.addEventListener('input', function() { nVal.textContent = nSlider.value; });
     nSlider.addEventListener('change', function() {
@@ -210,9 +211,21 @@ function onFilterChange() {
     function clearL2() {
         l2Elements.forEach(function(el) { el.remove(); });
         l2Elements = [];
+        l2FocusIndex = -1;
         // Remove L2 SVG lines
         var oldLines = svgEl.querySelectorAll('.stroll-line-l2');
         oldLines.forEach(function(l) { l.remove(); });
+    }
+
+    function setL2Focus(idx) {
+        // Remove old L2 focus
+        if (l2FocusIndex >= 0 && l2FocusIndex < l2Elements.length) {
+            l2Elements[l2FocusIndex].classList.remove('focused');
+        }
+        l2FocusIndex = idx;
+        if (idx >= 0 && idx < l2Elements.length) {
+            l2Elements[idx].classList.add('focused');
+        }
     }
 
     function showL2ForSatellite(satIdx) {
@@ -272,8 +285,8 @@ function onFilterChange() {
 
         // L2 size: ~60% of satellite size
         var l2Size = Math.round(sizes.satSize * 0.6);
-        // L2 radius: distance from satellite outward
-        var l2Radius = sizes.satSize * 0.5 + l2Size * 0.5 + 15;
+        // L2 radius: distance from focused satellite edge outward
+        var l2Radius = sizes.focSize * 0.5 + l2Size * 0.5 + 15;
 
         // Fan angle: spread L2 neighbors in an arc centered on the outward direction
         var fanSpread = Math.PI * 0.5; // 90 degrees total spread
@@ -386,11 +399,16 @@ function onFilterChange() {
 
         var n = satellites.length;
 
+        var inL2 = l2FocusIndex >= 0 && l2Elements.length > 0;
+
         switch (e.key) {
             case 'ArrowLeft':
                 e.preventDefault();
-                if (n === 0) break;
-                if (focusIndex === -1) {
+                if (inL2) {
+                    setL2Focus((l2FocusIndex - 1 + l2Elements.length) % l2Elements.length);
+                } else if (n === 0) {
+                    break;
+                } else if (focusIndex === -1) {
                     setFocus(0);
                 } else {
                     setFocus((focusIndex - 1 + n) % n);
@@ -398,8 +416,11 @@ function onFilterChange() {
                 break;
             case 'ArrowRight':
                 e.preventDefault();
-                if (n === 0) break;
-                if (focusIndex === -1) {
+                if (inL2) {
+                    setL2Focus((l2FocusIndex + 1) % l2Elements.length);
+                } else if (n === 0) {
+                    break;
+                } else if (focusIndex === -1) {
                     setFocus(0);
                 } else {
                     setFocus((focusIndex + 1) % n);
@@ -407,15 +428,27 @@ function onFilterChange() {
                 break;
             case 'ArrowUp':
                 e.preventDefault();
-                setFocus(-1);
+                if (inL2) {
+                    // Return to L1 satellite
+                    setL2Focus(-1);
+                } else {
+                    setFocus(-1);
+                }
                 break;
             case 'ArrowDown':
                 e.preventDefault();
-                if (focusIndex === -1 && n > 0) setFocus(0);
+                if (focusIndex === -1 && n > 0) {
+                    setFocus(0);
+                } else if (focusIndex >= 0 && l2Elements.length > 0 && !inL2) {
+                    // Drop into L2
+                    setL2Focus(0);
+                }
                 break;
             case 'Enter':
                 e.preventDefault();
-                if (focusIndex >= 0 && focusIndex < n) {
+                if (inL2) {
+                    navigate(l2Elements[l2FocusIndex].dataset.id);
+                } else if (focusIndex >= 0 && focusIndex < n) {
                     navigate(satellites[focusIndex].dataset.id);
                 } else {
                     window.location.href = '/asset/' + centerId;
@@ -423,7 +456,14 @@ function onFilterChange() {
                 break;
             case 'd':
                 e.preventDefault();
-                var targetId = focusIndex >= 0 ? satellites[focusIndex].dataset.id : centerId;
+                var targetId;
+                if (inL2) {
+                    targetId = l2Elements[l2FocusIndex].dataset.id;
+                } else if (focusIndex >= 0) {
+                    targetId = satellites[focusIndex].dataset.id;
+                } else {
+                    targetId = centerId;
+                }
                 window.location.href = '/asset/' + targetId;
                 break;
             case 'Escape':
@@ -586,9 +626,9 @@ function onFilterChange() {
     if (window.damHelp) {
         window.damHelp.registerShortcuts([
             { title: 'Navigation', shortcuts: [
-                { keys: '&#8592; &#8594;', desc: 'Cycle focus through satellites' },
-                { keys: '&#8593;', desc: 'Focus center image' },
-                { keys: '&#8595;', desc: 'Focus first satellite' },
+                { keys: '&#8592; &#8594;', desc: 'Cycle focus through satellites (or L2 neighbors)' },
+                { keys: '&#8593;', desc: 'Focus center (or return from L2 to satellite)' },
+                { keys: '&#8595;', desc: 'Focus first satellite (or drop into L2 neighbors)' },
                 { keys: 'Enter', desc: 'Navigate to focused (or open detail for center)' },
                 { keys: 'd', desc: 'Open detail page for focused asset' },
                 { keys: 'Shift+F', desc: 'Toggle filter bar' },
