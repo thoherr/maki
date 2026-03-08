@@ -635,25 +635,27 @@ Navigate to `/stroll` or click "Stroll" in the navigation bar. You can also pres
 
 ### Layout
 
-The center image is displayed prominently in the middle of the page. Surrounding it, satellite thumbnails show the most similar assets based on SigLIP embedding similarity (dot-product distance). Each neighbor shows a preview thumbnail, and clicking it navigates to that asset as the new center.
+The center image is displayed prominently in the middle of the page. Surrounding it, satellite thumbnails show the most similar assets based on SigLIP embedding similarity (dot-product distance), arranged in an elliptical layout that adapts to the viewport aspect ratio for optimal use of screen space. Each neighbor shows a preview thumbnail, and clicking it navigates to that asset as the new center.
 
 ### Neighbor count
 
-A slider control (5--25, default 12) lets you adjust how many neighbor thumbnails are shown around the center image. Fewer neighbors give a cleaner view; more neighbors let you see a wider range of similar assets.
+A slider control (5--25, default 12, configurable via `[serve] stroll_neighbors` and `stroll_neighbors_max` in `dam.toml`) lets you adjust how many neighbor thumbnails are shown around the center image. Fewer neighbors give a cleaner view; more neighbors let you see a wider range of similar assets.
 
 ### Filter bar
 
 The stroll page includes the same collapsible filter bar as the browse page. When filters are active, only assets matching the filters are considered as neighbors. Press **Shift+F** to toggle the filter bar visibility.
 
-### Depth slider (transitive neighbors)
+### Fan-Out slider (transitive neighbors)
 
-A depth slider in the bottom-left corner (range 0--8, default off) controls level-2 neighbor exploration. When depth is greater than 0 and you hover over or arrow-key to a satellite thumbnail, smaller thumbnails fan out from it showing that satellite's own nearest visual neighbors (excluding assets already visible on the page). Click any level-2 thumbnail to navigate to it as the new center. Results are cached per satellite, so moving focus back to a previously explored neighbor re-displays its fan instantly without another query.
+A fan-out slider in the bottom-left corner (range 0--10, configurable via `[serve] stroll_fanout` and `stroll_fanout_max` in `dam.toml`) controls level-2 neighbor exploration. When fan-out is greater than 0 and you hover over or arrow-key to a satellite thumbnail, smaller thumbnails fan out from it showing that satellite's own nearest visual neighbors (excluding assets already visible on the page). The L2 thumbnails are arranged in a direction-dependent arc -- the fan-out radius adapts based on each satellite's position, and satellites with L2 neighbors are pulled slightly toward the center to keep the layout balanced. L2 neighbor thumbnails show name, rating, and color label consistently with L1 satellites. Click any level-2 thumbnail to navigate to it as the new center. Results are cached per satellite, so moving focus back to a previously explored neighbor re-displays its fan instantly without another query.
 
 ### Keyboard shortcuts
 
 | Key | Action |
 |-----|--------|
-| Arrow keys | Navigate focus between neighbor thumbnails |
+| Arrow Left / Right | Navigate focus between neighbor thumbnails at the current level |
+| Arrow Up | Move focus from an L2 thumbnail back to its parent L1 satellite |
+| Arrow Down | Move focus from an L1 satellite into its L2 fan-out thumbnails (when fan-out > 0) |
 | Enter | Make the focused neighbor the new center |
 | Shift+F | Toggle filter bar visibility |
 | Escape | Return to the browse page |

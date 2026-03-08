@@ -2,6 +2,16 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v2.3.1 — 2026-03-08
+
+### Enhancements
+- **Elliptical satellite layout** — stroll page satellites now follow an elliptical orbit that adapts to the viewport aspect ratio, using more horizontal space in landscape and more vertical space in portrait orientations.
+- **Fan-out slider** — replaces the depth slider (0–8) with a fan-out slider (0–10) that shows transitive L2 neighbors behind focused satellites. Focused satellite pulls 30% toward center when fan-out is active to make room for L2 thumbnails.
+- **Direction-dependent L2 radius** — L2 neighbor arcs spread wider horizontally and narrower vertically, making better use of available screen space.
+- **L2 thumbnail metadata** — L2 (transitive neighbor) thumbnails now show name, rating, color label, and similarity score, consistent with L1 satellite display.
+- **L1/L2 keyboard navigation** — Arrow Up/Down moves between L1 satellites and their L2 neighbors. Hover suppression during keyboard navigation prevents focus catch-back.
+- **Stroll slider configuration** — `dam.toml` `[serve]` section supports `stroll_neighbors`, `stroll_neighbors_max`, `stroll_fanout`, and `stroll_fanout_max` to configure stroll page slider defaults and ranges.
+
 ## v2.3.0
 
 ### New Features

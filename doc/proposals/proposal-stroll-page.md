@@ -1,6 +1,6 @@
 # Proposal: Stroll Page — Graph-Based Visual Exploration
 
-> **Status**: Implemented (v2.3.0) — Phase 1 (visual similarity), Phase 2 (filter integration), and level-2 transitive neighbors are complete.
+> **Status**: Implemented (v2.3.0 / v2.3.1) — Phase 1 (visual similarity), Phase 2 (filter integration), and level-2 transitive neighbors are complete. v2.3.1 renamed "depth" to "fan-out", added elliptical satellite layout, and direction-dependent L2 arc radius.
 
 A new `/stroll` page for navigating the catalog by traversing connections between assets — primarily visual similarity, but extensible to shared tags, nearby dates, nearby GPS locations, and more.
 
@@ -38,7 +38,7 @@ None of these let you **explore** the catalog organically — following visual t
 - **Center image**: The current asset of interest. Shown as a large preview (similar to detail page size, ~600px). Overlay shows name/filename, rating stars, color label dot. Click opens lightbox; `d` opens detail page — same shortcuts as browse.
 - **Satellite images**: 8-12 neighbors arranged in a radial/circular layout around the center. Shown as thumbnails (~120-150px). Connected to center by subtle lines (SVG or CSS).
 - **Focused satellite**: On hover or arrow-key navigation, the focused satellite scales up to a mid-size (~250px) with a smooth transition. Shows name and similarity score as an overlay.
-- **Level-2 neighbors**: When a satellite has focus and the depth slider is > 0, its own nearest neighbors (excluding the center and all level-1 satellites) appear as smaller thumbnails radiating outward from the focused satellite. See [Level-2 Transitive Neighbors](#level-2-transitive-neighbors) below for full details.
+- **Level-2 neighbors**: When a satellite has focus and the fan-out slider is > 0, its own nearest neighbors (excluding the center and all level-1 satellites) appear as smaller thumbnails radiating outward from the focused satellite. The L2 arc radius adapts based on the satellite's direction from the center — satellites near the viewport edges use a shorter radius to avoid overflow. See [Level-2 Transitive Neighbors](#level-2-transitive-neighbors) below for full details.
 - **Navigation**: Click or Enter on a focused satellite makes it the new center. The view animates: old center shrinks away, new center grows, new satellites load. Clicking an L2 thumbnail also navigates (becomes the new center).
 
 ### Interaction Model
@@ -54,7 +54,7 @@ None of these let you **explore** the catalog organically — following visual t
 | `r/o/y/g/b/p/u/x` | Set color label on focused asset |
 | Back button | Navigate to previous center (browser history) |
 | `f` | Toggle filter bar |
-| Depth slider (0–8) | Controls how many level-2 neighbors appear per focused satellite (0 = off) |
+| Fan-Out slider (0–10) | Controls how many level-2 neighbors appear per focused satellite (0 = off, configurable max) |
 
 ### Arrow Key Navigation for Radial Layout
 
@@ -84,19 +84,19 @@ Implementation: the `/api/stroll/neighbors` endpoint accepts a `q` parameter (sa
 
 When exploring from a center asset, the level-1 satellites show direct neighbors. Level-2 (L2) transitive neighbors extend this by showing _each satellite's_ neighbors — the neighbors-of-neighbors — giving a deeper peek into the graph without navigating away.
 
-#### Depth Slider
+#### Fan-Out Slider
 
 A range slider in the bottom-left control panel (alongside any existing controls) sets how many L2 thumbnails to show per focused satellite:
 
-- **Range**: 0–8
+- **Range**: 0–10 (configurable)
 - **Default**: 0 (off — no L2 thumbnails shown)
 - **Label**: Shows the current value next to the slider
 
-When depth is 0, stroll behaves exactly as before. At depth 1–8, focusing a satellite triggers an L2 fetch (see below) and displays that many secondary thumbnails around it.
+When fan-out is 0, stroll behaves exactly as before. At fan-out 1–10, focusing a satellite triggers an L2 fetch (see below) and displays that many secondary thumbnails around it.
 
 #### Lazy-Loading
 
-L2 neighbors are fetched on demand: when a satellite receives focus (via mouse hover or arrow-key navigation) and the depth slider is > 0, a request is made to `/api/stroll/neighbors` for that satellite's asset ID. This avoids loading L2 data for all satellites upfront, keeping the initial page load fast.
+L2 neighbors are fetched on demand: when a satellite receives focus (via mouse hover or arrow-key navigation) and the fan-out slider is > 0, a request is made to `/api/stroll/neighbors` for that satellite's asset ID. This avoids loading L2 data for all satellites upfront, keeping the initial page load fast.
 
 #### Deduplication
 
@@ -109,7 +109,7 @@ L2 results are cached in memory (keyed by satellite asset ID). Once a satellite'
 #### Visual Design
 
 - **Size**: L2 thumbnails render at approximately 60% of the satellite thumbnail size, making the hierarchy visually clear (center > satellite > L2).
-- **Position**: L2 thumbnails are arranged in a 90-degree arc that radiates outward from the focused satellite, away from the center. The arc direction is determined by the satellite's angular position relative to the center.
+- **Position**: L2 thumbnails are arranged in a 90-degree arc that radiates outward from the focused satellite, away from the center. The arc direction is determined by the satellite's angular position relative to the center. The arc radius is direction-dependent: satellites near the left/right edges of the viewport use a shorter L2 radius to prevent thumbnails from overflowing the visible area.
 - **Connection lines**: Thin dashed SVG lines connect each L2 thumbnail back to its parent satellite. These are visually distinct from the solid lines connecting satellites to the center.
 - **Animation**: L2 thumbnails fade in when they appear (CSS opacity transition), giving a smooth reveal rather than a sudden pop.
 - **Resize handling**: L2 thumbnail positions are recalculated on window resize, just like satellite positions, so the layout stays coherent at any viewport size.
@@ -199,12 +199,12 @@ Server-rendered Askama template with the initial center asset data embedded. Nei
 
 ### Frontend Architecture
 
-**CSS Layout:** CSS `position: absolute` within a relative container. Satellites positioned using `transform: translate()` computed from angular positions. Center image at 50%/50%.
+**CSS Layout:** CSS `position: absolute` within a relative container. Satellites positioned using `transform: translate()` computed from angular positions on an elliptical orbit. Center image at 50%/50%. The elliptical layout uses separate horizontal and vertical radii to better fill widescreen viewports.
 
 ```
 angle_i = (2 * PI * i) / num_neighbors
-x_i = center_x + radius * cos(angle_i)
-y_i = center_y + radius * sin(angle_i)
+x_i = center_x + radius_x * cos(angle_i)
+y_i = center_y + radius_y * sin(angle_i)
 ```
 
 **Connection lines:** SVG overlay layer (absolutely positioned, pointer-events: none) with `<line>` elements from center to each satellite.
@@ -216,7 +216,7 @@ y_i = center_y + radius * sin(angle_i)
 - `neighbors[]` — current neighbor data
 - `focusIndex` — which satellite has keyboard focus (-1 = center)
 - `history[]` — breadcrumb trail for back navigation
-- `depth` — current depth slider value (0–8, default 0)
+- `fanOut` — current fan-out slider value (0–10, default 0)
 - `l2Cache` — map of satellite asset ID to fetched L2 neighbor arrays (cleared on navigation)
 
 **History:** Each navigation pushes to `window.history` via `pushState({ id })`, so the browser back button works naturally. URL updates to `/stroll?id=<new-id>`.
@@ -254,7 +254,7 @@ On narrow viewports (<768px), the radial layout could collapse to a horizontal s
    - `.stroll-overlay` — rating/label/name overlay on images
    - `.stroll-l2` — L2 thumbnail (~60% satellite size), fade-in animation
    - `.stroll-l2-line` — dashed SVG line from L2 thumbnail to parent satellite
-   - `.stroll-depth-slider` — depth control in bottom-left panel
+   - `.stroll-fanout-slider` — fan-out control in bottom-left panel
    - Dark mode overrides
 
 4. **JavaScript** IIFE in the template
@@ -265,7 +265,7 @@ On narrow viewports (<768px), the radial layout could collapse to a horizontal s
    - Rating/label keyboard shortcuts (reuse existing key handlers)
    - `pushState` for history
    - Lightbox integration (`window.damLightbox.openWithData()`)
-   - Depth slider change handler: updates `depth`, re-renders L2 for focused satellite
+   - Fan-out slider change handler: updates `fanOut`, re-renders L2 for focused satellite
    - L2 lazy-load on satellite focus: fetch, deduplicate (exclude center + L1 IDs), cache, render
    - L2 repositioning on window resize
    - L2 click handler: navigate (same as satellite click)

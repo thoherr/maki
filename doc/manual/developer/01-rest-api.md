@@ -1034,7 +1034,7 @@ curl "http://localhost:8080/api/calendar?year=2026&tag=landscape&rating=4%2B"
 
 *Requires `--features ai` compilation.*
 
-Returns the nearest neighbors of an asset by SigLIP embedding similarity. Used by the Stroll page for visual exploration and by the level-2 depth feature, which fetches transitive neighbors when a satellite is focused (L2 neighbors-of-neighbors).
+Returns the nearest neighbors of an asset by SigLIP embedding similarity. Used by the Stroll page for visual exploration and by the fan-out feature, which fetches transitive neighbors when a satellite is focused (L2 neighbors-of-neighbors).
 
 | Parameter | Type   | Default | Description                              |
 |-----------|--------|---------|------------------------------------------|

@@ -560,7 +560,7 @@ dam search "similar:72a0bb4b rating:4+"    # similar AND 4+ stars
 
 The `similar:` filter uses SigLIP image embeddings for fast dot-product similarity search. It composes with all other filters.
 
-For an interactive visual exploration experience, the web UI offers a **Stroll page** (`/stroll`) where you can navigate through your collection by clicking visually similar neighbors arranged around a center image. A depth slider (1-3) controls L2 transitive neighbor discovery: at depth 1 you see direct neighbors, at depth 2 you also see neighbors-of-neighbors, and at depth 3 you go one step further — useful for exploring broader visual themes. See [Web UI -- Stroll Page](06-web-ui.md#stroll-page) for details.
+For an interactive visual exploration experience, the web UI offers a **Stroll page** (`/stroll`) where you can navigate through your collection by clicking visually similar neighbors arranged around a center image. A fan-out slider (0--10) controls L2 transitive neighbor discovery: when fan-out is greater than 0, hovering or arrow-keying to a satellite reveals its own nearest neighbors fanning out behind it -- useful for exploring broader visual themes. See [Web UI -- Stroll Page](06-web-ui.md#stroll-page) for details.
 
 ---
 

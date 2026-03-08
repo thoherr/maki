@@ -137,6 +137,34 @@ Bind address for the web server. Use `"127.0.0.1"` to restrict access to the loc
 
 Number of results per page in the browse grid.
 
+### stroll_neighbors
+
+- **Type:** unsigned 32-bit integer
+- **Default:** `12`
+
+Initial number of neighbor thumbnails shown around the center image on the stroll page. Controls the default position of the neighbor count slider.
+
+### stroll_neighbors_max
+
+- **Type:** unsigned 32-bit integer
+- **Default:** `25`
+
+Maximum value for the neighbor count slider on the stroll page.
+
+### stroll_fanout
+
+- **Type:** unsigned 32-bit integer
+- **Default:** `5`
+
+Initial fan-out count for L2 transitive neighbors on the stroll page. Controls how many second-level neighbors fan out from a focused satellite. Set to `0` to disable fan-out by default.
+
+### stroll_fanout_max
+
+- **Type:** unsigned 32-bit integer
+- **Default:** `10`
+
+Maximum value for the fan-out slider on the stroll page.
+
 ### CLI Override
 
 The `--port`, `--bind`, and `--per-page` flags on `dam serve` override the values from `dam.toml`:
@@ -150,6 +178,10 @@ dam serve --port 9090 --bind 0.0.0.0 --per-page 100
 port = 8080
 bind = "127.0.0.1"
 per_page = 100
+stroll_neighbors = 12
+stroll_neighbors_max = 25
+stroll_fanout = 5
+stroll_fanout_max = 10
 ```
 
 ---
@@ -356,6 +388,12 @@ generate_on_demand = true
 port = 8080
 # Bind address. Use "0.0.0.0" to allow network access.
 bind = "127.0.0.1"
+# Stroll page: initial neighbor count and slider maximum.
+stroll_neighbors = 12
+stroll_neighbors_max = 25
+# Stroll page: initial fan-out count and slider maximum.
+stroll_fanout = 5
+stroll_fanout_max = 10
 
 [import]
 # Glob patterns to exclude during import (matched against filenames).
@@ -435,6 +473,11 @@ When a field is absent from `dam.toml`, these defaults apply:
 | `preview.generate_on_demand` | `false` |
 | `serve.port` | `8080` |
 | `serve.bind` | `"127.0.0.1"` |
+| `serve.per_page` | `60` |
+| `serve.stroll_neighbors` | `12` |
+| `serve.stroll_neighbors_max` | `25` |
+| `serve.stroll_fanout` | `5` |
+| `serve.stroll_fanout_max` | `10` |
 | `import.exclude` | `[]` |
 | `import.auto_tags` | `[]` |
 | `import.smart_previews` | `false` |
