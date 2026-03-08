@@ -105,6 +105,7 @@ pub struct ParsedSearch {
     pub face_count_exact: Option<u32>,
     pub persons: Vec<String>,
     pub persons_exclude: Vec<String>,
+    pub has_embed: Option<bool>,
     #[cfg(feature = "ai")]
     pub similar: Option<String>,
     #[cfg(feature = "ai")]
@@ -159,6 +160,7 @@ impl ParsedSearch {
             geo_bbox: self.geo_bbox,
             has_gps: self.has_gps,
             has_faces: self.has_faces,
+            has_embed: self.has_embed,
             face_count_min: self.face_count_min,
             face_count_exact: self.face_count_exact,
             ..Default::default()
@@ -378,6 +380,12 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
                 }
             } else if let Ok(n) = value.parse::<u32>() {
                 parsed.face_count_exact = Some(n);
+            }
+        } else if let Some(value) = token_body.strip_prefix("embed:") {
+            if value == "any" || value == "true" {
+                parsed.has_embed = Some(true);
+            } else if value == "none" || value == "false" {
+                parsed.has_embed = Some(false);
             }
         } else if let Some(value) = token_body.strip_prefix("person:") {
             if negated {
@@ -2502,6 +2510,30 @@ mod tests {
         assert!((w - 10.0).abs() < 0.001);
         assert!((n - 55.0).abs() < 0.001);
         assert!((e - 15.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_embed_any() {
+        let p = parse_search_query("embed:any");
+        assert_eq!(p.has_embed, Some(true));
+    }
+
+    #[test]
+    fn parse_embed_true() {
+        let p = parse_search_query("embed:true");
+        assert_eq!(p.has_embed, Some(true));
+    }
+
+    #[test]
+    fn parse_embed_none() {
+        let p = parse_search_query("embed:none");
+        assert_eq!(p.has_embed, Some(false));
+    }
+
+    #[test]
+    fn parse_embed_false() {
+        let p = parse_search_query("embed:false");
+        assert_eq!(p.has_embed, Some(false));
     }
 
     // ── negation and OR parse tests ────────────────────────────────

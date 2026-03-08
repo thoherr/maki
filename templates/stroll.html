@@ -508,12 +508,27 @@ function onFilterChange() {
         });
     });
 
+    // Store stroll context so the detail page can navigate back here
+    function storeStrollContext() {
+        var ids = [centerId];
+        satellites.forEach(function(s) { ids.push(s.dataset.id); });
+        sessionStorage.setItem('dam-browse-ids', JSON.stringify(ids));
+        sessionStorage.setItem('dam-browse-url', window.location.href);
+        sessionStorage.setItem('dam-browse-page', '0');
+        sessionStorage.setItem('dam-browse-total-pages', '0');
+    }
+
+    function goDetail(assetId) {
+        storeStrollContext();
+        window.location.href = '/asset/' + assetId;
+    }
+
     centerEl.addEventListener('mouseenter', function() {
         if (!isHoverSuppressed()) setFocus(-1);
     });
 
     centerEl.addEventListener('click', function() {
-        if (!mouseInControls) window.location.href = '/asset/' + centerId;
+        if (!mouseInControls) goDetail(centerId);
     });
 
     // Keyboard navigation
@@ -581,7 +596,7 @@ function onFilterChange() {
                 } else if (focusIndex >= 0 && focusIndex < n) {
                     navigate(satellites[focusIndex].dataset.id);
                 } else {
-                    window.location.href = '/asset/' + centerId;
+                    goDetail(centerId);
                 }
                 break;
             case 'd':
@@ -594,7 +609,7 @@ function onFilterChange() {
                 } else {
                     targetId = centerId;
                 }
-                window.location.href = '/asset/' + targetId;
+                goDetail(targetId);
                 break;
             case 'Escape':
                 e.preventDefault();

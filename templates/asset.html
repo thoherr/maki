@@ -380,6 +380,8 @@
         if (storedUrl) browseUrl = storedUrl;
     } catch(e) {}
 
+    var fromStroll = browseUrl.indexOf('/stroll') !== -1;
+
     var idx = browseIds.indexOf(assetId);
     var prevNav = document.getElementById('nav-prev');
     var nextNav = document.getElementById('nav-next');
@@ -643,10 +645,12 @@
             if (dragState) { previewDiv.classList.remove('dragging'); dragState = null; }
         });
 
-        // Click on image: navigate to lightbox via browse page
+        // Click on image: navigate to lightbox via browse page (or back to stroll)
         img.addEventListener('click', function(e) {
             if (wasDrag) { wasDrag = false; return; }
-            sessionStorage.setItem('dam-lightbox-asset', assetId);
+            if (!fromStroll) {
+                sessionStorage.setItem('dam-lightbox-asset', assetId);
+            }
             sessionStorage.setItem('dam-browse-focus', assetId);
             backNav.click();
         });
@@ -721,7 +725,9 @@
                 return;
             }
             if (lower === 'l') {
-                sessionStorage.setItem('dam-lightbox-asset', assetId);
+                if (!fromStroll) {
+                    sessionStorage.setItem('dam-lightbox-asset', assetId);
+                }
                 sessionStorage.setItem('dam-browse-focus', assetId);
                 backNav.click();
                 return;
@@ -882,9 +888,9 @@
         damHelp.registerShortcuts([
             { title: 'Navigation', shortcuts: [
                 { keys: '\u2190 \u2192', desc: 'Previous / next asset' },
-                { keys: 'Click image', desc: 'Open in lightbox' },
-                { keys: 'l', desc: 'Open in lightbox' },
-                { keys: 'Escape', desc: 'Go back to browse' }
+                { keys: 'Click image', desc: fromStroll ? 'Back to stroll' : 'Open in lightbox' },
+                { keys: 'l', desc: fromStroll ? 'Back to stroll' : 'Open in lightbox' },
+                { keys: 'Escape', desc: fromStroll ? 'Back to stroll' : 'Go back to browse' }
             ]},
             { title: 'Rating', shortcuts: [
                 { keys: '1 \u2013 5', desc: 'Set rating' },

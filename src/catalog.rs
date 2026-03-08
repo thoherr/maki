@@ -400,6 +400,7 @@ pub struct SearchOptions<'a> {
     pub geo_bbox: Option<(f64, f64, f64, f64)>,
     pub has_gps: Option<bool>,
     pub has_faces: Option<bool>,
+    pub has_embed: Option<bool>,
     pub face_count_min: Option<u32>,
     pub face_count_exact: Option<u32>,
     pub person_asset_ids: Option<&'a [String]>,
@@ -459,6 +460,7 @@ impl<'a> Default for SearchOptions<'a> {
             geo_bbox: None,
             has_gps: None,
             has_faces: None,
+            has_embed: None,
             face_count_min: None,
             face_count_exact: None,
             person_asset_ids: None,
@@ -677,7 +679,16 @@ impl Catalog {
             "CREATE INDEX IF NOT EXISTS idx_assets_face_count ON assets(face_count) WHERE face_count > 0",
         );
 
-        // Embeddings table for AI features
+        // Embeddings table — created unconditionally so embed: search filter works
+        let _ = self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS embeddings (
+                asset_id TEXT NOT NULL,
+                model TEXT NOT NULL DEFAULT 'siglip-vit-b16-256',
+                embedding BLOB NOT NULL,
+                PRIMARY KEY (asset_id, model)
+            )",
+        );
+        // AI-specific migrations (embedding schema migration, faces table)
         #[cfg(feature = "ai")]
         {
             let _ = crate::embedding_store::EmbeddingStore::initialize(&self.conn);
@@ -867,6 +878,16 @@ impl Catalog {
         let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN face_count INTEGER NOT NULL DEFAULT 0");
         let _ = self.conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_assets_face_count ON assets(face_count) WHERE face_count > 0",
+        );
+
+        // Embeddings table (always created so embed: search filter works without AI feature)
+        let _ = self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS embeddings (
+                asset_id TEXT NOT NULL,
+                model TEXT NOT NULL DEFAULT 'siglip-vit-b16-256',
+                embedding BLOB NOT NULL,
+                PRIMARY KEY (asset_id, model)
+            )",
         );
 
         // Stamp schema version
@@ -2684,6 +2705,19 @@ impl Catalog {
             params.push(Box::new(exact as i64));
         }
 
+        // Embedding presence filter
+        if let Some(has_embed) = opts.has_embed {
+            if has_embed {
+                clauses.push(
+                    "EXISTS (SELECT 1 FROM embeddings e WHERE e.asset_id = a.id)".to_string(),
+                );
+            } else {
+                clauses.push(
+                    "NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.asset_id = a.id)".to_string(),
+                );
+            }
+        }
+
         // Person filter: restrict to pre-computed asset IDs
         if let Some(ids) = opts.person_asset_ids {
             if ids.is_empty() {
@@ -4231,7 +4265,7 @@ mod tests {
 
         assert_eq!(
             tables,
-            vec!["assets", "collection_assets", "collections", "file_locations", "recipes", "schema_version", "stacks", "variants", "volumes"]
+            vec!["assets", "collection_assets", "collections", "embeddings", "file_locations", "recipes", "schema_version", "stacks", "variants", "volumes"]
         );
     }
 
@@ -6791,6 +6825,63 @@ mod tests {
         let results = catalog.search_paginated(&opts).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].asset_id, all[0].asset_id);
+    }
+
+    #[test]
+    fn search_has_embed_filter() {
+        let catalog = setup_search_catalog();
+
+        // No embeddings yet — embed:none should return all
+        let all = catalog
+            .search_paginated(&SearchOptions {
+                has_embed: Some(false),
+                per_page: u32::MAX,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(all.len(), 2);
+
+        // embed:any should return nothing
+        let embedded = catalog
+            .search_paginated(&SearchOptions {
+                has_embed: Some(true),
+                per_page: u32::MAX,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(embedded.len(), 0);
+
+        // Insert a fake embedding for one asset
+        let asset_id = &all[0].asset_id;
+        catalog
+            .conn()
+            .execute(
+                "INSERT INTO embeddings (asset_id, model, embedding) VALUES (?1, 'test', X'00')",
+                rusqlite::params![asset_id],
+            )
+            .unwrap();
+
+        // embed:any should now return 1
+        let embedded = catalog
+            .search_paginated(&SearchOptions {
+                has_embed: Some(true),
+                per_page: u32::MAX,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(embedded.len(), 1);
+        assert_eq!(&embedded[0].asset_id, asset_id);
+
+        // embed:none should return 1
+        let not_embedded = catalog
+            .search_paginated(&SearchOptions {
+                has_embed: Some(false),
+                per_page: u32::MAX,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(not_embedded.len(), 1);
+        assert_ne!(&not_embedded[0].asset_id, asset_id);
     }
 
     #[test]
