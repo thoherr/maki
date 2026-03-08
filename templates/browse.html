@@ -2630,6 +2630,7 @@ window.damFacets = (function() {
         cards.forEach(function(c) { ids.push(c.getAttribute('data-asset-id')); });
         sessionStorage.setItem('dam-browse-ids', JSON.stringify(ids));
         sessionStorage.setItem('dam-browse-url', window.location.href);
+        sessionStorage.setItem('dam-browse-home', window.location.href);
         var meta = document.getElementById('results-meta');
         if (meta) {
             sessionStorage.setItem('dam-browse-page', meta.dataset.page);

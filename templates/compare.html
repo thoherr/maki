@@ -500,10 +500,18 @@
         if (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
         if (el.tagName === 'INPUT' && el.type !== 'checkbox') return;
 
-        // Escape: go back to browse
+        // Escape: go back
         if (e.key === 'Escape') {
             e.preventDefault();
-            window.location.href = browseUrl;
+            history.back();
+            return;
+        }
+
+        // Shift+B: back to browse
+        if (e.shiftKey && e.key === 'B') {
+            e.preventDefault();
+            var home = sessionStorage.getItem('dam-browse-home') || '/';
+            window.location.href = home;
             return;
         }
 
@@ -576,7 +584,8 @@
                 { keys: '\u2190 \u2192', desc: 'Focus previous / next' },
                 { keys: 'd', desc: 'Open detail page' },
                 { keys: 's', desc: 'Toggle sync zoom' },
-                { keys: 'Escape', desc: 'Back to browse' }
+                { keys: 'Escape', desc: 'Go back' },
+                { keys: 'Shift+B', desc: 'Back to browse' }
             ]},
             { title: 'Rating', shortcuts: [
                 { keys: '1 \u2013 5', desc: 'Set rating (focused)' },

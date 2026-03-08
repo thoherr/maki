@@ -615,6 +615,13 @@ function onFilterChange() {
                 e.preventDefault();
                 window.history.back();
                 break;
+            case 'B':
+                if (e.shiftKey) {
+                    e.preventDefault();
+                    var home = sessionStorage.getItem('dam-browse-home') || '/';
+                    window.location.href = home;
+                }
+                break;
             case 'F':
                 if (e.shiftKey && window.damFilterToggle) {
                     e.preventDefault();
@@ -791,6 +798,7 @@ function onFilterChange() {
                 { keys: 'd', desc: 'Open detail page for focused asset' },
                 { keys: 'Shift+F', desc: 'Toggle filter bar' },
                 { keys: 'Escape', desc: 'Go back' },
+                { keys: 'Shift+B', desc: 'Back to browse' },
             ]},
         ]);
     }

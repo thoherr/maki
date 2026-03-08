@@ -380,7 +380,8 @@
         if (storedUrl) browseUrl = storedUrl;
     } catch(e) {}
 
-    var fromStroll = browseUrl.indexOf('/stroll') !== -1;
+    // Detect if we came from a browse page (for lightbox return behavior)
+    var fromBrowse = browseUrl === '/' || (browseUrl.indexOf('/') === 0 && browseUrl.indexOf('/asset/') !== 0 && browseUrl.indexOf('/stroll') !== 0);
 
     var idx = browseIds.indexOf(assetId);
     var prevNav = document.getElementById('nav-prev');
@@ -464,6 +465,10 @@
     }
 
     backNav.href = browseUrl;
+    backNav.addEventListener('click', function(e) {
+        e.preventDefault();
+        history.back();
+    });
 
     // --- Zoom state ---
     var zoomMode = 'fit';
@@ -645,14 +650,14 @@
             if (dragState) { previewDiv.classList.remove('dragging'); dragState = null; }
         });
 
-        // Click on image: navigate to lightbox via browse page (or back to stroll)
+        // Click on image: go back (opens lightbox if returning to browse)
         img.addEventListener('click', function(e) {
             if (wasDrag) { wasDrag = false; return; }
-            if (!fromStroll) {
+            if (fromBrowse) {
                 sessionStorage.setItem('dam-lightbox-asset', assetId);
             }
             sessionStorage.setItem('dam-browse-focus', assetId);
-            backNav.click();
+            history.back();
         });
     }
     initZoom();
@@ -686,10 +691,18 @@
             return;
         }
 
-        // Escape: go back to browse
+        // Escape: go back
         if (e.key === 'Escape') {
             e.preventDefault();
-            backNav.click();
+            history.back();
+            return;
+        }
+
+        // Shift+B: back to browse
+        if (e.shiftKey && e.key === 'B') {
+            e.preventDefault();
+            var home = sessionStorage.getItem('dam-browse-home') || '/';
+            window.location.href = home;
             return;
         }
 
@@ -725,11 +738,11 @@
                 return;
             }
             if (lower === 'l') {
-                if (!fromStroll) {
+                if (fromBrowse) {
                     sessionStorage.setItem('dam-lightbox-asset', assetId);
                 }
                 sessionStorage.setItem('dam-browse-focus', assetId);
-                backNav.click();
+                history.back();
                 return;
             }
         }
@@ -856,12 +869,13 @@
                 container.style.display = 'block';
                 return;
             }
+            var similarIds = results.map(function(r) { return r.asset_id; });
             var html = '<div class="similar-grid">';
             results.forEach(function(r) {
                 var pct = Math.round(r.similarity * 100);
                 var imgSrc = r.preview_url || '';
                 var safeName = r.name.replace(/</g,'&lt;').replace(/>/g,'&gt;');
-                html += '<a href="/asset/' + r.asset_id + '" class="similar-card" title="' + safeName + '">';
+                html += '<a href="/asset/' + r.asset_id + '" class="similar-card" data-similar-nav title="' + safeName + '">';
                 if (imgSrc) {
                     html += '<img src="' + imgSrc + '" alt="" loading="lazy">';
                 } else {
@@ -875,6 +889,14 @@
             html += '</div>';
             container.innerHTML = html;
             container.style.display = 'block';
+            // Store similar IDs so next detail page has prev/next navigation
+            container.addEventListener('click', function(e) {
+                var link = e.target.closest('[data-similar-nav]');
+                if (link) {
+                    sessionStorage.setItem('dam-browse-ids', JSON.stringify(similarIds));
+                    sessionStorage.setItem('dam-browse-url', window.location.pathname);
+                }
+            });
         })
         .catch(function(err) {
             btn.textContent = 'Find similar';
@@ -888,9 +910,10 @@
         damHelp.registerShortcuts([
             { title: 'Navigation', shortcuts: [
                 { keys: '\u2190 \u2192', desc: 'Previous / next asset' },
-                { keys: 'Click image', desc: fromStroll ? 'Back to stroll' : 'Open in lightbox' },
-                { keys: 'l', desc: fromStroll ? 'Back to stroll' : 'Open in lightbox' },
-                { keys: 'Escape', desc: fromStroll ? 'Back to stroll' : 'Go back to browse' }
+                { keys: 'Click image', desc: fromBrowse ? 'Open in lightbox' : 'Go back' },
+                { keys: 'l', desc: fromBrowse ? 'Open in lightbox' : 'Go back' },
+                { keys: 'Escape', desc: 'Go back' },
+                { keys: 'Shift+B', desc: 'Back to browse' }
             ]},
             { title: 'Rating', shortcuts: [
                 { keys: '1 \u2013 5', desc: 'Set rating' },
