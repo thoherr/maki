@@ -100,7 +100,8 @@ nav {
 nav a { color: #fff; font-weight: 600; }
 nav a:hover { text-decoration: none; opacity: 0.85; }
 nav .brand { font-size: 1.1rem; letter-spacing: 0.5px; }
-nav .nav-links { display: flex; gap: 1rem; font-size: 0.9rem; }
+nav .nav-links { display: flex; gap: 1rem; font-size: 0.9rem; align-items: center; }
+nav .nav-sep { width: 1px; height: 1rem; background: rgba(255,255,255,0.25); flex-shrink: 0; }
 nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-weight: normal; }
 .theme-toggle {
     background: none;

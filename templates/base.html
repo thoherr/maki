@@ -14,13 +14,16 @@
         <a href="/" class="brand">DAM</a>
         <div class="nav-links">
             <a href="/">Browse</a>
-            <a href="/saved-searches">Searches</a>
-            <a href="/collections">Collections</a>
+            {% block nav_explore %}{% endblock %}
+            <span class="nav-sep"></span>
             <a href="/tags">Tags</a>
+            {% block nav_organize %}{% endblock %}
+            <a href="/collections">Collections</a>
+            <a href="/saved-searches">Searches</a>
+            <span class="nav-sep"></span>
             <a href="/stats">Stats</a>
             <a href="/backup">Backup</a>
             <a href="/duplicates">Duplicates</a>
-            {% block nav_extra %}{% endblock %}
         </div>
         <button class="theme-toggle" id="help-toggle" title="Keyboard shortcuts (?)">?</button>
         <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">
