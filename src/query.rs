@@ -938,6 +938,8 @@ impl QueryEngine {
 
         // Step 6: Update variant rows in catalog and clean up donors
         for donor in &donors {
+            let donor_id = donor.id.to_string();
+
             for variant in &donor.variants {
                 catalog.update_variant_asset_id(
                     &variant.content_hash,
@@ -948,8 +950,21 @@ impl QueryEngine {
                     catalog.update_variant_role(&variant.content_hash, "export")?;
                 }
             }
+
+            // Clean up FK-referencing rows before deleting the donor asset.
+            // variants, collection_assets, and faces reference assets(id).
+            let _ = catalog.delete_collection_memberships_for_asset(&donor_id);
+            let _ = catalog.delete_recipes_for_asset(&donor_id);
+            let _ = catalog.delete_file_locations_for_asset(&donor_id);
+            let _ = catalog.delete_variants_for_asset(&donor_id);
+            // faces table references assets(id) via FK
+            let _ = catalog.conn().execute(
+                "DELETE FROM faces WHERE asset_id = ?1",
+                rusqlite::params![donor_id],
+            );
+
             store.delete(donor.id)?;
-            catalog.delete_asset(&donor.id.to_string())?;
+            catalog.delete_asset(&donor_id)?;
         }
 
         let donors_removed = donors.len();

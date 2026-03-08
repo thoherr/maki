@@ -889,9 +889,26 @@ impl Catalog {
         let primary_format = crate::models::variant::compute_primary_format(&asset.variants);
         let variant_count = asset.variants.len() as i64;
         let (latitude, longitude) = crate::models::variant::compute_gps_from_variants(&asset.variants);
+        // Use ON CONFLICT UPDATE instead of INSERT OR REPLACE to avoid
+        // intermediate DELETE that triggers FK constraint violations on
+        // variants/faces/collection_assets referencing this asset.
         self.conn.execute(
-            "INSERT OR REPLACE INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count, latitude, longitude, preview_rotation) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count, latitude, longitude, preview_rotation) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) \
+             ON CONFLICT(id) DO UPDATE SET \
+               name = excluded.name, \
+               created_at = excluded.created_at, \
+               asset_type = excluded.asset_type, \
+               tags = excluded.tags, \
+               description = excluded.description, \
+               rating = excluded.rating, \
+               color_label = excluded.color_label, \
+               best_variant_hash = excluded.best_variant_hash, \
+               primary_variant_format = excluded.primary_variant_format, \
+               variant_count = excluded.variant_count, \
+               latitude = excluded.latitude, \
+               longitude = excluded.longitude, \
+               preview_rotation = excluded.preview_rotation",
             rusqlite::params![
                 asset.id.to_string(),
                 asset.name,
