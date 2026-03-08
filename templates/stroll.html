@@ -113,15 +113,19 @@ function onFilterChange() {
         clearL2();
         // Re-layout satellites: orbit radius depends on whether L2 is active
         layoutSatellites();
+        // Re-apply focus state (sizing, pull offset, L2)
         if (focusIndex >= 0 && focusIndex < satellites.length) {
-            // Re-apply focus sizing after layout reset
+            satellites[focusIndex].classList.add('focused');
             var focImg = satellites[focusIndex].querySelector('img');
             if (focImg) {
                 var s = getSizes();
                 focImg.style.width = s.focSize + 'px';
                 focImg.style.height = s.focSize + 'px';
             }
-            if (currentDepth > 0) showL2ForSatellite(focusIndex);
+            if (currentDepth > 0) {
+                offsetSatellite(focusIndex, 0.3);
+                showL2ForSatellite(focusIndex);
+            }
         }
     });
 
@@ -166,9 +170,10 @@ function onFilterChange() {
         var l2Reserve = currentDepth > 0 ? (sizes.focSize * 0.5 + l2Size + 30) : (sizes.focSize / 2 + 10);
 
         // Ellipse radii: use available space in each axis independently
+        // Extra vertical padding to keep top satellites clear of toolbar
         var minR = sizes.centerMax / 2 + sizes.focSize / 2 + 20;
         var rx = Math.max(minR, cx - l2Reserve);
-        var ry = Math.max(minR, cy - l2Reserve);
+        var ry = Math.max(minR, cy - l2Reserve - 20);
 
         // Store geometry for L2 positioning
         layoutGeo.cx = cx;
@@ -304,10 +309,11 @@ function onFilterChange() {
 
         var sizes = getSizes();
 
-        // Use stored layout geometry — no DOM measurement needed
+        // Use stored layout geometry — account for pull toward center
         var baseAngle = layoutGeo.angles[satIdx];
-        var satX = layoutGeo.cx + layoutGeo.rx * Math.cos(baseAngle);
-        var satY = layoutGeo.cy + layoutGeo.ry * Math.sin(baseAngle);
+        var pullFrac = currentDepth > 0 ? 0.3 : 0;
+        var satX = layoutGeo.cx + layoutGeo.rx * (1 - pullFrac) * Math.cos(baseAngle);
+        var satY = layoutGeo.cy + layoutGeo.ry * (1 - pullFrac) * Math.sin(baseAngle);
 
         // L2 size: ~60% of satellite size
         var l2Size = Math.round(sizes.satSize * 0.6);
@@ -356,10 +362,26 @@ function onFilterChange() {
         }
     }
 
+    // Move a satellite toward/away from center (for L2 room)
+    function offsetSatellite(satIdx, pullFraction) {
+        if (satIdx < 0 || satIdx >= satellites.length) return;
+        var angle = layoutGeo.angles[satIdx];
+        var ox = layoutGeo.cx + layoutGeo.rx * (1 - pullFraction) * Math.cos(angle);
+        var oy = layoutGeo.cy + layoutGeo.ry * (1 - pullFraction) * Math.sin(angle);
+        satellites[satIdx].style.left = ox + 'px';
+        satellites[satIdx].style.top = oy + 'px';
+        // Update SVG line to match
+        var lines = svgEl.querySelectorAll('.stroll-line');
+        if (lines[satIdx]) {
+            lines[satIdx].setAttribute('x2', ox);
+            lines[satIdx].setAttribute('y2', oy);
+        }
+    }
+
     // Focus management
     function setFocus(idx) {
         var sizes = getSizes();
-        // Remove old focus
+        // Restore old focused satellite to orbit position
         if (focusIndex >= 0 && focusIndex < satellites.length) {
             satellites[focusIndex].classList.remove('focused');
             var oldImg = satellites[focusIndex].querySelector('img');
@@ -367,6 +389,7 @@ function onFilterChange() {
                 oldImg.style.width = sizes.satSize + 'px';
                 oldImg.style.height = sizes.satSize + 'px';
             }
+            offsetSatellite(focusIndex, 0);
         }
         centerEl.classList.remove('focused');
 
@@ -382,11 +405,30 @@ function onFilterChange() {
                 newImg.style.width = sizes.focSize + 'px';
                 newImg.style.height = sizes.focSize + 'px';
             }
+            // Pull focused satellite 30% toward center to make room for L2
+            if (currentDepth > 0) {
+                offsetSatellite(idx, 0.3);
+            }
             // Show L2 neighbors for focused satellite
             clearL2();
             showL2ForSatellite(idx);
         }
     }
+
+    // Prevent control interactions from stealing satellite focus
+    var controlEl = document.getElementById('stroll-neighbor-control');
+    if (controlEl) {
+        controlEl.addEventListener('mouseenter', function(e) { e.stopPropagation(); });
+    }
+
+    // Track whether mouse is over an interactive control (suppress hover focus)
+    var mouseInControls = false;
+    var toolbarEl = document.querySelector('.stroll-toolbar');
+    [controlEl, toolbarEl].forEach(function(el) {
+        if (!el) return;
+        el.addEventListener('mouseenter', function() { mouseInControls = true; });
+        el.addEventListener('mouseleave', function() { mouseInControls = false; });
+    });
 
     // Mouse hover on satellites
     satellites.forEach(function(sat, i) {
@@ -399,11 +441,11 @@ function onFilterChange() {
     });
 
     centerEl.addEventListener('mouseenter', function() {
-        setFocus(-1);
+        if (!mouseInControls) setFocus(-1);
     });
 
     centerEl.addEventListener('click', function() {
-        window.location.href = '/asset/' + centerId;
+        if (!mouseInControls) window.location.href = '/asset/' + centerId;
     });
 
     // Keyboard navigation

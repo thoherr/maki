@@ -3217,6 +3217,7 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     transform: translate(-50%, -50%);
     z-index: 1;
     cursor: pointer;
+    transition: left 0.25s ease, top 0.25s ease;
 }
 .stroll-satellite img {
     object-fit: cover;
@@ -3270,6 +3271,7 @@ body.has-batch-toolbar { padding-bottom: 60px; }
 .stroll-l2 {
     opacity: 0;
     animation: stroll-l2-in 0.3s ease-out forwards;
+    transition: none;
 }
 @keyframes stroll-l2-in {
     from { opacity: 0; transform: translate(-50%, -50%) scale(0.7); }
