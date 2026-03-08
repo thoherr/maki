@@ -292,6 +292,116 @@ On narrow viewports (<768px), the radial layout could collapse to a horizontal s
 
 ---
 
+## Strolling Without Going in Circles
+
+### The Problem
+
+With large collections of visually similar images — hundreds of concert shots, event photos, or landscape series — pure similarity search creates a local trap. The top-N neighbors of any image in such a cluster are almost always other images from the same cluster. Strolling devolves into walking in tight circles through near-duplicates, never escaping to discover unexpected connections.
+
+Even filtering (e.g., `rating:4+`) only shrinks the cluster from 300 to 100 — still dense enough to dominate all neighbor slots. The stroll page needs mechanisms to inject diversity, break out of local clusters, and make exploration genuinely serendipitous.
+
+### Approach 1: Stroll Modes
+
+A mode selector in the control panel (alongside the neighbors/fan-out sliders) that changes *how* neighbors are selected from the similarity index:
+
+| Mode | Behavior | Use case |
+|------|----------|----------|
+| **Nearest** (default) | Top N by similarity score | Focused exploration of very similar assets |
+| **Discover** | Random N drawn from top M (e.g., 12 from top 80) | Same general neighborhood, but different faces each time |
+| **Explore** | Skip the first X most similar, then take N | Jump over the near-duplicate shell to more distant connections |
+| **Diverse** | MMR-based selection (see Approach 2) | Maximize variety while staying relevant |
+
+**Discover mode** is the simplest to implement: over-fetch (e.g., 80 candidates), shuffle, take N. Each navigation or reload produces a different set. The randomness breaks the repetitive loops while keeping results in the same broad region of embedding space.
+
+**Explore mode** adds an "offset" or "skip" parameter: ignore the K nearest neighbors and show the next N. This directly addresses the near-duplicate problem by jumping past the tight cluster. A slider could control the skip distance (0 = nearest, 50 = skip 50 nearest, etc.), or it could be a fixed mode that auto-calculates a reasonable skip based on the similarity score distribution (e.g., skip all assets above 0.9 similarity).
+
+Both modes could apply independently to L1 and L2 — e.g., L1 in Explore mode to escape the cluster, L2 in Nearest mode to peek at what's close to each satellite.
+
+### Approach 2: Diversity-Aware Selection (MMR)
+
+Maximal Marginal Relevance (MMR) is a well-known technique from information retrieval. Instead of picking the N most similar assets independently, it picks them *iteratively*: each next pick maximizes similarity to the center while minimizing similarity to assets already picked. This naturally spreads the selection across different sub-clusters.
+
+**Algorithm** (greedy, per-query):
+```
+candidates = top_100_similar(center)
+selected = []
+for i in 0..N:
+    best = argmax over candidates of:
+        λ * sim(candidate, center) - (1-λ) * max(sim(candidate, s) for s in selected)
+    selected.append(best)
+    candidates.remove(best)
+```
+
+The parameter λ (0.0–1.0) controls the trade-off: λ=1.0 is pure similarity (same as today), λ=0.0 is pure diversity (maximally spread out), λ=0.5 is balanced. This could be exposed as a "Diversity" slider in the UI, or simply fixed at a reasonable default (e.g., 0.6).
+
+**Performance**: For N=12 picks from 100 candidates, this requires ~1200 dot products — trivial given that embeddings are 256-dim floats. The entire selection completes in <1ms.
+
+**Implementation**: The MMR logic would live in `EmbeddingIndex` (or a new `DiverseSearch` utility), computing pairwise similarities from the already-loaded embedding buffer. The API endpoint gains a `diversity` parameter (0.0–1.0, default 0.0 for backward compatibility).
+
+This is the most principled approach and subsumes the simpler "Discover" mode (random selection achieves diversity by accident; MMR achieves it optimally).
+
+### Approach 3: Location-Aware Filtering
+
+Ignore assets from the same shooting session when computing neighbors. Two variants:
+
+**a) Path-based session detection**: Assets imported from the same directory (or same parent directory) are assumed to be from the same session. When selecting neighbors for an asset at `Capture/2026-02-22/concert/DSC_4521.NEF`, exclude all assets whose path shares the prefix `Capture/2026-02-22/concert/`. The exclusion depth could be configurable (same directory, same parent, same grandparent).
+
+**b) Time-based session detection**: Assets created within a configurable time window (e.g., ±4 hours, ±1 day) of the center asset are excluded. This handles cases where the same session spans multiple directories (card changes, multiple cameras) and doesn't rely on path structure.
+
+**c) Combined**: Exclude assets that share *both* a similar path prefix *and* a close creation date. This is more conservative — it won't accidentally exclude unrelated assets that happen to be in nearby directories.
+
+This could be a toggle: "Cross-session only" or "Different shoots only". When active, the neighbor query first computes the center asset's session (path prefix or date range), then excludes those asset IDs before similarity ranking. The exclusion set can be precomputed with a single SQL query.
+
+This approach is particularly powerful for the concert/event use case: you'd see visually similar images from *other* concerts, other events, other locations — exactly the kind of unexpected connection that makes strolling interesting.
+
+Could apply to L1 only (L2 still shows local neighbors of the satellite, which may be from the same session) or to both levels. Applying to L1 only is probably more useful: "show me similar things from elsewhere" at the top level, with L2 providing local context around each discovery.
+
+### Approach 4: Visited-Asset Down-Ranking
+
+Track which assets the user has visited (navigated to as center) during the current stroll session, and down-rank them in neighbor selection. This doesn't prevent circles entirely (the same cluster still dominates), but it gradually pushes the user outward by removing already-visited nodes from consideration.
+
+**Simple version**: Exclude visited asset IDs from the candidate set entirely.
+
+**Soft version**: Multiply the similarity score of visited assets by a decay factor (e.g., 0.5), so they can still appear but are less likely to. This avoids dead-ends where all close neighbors have been visited.
+
+The visited set is already partially tracked (browser history / `pushState`), so the client could pass visited IDs to the API. Alternatively, the server could maintain a session-scoped visited set (but this adds statefulness).
+
+### Approach 5: Cluster-Aware Sampling
+
+A more sophisticated variant: detect dense clusters in the candidate set and show one representative per cluster rather than multiple from the same cluster.
+
+**Algorithm**: Take top 100 similar assets. Run a simple clustering (e.g., greedy: first asset starts cluster 1; each subsequent asset joins the nearest cluster if similarity > threshold, otherwise starts a new cluster). Pick the top representative from each cluster (highest similarity to center). This naturally deduplicates near-identical images.
+
+This is similar to MMR but more explicit about cluster boundaries. It could be combined with any of the above approaches.
+
+### Approach 6: "Jump" Button
+
+A simple escape hatch: a button (or keyboard shortcut, e.g., `j`) that teleports to a random asset with *low* similarity to the current center. This is the nuclear option for breaking out of a rut — instead of gradually pushing the boundary, it jumps to a completely different part of the catalog.
+
+The random asset could be: (a) truly random (any embedded asset), (b) anti-similar (lowest similarity to current center — the most *different* image in the catalog), or (c) random from a different cluster/session.
+
+### Recommendation
+
+These approaches are complementary, not mutually exclusive. A phased implementation:
+
+1. **Quick win — Discover mode + Explore mode**: Random-from-top-M and skip-first-K are trivial to implement (just parameters on the existing query). Add as mode buttons or a single dropdown. Immediately breaks the repetitive loop for most users.
+
+2. **Principled solution — MMR diversity slider**: Adds a `diversity` parameter to the neighbor API. More elegant than random sampling and gives the user fine-grained control. Subsumes Discover mode.
+
+3. **Domain-specific — Cross-session toggle**: Adds an "Other shoots only" toggle that excludes same-path/same-date assets. Extremely effective for the photographer workflow. Requires a bit of SQL work but no changes to the embedding logic.
+
+4. **Polish — Visited tracking + Jump**: Down-rank visited assets and add a "Jump" shortcut. Small quality-of-life improvements that compound over time.
+
+### UX Considerations
+
+- **Discoverability**: New users should get useful strolling out of the box. The default mode (Nearest + some diversity) should work well without tweaking. Power users can adjust sliders and modes.
+- **Predictability vs. serendipity**: Random/diverse modes sacrifice reproducibility (same center → different neighbors each time). This is a feature for exploration but could confuse users who expect consistency. Consider showing the active mode prominently.
+- **Composability with filters**: All modes should compose with the existing filter bar. "Cross-session Explore mode within my 4-star landscapes" should just work.
+- **L1 vs. L2 modes**: Modes could apply differently to L1 and L2. A reasonable default: L1 uses the selected mode (diverse/explore/cross-session), L2 always uses Nearest (showing the local neighborhood around each satellite). This gives breadth at L1 and depth at L2.
+- **Control panel layout**: The mode selector, diversity slider, and cross-session toggle add controls to an already-busy panel. Group them under a collapsible "Stroll mode" section, or use a dropdown that exposes relevant sub-controls for the selected mode.
+
+---
+
 ## Open Questions
 
 1. **Number of satellites**: 8? 10? 12? More feels richer but clutters. Start with 10, make it configurable or adaptive to viewport size.
