@@ -3289,6 +3289,29 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     font-size: 0.55rem;
     padding: 0 3px;
 }
+.stroll-l2 .stroll-sat-overlay {
+    font-size: 0.45rem;
+    padding: 2px 3px;
+    gap: 2px;
+}
+.stroll-l2.focused .stroll-sat-overlay {
+    font-size: 0.55rem;
+    padding: 3px 4px;
+}
+.stroll-l2 .stroll-rating {
+    font-size: 0.5rem;
+}
+.stroll-l2.focused .stroll-rating {
+    font-size: 0.6rem;
+}
+.stroll-l2 .stroll-label-dot {
+    width: 6px;
+    height: 6px;
+}
+.stroll-l2.focused .stroll-label-dot {
+    width: 8px;
+    height: 8px;
+}
 .stroll-line-l2 {
     stroke: var(--text-muted, #999);
     stroke-width: 0.5;
