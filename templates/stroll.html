@@ -317,8 +317,11 @@ function onFilterChange() {
 
         // L2 size: ~60% of satellite size
         var l2Size = Math.round(sizes.satSize * 0.6);
-        // L2 radius: distance from focused satellite edge outward
-        var l2Radius = sizes.focSize * 0.5 + l2Size * 0.5 + 20;
+        // L2 base offset from satellite center
+        var l2Base = sizes.focSize * 0.5 + l2Size * 0.5 + 20;
+        // Direction-dependent scaling: stretch horizontally, compress vertically
+        // Use the ellipse aspect ratio so L2 fans match the main layout
+        var aspectScale = layoutGeo.rx / Math.max(layoutGeo.ry, 1);
 
         // Fan angle: spread L2 neighbors in an arc centered on the outward direction
         var fanSpread = Math.PI * 0.5; // 90 degrees total spread
@@ -329,6 +332,10 @@ function onFilterChange() {
             // Spread evenly within the fan
             var angleOffset = count === 1 ? 0 : (i / (count - 1) - 0.5) * fanSpread;
             var angle = baseAngle + angleOffset;
+            // Elliptical L2 radius: more horizontal, less vertical
+            var cosA = Math.abs(Math.cos(angle));
+            var sinA = Math.abs(Math.sin(angle));
+            var l2Radius = l2Base * (cosA * aspectScale + sinA) / (cosA + sinA || 1);
             var x = satX + l2Radius * Math.cos(angle);
             var y = satY + l2Radius * Math.sin(angle);
 
