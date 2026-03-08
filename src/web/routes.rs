@@ -4239,6 +4239,8 @@ pub struct StrollParams {
     pub id: Option<String>,
     pub q: Option<String>,
     pub n: Option<u32>,
+    pub mode: Option<String>,
+    pub skip: Option<u32>,
 }
 
 /// GET /stroll — visual exploration page
@@ -4253,7 +4255,9 @@ pub async fn stroll_page(
             let default_n = state.stroll_neighbors;
             let max_n = state.stroll_neighbors_max;
             let n = params.n.unwrap_or(default_n).clamp(5, max_n);
-            stroll_page_inner(&state, params.id.as_deref(), params.q.as_deref(), n)
+            let mode = params.mode.as_deref().unwrap_or("nearest");
+            let skip = params.skip.unwrap_or(0);
+            stroll_page_inner(&state, params.id.as_deref(), params.q.as_deref(), n, mode, skip)
         }).await;
 
     match result {
@@ -4271,6 +4275,8 @@ fn stroll_page_inner(
     asset_id: Option<&str>,
     query: Option<&str>,
     neighbor_count: u32,
+    mode: &str,
+    skip: u32,
 ) -> Result<StrollPage, String> {
     let catalog = state.catalog().map_err(|e| format!("{e:#}"))?;
     let preview_gen = state.preview_generator();
@@ -4344,8 +4350,13 @@ fn stroll_page_inner(
 
     // Find similar neighbors
     let query_emb = emb_store.get(&center_id, model_id).map_err(|e| format!("{e:#}"))?;
-    // Over-fetch when filtering, to compensate for filtered-out results
-    let fetch_limit = if filter_ids.is_some() { (neighbor_count * 4) as usize } else { neighbor_count as usize };
+    // Compute fetch limit based on mode
+    let base_limit = match mode {
+        "discover" => 80.max(neighbor_count as usize * 6), // large pool for random sampling
+        "explore" => (skip as usize) + (neighbor_count as usize), // skip + take
+        _ => neighbor_count as usize, // nearest: exact count
+    };
+    let fetch_limit = if filter_ids.is_some() { base_limit * 4 } else { base_limit };
     let neighbors = if let Some(emb) = query_emb {
         let spec = crate::ai::get_model_spec(model_id)
             .ok_or_else(|| format!("Unknown model: {model_id}"))?;
@@ -4372,11 +4383,52 @@ fn stroll_page_inner(
             idx.search(&emb, fetch_limit, Some(&center_id))
         };
 
-        let mut neighbors: Vec<StrollNeighbor> = results.into_iter().filter_map(|(id, similarity)| {
-            // Filter by query if active
-            if let Some(ref fids) = filter_ids {
-                if !fids.contains(&id) { return None; }
+        // Apply mode-specific selection before loading full details
+        let selected: Vec<(String, f32)> = match mode {
+            "discover" => {
+                // Filter first, then random-sample from the pool
+                let filtered: Vec<(String, f32)> = if let Some(ref fids) = filter_ids {
+                    results.into_iter().filter(|(id, _)| fids.contains(id)).collect()
+                } else {
+                    results
+                };
+                // Deterministic-ish shuffle using current time as seed
+                let mut pool = filtered;
+                let seed = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64;
+                // Fisher-Yates with simple LCG
+                let mut rng = seed;
+                for i in (1..pool.len()).rev() {
+                    rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    let j = (rng >> 33) as usize % (i + 1);
+                    pool.swap(i, j);
+                }
+                pool.truncate(neighbor_count as usize);
+                pool
             }
+            "explore" => {
+                // Filter first, then skip the nearest, take N
+                let filtered: Vec<(String, f32)> = if let Some(ref fids) = filter_ids {
+                    results.into_iter().filter(|(id, _)| fids.contains(id)).collect()
+                } else {
+                    results
+                };
+                let skip_n = (skip as usize).min(filtered.len());
+                filtered.into_iter().skip(skip_n).take(neighbor_count as usize).collect()
+            }
+            _ => {
+                // Nearest: filter and take N
+                if let Some(ref fids) = filter_ids {
+                    results.into_iter().filter(|(id, _)| fids.contains(id)).take(neighbor_count as usize).collect()
+                } else {
+                    results.into_iter().take(neighbor_count as usize).collect()
+                }
+            }
+        };
+
+        let mut neighbors: Vec<StrollNeighbor> = selected.into_iter().filter_map(|(id, similarity)| {
             let cat = state.catalog().ok()?;
             let d = cat.load_asset_details(&id).ok()??;
             let name = d.name.clone().unwrap_or_else(|| {
@@ -4492,12 +4544,15 @@ pub async fn stroll_neighbors_api(
     };
     let state = state.clone();
     let q = params.q;
+    let mode = params.mode.unwrap_or_default();
+    let skip = params.skip.unwrap_or(0);
     let default_n = state.stroll_neighbors;
     let max_n = state.stroll_neighbors_max;
     let n = params.n.unwrap_or(default_n).clamp(5, max_n);
     let result: Result<Result<serde_json::Value, String>, _> =
         tokio::task::spawn_blocking(move || {
-            let page = stroll_page_inner(&state, Some(&asset_id), q.as_deref(), n)?;
+            let m = if mode.is_empty() { "nearest" } else { &mode };
+            let page = stroll_page_inner(&state, Some(&asset_id), q.as_deref(), n, m, skip)?;
             Ok(serde_json::json!({
                 "center": {
                     "asset_id": page.center.asset_id,

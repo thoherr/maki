@@ -43,10 +43,20 @@
     </div>
 
     <div class="stroll-neighbor-control" id="stroll-neighbor-control">
+        <div class="stroll-mode-selector">
+            <button class="stroll-mode-btn active" data-mode="nearest" title="Show the most similar neighbors">Nearest</button>
+            <button class="stroll-mode-btn" data-mode="discover" title="Random selection from a wider pool — different each time">Discover</button>
+            <button class="stroll-mode-btn" data-mode="explore" title="Skip past the most similar to find more distant connections">Explore</button>
+        </div>
         <label class="stroll-n-label" title="Number of neighbors">
             <span>Neighbors:</span>
             <input type="range" id="stroll-n" min="5" max="{{ stroll_neighbors_max }}" value="{{ neighbor_count }}">
             <span id="stroll-n-val">{{ neighbor_count }}</span>
+        </label>
+        <label class="stroll-n-label stroll-skip-control" title="Skip past this many nearest neighbors" style="display:none;">
+            <span>Skip:</span>
+            <input type="range" id="stroll-skip" min="0" max="200" value="20" step="5">
+            <span id="stroll-skip-val">20</span>
         </label>
         <label class="stroll-n-label" title="Show this many neighbors-of-neighbors per satellite (0 = off)">
             <span>Fan-Out:</span>
@@ -92,6 +102,40 @@ function onFilterChange() {
     var nSlider = document.getElementById('stroll-n');
     var nVal = document.getElementById('stroll-n-val');
     var currentN = parseInt(nSlider.value, 10);
+
+    // Mode selector — restore from URL if present
+    var urlMode = new URLSearchParams(window.location.search).get('mode') || 'nearest';
+    var currentMode = ['nearest', 'discover', 'explore'].indexOf(urlMode) >= 0 ? urlMode : 'nearest';
+    var modeButtons = document.querySelectorAll('.stroll-mode-btn');
+    var skipControl = document.querySelector('.stroll-skip-control');
+    var skipSlider = document.getElementById('stroll-skip');
+    var skipVal = document.getElementById('stroll-skip-val');
+    var urlSkip = new URLSearchParams(window.location.search).get('skip');
+    if (urlSkip) skipSlider.value = urlSkip;
+    var currentSkip = parseInt(skipSlider.value, 10);
+    skipVal.textContent = currentSkip;
+
+    // Set initial active button from URL
+    modeButtons.forEach(function(btn) {
+        btn.classList.toggle('active', btn.dataset.mode === currentMode);
+    });
+    skipControl.style.display = currentMode === 'explore' ? '' : 'none';
+
+    modeButtons.forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            modeButtons.forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            currentMode = btn.dataset.mode;
+            skipControl.style.display = currentMode === 'explore' ? '' : 'none';
+            navigate(centerId);
+        });
+    });
+
+    skipSlider.addEventListener('input', function() { skipVal.textContent = skipSlider.value; });
+    skipSlider.addEventListener('change', function() {
+        currentSkip = parseInt(skipSlider.value, 10);
+        navigate(centerId);
+    });
 
     // Depth slider (level-2 neighbors)
     var depthSlider = document.getElementById('stroll-depth');
@@ -584,11 +628,13 @@ function onFilterChange() {
 
         var currentQuery = window.damFilterQuery ? window.damFilterQuery() : '';
         var apiUrl = '/api/stroll/neighbors?id=' + encodeURIComponent(newId) + '&n=' + currentN;
+        if (currentMode !== 'nearest') apiUrl += '&mode=' + currentMode;
+        if (currentMode === 'explore' && currentSkip > 0) apiUrl += '&skip=' + currentSkip;
         if (currentQuery) apiUrl += '&q=' + encodeURIComponent(currentQuery);
         fetch(apiUrl)
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                history.pushState({ id: newId, n: currentN }, '', strollUrl(newId));
+                history.pushState({ id: newId, n: currentN, mode: currentMode, skip: currentSkip }, '', strollUrl(newId));
 
                 centerId = data.center.asset_id;
                 var centerImg = centerEl.querySelector('img');
@@ -662,6 +708,12 @@ function onFilterChange() {
     window.addEventListener('popstate', function(e) {
         if (e.state && e.state.id) {
             if (e.state.n !== undefined) { currentN = e.state.n; nSlider.value = currentN; nVal.textContent = currentN; }
+            if (e.state.mode) {
+                currentMode = e.state.mode;
+                modeButtons.forEach(function(b) { b.classList.toggle('active', b.dataset.mode === currentMode); });
+                skipControl.style.display = currentMode === 'explore' ? '' : 'none';
+            }
+            if (e.state.skip !== undefined) { currentSkip = e.state.skip; skipSlider.value = currentSkip; skipVal.textContent = currentSkip; }
             navigate(e.state.id);
         }
     });
@@ -671,10 +723,12 @@ function onFilterChange() {
         var q = window.damFilterQuery ? window.damFilterQuery() : '';
         var u = '/stroll?id=' + id;
         if (currentN !== {{ neighbor_count }}) u += '&n=' + currentN;
+        if (currentMode !== 'nearest') u += '&mode=' + currentMode;
+        if (currentMode === 'explore' && currentSkip > 0) u += '&skip=' + currentSkip;
         if (q) u += '&q=' + encodeURIComponent(q);
         return u;
     }
-    history.replaceState({ id: centerId, n: currentN }, '', strollUrl(centerId));
+    history.replaceState({ id: centerId, n: currentN, mode: currentMode, skip: currentSkip }, '', strollUrl(centerId));
 
     // Load smart preview for center
     function loadSmartPreview(img) {

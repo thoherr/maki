@@ -3340,6 +3340,31 @@ body.has-batch-toolbar { padding-bottom: 60px; }
 .stroll-neighbor-control:hover {
     opacity: 1;
 }
+.stroll-mode-selector {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 2px;
+    margin-bottom: 0.2rem;
+}
+.stroll-mode-btn {
+    flex: 1;
+    padding: 3px 8px;
+    font-size: 0.7rem;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    border-radius: 0;
+    transition: background 0.15s, color 0.15s;
+}
+.stroll-mode-btn:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+.stroll-mode-btn:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
+.stroll-mode-btn:hover { background: var(--bg-card); }
+.stroll-mode-btn.active {
+    background: var(--accent, #4a9eff);
+    color: #fff;
+    border-color: var(--accent, #4a9eff);
+}
 .stroll-empty {
     text-align: center;
     padding: 2rem;
