@@ -642,6 +642,9 @@ pub struct StrollPage {
     pub neighbors: Vec<StrollNeighbor>,
     pub query: String,
     pub neighbor_count: u32,
+    pub stroll_neighbors_max: u32,
+    pub stroll_fanout: u32,
+    pub stroll_fanout_max: u32,
     pub ai_enabled: bool,
     // Filter bar data (shared with browse page)
     pub tag: String,

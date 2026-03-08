@@ -45,13 +45,13 @@
     <div class="stroll-neighbor-control" id="stroll-neighbor-control">
         <label class="stroll-n-label" title="Number of neighbors">
             <span>Neighbors:</span>
-            <input type="range" id="stroll-n" min="5" max="25" value="{{ neighbor_count }}">
+            <input type="range" id="stroll-n" min="5" max="{{ stroll_neighbors_max }}" value="{{ neighbor_count }}">
             <span id="stroll-n-val">{{ neighbor_count }}</span>
         </label>
         <label class="stroll-n-label" title="Show this many neighbors-of-neighbors per satellite (0 = off)">
-            <span>Reach:</span>
-            <input type="range" id="stroll-depth" min="0" max="8" value="0">
-            <span id="stroll-depth-val">0</span>
+            <span>Fan-Out:</span>
+            <input type="range" id="stroll-depth" min="0" max="{{ stroll_fanout_max }}" value="{{ stroll_fanout }}">
+            <span id="stroll-depth-val">{{ stroll_fanout }}</span>
         </label>
     </div>
 
@@ -219,7 +219,7 @@ function onFilterChange() {
         // Re-render L2 at new positions if visible
         if (currentDepth > 0 && focusIndex >= 0 && focusIndex < satellites.length) {
             var satId = satellites[focusIndex].dataset.id;
-            if (l2Cache[satId]) renderL2(focusIndex, l2Cache[satId]);
+            if (l2Cache[satId]) renderL2(focusIndex, l2Cache[satId].slice(0, currentDepth));
         }
     });
 
@@ -258,23 +258,24 @@ function onFilterChange() {
         }
     }
 
+    var reachMax = parseInt(depthSlider.max, 10);
+
     function showL2ForSatellite(satIdx) {
         if (currentDepth <= 0) return;
         var sat = satellites[satIdx];
         if (!sat) return;
         var satId = sat.dataset.id;
 
-        // Already have cached data?
+        // Already have cached data with enough entries?
         if (l2Cache[satId]) {
-            renderL2(satIdx, l2Cache[satId]);
+            renderL2(satIdx, l2Cache[satId].slice(0, currentDepth));
             return;
         }
 
-        // Fetch neighbors for this satellite
+        // Fetch max neighbors for this satellite (cache full list)
         l2FetchingFor = satId;
-        var fetchN = currentDepth;
         var currentQuery = window.damFilterQuery ? window.damFilterQuery() : '';
-        var apiUrl = '/api/stroll/neighbors?id=' + encodeURIComponent(satId) + '&n=' + (fetchN + satellites.length + 1);
+        var apiUrl = '/api/stroll/neighbors?id=' + encodeURIComponent(satId) + '&n=' + (reachMax + satellites.length + 1);
         if (currentQuery) apiUrl += '&q=' + encodeURIComponent(currentQuery);
 
         fetch(apiUrl)
@@ -285,11 +286,11 @@ function onFilterChange() {
                 var filtered = data.neighbors.filter(function(n) {
                     return !visible.has(n.asset_id);
                 });
-                filtered = filtered.slice(0, currentDepth);
-                l2Cache[satId] = filtered;
+                // Cache full deduped list, slice at render time
+                l2Cache[satId] = filtered.slice(0, reachMax);
                 // Only render if this satellite is still focused
                 if (focusIndex === satIdx) {
-                    renderL2(satIdx, filtered);
+                    renderL2(satIdx, l2Cache[satId].slice(0, currentDepth));
                 }
             })
             .catch(function() { /* ignore fetch errors for L2 */ });
@@ -611,7 +612,7 @@ function onFilterChange() {
     function strollUrl(id) {
         var q = window.damFilterQuery ? window.damFilterQuery() : '';
         var u = '/stroll?id=' + id;
-        if (currentN !== 12) u += '&n=' + currentN;
+        if (currentN !== {{ neighbor_count }}) u += '&n=' + currentN;
         if (q) u += '&q=' + encodeURIComponent(q);
         return u;
     }

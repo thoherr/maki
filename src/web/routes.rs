@@ -4250,7 +4250,9 @@ pub async fn stroll_page(
     let state = state.clone();
     let result: Result<Result<StrollPage, String>, _> =
         tokio::task::spawn_blocking(move || {
-            let n = params.n.unwrap_or(12).clamp(5, 25);
+            let default_n = state.stroll_neighbors;
+            let max_n = state.stroll_neighbors_max;
+            let n = params.n.unwrap_or(default_n).clamp(5, max_n);
             stroll_page_inner(&state, params.id.as_deref(), params.q.as_deref(), n)
         }).await;
 
@@ -4427,6 +4429,9 @@ fn stroll_page_inner(
         neighbors,
         query: query.unwrap_or("").to_string(),
         neighbor_count,
+        stroll_neighbors_max: state.stroll_neighbors_max,
+        stroll_fanout: state.stroll_fanout,
+        stroll_fanout_max: state.stroll_fanout_max,
         ai_enabled: state.ai_enabled,
         tag: String::new(),
         rating: String::new(),
@@ -4487,7 +4492,9 @@ pub async fn stroll_neighbors_api(
     };
     let state = state.clone();
     let q = params.q;
-    let n = params.n.unwrap_or(12).clamp(5, 25);
+    let default_n = state.stroll_neighbors;
+    let max_n = state.stroll_neighbors_max;
+    let n = params.n.unwrap_or(default_n).clamp(5, max_n);
     let result: Result<Result<serde_json::Value, String>, _> =
         tokio::task::spawn_blocking(move || {
             let page = stroll_page_inner(&state, Some(&asset_id), q.as_deref(), n)?;

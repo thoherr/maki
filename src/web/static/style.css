@@ -3121,17 +3121,18 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     z-index: 10;
 }
 .stroll-n-label {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
+    display: contents;
     font-size: 0.8rem;
     color: var(--text-muted);
     white-space: nowrap;
 }
+.stroll-n-label span:first-child {
+    text-align: right;
+}
 .stroll-n-label input[type="range"] {
     width: 80px;
 }
-#stroll-n-val {
+.stroll-n-label span:last-child {
     min-width: 1.5em;
     text-align: center;
 }
@@ -3329,9 +3330,10 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     padding: 0.4rem 0.8rem;
     opacity: 0.7;
     transition: opacity 0.2s;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
+    display: grid;
+    grid-template-columns: auto auto auto;
+    gap: 0.2rem 0.4rem;
+    align-items: center;
 }
 .stroll-neighbor-control:hover {
     opacity: 1;

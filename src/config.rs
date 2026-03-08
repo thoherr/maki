@@ -83,6 +83,14 @@ pub struct ServeConfig {
     pub bind: String,
     #[serde(default = "default_per_page")]
     pub per_page: u32,
+    #[serde(default = "default_stroll_neighbors")]
+    pub stroll_neighbors: u32,
+    #[serde(default = "default_stroll_neighbors_max")]
+    pub stroll_neighbors_max: u32,
+    #[serde(default = "default_stroll_fanout")]
+    pub stroll_fanout: u32,
+    #[serde(default = "default_stroll_fanout_max")]
+    pub stroll_fanout_max: u32,
 }
 
 fn default_port() -> u16 {
@@ -97,12 +105,32 @@ fn default_per_page() -> u32 {
     60
 }
 
+fn default_stroll_neighbors() -> u32 {
+    12
+}
+
+fn default_stroll_neighbors_max() -> u32 {
+    25
+}
+
+fn default_stroll_fanout() -> u32 {
+    5
+}
+
+fn default_stroll_fanout_max() -> u32 {
+    10
+}
+
 impl Default for ServeConfig {
     fn default() -> Self {
         Self {
             port: 8080,
             bind: "127.0.0.1".to_string(),
             per_page: 60,
+            stroll_neighbors: 12,
+            stroll_neighbors_max: 25,
+            stroll_fanout: 5,
+            stroll_fanout_max: 10,
         }
     }
 }
