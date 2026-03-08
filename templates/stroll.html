@@ -86,6 +86,7 @@ function onFilterChange() {
     var satellites = Array.from(container.querySelectorAll('.stroll-satellite'));
     var focusIndex = -1; // -1 = center focused
     var isNavigating = false;
+    var keyNavUntil = 0; // suppress hover focus briefly after keyboard nav
 
     // Neighbor count slider
     var nSlider = document.getElementById('stroll-n');
@@ -250,7 +251,7 @@ function onFilterChange() {
     function setL2Focus(idx) {
         var sizes = getSizes();
         var l2Size = Math.round(sizes.satSize * 0.6);
-        var l2FocSize = Math.round(sizes.satSize * 0.9);
+        var l2FocSize = Math.round(sizes.satSize * 1.1);
         // Remove old L2 focus
         if (l2FocusIndex >= 0 && l2FocusIndex < l2Elements.length) {
             l2Elements[l2FocusIndex].classList.remove('focused');
@@ -360,7 +361,7 @@ function onFilterChange() {
 
             // Hover and click
             (function(id, idx) {
-                div.addEventListener('mouseenter', function() { setL2Focus(idx); });
+                div.addEventListener('mouseenter', function() { if (!isHoverSuppressed()) setL2Focus(idx); });
                 div.addEventListener('click', function() { navigate(id); });
             })(n.asset_id, i);
 
@@ -437,10 +438,13 @@ function onFilterChange() {
         el.addEventListener('mouseleave', function() { mouseInControls = false; });
     });
 
-    // Mouse hover on satellites
+    // Mouse hover on satellites (suppressed briefly after keyboard nav)
+    function isHoverSuppressed() {
+        return Date.now() < keyNavUntil || mouseInControls;
+    }
     satellites.forEach(function(sat, i) {
         sat.addEventListener('mouseenter', function() {
-            setFocus(i);
+            if (!isHoverSuppressed()) setFocus(i);
         });
         sat.addEventListener('click', function() {
             navigate(sat.dataset.id);
@@ -448,7 +452,7 @@ function onFilterChange() {
     });
 
     centerEl.addEventListener('mouseenter', function() {
-        if (!mouseInControls) setFocus(-1);
+        if (!isHoverSuppressed()) setFocus(-1);
     });
 
     centerEl.addEventListener('click', function() {
@@ -462,6 +466,9 @@ function onFilterChange() {
         if (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
         if (el.tagName === 'INPUT' && el.type !== 'checkbox') return;
         if (isNavigating) return;
+
+        // Suppress hover focus briefly after arrow key navigation
+        if (e.key.startsWith('Arrow')) keyNavUntil = Date.now() + 400;
 
         var n = satellites.length;
 
@@ -625,7 +632,7 @@ function onFilterChange() {
                     div.innerHTML = buildSatelliteHtml(n);
 
                     div.addEventListener('mouseenter', (function(idx) {
-                        return function() { setFocus(idx); };
+                        return function() { if (!isHoverSuppressed()) setFocus(idx); };
                     })(i));
                     div.addEventListener('click', (function(id) {
                         return function() { navigate(id); };
