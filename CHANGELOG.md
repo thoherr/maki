@@ -2,6 +2,15 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v2.3.4 — 2026-03-09
+
+### Enhancements
+- **Shared lightbox component** — lightbox with full rating/label editing is now available on browse, detail, and stroll pages. Extracted as a reusable shared component with items-based API and page-specific callbacks.
+- **Chained detail navigation** — navigating through similar images (detail→similar→detail) now uses `history.back()` for correct back-button behavior at any depth.
+- **Shift+B shortcut** — jump directly to the browse grid from detail, stroll, or compare pages.
+- **Nav menu reorganization** — menu items grouped by function (Explore, Organize, Maintain) with visual separators for clarity.
+- **Updated navigation docs** — state diagram expanded with stroll, compare, shared lightbox, and all navigation paths.
+
 ## v2.3.3 — 2026-03-08
 
 ### New Features
