@@ -932,6 +932,7 @@ pub async fn tags_page(State(state): State<Arc<AppState>>) -> Response {
         let tmpl = TagsPage {
             tags: tree,
             total_tags,
+            ai_enabled: state.ai_enabled,
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
@@ -964,6 +965,7 @@ pub async fn stats_page(State(state): State<Arc<AppState>>) -> Response {
         let tmpl = StatsPage {
             stats,
             total_size_fmt,
+            ai_enabled: state.ai_enabled,
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
@@ -1003,6 +1005,7 @@ pub async fn backup_page(State(state): State<Arc<AppState>>) -> Response {
         let tmpl = BackupPage {
             result: backup,
             total_assets_fmt,
+            ai_enabled: state.ai_enabled,
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
@@ -1776,7 +1779,7 @@ pub async fn collections_page(State(state): State<Arc<AppState>>) -> Response {
         let catalog = state.catalog()?;
         let col_store = crate::collection::CollectionStore::new(catalog.conn());
         let collections = col_store.list()?;
-        let tmpl = super::templates::CollectionsPage { collections };
+        let tmpl = super::templates::CollectionsPage { collections, ai_enabled: state.ai_enabled };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
     .await;
@@ -2088,7 +2091,7 @@ pub async fn saved_searches_page(State(state): State<Arc<AppState>>) -> Response
                 }
             })
             .collect();
-        let tmpl = SavedSearchesPage { searches };
+        let tmpl = SavedSearchesPage { searches, ai_enabled: state.ai_enabled };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
     .await;
@@ -2749,6 +2752,7 @@ pub async fn duplicates_page(
             all_volumes,
             all_formats,
             dedup_prefer,
+            ai_enabled: state.ai_enabled,
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
@@ -2973,7 +2977,7 @@ pub async fn compare_page(
             assets.push(CompareAsset::from_details(&details, purl));
         }
 
-        let tmpl = ComparePage { assets };
+        let tmpl = ComparePage { assets, ai_enabled: state.ai_enabled };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
     .await;

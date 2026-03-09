@@ -2,6 +2,9 @@
 
 {% block title %}Tags — DAM{% endblock %}
 
+{% block nav_explore %}{% if ai_enabled %}<a href="/stroll">Stroll</a>{% endif %}{% endblock %}
+{% block nav_organize %}{% if ai_enabled %}<a href="/people">People</a>{% endif %}{% endblock %}
+
 {% block content %}
 <h1>Tags <span class="muted" id="tag-count">({{ total_tags }})</span></h1>
 

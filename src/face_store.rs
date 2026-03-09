@@ -233,12 +233,33 @@ impl<'a> FaceStore<'a> {
         Ok(results)
     }
 
-    /// Assign a face to a person.
+    /// Assign a face to a person. Auto-sets representative if the person has none.
     pub fn assign_face_to_person(&self, face_id: &str, person_id: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE faces SET person_id = ?1 WHERE id = ?2",
             rusqlite::params![person_id, face_id],
         )?;
+        self.ensure_representative(person_id)?;
+        Ok(())
+    }
+
+    /// Ensure a person has a representative face. If NULL, picks the highest-confidence face.
+    pub fn ensure_representative(&self, person_id: &str) -> Result<()> {
+        let has_rep: bool = self.conn.query_row(
+            "SELECT representative_face_id IS NOT NULL FROM people WHERE id = ?1",
+            rusqlite::params![person_id],
+            |row| row.get(0),
+        ).unwrap_or(false);
+        if !has_rep {
+            let best: Option<String> = self.conn.query_row(
+                "SELECT id FROM faces WHERE person_id = ?1 ORDER BY confidence DESC LIMIT 1",
+                rusqlite::params![person_id],
+                |row| row.get(0),
+            ).ok();
+            if let Some(face_id) = best {
+                self.set_representative_face(person_id, &face_id)?;
+            }
+        }
         Ok(())
     }
 
@@ -290,7 +311,17 @@ impl<'a> FaceStore<'a> {
     }
 
     /// List all people with optional face counts.
+    /// Auto-backfills missing representative faces.
     pub fn list_people(&self) -> Result<Vec<(Person, usize)>> {
+        // Backfill any people missing a representative face
+        self.conn.execute_batch(
+            "UPDATE people SET representative_face_id = (
+                SELECT id FROM faces WHERE faces.person_id = people.id
+                ORDER BY confidence DESC LIMIT 1
+             ) WHERE representative_face_id IS NULL
+               AND EXISTS (SELECT 1 FROM faces WHERE faces.person_id = people.id)"
+        )?;
+
         let mut stmt = self.conn.prepare(
             "SELECT p.id, p.name, p.representative_face_id, p.created_at,
                     (SELECT COUNT(*) FROM faces f WHERE f.person_id = p.id)

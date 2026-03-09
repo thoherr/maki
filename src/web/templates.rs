@@ -212,6 +212,7 @@ pub struct SavedSearchEntry {
 #[template(path = "saved_searches.html")]
 pub struct SavedSearchesPage {
     pub searches: Vec<SavedSearchEntry>,
+    pub ai_enabled: bool,
 }
 
 #[derive(Template)]
@@ -467,6 +468,7 @@ pub struct TagTreeEntry {
 pub struct TagsPage {
     pub tags: Vec<TagTreeEntry>,
     pub total_tags: u64,
+    pub ai_enabled: bool,
 }
 
 #[derive(Template)]
@@ -474,6 +476,7 @@ pub struct TagsPage {
 pub struct StatsPage {
     pub stats: CatalogStats,
     pub total_size_fmt: String,
+    pub ai_enabled: bool,
 }
 
 #[derive(Template)]
@@ -481,6 +484,7 @@ pub struct StatsPage {
 pub struct BackupPage {
     pub result: BackupStatusResult,
     pub total_assets_fmt: String,
+    pub ai_enabled: bool,
 }
 
 #[derive(Template)]
@@ -539,6 +543,7 @@ pub struct DateFragment {
 #[template(path = "collections.html")]
 pub struct CollectionsPage {
     pub collections: Vec<crate::collection::CollectionSummary>,
+    pub ai_enabled: bool,
 }
 
 #[derive(Template)]
@@ -555,6 +560,7 @@ pub struct DuplicatesPage {
     pub all_volumes: Vec<VolumeOption>,
     pub all_formats: Vec<FormatOption>,
     pub dedup_prefer: String,
+    pub ai_enabled: bool,
 }
 
 /// Pre-computed asset data for the compare page.
@@ -626,6 +632,7 @@ impl CompareAsset {
 #[template(path = "compare.html")]
 pub struct ComparePage {
     pub assets: Vec<CompareAsset>,
+    pub ai_enabled: bool,
 }
 
 /// A neighbor asset on the stroll page.
