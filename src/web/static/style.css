@@ -692,6 +692,11 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
     font-size: 0.8rem;
     margin: 0.15rem;
 }
+.tag-chip .tag-link {
+    color: inherit;
+    text-decoration: none;
+}
+.tag-chip .tag-link:hover { text-decoration: underline; }
 .tag-chip .remove-tag {
     background: none;
     border: none;
