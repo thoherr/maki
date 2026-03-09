@@ -10,15 +10,7 @@ use dam::query::QueryEngine;
 
 #[derive(Parser)]
 #[command(name = "dam", about = "Digital Asset Manager", version,
-    after_help = "\
-Quick Reference:
-  Setup:      init, volume
-  Ingest:     import, delete, tag, edit, group, auto-group, auto-tag
-  Organize:   collection (col), saved-search (ss), stack (st)
-  Retrieve:   search, show, export, contact-sheet, duplicates, stats, backup-status, serve
-  Maintain:   verify, sync, refresh, cleanup, dedup, relocate,
-              update-location, generate-previews, fix-roles,
-              fix-dates, rebuild-catalog"
+    after_help = "Use dam --help for grouped overview, or dam <command> --help for details."
 )]
 struct Cli {
     /// Output machine-readable JSON (valid JSON on stdout, messages on stderr)
@@ -95,8 +87,21 @@ enum Commands {
         embed: bool,
     },
 
-    /// Add or remove tags on an asset
+    /// Delete assets from the catalog
     #[command(display_order = 11)]
+    Delete {
+        /// Asset IDs to delete (reads from stdin if empty)
+        asset_ids: Vec<String>,
+        /// Execute deletion (default: report-only)
+        #[arg(long)]
+        apply: bool,
+        /// Also delete physical files from disk (requires --apply)
+        #[arg(long)]
+        remove_files: bool,
+    },
+
+    /// Add or remove tags on an asset
+    #[command(display_order = 12)]
     Tag {
         /// Asset ID
         asset_id: String,
@@ -110,7 +115,7 @@ enum Commands {
     },
 
     /// Edit asset metadata (name, description, rating)
-    #[command(display_order = 12)]
+    #[command(display_order = 13)]
     Edit {
         /// Asset ID (or unique prefix)
         asset_id: String,
@@ -157,14 +162,14 @@ enum Commands {
     },
 
     /// Group variants into one asset
-    #[command(display_order = 13)]
+    #[command(display_order = 14)]
     Group {
         /// Content hashes of variants to group
         variant_hashes: Vec<String>,
     },
 
     /// Split variants out of an asset into new standalone assets
-    #[command(display_order = 14)]
+    #[command(display_order = 15)]
     Split {
         /// Asset ID to split
         asset_id: String,
@@ -173,7 +178,7 @@ enum Commands {
     },
 
     /// Auto-group assets by filename stem
-    #[command(display_order = 15)]
+    #[command(display_order = 16)]
     AutoGroup {
         /// Search query to scope assets (same syntax as dam search)
         query: Option<String>,
@@ -182,22 +187,9 @@ enum Commands {
         apply: bool,
     },
 
-    /// Delete assets from the catalog
-    #[command(display_order = 15)]
-    Delete {
-        /// Asset IDs to delete (reads from stdin if empty)
-        asset_ids: Vec<String>,
-        /// Execute deletion (default: report-only)
-        #[arg(long)]
-        apply: bool,
-        /// Also delete physical files from disk (requires --apply)
-        #[arg(long)]
-        remove_files: bool,
-    },
-
     /// Auto-tag assets using AI vision model (requires --features ai)
     #[cfg(feature = "ai")]
-    #[command(display_order = 16)]
+    #[command(display_order = 17)]
     AutoTag {
         /// Search query to scope assets
         #[arg(long, display_order = 1)]
@@ -250,7 +242,7 @@ enum Commands {
 
     /// Generate embeddings for visual similarity search (requires --features ai)
     #[cfg(feature = "ai")]
-    #[command(display_order = 17)]
+    #[command(display_order = 18)]
     Embed {
         /// Search query to scope assets
         #[arg(long, display_order = 1)]
@@ -279,7 +271,7 @@ enum Commands {
 
     /// Face detection and recognition (requires --features ai)
     #[cfg(feature = "ai")]
-    #[command(subcommand, display_order = 18)]
+    #[command(subcommand, display_order = 19)]
     Faces(FacesCommands),
 
     // --- Organize ---
@@ -1112,7 +1104,106 @@ enum FacesCommands {
     Export,
 }
 
+/// Print custom grouped help text through a pager.
+fn print_custom_help() {
+    let version = env!("CARGO_PKG_VERSION");
+    let ai_note = if cfg!(feature = "ai") { "" } else { "  (build with --features ai for: auto-tag, embed, faces, stroll)" };
+
+    let help = format!("\
+dam {version} — Digital Asset Manager{ai_note}
+
+Usage: dam [OPTIONS] <COMMAND>
+
+Setup:
+  init               Initialize a new catalog in the current directory
+  volume             Manage storage volumes
+
+Ingest & Edit:
+  import             Import files into the catalog
+  delete             Delete assets from the catalog
+  tag                Add or remove tags on an asset
+  edit               Edit asset metadata (name, description, rating, label, date)
+  group              Group variants into one asset
+  split              Split variants out of an asset into new standalone assets
+  auto-group         Auto-group assets by filename stem{auto_tag}{embed}{faces}
+
+Organize:
+  collection         Manage collections (static albums)  [alias: col]
+  saved-search       Manage saved searches (smart albums)  [alias: ss]
+  stack              Manage stacks (scene grouping)  [alias: st]
+
+Retrieve:
+  search             Search assets
+  show               Show asset details
+  export             Export files matching a search query to a directory
+  contact-sheet      Generate a PDF contact sheet from search results
+  duplicates         Find duplicate files
+  stats              Show catalog statistics
+  backup-status      Check backup coverage and find under-backed-up assets
+  serve              Start the web UI server
+
+Maintain:
+  verify             Check file integrity
+  sync               Sync catalog with disk changes (moved/modified/missing files)
+  refresh            Re-read metadata from changed sidecar/recipe files
+  sync-metadata      Bidirectional metadata sync: read XMP changes + write back pending edits
+  writeback          Write back pending metadata changes to XMP recipe files
+  cleanup            Remove stale file location records (files no longer on disk)
+  dedup              Remove same-volume duplicate file locations
+  relocate           Copy or move asset files to another volume
+  update-location    Update a file's catalog path after it was moved on disk
+  generate-previews  Generate or regenerate preview thumbnails
+  fix-roles          Fix variant roles in RAW+non-RAW groups
+  fix-dates          Fix asset dates from EXIF metadata and file timestamps
+  fix-recipes        Re-attach recipe files that were imported as standalone assets
+  rebuild-catalog    Rebuild SQLite catalog from sidecar files
+  migrate            Run database schema migrations
+
+Options:
+      --json         Output machine-readable JSON
+  -l, --log          Log individual file progress
+  -d, --debug        Show debug output from external tools
+  -t, --time         Show elapsed time after command execution
+  -h, --help         Print help (use <command> --help for details)
+  -V, --version      Print version
+",
+        auto_tag = if cfg!(feature = "ai") { "\n  auto-tag           Auto-tag assets using AI vision model" } else { "" },
+        embed = if cfg!(feature = "ai") { "\n  embed              Generate embeddings for visual similarity search" } else { "" },
+        faces = if cfg!(feature = "ai") { "\n  faces              Face detection and recognition" } else { "" },
+    );
+
+    // Pipe through pager if stdout is a terminal
+    if atty_stdout() {
+        if let Ok(mut child) = std::process::Command::new("less")
+            .args(["-FRSX"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            if let Some(ref mut stdin) = child.stdin {
+                use std::io::Write;
+                let _ = stdin.write_all(help.as_bytes());
+            }
+            let _ = child.wait();
+            return;
+        }
+    }
+    print!("{help}");
+}
+
+/// Check if stdout is a terminal.
+fn atty_stdout() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
+}
+
 fn main() {
+    // Intercept top-level --help / -h before clap parses
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() == 2 && (args[1] == "--help" || args[1] == "-h") {
+        print_custom_help();
+        std::process::exit(0);
+    }
+
     let cli = Cli::parse();
     let start = std::time::Instant::now();
 
