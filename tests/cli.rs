@@ -4799,9 +4799,9 @@ fn show_preview_prefers_export_variant() {
     let variants = parsed["variants"].as_array().unwrap();
     assert_eq!(variants.len(), 2, "Should have 2 variants (RAW + JPG)");
 
-    // The JPG should have role "export"
-    let has_export = variants.iter().any(|v| v["role"].as_str() == Some("export"));
-    assert!(has_export, "JPG variant should have export role");
+    // The JPG should have role "alternate" (non-RAW alongside RAW)
+    let has_alternate = variants.iter().any(|v| v["role"].as_str() == Some("alternate"));
+    assert!(has_alternate, "JPG variant should have alternate role");
 
     // dam show should show the JPG's hash in the Preview line (export preferred)
     let jpg_hash = sha256_hex(&jpg_content);

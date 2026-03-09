@@ -901,12 +901,12 @@ impl AssetService {
                         }
                     }
 
-                    // If the primary variant is RAW and this file is not, it's a derivative
+                    // If the primary variant is RAW and this file is not, it's an alternate
                     let primary_is_raw = asset.variants.first()
                         .map(|v| is_raw_extension(&v.format))
                         .unwrap_or(false);
                     let role = if primary_is_raw && !is_raw_extension(ext) {
-                        VariantRole::Export
+                        VariantRole::Alternate
                     } else {
                         VariantRole::Original
                     };
@@ -4579,10 +4579,10 @@ impl AssetService {
 
             if apply {
                 for &idx in &fixable {
-                    asset.variants[idx].role = VariantRole::Export;
+                    asset.variants[idx].role = VariantRole::Alternate;
                     catalog.update_variant_role(
                         &asset.variants[idx].content_hash,
-                        "export",
+                        "alternate",
                     )?;
                 }
                 metadata_store.save(&asset)?;
@@ -6341,9 +6341,9 @@ mod tests {
         // RAW should be first (defines the asset)
         assert_eq!(asset.variants[0].format, "nef");
         assert_eq!(asset.variants[1].format, "jpg");
-        // RAW is original, JPG is a derivative → export
+        // RAW is original, JPG is an alternate
         assert_eq!(asset.variants[0].role, VariantRole::Original);
-        assert_eq!(asset.variants[1].role, VariantRole::Export);
+        assert_eq!(asset.variants[1].role, VariantRole::Alternate);
         assert_eq!(asset.name.as_deref(), Some("DSC_4521"));
     }
 
@@ -7104,10 +7104,10 @@ mod tests {
         assert_eq!(result.already_correct, 0);
         assert!(!result.dry_run);
 
-        // Verify the JPG variant is now Export in sidecar
+        // Verify the JPG variant is now Alternate in sidecar
         let asset = metadata_store.load(summaries[0].id).unwrap();
         let jpg = asset.variants.iter().find(|v| v.format == "jpg").unwrap();
-        assert_eq!(jpg.role, VariantRole::Export);
+        assert_eq!(jpg.role, VariantRole::Alternate);
         // RAW should still be Original
         let raw = asset.variants.iter().find(|v| v.format == "nef").unwrap();
         assert_eq!(raw.role, VariantRole::Original);

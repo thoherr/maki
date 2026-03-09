@@ -11,6 +11,7 @@ use crate::catalog::VariantDetails;
 #[serde(rename_all = "snake_case")]
 pub enum VariantRole {
     Original,
+    Alternate,
     Processed,
     Export,
     Sidecar,
@@ -43,6 +44,7 @@ fn role_score_enum(role: &VariantRole) -> u64 {
         VariantRole::Export => 300,
         VariantRole::Processed => 200,
         VariantRole::Original => 100,
+        VariantRole::Alternate => 50,
         VariantRole::Sidecar => 0,
     }
 }
@@ -52,6 +54,7 @@ fn role_score_str(role: &str) -> u64 {
         "export" => 300,
         "processed" => 200,
         "original" => 100,
+        "alternate" => 50,
         _ => 0,
     }
 }
@@ -63,7 +66,7 @@ fn variant_score(role_score: u64, format: &str, file_size: u64) -> u64 {
 }
 
 /// Return the index of the variant best suited for preview display.
-/// Prefers Export > Processed > Original, image formats over RAW, larger files.
+/// Prefers Export > Processed > Original > Alternate, image formats over RAW, larger files.
 pub fn best_preview_index(variants: &[Variant]) -> Option<usize> {
     if variants.is_empty() {
         return None;
@@ -233,6 +236,34 @@ mod tests {
             make_variant(VariantRole::Export, "jpg", 10_000_000),
         ];
         assert_eq!(best_preview_index(&variants), Some(1));
+    }
+
+    #[test]
+    fn best_preview_prefers_original_over_alternate() {
+        let variants = vec![
+            make_variant(VariantRole::Alternate, "jpg", 5_000_000),
+            make_variant(VariantRole::Original, "nef", 25_000_000),
+        ];
+        assert_eq!(best_preview_index(&variants), Some(1));
+    }
+
+    #[test]
+    fn best_preview_alternate_over_sidecar() {
+        let variants = vec![
+            make_variant(VariantRole::Sidecar, "xmp", 1_000),
+            make_variant(VariantRole::Alternate, "jpg", 5_000_000),
+        ];
+        assert_eq!(best_preview_index(&variants), Some(1));
+    }
+
+    #[test]
+    fn best_preview_details_alternate_score() {
+        let variants = vec![
+            make_details("alternate", "jpg", 5_000_000),
+            make_details("original", "nef", 25_000_000),
+        ];
+        // Original (100) > Alternate (50+50 format bonus) — both score 100, but original has larger file
+        assert_eq!(best_preview_index_details(&variants), Some(1));
     }
 
     #[test]

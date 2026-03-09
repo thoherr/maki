@@ -945,7 +945,7 @@ impl QueryEngine {
                 moved_variant.asset_id = target_id;
                 // Donor's "original" variants become exports in the target asset
                 if moved_variant.role == crate::models::VariantRole::Original {
-                    moved_variant.role = crate::models::VariantRole::Export;
+                    moved_variant.role = crate::models::VariantRole::Alternate;
                 }
                 target.variants.push(moved_variant);
                 variants_moved += 1;
@@ -975,7 +975,7 @@ impl QueryEngine {
                 )?;
                 // Re-role originals to exports in the catalog too
                 if variant.role == crate::models::VariantRole::Original {
-                    catalog.update_variant_role(&variant.content_hash, "export")?;
+                    catalog.update_variant_role(&variant.content_hash, "alternate")?;
                 }
             }
 
@@ -1077,7 +1077,7 @@ impl QueryEngine {
                 let mut moved_variant = variant.clone();
                 moved_variant.asset_id = target_uuid;
                 if moved_variant.role == crate::models::VariantRole::Original {
-                    moved_variant.role = crate::models::VariantRole::Export;
+                    moved_variant.role = crate::models::VariantRole::Alternate;
                 }
                 target.variants.push(moved_variant);
                 variants_moved += 1;
@@ -1105,7 +1105,7 @@ impl QueryEngine {
                     &target_uuid.to_string(),
                 )?;
                 if variant.role == crate::models::VariantRole::Original {
-                    catalog.update_variant_role(&variant.content_hash, "export")?;
+                    catalog.update_variant_role(&variant.content_hash, "alternate")?;
                 }
             }
 
@@ -2505,11 +2505,11 @@ mod tests {
         let details = engine.show(&id1).unwrap();
         assert_eq!(details.variants.len(), 2);
 
-        // Original variant keeps its role, donor variant becomes export
+        // Original variant keeps its role, donor variant becomes alternate
         let original = details.variants.iter().find(|v| v.content_hash == "sha256:hash1").unwrap();
         assert_eq!(original.role, "original");
         let moved = details.variants.iter().find(|v| v.content_hash == "sha256:hash2").unwrap();
-        assert_eq!(moved.role, "export");
+        assert_eq!(moved.role, "alternate");
 
         // Donor should be gone
         assert!(engine.show(&id2).is_err());
