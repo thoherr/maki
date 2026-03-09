@@ -270,7 +270,7 @@ pub enum CleanupStatus {
     Stale,
     Offline,
     OrphanedAsset,
-    OrphanedPreview,
+    OrphanedFile,
 }
 
 /// Result of an update-location operation.
@@ -631,7 +631,7 @@ fn scan_orphaned_sharded_files(
                         ));
                     } else {
                         *removed += 1;
-                        on_file(&path, CleanupStatus::OrphanedPreview, file_start.elapsed());
+                        on_file(&path, CleanupStatus::OrphanedFile, file_start.elapsed());
                     }
                 }
             }

@@ -1201,11 +1201,11 @@ fn main() {
                                     let name = path.to_str().unwrap_or("?");
                                     eprintln!("  {} — orphaned asset removed ({})", name, format_duration(elapsed));
                                 }
-                                CleanupStatus::OrphanedPreview => {
+                                CleanupStatus::OrphanedFile => {
                                     let name = path.file_name()
                                         .and_then(|n| n.to_str())
                                         .unwrap_or_else(|| path.to_str().unwrap_or("?"));
-                                    eprintln!("  {} — orphaned preview removed ({})", name, format_duration(elapsed));
+                                    eprintln!("  {} — orphaned file removed ({})", name, format_duration(elapsed));
                                 }
                                 _ => {}
                             }
@@ -3615,11 +3615,11 @@ fn main() {
                                 let name = path.to_str().unwrap_or("?");
                                 eprintln!("  {} — orphaned asset removed ({})", name, format_duration(elapsed));
                             }
-                            CleanupStatus::OrphanedPreview => {
+                            CleanupStatus::OrphanedFile => {
                                 let name = path.file_name()
                                     .and_then(|n| n.to_str())
                                     .unwrap_or_else(|| path.to_str().unwrap_or("?"));
-                                eprintln!("  {} — orphaned preview removed ({})", name, format_duration(elapsed));
+                                eprintln!("  {} — orphaned file removed ({})", name, format_duration(elapsed));
                             }
                             _ => {}
                         }
