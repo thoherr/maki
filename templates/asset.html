@@ -789,10 +789,12 @@
             return;
         }
 
-        // Escape: go back
+        // Escape: go back (deferred to let keyup complete on this page)
         if (e.key === 'Escape') {
+            if (document.fullscreenElement || document.webkitFullscreenElement) return;
             e.preventDefault();
-            history.back();
+            e.stopImmediatePropagation();
+            setTimeout(function() { history.back(); }, 150);
             return;
         }
 
