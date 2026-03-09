@@ -943,7 +943,7 @@ impl QueryEngine {
             for variant in &donor.variants {
                 let mut moved_variant = variant.clone();
                 moved_variant.asset_id = target_id;
-                // Donor's "original" variants become exports in the target asset
+                // Donor's "original" variants become alternates in the target asset
                 if moved_variant.role == crate::models::VariantRole::Original {
                     moved_variant.role = crate::models::VariantRole::Alternate;
                 }

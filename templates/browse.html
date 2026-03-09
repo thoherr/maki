@@ -832,7 +832,7 @@ window.triggerSearch = onFilterChange;
         var focusedId = (window.damKeyNav && window.damKeyNav.getFocusedId) ? window.damKeyNav.getFocusedId() : null;
         var targetDesc = focusedId && selected.has(focusedId) ? 'focused asset' : 'oldest asset';
         var targetId = focusedId && selected.has(focusedId) ? focusedId : null;
-        if (!confirm('Merge ' + selected.size + ' selected assets into one (' + targetDesc + ' becomes the target)? Donor variants become exports. This cannot be undone.')) return;
+        if (!confirm('Merge ' + selected.size + ' selected assets into one (' + targetDesc + ' becomes the target)? Donor variants become alternates. This cannot be undone.')) return;
         setButtonsBusy(true);
         var payload = {asset_ids: Array.from(selected)};
         if (targetId) payload.target_id = targetId;
