@@ -519,7 +519,6 @@ pub fn generate_contact_sheet(
             page_w,
             title_text,
             query,
-            page_idx,
         );
 
         // Draw footer
@@ -800,7 +799,6 @@ fn draw_header(
     page_w: u32,
     title: &str,
     query: &str,
-    page_idx: usize,
 ) {
     let header_h = mm_to_px(HEADER_HEIGHT_MM);
     let y = margin as i32;
@@ -846,7 +844,7 @@ fn draw_footer(
     // Left: branding + version + date
     let version = env!("CARGO_PKG_VERSION");
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let left_text = format!("dam v{} \u{2022} {}", version, date);
+    let left_text = format!("dam {} \u{2022} {}", version, date);
     draw_text_mut(img, DIM_COLOR, margin as i32 + 10, text_y, scale, font, &left_text);
 
     // Center: copyright text (if provided)
