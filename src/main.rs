@@ -15,7 +15,7 @@ Quick Reference:
   Setup:      init, volume
   Ingest:     import, delete, tag, edit, group, auto-group, auto-tag
   Organize:   collection (col), saved-search (ss), stack (st)
-  Retrieve:   search, show, export, duplicates, stats, backup-status, serve
+  Retrieve:   search, show, export, contact-sheet, duplicates, stats, backup-status, serve
   Maintain:   verify, sync, refresh, cleanup, dedup, relocate,
               update-location, generate-previews, fix-roles,
               fix-dates, rebuild-catalog"
@@ -340,6 +340,72 @@ enum Commands {
         /// Filter to entries with a location under this path prefix
         #[arg(long, display_order = 14)]
         path: Option<String>,
+    },
+
+    /// Generate a PDF contact sheet from search results
+    #[command(display_order = 35)]
+    ContactSheet {
+        /// Search query (same syntax as dam search)
+        query: String,
+
+        /// Output PDF file path
+        output: String,
+
+        /// Layout preset: dense, standard, large
+        #[arg(long, default_value = "standard")]
+        layout: String,
+
+        /// Number of columns (overrides layout preset)
+        #[arg(long)]
+        columns: Option<u32>,
+
+        /// Number of rows per page (overrides layout preset)
+        #[arg(long)]
+        rows: Option<u32>,
+
+        /// Paper size: a4, letter, a3
+        #[arg(long, default_value = "a4")]
+        paper: String,
+
+        /// Use landscape orientation
+        #[arg(long)]
+        landscape: bool,
+
+        /// Title printed on first page header
+        #[arg(long)]
+        title: Option<String>,
+
+        /// Comma-separated metadata fields below each thumbnail
+        #[arg(long)]
+        fields: Option<String>,
+
+        /// Override sort order: date, name, rating, filename
+        #[arg(long)]
+        sort: Option<String>,
+
+        /// Use regular previews (800px) instead of smart previews (default: smart with fallback)
+        #[arg(long)]
+        no_smart: bool,
+
+        /// Group by field with section headers: date, volume, collection, label
+        #[arg(long)]
+        group_by: Option<String>,
+
+        /// Page margin in mm
+        #[arg(long)]
+        margin: Option<f32>,
+
+        /// Color label rendering style: border, dot, none
+        #[arg(long)]
+        label_style: Option<String>,
+
+        /// JPEG quality for page images (1-100)
+        #[arg(long)]
+        quality: Option<u8>,
+
+        /// Report page count and asset count without generating
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Export files matching a search query to a directory
@@ -4557,6 +4623,119 @@ fn main() {
             rt.block_on(dam::web::serve(catalog_root, &bind, port, config.preview, cli.log, config.dedup.prefer, config.serve.per_page, config.serve.stroll_neighbors, config.serve.stroll_neighbors_max, config.serve.stroll_fanout, config.serve.stroll_fanout_max, config.serve.stroll_discover_pool, config.ai))?;
             #[cfg(not(feature = "ai"))]
             rt.block_on(dam::web::serve(catalog_root, &bind, port, config.preview, cli.log, config.dedup.prefer, config.serve.per_page, config.serve.stroll_neighbors, config.serve.stroll_neighbors_max, config.serve.stroll_fanout, config.serve.stroll_fanout_max, config.serve.stroll_discover_pool))?;
+            Ok(())
+        }
+        Commands::ContactSheet {
+            query,
+            output,
+            layout,
+            columns,
+            rows,
+            paper,
+            landscape,
+            title,
+            fields,
+            sort,
+            no_smart,
+            group_by,
+            margin,
+            label_style,
+            quality,
+            dry_run,
+        } => {
+            use dam::contact_sheet::{
+                generate_contact_sheet, ContactSheetConfig, ContactSheetLayout,
+                ContactSheetStatus, GroupByField, LabelStyle, MetadataField, PaperSize,
+            };
+
+            let catalog_root = dam::config::find_catalog_root()?;
+            let config = CatalogConfig::load(&catalog_root)?;
+            let cs_defaults = &config.contact_sheet;
+
+            let cs_layout: ContactSheetLayout = layout.parse()?;
+            let cs_paper: PaperSize = paper.parse()?;
+
+            let cs_fields = if let Some(ref f) = fields {
+                let parsed: Vec<MetadataField> = f
+                    .split(',')
+                    .map(|s| s.trim().parse::<MetadataField>())
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Some(parsed)
+            } else if cs_defaults.fields != "filename,date,rating" {
+                let parsed: Vec<MetadataField> = cs_defaults
+                    .fields
+                    .split(',')
+                    .map(|s| s.trim().parse::<MetadataField>())
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Some(parsed)
+            } else {
+                None // Use layout preset default
+            };
+
+            let cs_group_by = group_by
+                .map(|g| g.parse::<GroupByField>())
+                .transpose()?;
+
+            let cs_label_style: LabelStyle = label_style
+                .unwrap_or_else(|| cs_defaults.label_style.clone())
+                .parse()?;
+
+            let cs_quality = quality.unwrap_or(cs_defaults.quality);
+            let cs_margin = margin.unwrap_or(cs_defaults.margin);
+
+            let cs_config = ContactSheetConfig {
+                layout: cs_layout,
+                columns,
+                rows,
+                paper: cs_paper,
+                landscape,
+                title,
+                fields: cs_fields,
+                sort,
+                use_smart_previews: !no_smart,
+                group_by: cs_group_by,
+                margin_mm: cs_margin,
+                label_style: cs_label_style,
+                quality: cs_quality,
+            };
+
+            let output_path = PathBuf::from(&output);
+            let show_log = cli.log;
+
+            let result = generate_contact_sheet(
+                &catalog_root,
+                &query,
+                &output_path,
+                &cs_config,
+                dry_run,
+                |msg, status, elapsed| {
+                    if show_log || matches!(status, ContactSheetStatus::Complete) {
+                        match status {
+                            ContactSheetStatus::Rendering => {
+                                eprintln!("  {} ({})", msg, format_duration(elapsed));
+                            }
+                            ContactSheetStatus::Complete => {
+                                if !cli.json {
+                                    eprintln!("{}", msg);
+                                }
+                            }
+                            ContactSheetStatus::Error => {
+                                eprintln!("  Error: {}", msg);
+                            }
+                        }
+                    }
+                },
+            )?;
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else if !dry_run {
+                println!(
+                    "Contact sheet: {} assets, {} pages → {}",
+                    result.assets, result.pages, result.output,
+                );
+            }
+
             Ok(())
         }
         Commands::Export {

@@ -2,6 +2,7 @@ pub mod asset_service;
 pub mod catalog;
 pub mod collection;
 pub mod config;
+pub mod contact_sheet;
 pub mod content_store;
 pub mod device_registry;
 pub mod embedded_xmp;

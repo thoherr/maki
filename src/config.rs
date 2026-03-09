@@ -250,6 +250,47 @@ fn is_default_ai(a: &AiConfig) -> bool {
     *a == AiConfig::default()
 }
 
+/// Contact sheet default configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContactSheetDefaults {
+    #[serde(default = "default_cs_layout")]
+    pub layout: String,
+    #[serde(default = "default_cs_paper")]
+    pub paper: String,
+    #[serde(default = "default_cs_fields")]
+    pub fields: String,
+    #[serde(default = "default_cs_margin")]
+    pub margin: f32,
+    #[serde(default = "default_cs_quality")]
+    pub quality: u8,
+    #[serde(default = "default_cs_label_style")]
+    pub label_style: String,
+}
+
+fn default_cs_layout() -> String { "standard".to_string() }
+fn default_cs_paper() -> String { "a4".to_string() }
+fn default_cs_fields() -> String { "filename,date,rating".to_string() }
+fn default_cs_margin() -> f32 { 10.0 }
+fn default_cs_quality() -> u8 { 90 }
+fn default_cs_label_style() -> String { "border".to_string() }
+
+impl Default for ContactSheetDefaults {
+    fn default() -> Self {
+        Self {
+            layout: "standard".to_string(),
+            paper: "a4".to_string(),
+            fields: "filename,date,rating".to_string(),
+            margin: 10.0,
+            quality: 90,
+            label_style: "border".to_string(),
+        }
+    }
+}
+
+fn is_default_contact_sheet(c: &ContactSheetDefaults) -> bool {
+    *c == ContactSheetDefaults::default()
+}
+
 /// Catalog configuration stored in dam.toml.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogConfig {
@@ -267,6 +308,8 @@ pub struct CatalogConfig {
     pub verify: VerifyConfig,
     #[serde(default, skip_serializing_if = "is_default_ai")]
     pub ai: AiConfig,
+    #[serde(default, skip_serializing_if = "is_default_contact_sheet")]
+    pub contact_sheet: ContactSheetDefaults,
 }
 
 impl Default for CatalogConfig {
@@ -279,6 +322,7 @@ impl Default for CatalogConfig {
             dedup: DedupConfig::default(),
             verify: VerifyConfig::default(),
             ai: AiConfig::default(),
+            contact_sheet: ContactSheetDefaults::default(),
         }
     }
 }
@@ -494,6 +538,7 @@ max_edge = 1000
             dedup: DedupConfig::default(),
             verify: VerifyConfig::default(),
             ai: AiConfig::default(),
+            contact_sheet: ContactSheetDefaults::default(),
         };
         let toml_str = toml::to_string_pretty(&original).unwrap();
         let parsed: CatalogConfig = toml::from_str(&toml_str).unwrap();
@@ -640,6 +685,7 @@ max_edge = 1000
             dedup: DedupConfig::default(),
             verify: VerifyConfig::default(),
             ai: AiConfig::default(),
+            contact_sheet: ContactSheetDefaults::default(),
         };
         original.save(dir.path()).unwrap();
         let loaded = CatalogConfig::load(dir.path()).unwrap();

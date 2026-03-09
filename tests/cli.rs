@@ -8848,3 +8848,172 @@ fn sync_metadata_json_output() {
     assert_eq!(parsed["conflicts"], 0);
     assert_eq!(parsed["dry_run"], false);
 }
+
+// ── Contact sheet tests ─────────────────────────────────────────────────────
+
+#[test]
+fn contact_sheet_generates_pdf() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "cs_test.jpg", b"contact sheet image");
+    dam()
+        .current_dir(&root)
+        .args(["import", root.join("cs_test.jpg").to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dir.path().join("output.pdf");
+    dam()
+        .current_dir(&root)
+        .args([
+            "contact-sheet",
+            "cs_test",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 assets"));
+
+    assert!(output.exists());
+    let data = std::fs::read(&output).unwrap();
+    assert!(data.starts_with(b"%PDF"), "Output should be a valid PDF");
+}
+
+#[test]
+fn contact_sheet_dry_run() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "cs_dry.jpg", b"dry run image");
+    dam()
+        .current_dir(&root)
+        .args(["import", root.join("cs_dry.jpg").to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dir.path().join("dry.pdf");
+    dam()
+        .current_dir(&root)
+        .args([
+            "contact-sheet",
+            "cs_dry",
+            output.to_str().unwrap(),
+            "--dry-run",
+        ])
+        .assert()
+        .success();
+
+    assert!(!output.exists(), "Dry run should not create the PDF");
+}
+
+#[test]
+fn contact_sheet_json_output() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "cs_json.jpg", b"json image");
+    dam()
+        .current_dir(&root)
+        .args(["import", root.join("cs_json.jpg").to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dir.path().join("json.pdf");
+    let cmd = dam()
+        .current_dir(&root)
+        .args([
+            "contact-sheet",
+            "cs_json",
+            output.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&cmd.get_output().stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["assets"], 1);
+    assert_eq!(parsed["pages"], 1);
+    assert_eq!(parsed["layout"], "standard");
+    assert_eq!(parsed["paper"], "a4");
+    assert_eq!(parsed["dry_run"], false);
+}
+
+#[test]
+fn contact_sheet_zero_results_errors() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let output = dir.path().join("empty.pdf");
+    dam()
+        .current_dir(&root)
+        .args([
+            "contact-sheet",
+            "nonexistent:true",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+
+    assert!(!output.exists());
+}
+
+#[test]
+fn contact_sheet_layout_options() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "cs_opts.jpg", b"layout test");
+    dam()
+        .current_dir(&root)
+        .args(["import", root.join("cs_opts.jpg").to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dir.path().join("opts.pdf");
+    dam()
+        .current_dir(&root)
+        .args([
+            "contact-sheet",
+            "cs_opts",
+            output.to_str().unwrap(),
+            "--layout", "dense",
+            "--landscape",
+            "--paper", "a3",
+            "--title", "Test Sheet",
+            "--fields", "filename,rating",
+            "--label-style", "dot",
+        ])
+        .assert()
+        .success();
+
+    assert!(output.exists());
+}
+
+#[test]
+fn contact_sheet_dry_run_json() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "cs_drj.jpg", b"dry run json");
+    dam()
+        .current_dir(&root)
+        .args(["import", root.join("cs_drj.jpg").to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = dir.path().join("drj.pdf");
+    let cmd = dam()
+        .current_dir(&root)
+        .args([
+            "contact-sheet",
+            "cs_drj",
+            output.to_str().unwrap(),
+            "--dry-run",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&cmd.get_output().stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["dry_run"], true);
+    assert_eq!(parsed["assets"], 1);
+    assert!(!output.exists());
+}
