@@ -340,6 +340,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::post(routes::batch_auto_group),
         )
         .route(
+            "/api/batch/group",
+            axum::routing::post(routes::batch_group),
+        )
+        .route(
             "/api/batch/stack",
             axum::routing::post(routes::batch_create_stack)
                 .delete(routes::batch_unstack),

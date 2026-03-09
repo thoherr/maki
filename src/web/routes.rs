@@ -1957,6 +1957,38 @@ pub async fn batch_auto_group(
     }
 }
 
+#[derive(serde::Deserialize)]
+pub struct BatchGroupRequest {
+    pub asset_ids: Vec<String>,
+    pub target_id: Option<String>,
+}
+
+/// POST /api/batch/group — merge selected assets into one.
+pub async fn batch_group(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BatchGroupRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let engine = state.query_engine();
+        let result = engine.group_by_asset_ids(&req.asset_ids, req.target_id.as_deref())?;
+        Ok::<_, anyhow::Error>(serde_json::json!({
+            "target_id": result.target_id,
+            "variants_moved": result.variants_moved,
+            "donors_removed": result.donors_removed,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
 // --- Stack batch operations ---
 
 #[derive(serde::Deserialize)]

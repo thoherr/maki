@@ -91,6 +91,7 @@
         <button class="batch-btn" id="batch-add-collection" style="display:none">+ Collection</button>
         <button class="batch-btn batch-btn-danger" id="batch-remove-collection" style="display:none">&minus; Collection</button>
         <span class="batch-sep"></span>
+        <button class="batch-btn" id="batch-group">Group</button>
         <button class="batch-btn" id="batch-auto-group">Group by name</button>
         <span class="batch-sep"></span>
         <button class="batch-btn" id="batch-stack">Stack</button>
@@ -825,6 +826,33 @@ window.triggerSearch = onFilterChange;
         .finally(function() { setButtonsBusy(false); });
     });
 
+    // Batch group — merge selected assets into one
+    document.getElementById('batch-group').addEventListener('click', function() {
+        if (selected.size < 2 || batchBusy) return;
+        var focusedId = (window.damKeyNav && window.damKeyNav.getFocusedId) ? window.damKeyNav.getFocusedId() : null;
+        var targetDesc = focusedId && selected.has(focusedId) ? 'focused asset' : 'oldest asset';
+        var targetId = focusedId && selected.has(focusedId) ? focusedId : null;
+        if (!confirm('Merge ' + selected.size + ' selected assets into one (' + targetDesc + ' becomes the target)? Donor variants become exports. This cannot be undone.')) return;
+        setButtonsBusy(true);
+        var payload = {asset_ids: Array.from(selected)};
+        if (targetId) payload.target_id = targetId;
+        fetch('/api/batch/group', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        })
+        .then(function(r) {
+            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            return r.json();
+        })
+        .then(function(data) {
+            clearSelection();
+            refreshResults();
+        })
+        .catch(function(err) { alert('Group failed: ' + err.message); })
+        .finally(function() { setButtonsBusy(false); });
+    });
+
     // Batch auto-group by filename stem
     document.getElementById('batch-auto-group').addEventListener('click', function() {
         if (selected.size === 0 || batchBusy) return;
@@ -1384,7 +1412,8 @@ window.triggerSearch = onFilterChange;
                     return;
                 }
             }
-        }
+        },
+        getFocusedId: getFocusedId
     };
 
     // Restore focus on fresh page load (non-bfcache back-nav)

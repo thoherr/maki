@@ -1004,6 +1004,131 @@ impl QueryEngine {
         })
     }
 
+    /// Group assets by their IDs into a single asset.
+    ///
+    /// If `target_id` is provided, that asset becomes the merge target
+    /// (must be one of the `asset_ids`). Otherwise the oldest asset wins.
+    pub fn group_by_asset_ids(
+        &self,
+        asset_ids: &[String],
+        target_id: Option<&str>,
+    ) -> Result<GroupResult> {
+        if asset_ids.len() < 2 {
+            anyhow::bail!("Need at least 2 assets to group");
+        }
+
+        if let Some(tid) = target_id {
+            if !asset_ids.iter().any(|id| id == tid) {
+                anyhow::bail!("Target asset '{}' is not in the selected assets", tid);
+            }
+        }
+
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let store = MetadataStore::new(&self.catalog_root);
+
+        // Deduplicate
+        let unique_ids: Vec<String> = {
+            let mut seen = HashSet::new();
+            asset_ids
+                .iter()
+                .filter(|id| seen.insert((*id).clone()))
+                .cloned()
+                .collect()
+        };
+
+        if unique_ids.len() < 2 {
+            return Ok(GroupResult {
+                target_id: unique_ids.into_iter().next().unwrap(),
+                variants_moved: 0,
+                donors_removed: 0,
+            });
+        }
+
+        // Load all assets from sidecar
+        let mut assets: Vec<crate::models::Asset> = unique_ids
+            .iter()
+            .map(|id| {
+                let uuid: uuid::Uuid = id.parse()?;
+                store.load(uuid)
+            })
+            .collect::<Result<_>>()?;
+
+        // Pick target: explicit or oldest
+        let target_idx = if let Some(tid) = target_id {
+            assets
+                .iter()
+                .position(|a| a.id.to_string() == tid)
+                .unwrap()
+        } else {
+            assets.sort_by_key(|a| a.created_at);
+            0
+        };
+
+        let mut target = assets.remove(target_idx);
+        let target_uuid = target.id;
+        let donors = assets;
+
+        // Merge variants, tags, recipes from donors into target
+        let mut variants_moved = 0;
+        let mut all_tags: HashSet<String> = target.tags.iter().cloned().collect();
+
+        for donor in &donors {
+            for variant in &donor.variants {
+                let mut moved_variant = variant.clone();
+                moved_variant.asset_id = target_uuid;
+                if moved_variant.role == crate::models::VariantRole::Original {
+                    moved_variant.role = crate::models::VariantRole::Export;
+                }
+                target.variants.push(moved_variant);
+                variants_moved += 1;
+            }
+            for tag in &donor.tags {
+                if all_tags.insert(tag.clone()) {
+                    target.tags.push(tag.clone());
+                }
+            }
+            for recipe in &donor.recipes {
+                target.recipes.push(recipe.clone());
+            }
+        }
+
+        // Save target and update catalog
+        store.save(&target)?;
+        catalog.insert_asset(&target)?;
+
+        for donor in &donors {
+            let donor_id = donor.id.to_string();
+
+            for variant in &donor.variants {
+                catalog.update_variant_asset_id(
+                    &variant.content_hash,
+                    &target_uuid.to_string(),
+                )?;
+                if variant.role == crate::models::VariantRole::Original {
+                    catalog.update_variant_role(&variant.content_hash, "export")?;
+                }
+            }
+
+            let _ = catalog.delete_collection_memberships_for_asset(&donor_id);
+            let _ = catalog.delete_recipes_for_asset(&donor_id);
+            let _ = catalog.delete_file_locations_for_asset(&donor_id);
+            let _ = catalog.delete_variants_for_asset(&donor_id);
+            let _ = catalog.conn().execute(
+                "DELETE FROM faces WHERE asset_id = ?1",
+                rusqlite::params![donor_id],
+            );
+
+            store.delete(donor.id)?;
+            catalog.delete_asset(&donor_id)?;
+        }
+
+        Ok(GroupResult {
+            target_id: target_uuid.to_string(),
+            variants_moved,
+            donors_removed: donors.len(),
+        })
+    }
+
     /// Auto-group assets by filename stem using fuzzy prefix matching.
     ///
     /// Two stems match if the shorter is a prefix of the longer and the next
