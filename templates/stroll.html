@@ -672,8 +672,9 @@ function onFilterChange() {
                 if (document.fullscreenElement || document.webkitFullscreenElement) break;
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                // Defer navigation so the Escape key event fully completes
-                // on this page before bfcache restores the previous page
+                // Defer navigation until after keyup fires (~50-100ms) so the
+                // Escape release event completes on this page, not on the
+                // bfcache-restored browse page (which would exit fullscreen)
                 setTimeout(function() {
                     if (strollHistoryDepth > 0) {
                         strollHistoryDepth--;
@@ -681,7 +682,7 @@ function onFilterChange() {
                     } else {
                         window.history.back();
                     }
-                }, 0);
+                }, 150);
                 break;
             case 'B':
                 if (e.shiftKey) {
