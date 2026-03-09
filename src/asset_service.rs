@@ -295,6 +295,12 @@ pub struct CleanupResult {
     pub removed_assets: usize,
     pub orphaned_previews: usize,
     pub removed_previews: usize,
+    pub orphaned_smart_previews: usize,
+    pub removed_smart_previews: usize,
+    pub orphaned_embeddings: usize,
+    pub removed_embeddings: usize,
+    pub orphaned_face_files: usize,
+    pub removed_face_files: usize,
     pub errors: Vec<String>,
 }
 
@@ -579,6 +585,58 @@ pub struct AssetService {
     catalog_root: PathBuf,
     debug: bool,
     preview_config: crate::config::PreviewConfig,
+}
+
+/// Walk a sharded directory (`dir/<prefix>/<id>.<ext>`) and find files whose stem
+/// is not in the valid set. Counts orphaned/removed and optionally deletes.
+fn scan_orphaned_sharded_files(
+    dir: &Path,
+    is_valid: impl Fn(&str) -> bool,
+    apply: bool,
+    orphaned: &mut usize,
+    removed: &mut usize,
+    errors: &mut Vec<String>,
+    on_file: &impl Fn(&Path, CleanupStatus, Duration),
+) {
+    if !dir.is_dir() {
+        return;
+    }
+    let Ok(shard_entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for shard_entry in shard_entries.flatten() {
+        if !shard_entry.path().is_dir() {
+            continue;
+        }
+        let Ok(file_entries) = std::fs::read_dir(shard_entry.path()) else {
+            continue;
+        };
+        for file_entry in file_entries.flatten() {
+            let path = file_entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if stem.is_empty() {
+                continue;
+            }
+            if !is_valid(stem) {
+                *orphaned += 1;
+                if apply {
+                    let file_start = Instant::now();
+                    if let Err(e) = std::fs::remove_file(&path) {
+                        errors.push(format!(
+                            "Failed to remove orphaned file {}: {e}",
+                            path.display()
+                        ));
+                    } else {
+                        *removed += 1;
+                        on_file(&path, CleanupStatus::OrphanedPreview, file_start.elapsed());
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl AssetService {
@@ -2612,6 +2670,9 @@ impl AssetService {
 
     /// Scan all file locations and recipes across online volumes, checking for files
     /// that no longer exist on disk. Optionally remove stale records.
+    ///
+    /// Also scans for orphaned derived files (previews, smart previews, embeddings,
+    /// face crops) and removes them.
     pub fn cleanup(
         &self,
         volume_filter: Option<&str>,
@@ -2631,6 +2692,12 @@ impl AssetService {
             removed_assets: 0,
             orphaned_previews: 0,
             removed_previews: 0,
+            orphaned_smart_previews: 0,
+            removed_smart_previews: 0,
+            orphaned_embeddings: 0,
+            removed_embeddings: 0,
+            orphaned_face_files: 0,
+            removed_face_files: 0,
             errors: Vec::new(),
         };
 
@@ -2748,15 +2815,37 @@ impl AssetService {
 
         if apply {
             let stack_store = crate::stack::StackStore::new(catalog.conn());
+            let preview_gen = crate::preview::PreviewGenerator::new(
+                &self.catalog_root,
+                self.debug,
+                &self.preview_config,
+            );
             for asset_id in &orphaned_ids {
                 let file_start = Instant::now();
                 let asset_id_path = PathBuf::from(asset_id);
+
+                // Collect variant hashes and face IDs before deleting DB records
+                let variant_hashes: Vec<String> = catalog.conn()
+                    .prepare("SELECT content_hash FROM variants WHERE asset_id = ?1")
+                    .and_then(|mut s| s.query_map(rusqlite::params![asset_id], |r| r.get(0))
+                        .and_then(|rows| rows.collect()))
+                    .unwrap_or_default();
+                let face_ids: Vec<String> = catalog.conn()
+                    .prepare("SELECT id FROM faces WHERE asset_id = ?1")
+                    .and_then(|mut s| s.query_map(rusqlite::params![asset_id], |r| r.get(0))
+                        .and_then(|rows| rows.collect()))
+                    .unwrap_or_default();
 
                 // Remove from stacks, collections, and faces before deleting the asset
                 let _ = stack_store.remove(&[asset_id.clone()]);
                 let _ = catalog.delete_collection_memberships_for_asset(asset_id);
                 let _ = catalog.conn().execute(
                     "DELETE FROM faces WHERE asset_id = ?1",
+                    rusqlite::params![asset_id],
+                );
+                // Delete embedding DB records
+                let _ = catalog.conn().execute(
+                    "DELETE FROM embeddings WHERE asset_id = ?1",
                     rusqlite::params![asset_id],
                 );
 
@@ -2794,56 +2883,114 @@ impl AssetService {
                     }
                 }
 
+                // Delete derived files: previews, smart previews, embeddings, face crops
+                for hash in &variant_hashes {
+                    let _ = std::fs::remove_file(preview_gen.preview_path(hash));
+                    let _ = std::fs::remove_file(preview_gen.smart_preview_path(hash));
+                }
+                for face_id in &face_ids {
+                    let prefix = &face_id[..2.min(face_id.len())];
+                    let _ = std::fs::remove_file(
+                        self.catalog_root.join("faces").join(prefix).join(format!("{face_id}.jpg")),
+                    );
+                    let _ = std::fs::remove_file(
+                        self.catalog_root.join("embeddings").join("arcface").join(prefix).join(format!("{face_id}.bin")),
+                    );
+                }
+                // Delete SigLIP embedding binaries
+                for model in &["siglip-vit-b16-256", "siglip-vit-l16-256"] {
+                    let prefix = &asset_id[..2.min(asset_id.len())];
+                    let _ = std::fs::remove_file(
+                        self.catalog_root.join("embeddings").join(model).join(prefix).join(format!("{asset_id}.bin")),
+                    );
+                }
+
                 result.removed_assets += 1;
                 on_file(&asset_id_path, CleanupStatus::OrphanedAsset, file_start.elapsed());
             }
         }
 
         // Pass 3: Orphaned previews (preview files with no matching variant)
-        let preview_dir = self.catalog_root.join("previews");
-        if preview_dir.is_dir() {
-            let variant_hashes = catalog.list_all_variant_hashes()?;
+        let variant_hashes = catalog.list_all_variant_hashes()?;
+        scan_orphaned_sharded_files(
+            &self.catalog_root.join("previews"),
+            |stem| {
+                let content_hash = format!("sha256:{stem}");
+                variant_hashes.contains(&content_hash)
+            },
+            apply,
+            &mut result.orphaned_previews,
+            &mut result.removed_previews,
+            &mut result.errors,
+            &on_file,
+        );
 
-            if let Ok(shard_entries) = std::fs::read_dir(&preview_dir) {
-                for shard_entry in shard_entries.flatten() {
-                    if !shard_entry.path().is_dir() {
+        // Pass 4: Orphaned smart previews (same logic, different directory)
+        scan_orphaned_sharded_files(
+            &self.catalog_root.join("smart_previews"),
+            |stem| {
+                let content_hash = format!("sha256:{stem}");
+                variant_hashes.contains(&content_hash)
+            },
+            apply,
+            &mut result.orphaned_smart_previews,
+            &mut result.removed_smart_previews,
+            &mut result.errors,
+            &on_file,
+        );
+
+        // Pass 5: Orphaned embedding binaries (asset_id.bin under embeddings/<model>/)
+        let asset_ids_set: HashSet<String> = catalog.list_all_asset_ids()?;
+        let emb_base = self.catalog_root.join("embeddings");
+        if emb_base.is_dir() {
+            if let Ok(model_entries) = std::fs::read_dir(&emb_base) {
+                for model_entry in model_entries.flatten() {
+                    if !model_entry.path().is_dir() {
                         continue;
                     }
-                    if let Ok(file_entries) = std::fs::read_dir(shard_entry.path()) {
-                        for file_entry in file_entries.flatten() {
-                            let path = file_entry.path();
-                            if !path.is_file() {
-                                continue;
-                            }
-                            // Extract content hash from filename: <hex>.<ext> → sha256:<hex>
-                            let stem = path.file_stem()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("");
-                            if stem.is_empty() {
-                                continue;
-                            }
-                            let content_hash = format!("sha256:{stem}");
-
-                            if !variant_hashes.contains(&content_hash) {
-                                result.orphaned_previews += 1;
-                                if apply {
-                                    let file_start = Instant::now();
-                                    if let Err(e) = std::fs::remove_file(&path) {
-                                        result.errors.push(format!(
-                                            "Failed to remove orphaned preview {}: {e}",
-                                            path.display()
-                                        ));
-                                    } else {
-                                        result.removed_previews += 1;
-                                        on_file(&path, CleanupStatus::OrphanedPreview, file_start.elapsed());
-                                    }
-                                }
-                            }
-                        }
+                    let model_name = model_entry.file_name().to_string_lossy().to_string();
+                    if model_name == "arcface" {
+                        continue; // handled separately in pass 7
                     }
+                    scan_orphaned_sharded_files(
+                        &model_entry.path(),
+                        |stem| asset_ids_set.contains(stem),
+                        apply,
+                        &mut result.orphaned_embeddings,
+                        &mut result.removed_embeddings,
+                        &mut result.errors,
+                        &on_file,
+                    );
                 }
             }
         }
+
+        // Pass 6: Orphaned face crop thumbnails (face_id.jpg under faces/)
+        let face_ids_set: HashSet<String> = catalog.conn()
+            .prepare("SELECT id FROM faces")
+            .and_then(|mut s| s.query_map([], |r| r.get(0))
+                .and_then(|rows| rows.collect()))
+            .unwrap_or_default();
+        scan_orphaned_sharded_files(
+            &self.catalog_root.join("faces"),
+            |stem| face_ids_set.contains(stem),
+            apply,
+            &mut result.orphaned_face_files,
+            &mut result.removed_face_files,
+            &mut result.errors,
+            &on_file,
+        );
+
+        // Pass 7: Orphaned ArcFace embedding binaries (face_id.bin under embeddings/arcface/)
+        scan_orphaned_sharded_files(
+            &self.catalog_root.join("embeddings").join("arcface"),
+            |stem| face_ids_set.contains(stem),
+            apply,
+            &mut result.orphaned_embeddings,
+            &mut result.removed_embeddings,
+            &mut result.errors,
+            &on_file,
+        );
 
         Ok(result)
     }
@@ -2969,11 +3116,37 @@ impl AssetService {
                     collections_changed = true;
                 }
 
-                // 4c2. Delete faces
+                // 4c2. Delete faces and their derived files
+                let face_ids: Vec<String> = catalog.conn()
+                    .prepare("SELECT id FROM faces WHERE asset_id = ?1")
+                    .and_then(|mut s| s.query_map(rusqlite::params![&asset_id], |r| r.get(0))
+                        .and_then(|rows| rows.collect()))
+                    .unwrap_or_default();
                 let _ = catalog.conn().execute(
                     "DELETE FROM faces WHERE asset_id = ?1",
                     rusqlite::params![&asset_id],
                 );
+                for face_id in &face_ids {
+                    let prefix = &face_id[..2.min(face_id.len())];
+                    let _ = std::fs::remove_file(
+                        self.catalog_root.join("faces").join(prefix).join(format!("{face_id}.jpg")),
+                    );
+                    let _ = std::fs::remove_file(
+                        self.catalog_root.join("embeddings").join("arcface").join(prefix).join(format!("{face_id}.bin")),
+                    );
+                }
+
+                // 4c3. Delete embeddings (DB records + binary files)
+                let _ = catalog.conn().execute(
+                    "DELETE FROM embeddings WHERE asset_id = ?1",
+                    rusqlite::params![&asset_id],
+                );
+                for model in &["siglip-vit-b16-256", "siglip-vit-l16-256"] {
+                    let prefix = &asset_id[..2.min(asset_id.len())];
+                    let _ = std::fs::remove_file(
+                        self.catalog_root.join("embeddings").join(model).join(prefix).join(format!("{asset_id}.bin")),
+                    );
+                }
 
                 // 4d. Delete recipes
                 if let Err(e) = catalog.delete_recipes_for_asset(&asset_id) {
@@ -3163,15 +3336,36 @@ impl AssetService {
 
         if apply {
             let stack_store = crate::stack::StackStore::new(catalog.conn());
+            let preview_gen = crate::preview::PreviewGenerator::new(
+                &self.catalog_root,
+                self.debug,
+                &self.preview_config,
+            );
             for asset_id in &orphaned_ids {
                 let file_start = Instant::now();
                 let asset_id_path = PathBuf::from(asset_id);
 
-                // Remove from stacks, collections, and faces before deleting the asset
+                // Collect variant hashes and face IDs before deleting DB records
+                let variant_hashes: Vec<String> = catalog.conn()
+                    .prepare("SELECT content_hash FROM variants WHERE asset_id = ?1")
+                    .and_then(|mut s| s.query_map(rusqlite::params![asset_id], |r| r.get(0))
+                        .and_then(|rows| rows.collect()))
+                    .unwrap_or_default();
+                let face_ids: Vec<String> = catalog.conn()
+                    .prepare("SELECT id FROM faces WHERE asset_id = ?1")
+                    .and_then(|mut s| s.query_map(rusqlite::params![asset_id], |r| r.get(0))
+                        .and_then(|rows| rows.collect()))
+                    .unwrap_or_default();
+
+                // Remove from stacks, collections, faces, and embeddings
                 let _ = stack_store.remove(&[asset_id.clone()]);
                 let _ = catalog.delete_collection_memberships_for_asset(asset_id);
                 let _ = catalog.conn().execute(
                     "DELETE FROM faces WHERE asset_id = ?1",
+                    rusqlite::params![asset_id],
+                );
+                let _ = catalog.conn().execute(
+                    "DELETE FROM embeddings WHERE asset_id = ?1",
                     rusqlite::params![asset_id],
                 );
 
@@ -3206,55 +3400,59 @@ impl AssetService {
                         ));
                     }
                 }
+
+                // Delete derived files
+                for hash in &variant_hashes {
+                    let _ = std::fs::remove_file(preview_gen.preview_path(hash));
+                    let _ = std::fs::remove_file(preview_gen.smart_preview_path(hash));
+                }
+                for face_id in &face_ids {
+                    let prefix = &face_id[..2.min(face_id.len())];
+                    let _ = std::fs::remove_file(
+                        self.catalog_root.join("faces").join(prefix).join(format!("{face_id}.jpg")),
+                    );
+                    let _ = std::fs::remove_file(
+                        self.catalog_root.join("embeddings").join("arcface").join(prefix).join(format!("{face_id}.bin")),
+                    );
+                }
+                for model in &["siglip-vit-b16-256", "siglip-vit-l16-256"] {
+                    let prefix = &asset_id[..2.min(asset_id.len())];
+                    let _ = std::fs::remove_file(
+                        self.catalog_root.join("embeddings").join(model).join(prefix).join(format!("{asset_id}.bin")),
+                    );
+                }
+
                 result.removed_assets += 1;
                 on_file(&asset_id_path, CleanupStatus::OrphanedAsset, file_start.elapsed());
             }
         }
 
-        // Orphaned previews
-        let preview_dir = self.catalog_root.join("previews");
-        if preview_dir.is_dir() {
-            let variant_hashes = catalog.list_all_variant_hashes()?;
-
-            if let Ok(shard_entries) = std::fs::read_dir(&preview_dir) {
-                for shard_entry in shard_entries.flatten() {
-                    if !shard_entry.path().is_dir() {
-                        continue;
-                    }
-                    if let Ok(file_entries) = std::fs::read_dir(shard_entry.path()) {
-                        for file_entry in file_entries.flatten() {
-                            let path = file_entry.path();
-                            if !path.is_file() {
-                                continue;
-                            }
-                            let stem = path.file_stem()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("");
-                            if stem.is_empty() {
-                                continue;
-                            }
-                            let content_hash = format!("sha256:{stem}");
-
-                            if !variant_hashes.contains(&content_hash) {
-                                result.orphaned_previews += 1;
-                                if apply {
-                                    let file_start = Instant::now();
-                                    if let Err(e) = std::fs::remove_file(&path) {
-                                        result.errors.push(format!(
-                                            "Failed to remove orphaned preview {}: {e}",
-                                            path.display()
-                                        ));
-                                    } else {
-                                        result.removed_previews += 1;
-                                        on_file(&path, CleanupStatus::OrphanedPreview, file_start.elapsed());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // Orphaned previews and smart previews
+        let variant_hashes = catalog.list_all_variant_hashes()?;
+        scan_orphaned_sharded_files(
+            &self.catalog_root.join("previews"),
+            |stem| {
+                let content_hash = format!("sha256:{stem}");
+                variant_hashes.contains(&content_hash)
+            },
+            apply,
+            &mut result.orphaned_previews,
+            &mut result.removed_previews,
+            &mut result.errors,
+            &on_file,
+        );
+        scan_orphaned_sharded_files(
+            &self.catalog_root.join("smart_previews"),
+            |stem| {
+                let content_hash = format!("sha256:{stem}");
+                variant_hashes.contains(&content_hash)
+            },
+            apply,
+            &mut result.orphaned_previews,
+            &mut result.removed_previews,
+            &mut result.errors,
+            &on_file,
+        );
 
         // Finally, remove the volume itself
         if apply {

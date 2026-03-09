@@ -4341,6 +4341,14 @@ impl Catalog {
             .collect::<std::result::Result<std::collections::HashSet<String>, _>>()?;
         Ok(hashes)
     }
+
+    pub fn list_all_asset_ids(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM assets")?;
+        let ids = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<std::collections::HashSet<String>, _>>()?;
+        Ok(ids)
+    }
 }
 
 #[cfg(test)]

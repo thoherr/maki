@@ -3032,9 +3032,9 @@ fn cleanup_removes_orphaned_previews() {
         .args(["cleanup", "--apply"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("orphaned previews removed"));
+        .stdout(predicate::str::contains("orphaned assets removed"));
 
-    // Preview should be gone
+    // Preview should be gone (removed as part of orphaned asset cleanup)
     let preview_count_after = count_preview_files(&previews_dir);
     assert_eq!(preview_count_after, 0, "orphaned previews should be removed");
 }

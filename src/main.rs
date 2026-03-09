@@ -3659,6 +3659,15 @@ fn main() {
                     if result.removed_previews > 0 {
                         parts.push(format!("{} orphaned previews removed", result.removed_previews));
                     }
+                    if result.removed_smart_previews > 0 {
+                        parts.push(format!("{} orphaned smart previews removed", result.removed_smart_previews));
+                    }
+                    if result.removed_embeddings > 0 {
+                        parts.push(format!("{} orphaned embeddings removed", result.removed_embeddings));
+                    }
+                    if result.removed_face_files > 0 {
+                        parts.push(format!("{} orphaned face files removed", result.removed_face_files));
+                    }
                     println!("Cleanup complete: {}", parts.join(", "));
                 } else {
                     let mut parts = vec![
@@ -3671,9 +3680,24 @@ fn main() {
                     if result.orphaned_previews > 0 {
                         parts.push(format!("{} orphaned previews", result.orphaned_previews));
                     }
+                    if result.orphaned_smart_previews > 0 {
+                        parts.push(format!("{} orphaned smart previews", result.orphaned_smart_previews));
+                    }
+                    if result.orphaned_embeddings > 0 {
+                        parts.push(format!("{} orphaned embeddings", result.orphaned_embeddings));
+                    }
+                    if result.orphaned_face_files > 0 {
+                        parts.push(format!("{} orphaned face files", result.orphaned_face_files));
+                    }
                     println!("Cleanup complete: {}", parts.join(", "));
-                    if result.stale > 0 || result.orphaned_assets > 0 || result.orphaned_previews > 0 {
-                        println!("  Run with --apply to remove stale records, orphaned assets, and previews.");
+                    let has_orphans = result.stale > 0
+                        || result.orphaned_assets > 0
+                        || result.orphaned_previews > 0
+                        || result.orphaned_smart_previews > 0
+                        || result.orphaned_embeddings > 0
+                        || result.orphaned_face_files > 0;
+                    if has_orphans {
+                        println!("  Run with --apply to remove stale records and orphaned files.");
                     }
                 }
             }
