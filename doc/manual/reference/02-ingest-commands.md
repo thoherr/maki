@@ -922,5 +922,136 @@ dam embed --export
 
 ---
 
+## dam describe
+
+### NAME
+
+dam-describe -- generate image descriptions using a vision-language model (VLM)
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] describe [OPTIONS]
+```
+
+### DESCRIPTION
+
+Sends preview images to a VLM server and generates natural language descriptions. The command uses the OpenAI-compatible chat completions API, which is implemented by Ollama, LM Studio, vLLM, and most local inference servers.
+
+By default, the command runs in **report-only mode**: descriptions are generated and displayed but not saved. Use `--apply` to write descriptions to assets. Use `--dry-run` to see what would be processed without calling the VLM at all.
+
+The command requires at least one scope filter (`--query`, `--asset`, or `--volume`) to prevent accidental processing of the entire catalog.
+
+For each asset, the command:
+1. Checks if a description already exists (skips unless `--force` is set)
+2. Finds the best available image (smart preview > regular preview > original on an online volume)
+3. Base64-encodes the image and sends it to the VLM endpoint
+4. Parses the response and optionally saves it as the asset's description
+
+### OPTIONS
+
+**--query \<QUERY\>**
+: Search query to scope which assets are described. Same syntax as `dam search`.
+
+**--asset \<ID\>**
+: Process a single asset (ID or unique prefix).
+
+**--volume \<LABEL\>**
+: Limit to assets on a specific volume.
+
+**--model \<NAME\>**
+: VLM model name. Default from `[vlm] model` in `dam.toml`, or `qwen2.5vl:3b`.
+
+**--endpoint \<URL\>**
+: VLM server base URL. Default from `[vlm] endpoint` in `dam.toml`, or `http://localhost:11434`.
+
+**--prompt \<TEXT\>**
+: Custom prompt sent to the VLM. Default from `[vlm] prompt` in `dam.toml`, or a built-in photography-focused prompt.
+
+**--max-tokens \<N\>**
+: Maximum tokens in the VLM response. Default from `[vlm] max_tokens` in `dam.toml`, or `200`.
+
+**--apply**
+: Write descriptions to assets. Without this flag, descriptions are generated and displayed but not saved.
+
+**--force**
+: Overwrite existing descriptions. By default, assets that already have a description are skipped.
+
+**--dry-run**
+: Show what would be processed without calling the VLM. No network requests are made.
+
+**--check**
+: Test connectivity to the VLM endpoint. Prints the server status and available models, then exits. Does not process any assets.
+
+### EXAMPLES
+
+Check that Ollama is running and see available models:
+
+```bash
+dam describe --check
+```
+
+Preview descriptions for undescribed assets (report-only):
+
+```bash
+dam describe --query "description:none type:image"
+```
+
+Generate and apply descriptions to a specific volume:
+
+```bash
+dam describe --volume "Photos 2024" --apply
+```
+
+Describe a single asset:
+
+```bash
+dam describe --asset a1b2c3d4 --apply
+```
+
+Use a faster model for batch processing:
+
+```bash
+dam describe --query "date:2024-06" --model moondream --apply
+```
+
+Use a remote server or larger model:
+
+```bash
+dam describe --endpoint http://gpu-server:11434 --model qwen2.5vl:7b --apply
+```
+
+Custom prompt for architectural photography:
+
+```bash
+dam describe --prompt "Describe the architectural style, materials, and features." --query "tag:architecture" --apply
+```
+
+Overwrite existing descriptions with a better model:
+
+```bash
+dam describe --query "rating:4+" --model qwen2.5vl:7b --force --apply
+```
+
+Dry run with JSON output:
+
+```bash
+dam describe --query "rating:4+" --dry-run --json
+```
+
+Use a cloud API (OpenAI-compatible endpoint):
+
+```bash
+dam describe --endpoint https://api.openai.com --model gpt-4o --apply --query "*"
+```
+
+### SEE ALSO
+
+[edit](#dam-edit) -- manually set or clear an asset's description.
+[Configuration](08-configuration.md#vlm-section) -- `[vlm]` section for endpoint, model, and prompt settings.
+[VLM Setup (User Guide)](../user-guide/03-ingest.md#vlm-image-descriptions) -- how to set up a local VLM server.
+
+---
+
 Previous: [Setup Commands](01-setup-commands.md) -- `init`, `volume add`, `volume list`.
 Next: [Organize Commands](03-organize-commands.md) -- `collection`, `saved-search`.

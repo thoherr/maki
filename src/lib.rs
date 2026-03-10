@@ -15,6 +15,7 @@ pub mod query;
 pub mod saved_search;
 pub mod stack;
 pub mod tag_util;
+pub mod vlm;
 pub mod web;
 pub mod xmp_reader;
 

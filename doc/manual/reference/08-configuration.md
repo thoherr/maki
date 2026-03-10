@@ -402,6 +402,99 @@ face_min_confidence = 0.5
 
 ---
 
+## [vlm] Section
+
+Controls the VLM (vision-language model) integration for `dam describe`. Unlike the `[ai]` section, this requires no special build features -- it works with any dam binary because it uses HTTP calls to an external server.
+
+### endpoint
+
+- **Type:** string (URL)
+- **Default:** `"http://localhost:11434"`
+
+Base URL of the VLM server. Any server implementing the OpenAI-compatible `/v1/chat/completions` endpoint works. Ollama also supports its native `/api/generate` endpoint as an automatic fallback.
+
+**Local servers:**
+- [Ollama](https://ollama.com) -- `http://localhost:11434` (default)
+- [LM Studio](https://lmstudio.ai) -- `http://localhost:1234`
+- [llama.cpp server](https://github.com/ggerganov/llama.cpp) -- `http://localhost:8080`
+
+**Cloud APIs** (OpenAI-compatible, require API key in environment):
+- OpenAI -- `https://api.openai.com` (model: `gpt-4o`)
+- Groq -- `https://api.groq.com/openai` (model: `llama-3.2-90b-vision-preview`)
+- Together AI -- `https://api.together.xyz` (model: `meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo`)
+
+> **Note:** Cloud APIs charge per request. dam does not set authentication headers -- if your endpoint requires an API key, you may need to use a local proxy or set the key via the server's own configuration.
+
+### model
+
+- **Type:** string
+- **Default:** `"qwen2.5vl:3b"`
+
+Model name passed to the VLM server. For Ollama, this is the model tag (e.g., `moondream`, `qwen2.5vl:3b`, `qwen2.5vl:7b`). For cloud APIs, this is the model identifier (e.g., `gpt-4o`).
+
+**Recommended models for photography** (tested with Ollama on Apple Silicon):
+
+| Model | Size | RAM | Speed (M3 Pro) | Quality |
+|-------|------|-----|-----------------|---------|
+| Moondream 2B | 1.7 GB | ~2 GB | ~3--5s | Good, fast for batch |
+| Qwen2.5-VL 3B | 2.0 GB | ~3 GB | ~8--12s | Very good (default) |
+| Gemma 3 4B | 3.3 GB | ~4 GB | ~10--15s | Very good |
+| Qwen2.5-VL 7B | 4.7 GB | ~6 GB | ~20--36s | Excellent |
+| LLaVA 1.6 7B | 4.7 GB | ~6 GB | ~15--25s | Good |
+| SmolVLM 2.2B | 1.5 GB | ~2 GB | ~4--8s | Good, very compact |
+
+### max_tokens
+
+- **Type:** unsigned 32-bit integer
+- **Default:** `200`
+
+Maximum number of tokens in the VLM response. 200 tokens is typically 2--3 sentences. Increase for more detailed descriptions.
+
+### prompt
+
+- **Type:** string (optional)
+- **Default:** none (uses built-in photography-focused prompt)
+
+Custom system prompt sent to the VLM. When not set, uses:
+
+> *Describe this photograph in 1--3 concise sentences. Focus on the subject, setting, lighting, and mood. Be specific about what you see, not what you interpret.*
+
+Override for specialized workflows:
+
+```toml
+[vlm]
+prompt = "Describe the architectural style, materials, and notable design features."
+```
+
+### timeout
+
+- **Type:** unsigned 32-bit integer (seconds)
+- **Default:** `120`
+
+Maximum time to wait for a VLM response. Larger models on CPU may need higher timeouts. Assets that time out are reported as errors and skipped.
+
+### concurrency
+
+- **Type:** unsigned 32-bit integer
+- **Default:** `1`
+
+Reserved for future use. Currently, assets are processed sequentially.
+
+### CLI Override
+
+The `--endpoint`, `--model`, `--prompt`, and `--max-tokens` flags on `dam describe` override the values from `dam.toml`.
+
+```toml
+[vlm]
+endpoint = "http://localhost:11434"
+model = "qwen2.5vl:3b"
+max_tokens = 200
+timeout = 120
+# prompt = "Custom prompt here."
+```
+
+---
+
 ## Full Example
 
 A complete `dam.toml` with all options set and annotated:
@@ -488,6 +581,14 @@ model_dir = "~/.dam/models"
 prompt = "a photograph of {}"
 # GPU acceleration (requires --features ai-gpu).
 # execution_provider = "auto"
+
+# VLM image description settings (works with any build).
+[vlm]
+endpoint = "http://localhost:11434"
+model = "qwen2.5vl:3b"
+max_tokens = 200
+timeout = 120
+# prompt = "Describe this photograph concisely."
 ```
 
 ---
@@ -562,6 +663,12 @@ When a field is absent from `dam.toml`, these defaults apply:
 | `ai.execution_provider` | `"auto"` |
 | `ai.face_cluster_threshold` | `0.5` |
 | `ai.face_min_confidence` | `0.5` |
+| `vlm.endpoint` | `"http://localhost:11434"` |
+| `vlm.model` | `"qwen2.5vl:3b"` |
+| `vlm.max_tokens` | `200` |
+| `vlm.prompt` | none (built-in) |
+| `vlm.timeout` | `120` |
+| `vlm.concurrency` | `1` |
 
 ---
 

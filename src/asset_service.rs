@@ -5591,6 +5591,286 @@ impl AssetService {
 
         None
     }
+
+    /// Find the best image file for VLM processing.
+    /// Priority: smart preview > regular preview > original on online volume.
+    /// Same logic as find_image_for_ai but not feature-gated.
+    pub fn find_image_for_vlm(
+        &self,
+        details: &crate::catalog::AssetDetails,
+        preview_gen: &crate::preview::PreviewGenerator,
+        online_volumes: &std::collections::HashMap<String, &crate::models::Volume>,
+    ) -> Option<PathBuf> {
+        // Image-like extensions for VLM (it can process JPEG previews)
+        fn is_image_ext(ext: &str) -> bool {
+            matches!(
+                ext.to_lowercase().as_str(),
+                "jpg" | "jpeg" | "png" | "webp" | "tif" | "tiff" | "bmp" | "gif"
+            )
+        }
+
+        // Try smart preview of best variant
+        if let Some(best) = crate::models::variant::best_preview_index_details(&details.variants)
+        {
+            let variant = &details.variants[best];
+            let smart_path = preview_gen.smart_preview_path(&variant.content_hash);
+            if smart_path.exists() {
+                return Some(smart_path);
+            }
+            let preview_path = preview_gen.preview_path(&variant.content_hash);
+            if preview_path.exists() {
+                return Some(preview_path);
+            }
+        }
+
+        // Fall back to any preview we can find
+        for variant in &details.variants {
+            let smart_path = preview_gen.smart_preview_path(&variant.content_hash);
+            if smart_path.exists() {
+                return Some(smart_path);
+            }
+            let preview_path = preview_gen.preview_path(&variant.content_hash);
+            if preview_path.exists() {
+                return Some(preview_path);
+            }
+        }
+
+        // Fall back to original file on an online volume
+        for variant in &details.variants {
+            for loc in &variant.locations {
+                if let Some(vol) = online_volumes.get(&loc.volume_id) {
+                    let full_path = vol.mount_point.join(&loc.relative_path);
+                    if full_path.exists() {
+                        let ext = full_path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("");
+                        if is_image_ext(ext) {
+                            return Some(full_path);
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Batch-describe assets using a VLM endpoint.
+    pub fn describe(
+        &self,
+        query: Option<&str>,
+        asset_id: Option<&str>,
+        volume: Option<&str>,
+        endpoint: &str,
+        model: &str,
+        prompt: &str,
+        max_tokens: u32,
+        timeout: u32,
+        apply: bool,
+        force: bool,
+        dry_run: bool,
+        on_asset: impl Fn(&str, &crate::vlm::DescribeStatus, std::time::Duration),
+    ) -> Result<crate::vlm::BatchDescribeResult> {
+        use crate::vlm::{self, BatchDescribeResult, DescribeResult, DescribeStatus};
+
+        let catalog = crate::catalog::Catalog::open(&self.catalog_root)?;
+        let engine = crate::query::QueryEngine::new(&self.catalog_root);
+        let preview_gen =
+            crate::preview::PreviewGenerator::new(&self.catalog_root, self.debug, &self.preview_config);
+        let registry = DeviceRegistry::new(&self.catalog_root);
+        let volumes = registry.list()?;
+        let online_volumes: HashMap<String, &crate::models::Volume> = volumes
+            .iter()
+            .filter(|v| v.is_online)
+            .map(|v| (v.id.to_string(), v))
+            .collect();
+
+        // Resolve target assets
+        let asset_ids: Vec<String> = if let Some(id) = asset_id {
+            let full_id = catalog
+                .resolve_asset_id(id)?
+                .ok_or_else(|| anyhow::anyhow!("No asset found matching '{id}'"))?;
+            vec![full_id]
+        } else {
+            let q = if let Some(query) = query {
+                let volume_part = volume.map(|v| format!(" volume:{v}")).unwrap_or_default();
+                format!("{query}{volume_part}")
+            } else if let Some(v) = volume {
+                format!("volume:{v}")
+            } else {
+                "*".to_string()
+            };
+            let results = engine.search(&q)?;
+            results.into_iter().map(|r| r.asset_id).collect()
+        };
+
+        let mut result = BatchDescribeResult {
+            described: 0,
+            skipped: 0,
+            failed: 0,
+            errors: Vec::new(),
+            dry_run: !apply || dry_run,
+            results: Vec::new(),
+        };
+
+        for aid in &asset_ids {
+            let asset_start = std::time::Instant::now();
+            let short_id = &aid[..8.min(aid.len())];
+
+            // Load asset details
+            let details = match catalog.load_asset_details(aid)? {
+                Some(d) => d,
+                None => {
+                    let msg = format!("Asset {short_id} not found");
+                    result.errors.push(msg.clone());
+                    result.failed += 1;
+                    result.results.push(DescribeResult {
+                        asset_id: aid.clone(),
+                        description: None,
+                        status: DescribeStatus::Error(msg.clone()),
+                    });
+                    on_asset(aid, &DescribeStatus::Error(msg), asset_start.elapsed());
+                    continue;
+                }
+            };
+
+            // Skip if description exists and --force not set
+            if !force {
+                if let Some(ref desc) = details.description {
+                    if !desc.is_empty() {
+                        let msg = "already has description".to_string();
+                        result.skipped += 1;
+                        result.results.push(DescribeResult {
+                            asset_id: aid.clone(),
+                            description: Some(desc.clone()),
+                            status: DescribeStatus::Skipped(msg.clone()),
+                        });
+                        on_asset(aid, &DescribeStatus::Skipped(msg), asset_start.elapsed());
+                        continue;
+                    }
+                }
+            }
+
+            // Find image
+            let image_path = self.find_image_for_vlm(&details, &preview_gen, &online_volumes);
+            let image_path = match image_path {
+                Some(p) => p,
+                None => {
+                    let msg = format!("No preview/image for asset {short_id}. Run `dam generate-previews` first.");
+                    result.skipped += 1;
+                    result.results.push(DescribeResult {
+                        asset_id: aid.clone(),
+                        description: None,
+                        status: DescribeStatus::Skipped(msg.clone()),
+                    });
+                    on_asset(aid, &DescribeStatus::Skipped(msg), asset_start.elapsed());
+                    continue;
+                }
+            };
+
+            if dry_run {
+                let msg = format!("would describe (image: {})", image_path.display());
+                result.described += 1;
+                result.results.push(DescribeResult {
+                    asset_id: aid.clone(),
+                    description: None,
+                    status: DescribeStatus::Described,
+                });
+                on_asset(aid, &DescribeStatus::Skipped(msg), asset_start.elapsed());
+                continue;
+            }
+
+            // Encode image to base64
+            let image_base64 = match vlm::encode_image_base64(&image_path) {
+                Ok(b) => b,
+                Err(e) => {
+                    let msg = format!("Failed to read image for {short_id}: {e}");
+                    result.errors.push(msg.clone());
+                    result.failed += 1;
+                    result.results.push(DescribeResult {
+                        asset_id: aid.clone(),
+                        description: None,
+                        status: DescribeStatus::Error(msg.clone()),
+                    });
+                    on_asset(aid, &DescribeStatus::Error(msg), asset_start.elapsed());
+                    continue;
+                }
+            };
+
+            // Call VLM
+            let description = match vlm::call_vlm(
+                endpoint,
+                model,
+                &image_base64,
+                prompt,
+                max_tokens,
+                timeout,
+                self.debug,
+            ) {
+                Ok(text) => text,
+                Err(e) => {
+                    let msg = format!("VLM failed for {short_id}: {e}");
+                    result.errors.push(msg.clone());
+                    result.failed += 1;
+                    result.results.push(DescribeResult {
+                        asset_id: aid.clone(),
+                        description: None,
+                        status: DescribeStatus::Error(msg.clone()),
+                    });
+                    on_asset(aid, &DescribeStatus::Error(msg), asset_start.elapsed());
+                    continue;
+                }
+            };
+
+            // Skip empty responses
+            if description.is_empty() {
+                let msg = format!("VLM returned empty response for {short_id}");
+                result.errors.push(msg.clone());
+                result.failed += 1;
+                result.results.push(DescribeResult {
+                    asset_id: aid.clone(),
+                    description: None,
+                    status: DescribeStatus::Error(msg.clone()),
+                });
+                on_asset(aid, &DescribeStatus::Error(msg), asset_start.elapsed());
+                continue;
+            }
+
+            // Apply description
+            if apply {
+                let edit_fields = crate::query::EditFields {
+                    name: None,
+                    description: Some(Some(description.clone())),
+                    rating: None,
+                    color_label: None,
+                    created_at: None,
+                };
+                if let Err(e) = engine.edit(aid, edit_fields) {
+                    let msg = format!("Failed to save description for {short_id}: {e}");
+                    result.errors.push(msg.clone());
+                    result.failed += 1;
+                    result.results.push(DescribeResult {
+                        asset_id: aid.clone(),
+                        description: Some(description),
+                        status: DescribeStatus::Error(msg.clone()),
+                    });
+                    on_asset(aid, &DescribeStatus::Error(msg), asset_start.elapsed());
+                    continue;
+                }
+            }
+
+            result.described += 1;
+            result.results.push(DescribeResult {
+                asset_id: aid.clone(),
+                description: Some(description.clone()),
+                status: DescribeStatus::Described,
+            });
+            on_asset(aid, &DescribeStatus::Described, asset_start.elapsed());
+        }
+
+        Ok(result)
+    }
 }
 
 /// Compute directory prefixes from scanned paths relative to the volume mount point.

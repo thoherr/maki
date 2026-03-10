@@ -23,7 +23,7 @@ Man-page style documentation for every command, filter, and configuration option
 
 - [CLI Conventions](reference/00-cli-conventions.md) — Global flags, scripting patterns, exit codes
 - [Setup Commands](reference/01-setup-commands.md) — `init`, `volume add`, `volume list`, `volume combine`, `volume remove`
-- [Ingest Commands](reference/02-ingest-commands.md) — `import`, `tag`, `edit`, `group`, `auto-group`, `auto-tag`
+- [Ingest Commands](reference/02-ingest-commands.md) — `import`, `tag`, `edit`, `group`, `auto-group`, `auto-tag`, `describe`
 - [Organize Commands](reference/03-organize-commands.md) — `collection`, `saved-search`
 - [Retrieve Commands](reference/04-retrieve-commands.md) — `search`, `show`, `export`, `duplicates`, `stats`, `serve`
 - [Maintain Commands](reference/05-maintain-commands.md) — `verify`, `sync`, `refresh`, `cleanup`, `relocate`, `update-location`, `generate-previews`, `fix-roles`, `fix-dates`, `rebuild-catalog`

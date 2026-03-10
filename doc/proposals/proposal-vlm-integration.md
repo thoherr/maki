@@ -117,7 +117,7 @@ dam describe [--query <Q>] [--asset <id>] [--volume <label>]
 | `--query <Q>` | — | Scope to assets matching search query |
 | `--asset <id>` | — | Single asset |
 | `--volume <label>` | — | Scope to volume |
-| `--model <name>` | `qwen2.5-vl:3b` | Ollama model name (or any model the endpoint serves) |
+| `--model <name>` | `qwen2.5vl:3b` | Ollama model name (or any model the endpoint serves) |
 | `--endpoint <url>` | `http://localhost:11434` | VLM server base URL |
 | `--prompt <text>` | (built-in) | Custom system/user prompt |
 | `--max-tokens <N>` | 200 | Maximum response length |
@@ -145,7 +145,7 @@ dam describe --query "date:2024-06" --model moondream --apply
 dam describe --asset abc123 --mode tags
 
 # Use a remote server
-dam describe --endpoint http://gpu-server:11434 --model qwen2.5-vl:7b --apply
+dam describe --endpoint http://gpu-server:11434 --model qwen2.5vl:7b --apply
 
 # Custom prompt for architectural photography
 dam describe --prompt "Describe the architectural style, materials, and notable features of this building." --query "tag:architecture" --apply
@@ -188,7 +188,7 @@ Runs both modes in a single VLM call with a combined prompt. Returns description
 endpoint = "http://localhost:11434"
 
 # Default model name
-model = "qwen2.5-vl:3b"
+model = "qwen2.5vl:3b"
 
 # Maximum tokens in response
 max_tokens = 200
@@ -219,7 +219,7 @@ POST {endpoint}/v1/chat/completions
 Content-Type: application/json
 
 {
-  "model": "qwen2.5-vl:3b",
+  "model": "qwen2.5vl:3b",
   "messages": [
     {
       "role": "user",
@@ -272,7 +272,7 @@ If the `/v1/chat/completions` endpoint is not available (older Ollama versions),
 ```
 POST {endpoint}/api/generate
 {
-  "model": "qwen2.5-vl:3b",
+  "model": "qwen2.5vl:3b",
   "prompt": "Describe this photograph...",
   "images": ["{base64_image}"],
   "stream": false
@@ -437,7 +437,7 @@ This is a key advantage over the SigLIP integration which requires the `ai` feat
 | Scenario | Handling |
 |----------|----------|
 | Ollama not running | Error with helpful message: "VLM server not reachable at {endpoint}. Start Ollama with `ollama serve`." |
-| Model not pulled | Error from API includes model name: "model 'qwen2.5-vl:3b' not found. Run `ollama pull qwen2.5-vl:3b`." |
+| Model not pulled | Error from API includes model name: "model 'qwen2.5vl:3b' not found. Run `ollama pull qwen2.5vl:3b`." |
 | Timeout (slow model) | Configurable timeout, default 120s. Skip asset on timeout, report as error. |
 | Empty response | Skip, report as error. Don't clear existing description. |
 | Very long response | Truncate at `max_tokens`. Warn if response was cut off. |

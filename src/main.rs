@@ -274,6 +274,54 @@ enum Commands {
     #[command(subcommand, display_order = 19)]
     Faces(FacesCommands),
 
+    /// Generate image descriptions using a vision-language model (VLM)
+    #[command(display_order = 16)]
+    Describe {
+        /// Search query to scope assets
+        #[arg(long, display_order = 1)]
+        query: Option<String>,
+
+        /// Process a specific asset (ID or prefix)
+        #[arg(long, display_order = 2)]
+        asset: Option<String>,
+
+        /// Limit to assets on a specific volume
+        #[arg(long, display_order = 3)]
+        volume: Option<String>,
+
+        /// VLM model name (default from dam.toml or qwen2.5vl:3b)
+        #[arg(long, display_order = 4)]
+        model: Option<String>,
+
+        /// VLM server endpoint (default from dam.toml or http://localhost:11434)
+        #[arg(long, display_order = 5)]
+        endpoint: Option<String>,
+
+        /// Custom prompt for the VLM
+        #[arg(long, display_order = 6)]
+        prompt: Option<String>,
+
+        /// Maximum tokens in VLM response
+        #[arg(long, display_order = 7)]
+        max_tokens: Option<u32>,
+
+        /// Apply descriptions to assets (default: report-only)
+        #[arg(long, display_order = 20)]
+        apply: bool,
+
+        /// Overwrite existing descriptions
+        #[arg(long, display_order = 21)]
+        force: bool,
+
+        /// Show what would happen without calling the VLM
+        #[arg(long, display_order = 22)]
+        dry_run: bool,
+
+        /// Check VLM endpoint connectivity
+        #[arg(long, display_order = 30)]
+        check: bool,
+    },
+
     // --- Organize ---
 
     /// Manage collections (static albums)
@@ -1125,7 +1173,8 @@ Ingest & Edit:
   edit               Edit asset metadata (name, description, rating, label, date)
   group              Group variants into one asset
   split              Split variants out of an asset into new standalone assets
-  auto-group         Auto-group assets by filename stem{auto_tag}{embed}{faces}
+  auto-group         Auto-group assets by filename stem
+  describe           Generate image descriptions using a VLM{auto_tag}{embed}{faces}
 
 Organize:
   collection         Manage collections (static albums)  [alias: col]
@@ -2261,6 +2310,134 @@ fn main() {
                     if result.deleted > 0 {
                         println!("  Run with --apply to delete.");
                     }
+                }
+            }
+            Ok(())
+        }
+        Commands::Describe {
+            query,
+            asset,
+            volume,
+            model,
+            endpoint,
+            prompt,
+            max_tokens,
+            apply,
+            force,
+            dry_run,
+            check,
+        } => {
+            let catalog_root = dam::config::find_catalog_root()?;
+            let config = CatalogConfig::load(&catalog_root)?;
+
+            let endpoint = endpoint.as_deref().unwrap_or(&config.vlm.endpoint);
+            let model = model.as_deref().unwrap_or(&config.vlm.model);
+            let max_tokens = max_tokens.unwrap_or(config.vlm.max_tokens);
+            let timeout = config.vlm.timeout;
+            let prompt = prompt
+                .as_deref()
+                .or(config.vlm.prompt.as_deref())
+                .unwrap_or(dam::vlm::DEFAULT_DESCRIBE_PROMPT);
+
+            if check {
+                match dam::vlm::check_endpoint(endpoint, timeout, cli.debug) {
+                    Ok(msg) => {
+                        if cli.json {
+                            println!("{}", serde_json::json!({
+                                "status": "ok",
+                                "endpoint": endpoint,
+                                "message": msg,
+                            }));
+                        } else {
+                            println!("{msg}");
+                        }
+                    }
+                    Err(e) => {
+                        if cli.json {
+                            println!("{}", serde_json::json!({
+                                "status": "error",
+                                "endpoint": endpoint,
+                                "message": format!("{e}"),
+                            }));
+                        } else {
+                            eprintln!("{e}");
+                        }
+                        std::process::exit(1);
+                    }
+                }
+                return Ok(());
+            }
+
+            if query.is_none() && asset.is_none() && volume.is_none() {
+                anyhow::bail!(
+                    "No scope specified. Use --query, --asset, or --volume to select assets.\n  \
+                     Examples:\n    \
+                     dam describe --query '*'                  # all assets\n    \
+                     dam describe --asset <id>                 # single asset\n    \
+                     dam describe --query 'rating:4+' --apply  # apply to rated assets"
+                );
+            }
+
+            let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
+
+            let show_log = cli.log;
+            let result = service.describe(
+                query.as_deref(),
+                asset.as_deref(),
+                volume.as_deref(),
+                endpoint,
+                model,
+                prompt,
+                max_tokens,
+                timeout,
+                apply,
+                force,
+                dry_run,
+                |id, status, elapsed| {
+                    if show_log {
+                        let short_id = &id[..8.min(id.len())];
+                        match status {
+                            dam::vlm::DescribeStatus::Described => {
+                                eprintln!(
+                                    "  {short_id} — described ({})",
+                                    format_duration(elapsed)
+                                );
+                            }
+                            dam::vlm::DescribeStatus::Skipped(msg) => {
+                                eprintln!("  {short_id} — skipped: {msg}");
+                            }
+                            dam::vlm::DescribeStatus::Error(msg) => {
+                                eprintln!("  {short_id} — error: {msg}");
+                            }
+                        }
+                    }
+                },
+            )?;
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                for err in &result.errors {
+                    eprintln!("  {err}");
+                }
+
+                let mode = if dry_run {
+                    "Describe (dry run)"
+                } else if apply {
+                    "Describe"
+                } else {
+                    "Describe (report only)"
+                };
+                let mut parts = vec![format!("{} described", result.described)];
+                if result.skipped > 0 {
+                    parts.push(format!("{} skipped", result.skipped));
+                }
+                if result.failed > 0 {
+                    parts.push(format!("{} failed", result.failed));
+                }
+                println!("{mode}: {}", parts.join(", "));
+                if !apply && !dry_run && result.described > 0 {
+                    println!("  Run with --apply to save descriptions to assets.");
                 }
             }
             Ok(())

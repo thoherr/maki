@@ -259,6 +259,71 @@ fn is_default_ai(a: &AiConfig) -> bool {
     *a == AiConfig::default()
 }
 
+/// VLM (vision-language model) configuration for image descriptions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VlmConfig {
+    /// VLM server endpoint (Ollama, LM Studio, vLLM, or any OpenAI-compatible API).
+    #[serde(default = "default_vlm_endpoint")]
+    pub endpoint: String,
+
+    /// Default model name.
+    #[serde(default = "default_vlm_model")]
+    pub model: String,
+
+    /// Maximum tokens in response.
+    #[serde(default = "default_vlm_max_tokens")]
+    pub max_tokens: u32,
+
+    /// Custom prompt (overrides built-in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+
+    /// Request timeout in seconds.
+    #[serde(default = "default_vlm_timeout")]
+    pub timeout: u32,
+
+    /// Concurrent requests (for servers that handle parallelism).
+    #[serde(default = "default_vlm_concurrency")]
+    pub concurrency: u32,
+}
+
+fn default_vlm_endpoint() -> String {
+    "http://localhost:11434".to_string()
+}
+
+fn default_vlm_model() -> String {
+    "qwen2.5vl:3b".to_string()
+}
+
+fn default_vlm_max_tokens() -> u32 {
+    200
+}
+
+fn default_vlm_timeout() -> u32 {
+    120
+}
+
+fn default_vlm_concurrency() -> u32 {
+    1
+}
+
+impl Default for VlmConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: "http://localhost:11434".to_string(),
+            model: "qwen2.5vl:3b".to_string(),
+            max_tokens: 200,
+            prompt: None,
+            timeout: 120,
+            concurrency: 1,
+        }
+    }
+}
+
+fn is_default_vlm(v: &VlmConfig) -> bool {
+    *v == VlmConfig::default()
+}
+
 /// Contact sheet default configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContactSheetDefaults {
@@ -322,6 +387,8 @@ pub struct CatalogConfig {
     pub ai: AiConfig,
     #[serde(default, skip_serializing_if = "is_default_contact_sheet")]
     pub contact_sheet: ContactSheetDefaults,
+    #[serde(default, skip_serializing_if = "is_default_vlm")]
+    pub vlm: VlmConfig,
 }
 
 impl Default for CatalogConfig {
@@ -335,6 +402,7 @@ impl Default for CatalogConfig {
             verify: VerifyConfig::default(),
             ai: AiConfig::default(),
             contact_sheet: ContactSheetDefaults::default(),
+            vlm: VlmConfig::default(),
         }
     }
 }
@@ -551,6 +619,7 @@ max_edge = 1000
             verify: VerifyConfig::default(),
             ai: AiConfig::default(),
             contact_sheet: ContactSheetDefaults::default(),
+            vlm: VlmConfig::default(),
         };
         let toml_str = toml::to_string_pretty(&original).unwrap();
         let parsed: CatalogConfig = toml::from_str(&toml_str).unwrap();
@@ -698,6 +767,7 @@ max_edge = 1000
             verify: VerifyConfig::default(),
             ai: AiConfig::default(),
             contact_sheet: ContactSheetDefaults::default(),
+            vlm: VlmConfig::default(),
         };
         original.save(dir.path()).unwrap();
         let loaded = CatalogConfig::load(dir.path()).unwrap();

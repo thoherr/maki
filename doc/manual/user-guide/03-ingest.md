@@ -471,6 +471,169 @@ This runs embedding generation as a post-import phase using the preview image fo
 
 See the [auto-tag reference](../reference/02-ingest-commands.md#dam-auto-tag) for all options and the [configuration reference](../reference/08-configuration.md#ai-section) for `[ai]` settings in `dam.toml`.
 
+## VLM Image Descriptions
+
+While SigLIP auto-tagging classifies images against a fixed vocabulary (~100 labels), vision-language models (VLMs) generate free-form text descriptions that capture scene context, spatial relationships, lighting, and mood. The `dam describe` command sends preview images to a VLM server and stores the generated text as the asset's description.
+
+Unlike auto-tagging, this feature requires **no special build flags** -- it works with any dam binary because it communicates with an external server via HTTP.
+
+### Setting Up a Local VLM Server
+
+The recommended approach is [Ollama](https://ollama.com), a one-command install that manages model downloads, quantization, and GPU memory automatically.
+
+**1. Install Ollama:**
+
+```bash
+# macOS (also available as .dmg from ollama.com)
+brew install ollama
+
+# Linux
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+**2. Start the server:**
+
+```bash
+ollama serve
+```
+
+Ollama runs in the background on `http://localhost:11434`. On macOS, the Ollama desktop app starts the server automatically.
+
+**3. Pull a vision model:**
+
+```bash
+# Recommended: good balance of quality, speed, and memory
+ollama pull qwen2.5vl:3b
+
+# Faster, lighter alternative for batch processing
+ollama pull moondream
+
+# Higher quality for important assets (needs ~6 GB RAM)
+ollama pull qwen2.5vl:7b
+```
+
+**4. Verify the setup:**
+
+```bash
+dam describe --check
+# Connected to http://localhost:11434. 2 model(s) available: qwen2.5vl:3b, moondream:latest
+```
+
+### Model Recommendations
+
+| Model | Size | RAM | Speed (M3 Pro) | Best For |
+|-------|------|-----|-----------------|----------|
+| **Moondream 2B** | 1.7 GB | ~2 GB | ~3--5s | Large batch processing |
+| **Qwen2.5-VL 3B** | 2.0 GB | ~3 GB | ~8--12s | Daily use (default) |
+| **Gemma 3 4B** | 3.3 GB | ~4 GB | ~10--15s | Strong reasoning |
+| **Qwen2.5-VL 7B** | 4.7 GB | ~6 GB | ~20--36s | Best quality, key assets |
+| **SmolVLM 2.2B** | 1.5 GB | ~2 GB | ~4--8s | Minimal resources |
+
+All models use GPU automatically on macOS (Metal) and Linux (CUDA) when run through Ollama.
+
+### Alternative Local Servers
+
+Any server implementing the OpenAI-compatible `/v1/chat/completions` API works:
+
+- **[LM Studio](https://lmstudio.ai)** -- GUI-based model manager with built-in server. Default endpoint: `http://localhost:1234`
+- **[llama.cpp server](https://github.com/ggerganov/llama.cpp)** -- Lightweight C++ inference. Default endpoint: `http://localhost:8080`
+- **[vLLM](https://github.com/vllm-project/vllm)** -- High-throughput production server. Good for processing large catalogs on a dedicated GPU machine.
+
+```toml
+# Example: LM Studio
+[vlm]
+endpoint = "http://localhost:1234"
+model = "qwen2.5vl-3b"
+```
+
+### Using Cloud APIs
+
+Cloud vision APIs that implement the OpenAI chat completions format can also be used. Note that these charge per request.
+
+**OpenAI:**
+
+```toml
+[vlm]
+endpoint = "https://api.openai.com"
+model = "gpt-4o"
+```
+
+Requires `OPENAI_API_KEY` in your environment. Cost: ~$0.01--0.03 per image depending on resolution.
+
+**Groq (free tier available):**
+
+```toml
+[vlm]
+endpoint = "https://api.groq.com/openai"
+model = "llama-3.2-90b-vision-preview"
+```
+
+Requires `GROQ_API_KEY`. Free tier allows ~30 requests/minute.
+
+**Together AI:**
+
+```toml
+[vlm]
+endpoint = "https://api.together.xyz"
+model = "meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo"
+```
+
+Requires `TOGETHER_API_KEY`.
+
+> **Note on authentication:** dam currently sends requests without authentication headers. For cloud APIs that require bearer tokens, you may need a local proxy that adds the header, or use a server like Ollama as a gateway. Native API key support may be added in a future version.
+
+### Generating Descriptions
+
+```bash
+# Preview descriptions without saving (report-only)
+dam describe --query "description:none type:image" --log
+
+# Apply descriptions to undescribed assets on a volume
+dam describe --volume "Photos 2024" --apply --log
+
+# Describe a single asset
+dam describe --asset a1b2c3d4 --apply
+
+# Overwrite existing descriptions with a better model
+dam describe --query "rating:5" --model qwen2.5vl:7b --force --apply
+
+# Use a custom prompt for specific content
+dam describe --prompt "List the key subjects and artistic techniques." --query "tag:art" --apply
+
+# Dry run to see what would be processed
+dam describe --query "date:2024-06" --dry-run
+```
+
+The report-only default (no `--apply`) lets you review generated descriptions before committing them. This is especially useful when tuning prompts or trying different models.
+
+### Configuration
+
+Persistent settings go in `dam.toml`:
+
+```toml
+[vlm]
+endpoint = "http://localhost:11434"
+model = "qwen2.5vl:3b"
+max_tokens = 200
+timeout = 120
+```
+
+CLI flags (`--endpoint`, `--model`, `--prompt`, `--max-tokens`) override `dam.toml` for one-off runs.
+
+### SigLIP vs VLM: When to Use Which
+
+| | SigLIP Auto-Tag | VLM Describe |
+|--|----------------|--------------|
+| **Output** | Tags from fixed vocabulary | Free-form text |
+| **Speed** | ~50--150 ms/image | ~3--36s/image |
+| **Best for** | Categorical filtering, similarity | Documentation, search enrichment |
+| **Requires** | `--features ai`, ONNX models | `curl`, running VLM server |
+| **GPU** | CoreML via `--features ai-gpu` | Automatic via Ollama |
+
+The two approaches are complementary. Use SigLIP for fast categorical tagging across large batches, and VLM for rich descriptions when quality matters more than speed.
+
+See the [describe reference](../reference/02-ingest-commands.md#dam-describe) for all options and the [configuration reference](../reference/08-configuration.md#vlm-section) for `[vlm]` settings.
+
 ---
 
 Next: [Organizing Assets](04-organize.md) -- tags, ratings, labels, grouping, collections, and saved searches.
