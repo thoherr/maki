@@ -5667,6 +5667,7 @@ impl AssetService {
         prompt: &str,
         max_tokens: u32,
         timeout: u32,
+        temperature: f32,
         mode: crate::vlm::DescribeMode,
         apply: bool,
         force: bool,
@@ -5816,6 +5817,7 @@ impl AssetService {
                 prompt,
                 max_tokens,
                 timeout,
+                temperature,
                 mode,
                 self.debug,
             ) {

@@ -471,6 +471,13 @@ prompt = "Describe the architectural style, materials, and notable design featur
 
 Default output mode for `dam describe`. One of: `describe` (natural language description), `tags` (JSON tag suggestions), `both` (two separate VLM calls: one for description, one for tags).
 
+### temperature
+
+- **Type:** float
+- **Default:** `0.7`
+
+Sampling temperature controlling randomness in VLM output. `0.0` = deterministic (same input always produces the same output), `0.7` = balanced (default), `1.0+` = more creative/varied. Lower values give more consistent results; higher values give more diverse but potentially less accurate output.
+
 ### timeout
 
 - **Type:** unsigned 32-bit integer (seconds)
@@ -487,7 +494,7 @@ Reserved for future use. Currently, assets are processed sequentially.
 
 ### CLI Override
 
-The `--endpoint`, `--model`, `--prompt`, `--max-tokens`, `--timeout`, and `--mode` flags on `dam describe` override the values from `dam.toml`.
+The `--endpoint`, `--model`, `--prompt`, `--max-tokens`, `--timeout`, `--temperature`, and `--mode` flags on `dam describe` override the values from `dam.toml`.
 
 ```toml
 [vlm]
@@ -495,6 +502,7 @@ endpoint = "http://localhost:11434"
 model = "qwen2.5vl:3b"
 max_tokens = 200
 timeout = 120
+temperature = 0.7
 mode = "describe"
 # prompt = "Custom prompt here."
 ```
@@ -594,6 +602,7 @@ endpoint = "http://localhost:11434"
 model = "qwen2.5vl:3b"
 max_tokens = 200
 timeout = 120
+temperature = 0.7
 mode = "describe"
 # prompt = "Describe this photograph concisely."
 ```
@@ -675,6 +684,7 @@ When a field is absent from `dam.toml`, these defaults apply:
 | `vlm.max_tokens` | `200` |
 | `vlm.prompt` | none (built-in) |
 | `vlm.mode` | `"describe"` |
+| `vlm.temperature` | `0.7` |
 | `vlm.timeout` | `120` |
 | `vlm.concurrency` | `1` |
 

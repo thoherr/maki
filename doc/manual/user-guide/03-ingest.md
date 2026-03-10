@@ -624,9 +624,10 @@ endpoint = "http://localhost:11434"
 model = "qwen2.5vl:3b"
 max_tokens = 200
 timeout = 120
+temperature = 0.7
 ```
 
-CLI flags (`--endpoint`, `--model`, `--prompt`, `--max-tokens`) override `dam.toml` for one-off runs.
+CLI flags (`--endpoint`, `--model`, `--prompt`, `--max-tokens`, `--timeout`, `--temperature`, `--mode`) override `dam.toml` for one-off runs.
 
 ### SigLIP vs VLM: When to Use Which
 

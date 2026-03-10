@@ -983,6 +983,9 @@ For each asset, the command:
 **--mode \<MODE\>**
 : Output mode: `describe` (default), `tags`, or `both`. In `both` mode, two VLM calls are made per asset — one for description, one for tags.
 
+**--temperature \<FLOAT\>**
+: Sampling temperature controlling randomness. `0.0` = deterministic (always picks the most likely token), `0.7` = balanced (default), `1.0+` = more creative. Lower values produce more consistent but potentially blander output. Default from `[vlm] temperature` in `dam.toml`, or `0.7`.
+
 **--apply**
 : Write descriptions and/or tags to assets. Without this flag, results are generated and displayed but not saved.
 
@@ -1049,6 +1052,12 @@ Custom prompt for architectural photography:
 
 ```bash
 dam describe --prompt "Describe the architectural style, materials, and features." --query "tag:architecture" --apply
+```
+
+Deterministic output (temperature 0) for reproducible batch tagging:
+
+```bash
+dam describe --mode tags --temperature 0 --query "date:2024-06" --apply
 ```
 
 Increase timeout for a large model's first load:

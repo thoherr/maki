@@ -102,20 +102,21 @@ pub fn call_vlm_with_mode(
     prompt: &str,
     max_tokens: u32,
     timeout: u32,
+    temperature: f32,
     mode: DescribeMode,
     debug: bool,
 ) -> Result<VlmOutput> {
     match mode {
         DescribeMode::Both => {
             // Two separate calls: describe first, then tags
-            let desc_raw = call_vlm(endpoint, model, image_base64, DEFAULT_DESCRIBE_PROMPT, max_tokens, timeout, debug)?;
-            let tags_raw = call_vlm(endpoint, model, image_base64, DEFAULT_TAGS_PROMPT, max_tokens, timeout, debug)?;
+            let desc_raw = call_vlm(endpoint, model, image_base64, DEFAULT_DESCRIBE_PROMPT, max_tokens, timeout, temperature, debug)?;
+            let tags_raw = call_vlm(endpoint, model, image_base64, DEFAULT_TAGS_PROMPT, max_tokens, timeout, temperature, debug)?;
             let description = Some(desc_raw.trim().to_string());
             let tags = extract_tags_from_json(&tags_raw).unwrap_or_default();
             Ok(VlmOutput { description, tags })
         }
         _ => {
-            let raw = call_vlm(endpoint, model, image_base64, prompt, max_tokens, timeout, debug)?;
+            let raw = call_vlm(endpoint, model, image_base64, prompt, max_tokens, timeout, temperature, debug)?;
             parse_vlm_output(&raw, mode)
         }
     }
@@ -268,10 +269,11 @@ pub fn call_vlm(
     prompt: &str,
     max_tokens: u32,
     timeout: u32,
+    temperature: f32,
     debug: bool,
 ) -> Result<String> {
     // Try OpenAI-compatible endpoint first
-    match call_openai_compatible(endpoint, model, image_base64, prompt, max_tokens, timeout, debug)
+    match call_openai_compatible(endpoint, model, image_base64, prompt, max_tokens, timeout, temperature, debug)
     {
         Ok(text) => return Ok(text),
         Err(e) => {
@@ -288,6 +290,7 @@ pub fn call_vlm(
                     prompt,
                     max_tokens,
                     timeout,
+                    temperature,
                     debug,
                 );
             }
@@ -304,6 +307,7 @@ fn call_openai_compatible(
     prompt: &str,
     max_tokens: u32,
     timeout: u32,
+    temperature: f32,
     debug: bool,
 ) -> Result<String> {
     let body = serde_json::json!({
@@ -324,7 +328,7 @@ fn call_openai_compatible(
             ]
         }],
         "max_tokens": max_tokens,
-        "temperature": 0.3,
+        "temperature": temperature,
         "stream": false
     });
 
@@ -360,13 +364,17 @@ fn call_ollama_native(
     prompt: &str,
     _max_tokens: u32,
     timeout: u32,
+    temperature: f32,
     debug: bool,
 ) -> Result<String> {
     let body = serde_json::json!({
         "model": model,
         "prompt": prompt,
         "images": [image_base64],
-        "stream": false
+        "stream": false,
+        "options": {
+            "temperature": temperature
+        }
     });
 
     let url = format!("{}/api/generate", endpoint.trim_end_matches('/'));

@@ -313,6 +313,10 @@ enum Commands {
         #[arg(long, display_order = 9, default_value = "describe")]
         mode: String,
 
+        /// Sampling temperature (0.0 = deterministic, 1.0+ = creative)
+        #[arg(long, display_order = 10)]
+        temperature: Option<f32>,
+
         /// Apply descriptions to assets (default: report-only)
         #[arg(long, display_order = 20)]
         apply: bool,
@@ -2332,6 +2336,7 @@ fn main() {
             max_tokens,
             timeout,
             mode,
+            temperature,
             apply,
             force,
             dry_run,
@@ -2344,6 +2349,7 @@ fn main() {
             let model = model.as_deref().unwrap_or(&config.vlm.model);
             let max_tokens = max_tokens.unwrap_or(config.vlm.max_tokens);
             let timeout = timeout.unwrap_or(config.vlm.timeout);
+            let temperature = temperature.unwrap_or(config.vlm.temperature);
             let vlm_mode = dam::vlm::DescribeMode::from_str(&mode)?;
             let prompt = prompt
                 .as_deref()
@@ -2401,6 +2407,7 @@ fn main() {
                 prompt,
                 max_tokens,
                 timeout,
+                temperature,
                 vlm_mode,
                 apply,
                 force,

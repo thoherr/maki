@@ -286,6 +286,10 @@ pub struct VlmConfig {
     #[serde(default = "default_vlm_mode")]
     pub mode: String,
 
+    /// Sampling temperature (0.0 = deterministic, 1.0+ = creative).
+    #[serde(default = "default_vlm_temperature")]
+    pub temperature: f32,
+
     /// Concurrent requests (for servers that handle parallelism).
     #[serde(default = "default_vlm_concurrency")]
     pub concurrency: u32,
@@ -311,6 +315,10 @@ fn default_vlm_mode() -> String {
     "describe".to_string()
 }
 
+fn default_vlm_temperature() -> f32 {
+    0.7
+}
+
 fn default_vlm_concurrency() -> u32 {
     1
 }
@@ -324,6 +332,7 @@ impl Default for VlmConfig {
             prompt: None,
             timeout: 120,
             mode: "describe".to_string(),
+            temperature: 0.7,
             concurrency: 1,
         }
     }
