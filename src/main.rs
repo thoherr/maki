@@ -309,6 +309,10 @@ enum Commands {
         #[arg(long, display_order = 8)]
         timeout: Option<u32>,
 
+        /// What to generate: describe (prose), tags (structured), both
+        #[arg(long, display_order = 9, default_value = "describe")]
+        mode: String,
+
         /// Apply descriptions to assets (default: report-only)
         #[arg(long, display_order = 20)]
         apply: bool,
@@ -2327,6 +2331,7 @@ fn main() {
             prompt,
             max_tokens,
             timeout,
+            mode,
             apply,
             force,
             dry_run,
@@ -2339,10 +2344,11 @@ fn main() {
             let model = model.as_deref().unwrap_or(&config.vlm.model);
             let max_tokens = max_tokens.unwrap_or(config.vlm.max_tokens);
             let timeout = timeout.unwrap_or(config.vlm.timeout);
+            let vlm_mode = dam::vlm::DescribeMode::from_str(&mode)?;
             let prompt = prompt
                 .as_deref()
                 .or(config.vlm.prompt.as_deref())
-                .unwrap_or(dam::vlm::DEFAULT_DESCRIBE_PROMPT);
+                .unwrap_or_else(|| dam::vlm::default_prompt_for_mode(vlm_mode));
 
             if check {
                 match dam::vlm::check_endpoint(endpoint, timeout, cli.debug) {
@@ -2395,6 +2401,7 @@ fn main() {
                 prompt,
                 max_tokens,
                 timeout,
+                vlm_mode,
                 apply,
                 force,
                 dry_run,
@@ -2430,6 +2437,9 @@ fn main() {
                             if let Some(ref desc) = r.description {
                                 println!("{short_id}: {desc}");
                             }
+                            if !r.tags.is_empty() {
+                                println!("{short_id}: tags: {}", r.tags.join(", "));
+                            }
                         }
                         dam::vlm::DescribeStatus::Skipped(msg) => {
                             if !cli.log {
@@ -2444,23 +2454,26 @@ fn main() {
                     }
                 }
 
-                let mode = if dry_run {
+                let label = if dry_run {
                     "Describe (dry run)"
                 } else if apply {
                     "Describe"
                 } else {
                     "Describe (report only)"
                 };
-                let mut parts = vec![format!("{} described", result.described)];
+                let mut parts = vec![format!("{} processed", result.described)];
                 if result.skipped > 0 {
                     parts.push(format!("{} skipped", result.skipped));
                 }
                 if result.failed > 0 {
                     parts.push(format!("{} failed", result.failed));
                 }
-                eprintln!("{mode}: {}", parts.join(", "));
+                if result.tags_applied > 0 {
+                    parts.push(format!("{} tags applied", result.tags_applied));
+                }
+                eprintln!("{label}: {}", parts.join(", "));
                 if !apply && !dry_run && result.described > 0 {
-                    eprintln!("  Run with --apply to save descriptions to assets.");
+                    eprintln!("  Run with --apply to save changes to assets.");
                 }
             }
             Ok(())

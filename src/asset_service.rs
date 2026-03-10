@@ -5667,12 +5667,13 @@ impl AssetService {
         prompt: &str,
         max_tokens: u32,
         timeout: u32,
+        mode: crate::vlm::DescribeMode,
         apply: bool,
         force: bool,
         dry_run: bool,
         on_asset: impl Fn(&str, &crate::vlm::DescribeStatus, std::time::Duration),
     ) -> Result<crate::vlm::BatchDescribeResult> {
-        use crate::vlm::{self, BatchDescribeResult, DescribeResult, DescribeStatus};
+        use crate::vlm::{self, BatchDescribeResult, DescribeMode, DescribeResult, DescribeStatus};
 
         let catalog = crate::catalog::Catalog::open(&self.catalog_root)?;
         let engine = crate::query::QueryEngine::new(&self.catalog_root);
@@ -5705,12 +5706,16 @@ impl AssetService {
             results.into_iter().map(|r| r.asset_id).collect()
         };
 
+        let wants_description = mode == DescribeMode::Describe || mode == DescribeMode::Both;
+
         let mut result = BatchDescribeResult {
             described: 0,
             skipped: 0,
             failed: 0,
+            tags_applied: 0,
             errors: Vec::new(),
             dry_run: !apply || dry_run,
+            mode: mode.to_string(),
             results: Vec::new(),
         };
 
@@ -5728,6 +5733,7 @@ impl AssetService {
                     result.results.push(DescribeResult {
                         asset_id: aid.clone(),
                         description: None,
+                        tags: Vec::new(),
                         status: DescribeStatus::Error(msg.clone()),
                     });
                     on_asset(aid, &DescribeStatus::Error(msg), asset_start.elapsed());
@@ -5735,8 +5741,8 @@ impl AssetService {
                 }
             };
 
-            // Skip if description exists and --force not set
-            if !force {
+            // In describe/both modes, skip if description exists and --force not set
+            if wants_description && !force {
                 if let Some(ref desc) = details.description {
                     if !desc.is_empty() {
                         let msg = "already has description".to_string();
@@ -5744,6 +5750,7 @@ impl AssetService {
                         result.results.push(DescribeResult {
                             asset_id: aid.clone(),
                             description: Some(desc.clone()),
+                            tags: Vec::new(),
                             status: DescribeStatus::Skipped(msg.clone()),
                         });
                         on_asset(aid, &DescribeStatus::Skipped(msg), asset_start.elapsed());
@@ -5762,6 +5769,7 @@ impl AssetService {
                     result.results.push(DescribeResult {
                         asset_id: aid.clone(),
                         description: None,
+                        tags: Vec::new(),
                         status: DescribeStatus::Skipped(msg.clone()),
                     });
                     on_asset(aid, &DescribeStatus::Skipped(msg), asset_start.elapsed());
@@ -5770,11 +5778,12 @@ impl AssetService {
             };
 
             if dry_run {
-                let msg = format!("would describe (image: {})", image_path.display());
+                let msg = format!("would process (image: {})", image_path.display());
                 result.described += 1;
                 result.results.push(DescribeResult {
                     asset_id: aid.clone(),
                     description: None,
+                    tags: Vec::new(),
                     status: DescribeStatus::Described,
                 });
                 on_asset(aid, &DescribeStatus::Skipped(msg), asset_start.elapsed());
@@ -5791,6 +5800,7 @@ impl AssetService {
                     result.results.push(DescribeResult {
                         asset_id: aid.clone(),
                         description: None,
+                        tags: Vec::new(),
                         status: DescribeStatus::Error(msg.clone()),
                     });
                     on_asset(aid, &DescribeStatus::Error(msg), asset_start.elapsed());
@@ -5798,17 +5808,18 @@ impl AssetService {
                 }
             };
 
-            // Call VLM
-            let description = match vlm::call_vlm(
+            // Call VLM and parse output
+            let output = match vlm::call_vlm_with_mode(
                 endpoint,
                 model,
                 &image_base64,
                 prompt,
                 max_tokens,
                 timeout,
+                mode,
                 self.debug,
             ) {
-                Ok(text) => text,
+                Ok(o) => o,
                 Err(e) => {
                     let msg = format!("VLM failed for {short_id}: {e}");
                     result.errors.push(msg.clone());
@@ -5816,6 +5827,7 @@ impl AssetService {
                     result.results.push(DescribeResult {
                         asset_id: aid.clone(),
                         description: None,
+                        tags: Vec::new(),
                         status: DescribeStatus::Error(msg.clone()),
                     });
                     on_asset(aid, &DescribeStatus::Error(msg), asset_start.elapsed());
@@ -5824,46 +5836,81 @@ impl AssetService {
             };
 
             // Skip empty responses
-            if description.is_empty() {
+            if output.description.as_ref().map_or(true, |d| d.is_empty()) && output.tags.is_empty() {
                 let msg = format!("VLM returned empty response for {short_id}");
                 result.errors.push(msg.clone());
                 result.failed += 1;
                 result.results.push(DescribeResult {
                     asset_id: aid.clone(),
                     description: None,
+                    tags: Vec::new(),
                     status: DescribeStatus::Error(msg.clone()),
                 });
                 on_asset(aid, &DescribeStatus::Error(msg), asset_start.elapsed());
                 continue;
             }
 
-            // Apply description
+            // Apply description (describe and both modes)
             if apply {
-                let edit_fields = crate::query::EditFields {
-                    name: None,
-                    description: Some(Some(description.clone())),
-                    rating: None,
-                    color_label: None,
-                    created_at: None,
-                };
-                if let Err(e) = engine.edit(aid, edit_fields) {
-                    let msg = format!("Failed to save description for {short_id}: {e}");
-                    result.errors.push(msg.clone());
-                    result.failed += 1;
-                    result.results.push(DescribeResult {
-                        asset_id: aid.clone(),
-                        description: Some(description),
-                        status: DescribeStatus::Error(msg.clone()),
-                    });
-                    on_asset(aid, &DescribeStatus::Error(msg), asset_start.elapsed());
-                    continue;
+                if let Some(ref desc) = output.description {
+                    if !desc.is_empty() {
+                        let edit_fields = crate::query::EditFields {
+                            name: None,
+                            description: Some(Some(desc.clone())),
+                            rating: None,
+                            color_label: None,
+                            created_at: None,
+                        };
+                        if let Err(e) = engine.edit(aid, edit_fields) {
+                            let msg = format!("Failed to save description for {short_id}: {e}");
+                            result.errors.push(msg.clone());
+                            result.failed += 1;
+                            result.results.push(DescribeResult {
+                                asset_id: aid.clone(),
+                                description: output.description,
+                                tags: output.tags,
+                                status: DescribeStatus::Error(msg.clone()),
+                            });
+                            on_asset(aid, &DescribeStatus::Error(msg), asset_start.elapsed());
+                            continue;
+                        }
+                    }
+                }
+
+                // Apply tags (tags and both modes) — deduplicated against existing tags
+                if !output.tags.is_empty() {
+                    let existing_tags: HashSet<String> = details
+                        .tags
+                        .iter()
+                        .map(|t| t.to_lowercase())
+                        .collect();
+                    let new_tags: Vec<String> = output
+                        .tags
+                        .iter()
+                        .filter(|t| !existing_tags.contains(&t.to_lowercase()))
+                        .cloned()
+                        .collect();
+
+                    if !new_tags.is_empty() {
+                        match engine.tag(aid, &new_tags, false) {
+                            Ok(_) => {
+                                result.tags_applied += new_tags.len();
+                            }
+                            Err(e) => {
+                                let msg = format!("Failed to apply tags for {short_id}: {e}");
+                                result.errors.push(msg.clone());
+                                // Don't fail the whole asset — description was already saved
+                            }
+                        }
+                    }
                 }
             }
 
             result.described += 1;
             result.results.push(DescribeResult {
                 asset_id: aid.clone(),
-                description: Some(description.clone()),
+                description: output.description.clone(),
+                tags: output.tags.clone(),
                 status: DescribeStatus::Described,
             });
             on_asset(aid, &DescribeStatus::Described, asset_start.elapsed());

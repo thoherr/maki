@@ -4,15 +4,71 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+/// Describe mode: what to generate from the VLM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DescribeMode {
+    Describe,
+    Tags,
+    Both,
+}
+
+impl DescribeMode {
+    pub fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_str() {
+            "describe" => Ok(Self::Describe),
+            "tags" => Ok(Self::Tags),
+            "both" => Ok(Self::Both),
+            _ => anyhow::bail!("Invalid mode '{s}'. Valid modes: describe, tags, both"),
+        }
+    }
+}
+
+impl std::fmt::Display for DescribeMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Describe => write!(f, "describe"),
+            Self::Tags => write!(f, "tags"),
+            Self::Both => write!(f, "both"),
+        }
+    }
+}
+
 /// Default prompt for describe mode.
 pub const DEFAULT_DESCRIBE_PROMPT: &str =
     "Describe this photograph in 1-3 concise sentences. Focus on the subject, setting, lighting, and mood. Be specific about what you see, not what you interpret.";
+
+/// Default prompt for tags mode.
+pub const DEFAULT_TAGS_PROMPT: &str =
+    "Suggest descriptive tags for this photograph. Return a JSON object with a single key \"tags\" containing an array of short, specific tag strings. Focus on subject, scene type, lighting, mood, colors, and photographic style. Example: {\"tags\": [\"golden hour\", \"silhouette\", \"beach\"]}";
+
+/// Default prompt for both mode.
+pub const DEFAULT_BOTH_PROMPT: &str =
+    "Analyze this photograph. Return a JSON object with two keys: \"description\" (1-3 concise sentences about the subject, setting, lighting, and mood) and \"tags\" (an array of short, specific tag strings covering subject, scene, lighting, mood, colors, and style). Example: {\"description\": \"A lone tree on a hilltop at sunset.\", \"tags\": [\"golden hour\", \"silhouette\", \"landscape\"]}";
+
+/// Return the default prompt for a given mode.
+pub fn default_prompt_for_mode(mode: DescribeMode) -> &'static str {
+    match mode {
+        DescribeMode::Describe => DEFAULT_DESCRIBE_PROMPT,
+        DescribeMode::Tags => DEFAULT_TAGS_PROMPT,
+        DescribeMode::Both => DEFAULT_BOTH_PROMPT,
+    }
+}
+
+/// Output of a VLM call, parsed per mode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VlmOutput {
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+}
 
 /// Result of a single VLM call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DescribeResult {
     pub asset_id: String,
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     pub status: DescribeStatus,
 }
 
@@ -31,9 +87,122 @@ pub struct BatchDescribeResult {
     pub described: usize,
     pub skipped: usize,
     pub failed: usize,
+    pub tags_applied: usize,
     pub errors: Vec<String>,
     pub dry_run: bool,
+    pub mode: String,
     pub results: Vec<DescribeResult>,
+}
+
+/// Call a VLM endpoint with an image and parse output according to mode.
+pub fn call_vlm_with_mode(
+    endpoint: &str,
+    model: &str,
+    image_base64: &str,
+    prompt: &str,
+    max_tokens: u32,
+    timeout: u32,
+    mode: DescribeMode,
+    debug: bool,
+) -> Result<VlmOutput> {
+    let raw = call_vlm(endpoint, model, image_base64, prompt, max_tokens, timeout, debug)?;
+    parse_vlm_output(&raw, mode)
+}
+
+/// Parse raw VLM text into structured output based on mode.
+pub fn parse_vlm_output(raw: &str, mode: DescribeMode) -> Result<VlmOutput> {
+    match mode {
+        DescribeMode::Describe => Ok(VlmOutput {
+            description: Some(raw.to_string()),
+            tags: Vec::new(),
+        }),
+        DescribeMode::Tags => {
+            let tags = extract_tags_from_json(raw)?;
+            Ok(VlmOutput {
+                description: None,
+                tags,
+            })
+        }
+        DescribeMode::Both => {
+            // Try to parse as JSON with both fields
+            if let Some(parsed) = try_parse_both(raw) {
+                return Ok(parsed);
+            }
+            // Fallback: treat the whole response as description
+            Ok(VlmOutput {
+                description: Some(raw.to_string()),
+                tags: Vec::new(),
+            })
+        }
+    }
+}
+
+/// Extract tags array from a JSON response.
+/// Handles: `{"tags": [...]}`, `["tag1", ...]`, or markdown-wrapped JSON.
+fn extract_tags_from_json(raw: &str) -> Result<Vec<String>> {
+    let cleaned = strip_markdown_json(raw);
+
+    // Try {"tags": [...]}
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&cleaned) {
+        if let Some(tags) = extract_string_array(&v, "tags") {
+            return Ok(tags);
+        }
+        // Try bare array
+        if let Some(arr) = v.as_array() {
+            let tags: Vec<String> = arr.iter().filter_map(|t| t.as_str().map(String::from)).collect();
+            if !tags.is_empty() {
+                return Ok(tags);
+            }
+        }
+    }
+
+    anyhow::bail!("Could not parse tags from VLM response: {}", &raw[..raw.len().min(200)])
+}
+
+/// Try to parse a "both" mode response: {"description": "...", "tags": [...]}
+fn try_parse_both(raw: &str) -> Option<VlmOutput> {
+    let cleaned = strip_markdown_json(raw);
+    let v: serde_json::Value = serde_json::from_str(&cleaned).ok()?;
+
+    let description = v.get("description").and_then(|d| d.as_str()).map(|s| s.trim().to_string());
+    let tags = extract_string_array(&v, "tags").unwrap_or_default();
+
+    // Need at least one of the two fields
+    if description.is_some() || !tags.is_empty() {
+        Some(VlmOutput { description, tags })
+    } else {
+        None
+    }
+}
+
+/// Extract a string array from a JSON value by key.
+fn extract_string_array(v: &serde_json::Value, key: &str) -> Option<Vec<String>> {
+    v.get(key)
+        .and_then(|arr| arr.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str().map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .filter(|tags: &Vec<String>| !tags.is_empty())
+}
+
+/// Strip markdown code fences from JSON responses.
+/// Many VLMs wrap JSON in ```json ... ``` blocks.
+fn strip_markdown_json(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Some(rest) = trimmed.strip_prefix("```json") {
+        if let Some(inner) = rest.strip_suffix("```") {
+            return inner.trim().to_string();
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("```") {
+        if let Some(inner) = rest.strip_suffix("```") {
+            return inner.trim().to_string();
+        }
+    }
+    trimmed.to_string()
 }
 
 /// Call a VLM endpoint with an image.
@@ -372,5 +541,72 @@ mod tests {
     #[test]
     fn test_default_describe_prompt() {
         assert!(DEFAULT_DESCRIBE_PROMPT.contains("photograph"));
+    }
+
+    #[test]
+    fn test_describe_mode_from_str() {
+        assert_eq!(DescribeMode::from_str("describe").unwrap(), DescribeMode::Describe);
+        assert_eq!(DescribeMode::from_str("tags").unwrap(), DescribeMode::Tags);
+        assert_eq!(DescribeMode::from_str("both").unwrap(), DescribeMode::Both);
+        assert_eq!(DescribeMode::from_str("TAGS").unwrap(), DescribeMode::Tags);
+        assert!(DescribeMode::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn test_parse_describe_mode() {
+        let output = parse_vlm_output("A sunset over the ocean.", DescribeMode::Describe).unwrap();
+        assert_eq!(output.description.unwrap(), "A sunset over the ocean.");
+        assert!(output.tags.is_empty());
+    }
+
+    #[test]
+    fn test_parse_tags_json_object() {
+        let raw = r#"{"tags": ["golden hour", "beach", "sunset"]}"#;
+        let output = parse_vlm_output(raw, DescribeMode::Tags).unwrap();
+        assert!(output.description.is_none());
+        assert_eq!(output.tags, vec!["golden hour", "beach", "sunset"]);
+    }
+
+    #[test]
+    fn test_parse_tags_bare_array() {
+        let raw = r#"["golden hour", "beach", "sunset"]"#;
+        let output = parse_vlm_output(raw, DescribeMode::Tags).unwrap();
+        assert_eq!(output.tags, vec!["golden hour", "beach", "sunset"]);
+    }
+
+    #[test]
+    fn test_parse_tags_markdown_wrapped() {
+        let raw = "```json\n{\"tags\": [\"landscape\", \"mountains\"]}\n```";
+        let output = parse_vlm_output(raw, DescribeMode::Tags).unwrap();
+        assert_eq!(output.tags, vec!["landscape", "mountains"]);
+    }
+
+    #[test]
+    fn test_parse_both_mode() {
+        let raw = r#"{"description": "A sunset at the beach.", "tags": ["sunset", "beach"]}"#;
+        let output = parse_vlm_output(raw, DescribeMode::Both).unwrap();
+        assert_eq!(output.description.unwrap(), "A sunset at the beach.");
+        assert_eq!(output.tags, vec!["sunset", "beach"]);
+    }
+
+    #[test]
+    fn test_parse_both_fallback_to_description() {
+        let raw = "Just a plain text response without JSON.";
+        let output = parse_vlm_output(raw, DescribeMode::Both).unwrap();
+        assert_eq!(output.description.unwrap(), raw);
+        assert!(output.tags.is_empty());
+    }
+
+    #[test]
+    fn test_strip_markdown_json() {
+        assert_eq!(strip_markdown_json("```json\n{}\n```"), "{}");
+        assert_eq!(strip_markdown_json("```\n{}\n```"), "{}");
+        assert_eq!(strip_markdown_json("{}"), "{}");
+    }
+
+    #[test]
+    fn test_parse_tags_invalid_json() {
+        let raw = "Here are some tags: sunset, beach, ocean";
+        assert!(parse_vlm_output(raw, DescribeMode::Tags).is_err());
     }
 }

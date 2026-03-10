@@ -282,6 +282,10 @@ pub struct VlmConfig {
     #[serde(default = "default_vlm_timeout")]
     pub timeout: u32,
 
+    /// Default mode: "describe", "tags", "both".
+    #[serde(default = "default_vlm_mode")]
+    pub mode: String,
+
     /// Concurrent requests (for servers that handle parallelism).
     #[serde(default = "default_vlm_concurrency")]
     pub concurrency: u32,
@@ -303,6 +307,10 @@ fn default_vlm_timeout() -> u32 {
     120
 }
 
+fn default_vlm_mode() -> String {
+    "describe".to_string()
+}
+
 fn default_vlm_concurrency() -> u32 {
     1
 }
@@ -315,6 +323,7 @@ impl Default for VlmConfig {
             max_tokens: 200,
             prompt: None,
             timeout: 120,
+            mode: "describe".to_string(),
             concurrency: 1,
         }
     }
