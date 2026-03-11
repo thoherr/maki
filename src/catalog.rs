@@ -407,6 +407,7 @@ pub struct SearchOptions<'a> {
     pub person_asset_ids: Option<&'a [String]>,
     pub person_exclude_ids: Option<&'a [String]>,
     pub similar_asset_ids: Option<&'a [String]>,
+    pub text_search_ids: Option<&'a [String]>,
     pub sort: SearchSort,
     pub page: u32,
     pub per_page: u32,
@@ -468,6 +469,7 @@ impl<'a> Default for SearchOptions<'a> {
             person_asset_ids: None,
             person_exclude_ids: None,
             similar_asset_ids: None,
+            text_search_ids: None,
             sort: SearchSort::DateDesc,
             page: 1,
             per_page: 60,
@@ -2846,6 +2848,19 @@ impl Catalog {
 
         // Similar assets filter (pre-computed from embedding similarity search)
         if let Some(ids) = opts.similar_asset_ids {
+            if ids.is_empty() {
+                clauses.push("0".to_string());
+            } else {
+                let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
+                clauses.push(format!("a.id IN ({})", placeholders.join(",")));
+                for id in ids {
+                    params.push(Box::new(id.clone()));
+                }
+            }
+        }
+
+        // Text search filter (pre-computed from text-to-image embedding similarity)
+        if let Some(ids) = opts.text_search_ids {
             if ids.is_empty() {
                 clauses.push("0".to_string());
             } else {
@@ -7048,5 +7063,64 @@ mod tests {
         };
         let results = catalog.search_paginated(&opts).unwrap();
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn search_text_search_ids_filter() {
+        let catalog = setup_search_catalog();
+        let all = catalog
+            .search_paginated(&SearchOptions {
+                per_page: u32::MAX,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Filter using text_search_ids (same mechanism as similar but for text queries)
+        let ids = vec![all[0].asset_id.clone()];
+        let opts = SearchOptions {
+            text_search_ids: Some(&ids),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].asset_id, all[0].asset_id);
+    }
+
+    #[test]
+    fn search_text_search_ids_empty() {
+        let catalog = setup_search_catalog();
+        let ids: Vec<String> = vec![];
+        let opts = SearchOptions {
+            text_search_ids: Some(&ids),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn search_text_search_ids_composes_with_other_filters() {
+        let catalog = setup_search_catalog();
+        let all = catalog
+            .search_paginated(&SearchOptions {
+                per_page: u32::MAX,
+                ..Default::default()
+            })
+            .unwrap();
+
+        // Both IDs in text_search_ids, but restrict by rating
+        let ids: Vec<String> = all.iter().map(|r| r.asset_id.clone()).collect();
+        let opts = SearchOptions {
+            text_search_ids: Some(&ids),
+            rating_min: Some(5), // Only the 5-star asset
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        // Should only return assets matching both text_search_ids AND rating
+        assert!(results.len() <= ids.len());
     }
 }

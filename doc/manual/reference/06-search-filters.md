@@ -698,6 +698,25 @@ dam search "embed:none type:image"         # images that still need embeddings
 
 ---
 
+## text (AI feature)
+
+**Syntax:** `text:<query>` or `text:"<multi-word query>"`
+
+**Description:** Natural language image search using SigLIP's text encoder. Encodes the query text into the same embedding space as image embeddings, then finds the top 50 most similar images via dot-product similarity. Requires the `ai` feature (`--features ai`) and embeddings to have been generated via `dam embed` or `dam import --embed`.
+
+**Examples:**
+
+```
+dam search "text:sunset"                                   # images matching "sunset"
+dam search "text:\"colorful flowers in a garden\""         # multi-word query
+dam search "text:\"person on a beach\" rating:3+"          # combined with other filters
+dam search "text:\"mountain landscape\" type:image"        # text search + type filter
+```
+
+**Behavior:** Loads the SigLIP model (text encoder), encodes the query string into an embedding vector, loads the in-memory embedding index, and returns the top 50 assets by dot-product similarity. The result set can be further filtered by all other search filters (AND logic). Since SigLIP is a vision-language model trained on image-text pairs, queries describe visual content ("red car", "sunset over water", "portrait of a woman") rather than metadata. Results quality depends on how well the SigLIP model generalizes.
+
+---
+
 ## Combining Filters
 
 All filters are combined with AND logic. Every specified filter must match for an asset to appear in results. Free-text terms are also AND-combined with all prefix filters.
@@ -812,6 +831,7 @@ dam search "camera:fuji"
 | `faces:` | yes | yes (query input) | yes |
 | `person:` | yes | yes (dropdown) | yes |
 | `similar:` | yes (ai feature) | yes (detail page) | no |
+| `text:` | yes (ai feature) | yes (query input) | yes |
 | `embed:` | yes (ai feature) | no | yes |
 
 ---

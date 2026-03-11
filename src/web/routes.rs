@@ -159,6 +159,50 @@ pub async fn browse_page(
             }
         }
 
+        // Resolve text: search filter to asset IDs via SigLIP text encoder
+        #[cfg(feature = "ai")]
+        let text_query_ids;
+        #[cfg(feature = "ai")]
+        if let Some(ref text_q) = parsed.text_query {
+            let model_id = &state.ai_config.model;
+            let spec = crate::ai::get_model_spec(model_id);
+            if let Some(spec) = spec {
+                let model_dir = resolve_model_dir(&state.ai_config);
+                let mut model_guard = state.ai_model.blocking_lock();
+                if model_guard.is_none() {
+                    if let Ok(m) = crate::ai::SigLipModel::load_with_provider(
+                        &model_dir, model_id, false, &state.ai_config.execution_provider,
+                    ) {
+                        *model_guard = Some(m);
+                    }
+                }
+                if let Some(ref mut model) = *model_guard {
+                    if let Ok(embs) = model.encode_texts(&[text_q.clone()]) {
+                        let query_emb = &embs[0];
+                        // Ensure embedding index is loaded
+                        let needs_load = state.ai_embedding_index.read().unwrap().is_none();
+                        if needs_load {
+                            if let Ok(index) = crate::embedding_store::EmbeddingIndex::load(
+                                catalog.conn(), model_id, spec.embedding_dim,
+                            ) {
+                                *state.ai_embedding_index.write().unwrap() = Some(index);
+                            }
+                        }
+                        let results = {
+                            let idx_guard = state.ai_embedding_index.read().unwrap();
+                            if let Some(ref idx) = *idx_guard {
+                                idx.search(query_emb, 50, None)
+                            } else {
+                                Vec::new()
+                            }
+                        };
+                        text_query_ids = results.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+                        opts.text_search_ids = Some(&text_query_ids);
+                    }
+                }
+            }
+        }
+
         let per_page = state.per_page;
         opts.sort = SearchSort::from_str(sort_str);
         opts.page = page;
@@ -395,6 +439,49 @@ pub async fn search_api(
             {
                 person_ids = Vec::<String>::new();
                 opts.person_asset_ids = Some(&person_ids);
+            }
+        }
+
+        // Resolve text: search filter to asset IDs via SigLIP text encoder
+        #[cfg(feature = "ai")]
+        let text_query_ids;
+        #[cfg(feature = "ai")]
+        if let Some(ref text_q) = parsed.text_query {
+            let model_id = &state.ai_config.model;
+            let spec = crate::ai::get_model_spec(model_id);
+            if let Some(spec) = spec {
+                let model_dir = resolve_model_dir(&state.ai_config);
+                let mut model_guard = state.ai_model.blocking_lock();
+                if model_guard.is_none() {
+                    if let Ok(m) = crate::ai::SigLipModel::load_with_provider(
+                        &model_dir, model_id, false, &state.ai_config.execution_provider,
+                    ) {
+                        *model_guard = Some(m);
+                    }
+                }
+                if let Some(ref mut model) = *model_guard {
+                    if let Ok(embs) = model.encode_texts(&[text_q.clone()]) {
+                        let query_emb = &embs[0];
+                        let needs_load = state.ai_embedding_index.read().unwrap().is_none();
+                        if needs_load {
+                            if let Ok(index) = crate::embedding_store::EmbeddingIndex::load(
+                                catalog.conn(), model_id, spec.embedding_dim,
+                            ) {
+                                *state.ai_embedding_index.write().unwrap() = Some(index);
+                            }
+                        }
+                        let results = {
+                            let idx_guard = state.ai_embedding_index.read().unwrap();
+                            if let Some(ref idx) = *idx_guard {
+                                idx.search(query_emb, 50, None)
+                            } else {
+                                Vec::new()
+                            }
+                        };
+                        text_query_ids = results.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+                        opts.text_search_ids = Some(&text_query_ids);
+                    }
+                }
             }
         }
 

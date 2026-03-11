@@ -147,12 +147,12 @@ Natural language image descriptions via local vision-language models.
 - "Describe" button on detail page, batch "Describe" in toolbar
 - VLM startup health check, `vlm_enabled` template flag
 - Truncated JSON recovery, tag deduplication
+- `text:` semantic search filter — natural language image search via SigLIP text encoder
 
 **Open (Phase 4):**
 - Concurrent requests (`concurrency > 1`)
 - Custom prompt library (`[vlm.prompts]`)
 - Auto-describe during import (`dam import --describe`)
-- Description-based semantic search
 
 ### Statistics Dashboard
 

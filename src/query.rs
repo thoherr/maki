@@ -112,6 +112,10 @@ pub struct ParsedSearch {
     pub similar: Option<String>,
     #[cfg(feature = "ai")]
     pub similar_limit: Option<usize>,
+    #[cfg(feature = "ai")]
+    pub text_query: Option<String>,
+    #[cfg(feature = "ai")]
+    pub text_query_limit: Option<usize>,
 }
 
 impl ParsedSearch {
@@ -412,6 +416,13 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
                     }
                 } else {
                     parsed.similar = Some(_value.to_string());
+                }
+            }
+        } else if let Some(_value) = token_body.strip_prefix("text:") {
+            #[cfg(feature = "ai")]
+            {
+                if !_value.is_empty() {
+                    parsed.text_query = Some(_value.to_string());
                 }
             }
         } else if negated {
@@ -869,6 +880,44 @@ impl QueryEngine {
             let results = index.search(&query_emb, limit, Some(&full_id));
             similar_ids = results.into_iter().map(|(id, _score)| id).collect::<Vec<_>>();
             opts.similar_asset_ids = Some(&similar_ids);
+        }
+
+        // Pre-compute text search asset IDs from text-to-image embedding similarity
+        #[cfg(feature = "ai")]
+        let text_query_ids;
+        #[cfg(feature = "ai")]
+        if let Some(ref text_q) = parsed.text_query {
+            let config = crate::config::CatalogConfig::load(&self.catalog_root).unwrap_or_default();
+            let model_id = &config.ai.model;
+            let spec = crate::ai::get_model_spec(model_id)
+                .ok_or_else(|| anyhow::anyhow!("Unknown AI model: {model_id}"))?;
+
+            // Resolve model directory
+            let model_dir_str = &config.ai.model_dir;
+            let model_base = if model_dir_str.starts_with("~/") {
+                let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
+                    .map_err(|_| anyhow::anyhow!("Cannot determine home directory"))?;
+                std::path::PathBuf::from(home).join(&model_dir_str[2..])
+            } else {
+                std::path::PathBuf::from(model_dir_str)
+            };
+            let model_dir = model_base.join(model_id);
+
+            // Load model and encode the text query
+            let mut model = crate::ai::SigLipModel::load_with_provider(
+                &model_dir, model_id, false, &config.ai.execution_provider,
+            )?;
+            let query_emb = model.encode_texts(&[text_q.clone()])?;
+            let query_emb = &query_emb[0];
+
+            // Search embedding index
+            let limit = parsed.text_query_limit.unwrap_or(50);
+            let index = crate::embedding_store::EmbeddingIndex::load(
+                catalog.conn(), model_id, spec.embedding_dim,
+            )?;
+            let results = index.search(query_emb, limit, None);
+            text_query_ids = results.into_iter().map(|(id, _score)| id).collect::<Vec<_>>();
+            opts.text_search_ids = Some(&text_query_ids);
         }
 
         // Pre-compute online volume IDs for volume:none
@@ -3283,6 +3332,36 @@ mod tests {
         let p = parse_search_query("similar:550e8400-e29b-41d4-a716-446655440000:10");
         assert_eq!(p.similar.as_deref(), Some("550e8400-e29b-41d4-a716-446655440000"));
         assert_eq!(p.similar_limit, Some(10));
+    }
+
+    #[cfg(feature = "ai")]
+    #[test]
+    fn parse_text_query_basic() {
+        let p = parse_search_query("text:sunset");
+        assert_eq!(p.text_query.as_deref(), Some("sunset"));
+    }
+
+    #[cfg(feature = "ai")]
+    #[test]
+    fn parse_text_query_quoted() {
+        let p = parse_search_query("text:\"sunset on the beach\"");
+        assert_eq!(p.text_query.as_deref(), Some("sunset on the beach"));
+    }
+
+    #[cfg(feature = "ai")]
+    #[test]
+    fn parse_text_query_with_other_filters() {
+        let p = parse_search_query("text:\"colorful flowers\" rating:3+ type:image");
+        assert_eq!(p.text_query.as_deref(), Some("colorful flowers"));
+        assert_eq!(p.rating_min, Some(3));
+        assert_eq!(p.asset_types, vec!["image".to_string()]);
+    }
+
+    #[cfg(feature = "ai")]
+    #[test]
+    fn parse_text_query_empty_ignored() {
+        let p = parse_search_query("text:");
+        assert!(p.text_query.is_none());
     }
 
     #[test]
