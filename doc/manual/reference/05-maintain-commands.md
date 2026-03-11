@@ -581,25 +581,37 @@ dam-relocate -- copy or move asset files to another volume
 
 ```
 dam [GLOBAL FLAGS] relocate <ASSET_ID> <VOLUME> [OPTIONS]
+dam [GLOBAL FLAGS] relocate <ASSET_IDS...> --target <VOLUME> [OPTIONS]
+dam [GLOBAL FLAGS] relocate --query <QUERY> --target <VOLUME> [OPTIONS]
 ```
 
 ### DESCRIPTION
 
-Copies all files belonging to an asset (variants and recipes) to a target volume. After copying, verifies file integrity via SHA-256 comparison. Preserves the relative path structure on the target volume.
+Copies all files belonging to one or more assets (variants and recipes) to a target volume. After copying, verifies file integrity via SHA-256 comparison. Preserves the relative path structure on the target volume.
 
 Without `--remove-source`, files are copied and the asset gains additional file locations on the target volume. With `--remove-source`, source files are deleted after verified copy, effectively moving the asset.
 
-Asset IDs support unique prefix matching.
+**Single-asset mode**: `dam relocate <ID> <VOLUME>` — backward-compatible form with two positional arguments.
+
+**Batch mode**: Use `--target` with one of:
+- Multiple positional IDs: `dam relocate <ID1> <ID2> ... --target <VOL>`
+- Search query: `dam relocate --query "tag:landscape" --target <VOL>`
+- Stdin: `dam search -q "rating:5" | dam relocate --target <VOL>`
+
+Asset IDs support unique prefix matching. Batch mode reports per-asset progress with `--log` and a summary at the end.
 
 ### ARGUMENTS
 
-**ASSET_ID** (required)
-: The asset ID or a unique prefix of it.
-
-**VOLUME** (required)
-: Target volume label or UUID.
+**ASSET_IDS** (positional)
+: One or more asset IDs or unique prefixes. Reads from stdin when empty and no `--query` is given.
 
 ### OPTIONS
+
+**--target \<VOLUME\>**
+: Target volume label or UUID. Required for batch mode. In single-asset mode, the volume can be given as the second positional argument instead.
+
+**--query \<QUERY\>**
+: Search query to select assets for batch relocate. Uses the same query syntax as `dam search`.
 
 **--remove-source**
 : Delete source files after successful copy and SHA-256 verification.
@@ -607,7 +619,7 @@ Asset IDs support unique prefix matching.
 **--dry-run**
 : Show what would happen without making any changes.
 
-`--json` outputs a `RelocateResult` with details of copied/moved files.
+`--json` outputs a JSON result with `assets`, `copied`, `skipped`, `removed`, `errors`, and `dry_run` fields.
 
 ### EXAMPLES
 
@@ -623,10 +635,23 @@ Move an asset (copy + delete source):
 dam relocate a1b2c3d4 "Archive" --remove-source
 ```
 
-Preview what would be relocated:
+Batch relocate by search query:
 
 ```bash
-dam relocate a1b2c3d4 "Backup" --dry-run
+dam relocate --query "tag:landscape rating:4+" --target "Archive" --dry-run
+dam relocate --query "date:2024" --target "Archive 2024" --remove-source --log
+```
+
+Batch relocate via stdin:
+
+```bash
+dam search -q "volume:Working date:2023" | dam relocate --target "Cold Storage" --remove-source
+```
+
+Multiple IDs:
+
+```bash
+dam relocate a1b2c3d4 e5f6g7h8 --target "Backup" --dry-run
 ```
 
 Relocate with full diagnostics:

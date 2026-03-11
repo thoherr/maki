@@ -110,6 +110,8 @@ Cards that belong to a stack have a colored left border for quick visual identif
 
 **Stack collapsing**: By default, stacks are collapsed -- only the pick image (position 0) is shown in the grid, with a stack count badge indicating how many assets are hidden. A collapse toggle in the results bar lets you expand all stacks so every member is visible. When expanded, all stack members appear in position order with the colored border indicating membership.
 
+**Per-stack expand/collapse**: Click the stack badge (⊞ N) on any browse card to expand or collapse just that individual stack, regardless of the global collapse setting. When stacks are globally collapsed, clicking a badge fetches and displays that stack's members inline. When stacks are globally expanded, clicking a badge collapses only that stack while others remain expanded. Re-clicking restores the previous state.
+
 Click a card to open the [asset detail page](#asset-detail-page).
 
 ### View mode toggle
@@ -475,6 +477,14 @@ A fixed toolbar appears at the bottom of the screen whenever one or more assets 
 
 After every batch operation, the selection clears and the results grid refreshes to reflect the changes. All toolbar buttons are disabled during the operation to prevent double submissions.
 
+### Drag-and-drop
+
+The web UI supports drag-and-drop for two common operations:
+
+**Adding to collections**: Drag one or more browse cards onto the collection dropdown in the batch toolbar. If cards are selected, dragging any selected card moves the entire selection. A toast notification confirms how many assets were added. The collection dropdown highlights as a valid drop target during the drag.
+
+**Reordering stack members**: On the asset detail page, stack members can be dragged to reorder. Dropping a member into the first position sets it as the stack pick.
+
 ### Keyboard shortcuts for selection
 
 | Key | Action |
@@ -707,6 +717,23 @@ A fan-out slider in the bottom-left corner (range 0--10, configurable via `[serv
 | Shift+F | Toggle filter bar visibility |
 | Escape | Return to the browse page |
 | ? | Open keyboard help |
+
+
+## Analytics Page
+
+Navigate to `/analytics` or click "Analytics" in the navigation bar to see shooting and storage analytics.
+
+The analytics page displays:
+
+- **Yearly shooting counts**: bar chart of assets imported per year
+- **Monthly sparkline**: monthly import volume for the most recent years
+- **Camera usage**: top camera bodies by asset count
+- **Lens usage**: top lenses by asset count
+- **Rating distribution**: vertical bar chart showing how many assets have each star rating (1–5) plus unrated
+- **Format distribution**: bar chart of file formats across the catalog
+- **Storage by volume**: bar chart showing total size per volume
+
+All charts auto-scale to their data. This complements the [Stats Page](#stats-page) with a more visual, photography-oriented perspective.
 
 
 ## Backup Status Page

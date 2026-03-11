@@ -632,6 +632,38 @@ curl -X DELETE http://localhost:8080/api/batch/stack \
   -d '{"asset_ids": ["uuid-1", "uuid-2"]}'
 ```
 
+### `GET /api/stack/{id}/members` -- Stack Members
+
+Returns all members of a stack as a JSON array of card data, ordered by stack position. Used by the per-stack expand/collapse feature on the browse page.
+
+**Response**: `application/json`
+
+```json
+[
+  {
+    "asset_id": "uuid-1",
+    "name": "DSC_001.NEF",
+    "asset_type": "image",
+    "format": "NEF",
+    "date": "2026-01-15",
+    "preview_url": "/previews/ab/abcdef1234.jpg",
+    "rating": 4,
+    "label": "Green",
+    "variant_count": 2,
+    "preview_rotation": 0,
+    "stack_id": "stack-uuid"
+  }
+]
+```
+
+```bash
+curl http://localhost:8080/api/stack/550e8400-e29b-41d4-a716-446655440000/members
+```
+
+### `GET /analytics` -- Analytics Dashboard
+
+Returns the analytics page with shooting frequency, camera/lens usage, rating distribution, format breakdown, monthly import volume, and storage per volume charts.
+
 ### `POST /api/asset/{id}/suggest-tags` -- AI Tag Suggestions
 
 *Requires `--features ai` compilation.*

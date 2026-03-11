@@ -325,6 +325,8 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 - `DELETE /api/dedup/location` — remove a specific file location and co-located recipes (JSON: `{content_hash, volume_id, relative_path}`)
 - `GET /stroll` — stroll page for graph-based visual similarity exploration (feature-gated: `--features ai`). Optional `?id=<asset-id>` parameter; without it, picks a random asset with an embedding. Radial layout with center asset and satellite neighbors.
 - `GET /api/stroll/neighbors` — returns center asset metadata and neighbor list with preview URLs and similarity scores (JSON: `{center: {...}, neighbors: [{asset_id, preview_url, similarity, ...}, ...]}`). Params: `id` (asset ID), `limit` (5–25, default 12), `q` (optional search query to filter neighbors)
+- `GET /analytics` — analytics dashboard with shooting frequency, camera/lens usage, rating distribution, format breakdown, monthly import volume, and storage per volume charts
+- `GET /api/stack/{id}/members` — returns all members of a stack as JSON array of card data, ordered by stack position (for per-stack expand/collapse)
 
 **Catalog extensions** (in `src/catalog.rs`):
 - `SearchOptions` / `SearchSort` / `SearchPage` — paginated search with volume filter, date filters, and dynamic sort

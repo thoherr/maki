@@ -782,6 +782,9 @@ Starts a local web server that provides a browser-based interface for browsing, 
 - **Keyboard navigation**: Arrow keys navigate between cards, Enter opens details, Space toggles selection, 1-5 sets rating, 0 clears rating, Alt+1-7 sets label, single letters (r/o/y/g/b/p/u) set label by color initial, x clears label.
 - **Saved search chips**: Clickable chips on the browse page load saved searches into the filter UI.
 - **Tags page**: Shows a collapsible tree view for hierarchical tags (tags containing `/` as a hierarchy separator). Non-hierarchical tags continue to display in the flat multi-column layout.
+- **Analytics page** (`/analytics`): Shooting frequency, camera/lens usage, rating distribution, format breakdown, monthly import volume, and storage per volume charts.
+- **Drag-and-drop**: Drag browse cards onto the collection dropdown to add to a collection. Drag stack members on the detail page to reorder.
+- **Per-stack expand/collapse**: Click the stack badge (⊞ N) on a browse card to expand/collapse just that stack, independent of the global toggle.
 
 The server defaults to `127.0.0.1:8080`. These can be overridden by CLI flags or the `[serve]` section in `dam.toml`. CLI flags take precedence over configuration.
 

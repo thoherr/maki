@@ -2,6 +2,19 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v2.5.1 (2026-03-11)
+
+### New Features
+- **Analytics dashboard** (`/analytics`) — shooting frequency, camera/lens usage, rating distribution, format breakdown, monthly import volume, and storage per volume charts. Accessible from the nav bar under Maintain.
+- **Batch relocate** — `dam relocate --query <QUERY> --target <VOLUME>` moves entire search results to a target volume in one command. Also supports stdin piping (`dam search -q "..." | dam relocate --target <VOL>`) and multiple positional IDs. Backward compatible with the existing single-asset `dam relocate <ID> <VOL>` syntax.
+- **Drag-and-drop** — drag browse cards onto the collection dropdown to add assets to a collection. Drag stack members on the detail page to reorder (drop to first position sets the pick). Visual feedback with drop highlights and toast notifications.
+- **Per-stack expand/collapse** — click the stack badge (⊞ N) on a browse card to expand or collapse just that stack, independent of the global collapse toggle. When globally expanded, clicking a badge collapses only that stack; re-clicking restores it.
+
+### Bug Fixes
+- **Stack member count on detail page** — detail page now shows all stack members including the current asset, fixing an off-by-one where the pick was excluded from the member list.
+- **Per-stack expand with global expand** — clicking the stack badge when stacks were globally expanded no longer adds duplicate cards. Now correctly hides non-pick members of just that stack.
+- **Keyboard focus preservation** — global stack toggle and htmx swaps now preserve focus by asset ID instead of grid index, preventing focus from jumping to the wrong card.
+
 ## v2.5.0 (2026-03-11)
 
 ### New Features

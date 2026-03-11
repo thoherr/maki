@@ -2,7 +2,7 @@
 
 Living document tracking planned enhancements. Previous proposals (all implemented or deferred) are in `archive/`.
 
-Current version: **v2.5.0** (2026-03-11)
+Current version: **v2.5.1** (2026-03-11)
 
 ---
 
@@ -99,13 +99,14 @@ Surface drive health and verification staleness proactively.
 
 Move entire query results to a target volume in one command.
 
-**Scope:**
-- `dam relocate --query <QUERY> --target <VOLUME> [--remove-source] [--dry-run]`
-- Or piped: `dam search -q "date:2024 volume:Working" | dam relocate --target "Archive 2024"`
-- Progress reporting with `--log`
-- Dry-run with size estimate
+**Status:** Implemented in v2.5.1.
 
-**Complexity:** Low. `relocate` per-asset logic exists; needs a query-driven loop.
+**Done:**
+- `dam relocate --query <QUERY> --target <VOLUME> [--remove-source] [--dry-run]`
+- Stdin piping: `dam search -q "date:2024 volume:Working" | dam relocate --target "Archive 2024"`
+- Multiple positional IDs with `--target`
+- Backward compatible with single-asset `dam relocate <ID> <VOL>`
+- Progress reporting with `--log`, batch summary with `--json`
 
 ---
 
@@ -127,12 +128,12 @@ Track metadata changes with timestamps for audit trail and undo capability.
 
 Reorder stacks, add to collections, and manage groups via drag-and-drop in the browser.
 
-**Scope:**
-- Drag browse cards onto collection sidebar to add
-- Drag within stack view to reorder (set pick)
-- HTML5 drag-and-drop API with touch fallback
+**Status:** Implemented in v2.5.1.
 
-**Complexity:** Medium. Frontend-heavy; backend endpoints already exist.
+**Done:**
+- Drag browse cards onto collection dropdown to add to collection
+- Drag stack members on detail page to reorder (drop to first = set pick)
+- HTML5 drag-and-drop API with visual feedback (drop highlights, toast notifications)
 
 ### Ollama VLM Integration
 
@@ -157,14 +158,12 @@ Natural language image descriptions via local vision-language models.
 
 Shooting analytics beyond the current `dam stats` command.
 
-**Scope:**
-- Shooting frequency heatmap (already have calendar view — could add stats overlay)
-- Camera/lens usage breakdown over time
-- Rating distribution trends
-- Storage growth projections
-- Web UI: `/analytics` page with charts
+**Status:** Implemented in v2.5.1.
 
-**Complexity:** Medium. Aggregate queries exist in stats; needs charting (could use lightweight JS library).
+**Done:**
+- `/analytics` page with shooting frequency, camera/lens usage, rating distribution, format breakdown, monthly import volume, and storage per volume charts
+- Auto-scaling bar charts and sparkline rendering
+- Nav bar link under Maintain group
 
 ---
 
@@ -180,4 +179,4 @@ All previous proposals are in `doc/proposals/archive/`. Key milestones:
 - **v2.2**: Performance — SQLite pragmas, single connection, denormalized columns
 - **v2.3**: Stroll, sync-metadata, comprehensive cleanup, faces/people
 - **v2.4**: Contact sheet export, split command, alternate variant role, grouped CLI help, CoreML GPU acceleration, VLM image descriptions
-- **v2.5**: Text-to-image semantic search, auto-describe during import
+- **v2.5**: Text-to-image semantic search, auto-describe during import, analytics dashboard, batch relocate, drag-and-drop, per-stack expand/collapse
