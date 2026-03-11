@@ -260,6 +260,20 @@ Uses the model configured in `[ai] model`. Silently skips if the model is not do
 embeddings = true
 ```
 
+### descriptions
+
+- **Type:** boolean
+- **Default:** `false`
+
+When `true`, import automatically generates VLM descriptions for newly imported assets as a post-import phase. Equivalent to passing `--describe` on every `dam import` command.
+
+Uses the VLM configured in `[vlm]` (endpoint, model, prompt, mode, temperature). Silently skips if the VLM endpoint is not available. Assets that already have descriptions are skipped. Works with all `[vlm] mode` settings (describe, tags, both).
+
+```toml
+[import]
+descriptions = true
+```
+
 ---
 
 ## [dedup] Section
@@ -561,6 +575,8 @@ auto_tags = ["inbox", "unreviewed"]
 smart_previews = true
 # Generate embeddings for visual similarity search during import (--features ai).
 embeddings = true
+# Generate VLM descriptions during import (requires running Ollama or compatible endpoint).
+descriptions = true
 
 [dedup]
 # Default path substring for --prefer (keep files whose path contains this).
@@ -662,6 +678,7 @@ When a field is absent from `dam.toml`, these defaults apply:
 | `import.auto_tags` | `[]` |
 | `import.smart_previews` | `false` |
 | `import.embeddings` | `false` |
+| `import.descriptions` | `false` |
 | `dedup.prefer` | none |
 | `verify.max_age_days` | none |
 | `contact_sheet.layout` | `"standard"` |

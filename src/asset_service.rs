@@ -5674,6 +5674,45 @@ impl AssetService {
         dry_run: bool,
         on_asset: impl Fn(&str, &crate::vlm::DescribeStatus, std::time::Duration),
     ) -> Result<crate::vlm::BatchDescribeResult> {
+        self.describe_inner(query, asset_id, volume, None, endpoint, model, prompt, max_tokens, timeout, temperature, mode, apply, force, dry_run, on_asset)
+    }
+
+    /// Describe specific assets by ID (for post-import phase).
+    pub fn describe_assets(
+        &self,
+        asset_ids: &[String],
+        endpoint: &str,
+        model: &str,
+        prompt: &str,
+        max_tokens: u32,
+        timeout: u32,
+        temperature: f32,
+        mode: crate::vlm::DescribeMode,
+        force: bool,
+        dry_run: bool,
+        on_asset: impl Fn(&str, &crate::vlm::DescribeStatus, std::time::Duration),
+    ) -> Result<crate::vlm::BatchDescribeResult> {
+        self.describe_inner(None, None, None, Some(asset_ids), endpoint, model, prompt, max_tokens, timeout, temperature, mode, true, force, dry_run, on_asset)
+    }
+
+    fn describe_inner(
+        &self,
+        query: Option<&str>,
+        asset_id: Option<&str>,
+        volume: Option<&str>,
+        explicit_ids: Option<&[String]>,
+        endpoint: &str,
+        model: &str,
+        prompt: &str,
+        max_tokens: u32,
+        timeout: u32,
+        temperature: f32,
+        mode: crate::vlm::DescribeMode,
+        apply: bool,
+        force: bool,
+        dry_run: bool,
+        on_asset: impl Fn(&str, &crate::vlm::DescribeStatus, std::time::Duration),
+    ) -> Result<crate::vlm::BatchDescribeResult> {
         use crate::vlm::{self, BatchDescribeResult, DescribeMode, DescribeResult, DescribeStatus};
 
         let catalog = crate::catalog::Catalog::open(&self.catalog_root)?;
@@ -5689,7 +5728,9 @@ impl AssetService {
             .collect();
 
         // Resolve target assets
-        let asset_ids: Vec<String> = if let Some(id) = asset_id {
+        let asset_ids: Vec<String> = if let Some(ids) = explicit_ids {
+            ids.to_vec()
+        } else if let Some(id) = asset_id {
             let full_id = catalog
                 .resolve_asset_id(id)?
                 .ok_or_else(|| anyhow::anyhow!("No asset found matching '{id}'"))?;

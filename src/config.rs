@@ -153,6 +153,8 @@ pub struct ImportConfig {
     pub smart_previews: bool,
     #[serde(default)]
     pub embeddings: bool,
+    #[serde(default)]
+    pub descriptions: bool,
 }
 
 fn is_default_preview(p: &PreviewConfig) -> bool {

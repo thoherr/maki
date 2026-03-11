@@ -85,6 +85,10 @@ enum Commands {
         #[cfg(feature = "ai")]
         #[arg(long, display_order = 23)]
         embed: bool,
+
+        /// Generate VLM descriptions for imported assets (requires running Ollama)
+        #[arg(long, display_order = 24)]
+        describe: bool,
     },
 
     /// Delete assets from the catalog
@@ -1551,6 +1555,7 @@ fn main() {
             smart,
             #[cfg(feature = "ai")]
             embed,
+            describe,
         } => {
             use dam::asset_service::FileTypeFilter;
 
@@ -1780,6 +1785,69 @@ fn main() {
                 None
             };
 
+            // Post-import VLM describe phase
+            let describe_result = if !dry_run
+                && (describe || config.import.descriptions)
+                && !result.new_asset_ids.is_empty()
+            {
+                // Check VLM endpoint availability first
+                let endpoint = &config.vlm.endpoint;
+                let vlm_model = &config.vlm.model;
+                let vlm_available = dam::vlm::check_endpoint(endpoint, 5, cli.debug).is_ok();
+
+                if vlm_available {
+                    let mode = dam::vlm::DescribeMode::from_str(&config.vlm.mode)
+                        .unwrap_or(dam::vlm::DescribeMode::Describe);
+                    let prompt = config.vlm.prompt.as_deref()
+                        .unwrap_or_else(|| dam::vlm::default_prompt_for_mode(mode));
+                    let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
+                    let log = cli.log;
+                    match service.describe_assets(
+                        &result.new_asset_ids,
+                        endpoint,
+                        vlm_model,
+                        prompt,
+                        config.vlm.max_tokens,
+                        config.vlm.timeout,
+                        config.vlm.temperature,
+                        mode,
+                        false, // force: don't overwrite existing descriptions
+                        false, // dry_run
+                        |aid, status, elapsed| {
+                            if log {
+                                let short = &aid[..8.min(aid.len())];
+                                match status {
+                                    dam::vlm::DescribeStatus::Described => {
+                                        eprintln!("  {short} — described ({})", format_duration(elapsed));
+                                    }
+                                    dam::vlm::DescribeStatus::Skipped(msg) => {
+                                        eprintln!("  {short} — skipped: {msg}");
+                                    }
+                                    dam::vlm::DescribeStatus::Error(msg) => {
+                                        eprintln!("  {short} — error: {msg}");
+                                    }
+                                }
+                            }
+                        },
+                    ) {
+                        Ok(dr) => Some(dr),
+                        Err(e) => {
+                            if cli.log {
+                                eprintln!("  Describe phase failed: {e:#}");
+                            }
+                            None
+                        }
+                    }
+                } else {
+                    if cli.log {
+                        eprintln!("  Skipping descriptions: VLM endpoint not available at {endpoint}");
+                    }
+                    None
+                }
+            } else {
+                None
+            };
+
             if cli.json {
                 #[allow(unused_mut)]
                 let mut json_val = serde_json::to_value(&result)?;
@@ -1790,6 +1858,13 @@ fn main() {
                 if let Some((embedded, skipped_embed)) = embed_result {
                     json_val["embeddings_generated"] = serde_json::json!(embedded);
                     json_val["embeddings_skipped"] = serde_json::json!(skipped_embed);
+                }
+                if let Some(ref dr) = describe_result {
+                    json_val["descriptions_generated"] = serde_json::json!(dr.described);
+                    json_val["descriptions_skipped"] = serde_json::json!(dr.skipped);
+                    if dr.tags_applied > 0 {
+                        json_val["describe_tags_applied"] = serde_json::json!(dr.tags_applied);
+                    }
                 }
                 println!("{}", serde_json::to_string_pretty(&json_val)?);
             } else {
@@ -1819,6 +1894,11 @@ fn main() {
                 if let Some((embedded, _)) = embed_result {
                     if embedded > 0 {
                         parts.push(format!("{} embedding(s) generated", embedded));
+                    }
+                }
+                if let Some(ref dr) = describe_result {
+                    if dr.described > 0 {
+                        parts.push(format!("{} described", dr.described));
                     }
                 }
                 if parts.is_empty() {
