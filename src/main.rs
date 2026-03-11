@@ -740,11 +740,16 @@ enum Commands {
     /// Copy or move asset files to another volume
     #[command(display_order = 45)]
     Relocate {
-        /// Asset ID
-        asset_id: String,
+        /// Asset IDs (reads from stdin if empty and no --query)
+        asset_ids: Vec<String>,
 
         /// Target volume label or ID
-        volume: String,
+        #[arg(long)]
+        target: Option<String>,
+
+        /// Search query to select assets for batch relocate
+        #[arg(long, display_order = 1)]
+        query: Option<String>,
 
         /// Delete source files after successful copy and verification
         #[arg(long)]
@@ -3569,44 +3574,140 @@ fn main() {
             Ok(())
         }
         Commands::Relocate {
-            asset_id,
-            volume,
+            asset_ids,
+            target,
+            query,
             remove_source,
             dry_run,
         } => {
             let catalog_root = dam::config::find_catalog_root()?;
             let config = CatalogConfig::load(&catalog_root)?;
             let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
-            let result = service.relocate(&asset_id, &volume, remove_source, dry_run)?;
+
+            // Resolve asset IDs: --query, positional args, or stdin
+            let ids: Vec<String> = if let Some(ref q) = query {
+                let engine = QueryEngine::new(&catalog_root);
+                engine.search(q)?.into_iter().map(|r| r.asset_id).collect()
+            } else if asset_ids.is_empty() {
+                use std::io::BufRead;
+                std::io::stdin().lock().lines()
+                    .filter_map(|l| l.ok())
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect()
+            } else {
+                asset_ids
+            };
+
+            if ids.is_empty() {
+                anyhow::bail!("No asset IDs specified. Use --query, positional args, or pipe from stdin.");
+            }
+
+            // Determine target volume: --target flag, or second positional arg for single-asset compat
+            let target_volume = match target {
+                Some(t) => t,
+                None => {
+                    // Backward compat: `dam relocate <asset-id> <volume>`
+                    if ids.len() == 2 && query.is_none() {
+                        let vol = ids[1].clone();
+                        // Treat as single-asset mode: first arg is asset, second is volume
+                        let single_id = ids[0].clone();
+                        let result = service.relocate(&single_id, &vol, remove_source, dry_run)?;
+
+                        if cli.json {
+                            println!("{}", serde_json::to_string_pretty(&result)?);
+                        } else {
+                            if dry_run {
+                                println!("Dry run — no changes made:");
+                            }
+                            for action in &result.actions {
+                                println!("  {action}");
+                            }
+                            let verb = if remove_source { "moved" } else { "copied" };
+                            let mut parts: Vec<String> = Vec::new();
+                            if result.copied > 0 {
+                                parts.push(format!("{} {verb}", result.copied));
+                            }
+                            if result.skipped > 0 {
+                                parts.push(format!("{} skipped", result.skipped));
+                            }
+                            if parts.is_empty() {
+                                if result.actions.len() == 1 {
+                                    // The "already on target" message was printed above
+                                } else {
+                                    println!("Relocate: nothing to do");
+                                }
+                            } else {
+                                println!("Relocate complete: {}", parts.join(", "));
+                            }
+                        }
+                        return Ok(());
+                    }
+                    anyhow::bail!("--target <volume> is required for batch relocate");
+                }
+            };
+
+            // Batch relocate
+            let total = ids.len();
+            let mut total_copied: usize = 0;
+            let mut total_skipped: usize = 0;
+            let mut total_removed: usize = 0;
+            let mut errors: Vec<String> = Vec::new();
+
+            if dry_run && !cli.json {
+                println!("Dry run — no changes will be made:");
+            }
+
+            for (i, id) in ids.iter().enumerate() {
+                match service.relocate(id, &target_volume, remove_source, dry_run) {
+                    Ok(result) => {
+                        total_copied += result.copied;
+                        total_skipped += result.skipped;
+                        total_removed += result.removed;
+
+                        if cli.log {
+                            let verb = if remove_source { "moved" } else { "copied" };
+                            eprintln!("[{}/{}] {} — {} {verb}, {} skipped",
+                                i + 1, total, &id[..8.min(id.len())],
+                                result.copied, result.skipped);
+                        }
+                    }
+                    Err(e) => {
+                        let msg = format!("{}: {e:#}", &id[..8.min(id.len())]);
+                        if cli.log {
+                            eprintln!("[{}/{}] ERROR {msg}", i + 1, total);
+                        }
+                        errors.push(msg);
+                    }
+                }
+            }
 
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&result)?);
+                println!("{}", serde_json::json!({
+                    "assets": total,
+                    "copied": total_copied,
+                    "skipped": total_skipped,
+                    "removed": total_removed,
+                    "errors": errors,
+                    "dry_run": dry_run,
+                }));
             } else {
-                if dry_run {
-                    println!("Dry run — no changes made:");
-                }
-
-                for action in &result.actions {
-                    println!("  {action}");
-                }
-
                 let verb = if remove_source { "moved" } else { "copied" };
                 let mut parts: Vec<String> = Vec::new();
-                if result.copied > 0 {
-                    parts.push(format!("{} {verb}", result.copied));
+                parts.push(format!("{total} assets"));
+                if total_copied > 0 {
+                    parts.push(format!("{total_copied} files {verb}"));
                 }
-                if result.skipped > 0 {
-                    parts.push(format!("{} skipped", result.skipped));
+                if total_skipped > 0 {
+                    parts.push(format!("{total_skipped} skipped"));
                 }
-                if parts.is_empty() {
-                    if result.actions.len() == 1 {
-                        // The "already on target" message was printed above
-                    } else {
-                        println!("Relocate: nothing to do");
+                if !errors.is_empty() {
+                    parts.push(format!("{} errors", errors.len()));
+                    for e in &errors {
+                        eprintln!("  error: {e}");
                     }
-                } else {
-                    println!("Relocate complete: {}", parts.join(", "));
                 }
+                println!("Relocate complete: {}", parts.join(", "));
             }
 
             Ok(())

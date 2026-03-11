@@ -691,6 +691,62 @@ fn relocate_dry_run_no_changes() {
 }
 
 #[test]
+fn relocate_batch_with_query() {
+    let dir = tempdir().unwrap();
+    let (root, vol1, vol2) = init_two_volumes(dir.path());
+
+    create_test_file(&vol1, "a.jpg", b"batch relocate A");
+    create_test_file(&vol1, "b.jpg", b"batch relocate B");
+
+    // Import both files with a tag for querying
+    dam()
+        .current_dir(&root)
+        .args(["import", "--add-tag", "batch-test", vol1.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Batch relocate all tagged assets to vol2
+    dam()
+        .current_dir(&root)
+        .args(["relocate", "--query", "tag:batch-test", "--target", "vol2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 assets"))
+        .stdout(predicate::str::contains("copied"));
+
+    // Both files should now exist on vol2
+    assert!(vol2.join("a.jpg").exists());
+    assert!(vol2.join("b.jpg").exists());
+    // Still on vol1 (no --remove-source)
+    assert!(vol1.join("a.jpg").exists());
+    assert!(vol1.join("b.jpg").exists());
+}
+
+#[test]
+fn relocate_batch_dry_run() {
+    let dir = tempdir().unwrap();
+    let (root, vol1, vol2) = init_two_volumes(dir.path());
+
+    create_test_file(&vol1, "dry_batch.jpg", b"dry batch data");
+
+    dam()
+        .current_dir(&root)
+        .args(["import", "--add-tag", "drybatch", vol1.to_str().unwrap()])
+        .assert()
+        .success();
+
+    dam()
+        .current_dir(&root)
+        .args(["relocate", "--query", "tag:drybatch", "--target", "vol2", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run"));
+
+    // File should NOT exist on vol2
+    assert!(!vol2.join("dry_batch.jpg").exists());
+}
+
+#[test]
 fn import_conflicting_include_skip_errors() {
     let dir = tempdir().unwrap();
     let root = init_catalog(dir.path());
