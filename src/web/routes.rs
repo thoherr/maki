@@ -12,7 +12,7 @@ use crate::query::{normalize_path_for_search, parse_search_query};
 use crate::device_registry::DeviceRegistry;
 
 use super::templates::{
-    format_size, link_cards, AssetCard, AssetPage, BackupPage, BrowsePage, CollectionOption,
+    format_size, link_cards, AnalyticsPage, AssetCard, AssetPage, BackupPage, BrowsePage, CollectionOption,
     CompareAsset, ComparePage, DateFragment, DescriptionFragment, DuplicatesPage, FaceRow,
     FormatGroup, FormatOption, LabelFragment, NameFragment, PeoplePage, PersonCard, PersonOption,
     PreviewFragment, RatingFragment, ResultsPartial, SavedSearchChip, SavedSearchEntry,
@@ -1055,6 +1055,30 @@ pub async fn stats_page(State(state): State<Arc<AppState>>) -> Response {
         let tmpl = StatsPage {
             stats,
             total_size_fmt,
+            ai_enabled: state.ai_enabled,
+            vlm_enabled: state.vlm_enabled,
+        };
+        Ok::<_, anyhow::Error>(tmpl.render()?)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(html)) => Html(html).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+/// GET /analytics — analytics dashboard page.
+pub async fn analytics_page(State(state): State<Arc<AppState>>) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+        let data = catalog.build_analytics(15)?;
+        let tmpl = AnalyticsPage {
+            data,
             ai_enabled: state.ai_enabled,
             vlm_enabled: state.vlm_enabled,
         };

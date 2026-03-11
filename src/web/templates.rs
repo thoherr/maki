@@ -1,6 +1,6 @@
 use askama::Template;
 
-use crate::catalog::{AssetDetails, BackupStatusResult, CatalogStats, SearchRow};
+use crate::catalog::{AnalyticsData, AssetDetails, BackupStatusResult, CatalogStats, SearchRow};
 
 /// Compute preview URL from a content hash like "sha256:abcdef...".
 pub fn preview_url(content_hash: &str, ext: &str) -> String {
@@ -484,6 +484,14 @@ pub struct TagsPage {
 pub struct StatsPage {
     pub stats: CatalogStats,
     pub total_size_fmt: String,
+    pub ai_enabled: bool,
+    pub vlm_enabled: bool,
+}
+
+#[derive(Template)]
+#[template(path = "analytics.html")]
+pub struct AnalyticsPage {
+    pub data: AnalyticsData,
     pub ai_enabled: bool,
     pub vlm_enabled: bool,
 }

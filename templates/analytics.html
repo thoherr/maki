@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+
+{% block title %}Analytics - DAM{% endblock %}
+
+{% block nav_explore %}{% if ai_enabled %}<a href="/stroll">Stroll</a>{% endif %}{% endblock %}
+{% block nav_organize %}{% if ai_enabled %}<a href="/people">People</a>{% endif %}{% endblock %}
+
+{% block content %}
+<h1>Analytics</h1>
+
+<!-- Yearly shooting volume -->
+{% if !data.yearly_counts.is_empty() %}
+<div class="stats-section">
+    <h2>Assets by Year</h2>
+    <div class="bar-chart" data-auto-scale>
+    {% for y in data.yearly_counts %}
+        <div class="bar-row">
+            <span class="bar-label">{{ y.year }}</span>
+            <div class="bar-track">
+                <div class="bar-fill" data-value="{{ y.count }}"></div>
+            </div>
+            <span class="bar-value">{{ y.count }}</span>
+        </div>
+    {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Monthly import volume -->
+{% if !data.monthly_imports.is_empty() %}
+<div class="stats-section">
+    <h2>Monthly Volume (Last 24 Months)</h2>
+    <div class="analytics-sparkline" id="monthly-chart">
+        {% for m in data.monthly_imports %}
+        <div class="spark-bar" data-value="{{ m.count }}" title="{{ m.month }}: {{ m.count }} assets">
+            <div class="spark-fill"></div>
+            <span class="spark-label">{{ m.month }}</span>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Two-column: Camera & Lens -->
+<div class="stats-columns">
+    {% if !data.camera_usage.is_empty() %}
+    <div class="stats-section">
+        <h2>Camera Bodies</h2>
+        <div class="bar-chart" data-auto-scale>
+        {% for c in data.camera_usage %}
+            <div class="bar-row">
+                <span class="bar-label bar-label-wide">{{ c.name }}</span>
+                <div class="bar-track">
+                    <div class="bar-fill accent-fill-teal" data-value="{{ c.count }}"></div>
+                </div>
+                <span class="bar-value">{{ c.count }}</span>
+            </div>
+        {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if !data.lens_usage.is_empty() %}
+    <div class="stats-section">
+        <h2>Lenses</h2>
+        <div class="bar-chart" data-auto-scale>
+        {% for l in data.lens_usage %}
+            <div class="bar-row">
+                <span class="bar-label bar-label-wide">{{ l.name }}</span>
+                <div class="bar-track">
+                    <div class="bar-fill accent-fill-amber" data-value="{{ l.count }}"></div>
+                </div>
+                <span class="bar-value">{{ l.count }}</span>
+            </div>
+        {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Two-column: Rating & Format -->
+<div class="stats-columns">
+    <div class="stats-section">
+        <h2>Rating Distribution</h2>
+        <div class="rating-chart">
+        {% for r in data.rating_distribution %}
+            <div class="rating-bar" data-value="{{ r.count }}">
+                <div class="rating-fill"></div>
+                <span class="rating-label">{% if r.rating == 0 %}Unrated{% else %}{{ r.rating }}{% endif %}</span>
+                <span class="rating-count">{{ r.count }}</span>
+            </div>
+        {% endfor %}
+        </div>
+    </div>
+
+    {% if !data.format_distribution.is_empty() %}
+    <div class="stats-section">
+        <h2>Format Distribution</h2>
+        <div class="bar-chart" data-auto-scale>
+        {% for f in data.format_distribution %}
+            <div class="bar-row">
+                <span class="bar-label">{{ f.name }}</span>
+                <div class="bar-track">
+                    <div class="bar-fill accent-fill-purple" data-value="{{ f.count }}"></div>
+                </div>
+                <span class="bar-value">{{ f.count }}</span>
+            </div>
+        {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Storage by volume -->
+{% if !data.storage_by_volume.is_empty() %}
+<div class="stats-section">
+    <h2>Storage by Volume</h2>
+    <div class="bar-chart" data-auto-scale>
+    {% for v in data.storage_by_volume %}
+        <div class="bar-row">
+            <span class="bar-label bar-label-wide">{{ v.label }}</span>
+            <div class="bar-track">
+                <div class="bar-fill accent-fill-emerald" data-value="{{ v.size }}"></div>
+            </div>
+            <span class="bar-value">{{ v.size|fmt_bytes }}</span>
+        </div>
+    {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<script>
+// Auto-scale bar charts
+document.querySelectorAll('.bar-chart[data-auto-scale]').forEach(function(chart) {
+    var fills = chart.querySelectorAll('.bar-fill[data-value]');
+    var max = 0;
+    fills.forEach(function(f) { var v = parseInt(f.dataset.value, 10); if (v > max) max = v; });
+    if (max > 0) fills.forEach(function(f) {
+        f.style.width = (parseInt(f.dataset.value, 10) / max * 100) + '%';
+    });
+});
+
+// Scale monthly sparkline
+(function() {
+    var bars = document.querySelectorAll('#monthly-chart .spark-bar');
+    if (!bars.length) return;
+    var max = 0;
+    bars.forEach(function(b) { var v = parseInt(b.dataset.value, 10); if (v > max) max = v; });
+    if (max > 0) bars.forEach(function(b) {
+        var pct = (parseInt(b.dataset.value, 10) / max * 100);
+        b.querySelector('.spark-fill').style.height = pct + '%';
+    });
+})();
+
+// Scale rating chart (vertical bars)
+(function() {
+    var bars = document.querySelectorAll('.rating-chart .rating-bar');
+    if (!bars.length) return;
+    var max = 0;
+    bars.forEach(function(b) { var v = parseInt(b.dataset.value, 10); if (v > max) max = v; });
+    if (max > 0) bars.forEach(function(b) {
+        var pct = (parseInt(b.dataset.value, 10) / max * 100);
+        b.querySelector('.rating-fill').style.height = pct + '%';
+    });
+})();
+</script>
+
+{% endblock %}

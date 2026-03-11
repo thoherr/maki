@@ -259,6 +259,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/compare", axum::routing::get(routes::compare_page))
         .route("/tags", axum::routing::get(routes::tags_page))
         .route("/stats", axum::routing::get(routes::stats_page))
+        .route("/analytics", axum::routing::get(routes::analytics_page))
         .route("/backup", axum::routing::get(routes::backup_page))
         .route("/api/search", axum::routing::get(routes::search_api))
         .route(

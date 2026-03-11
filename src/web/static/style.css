@@ -1126,6 +1126,9 @@ details[open] summary { margin-bottom: 0.5rem; }
 }
 .accent-fill-teal { background: #0d9488; }
 .accent-fill-amber { background: #d97706; }
+.accent-fill-purple { background: #7c3aed; }
+.accent-fill-emerald { background: #059669; }
+.bar-label-wide { width: 160px; }
 .bar-value {
     font-size: 0.82rem;
     font-weight: 600;
@@ -1829,6 +1832,81 @@ body.has-batch-toolbar { padding-bottom: 60px; }
 .btn-sm:hover { background: var(--badge-bg); }
 .btn-danger { color: var(--danger, #e74c3c); border-color: var(--danger, #e74c3c); }
 .btn-danger:hover { background: var(--danger, #e74c3c); color: #fff; }
+
+/* ===== Analytics Page ===== */
+.analytics-sparkline {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 180px;
+    padding: 0.5rem 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 0.5rem 2rem;
+}
+.spark-bar {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    height: 100%;
+    position: relative;
+}
+.spark-fill {
+    width: 100%;
+    min-width: 4px;
+    background: #0d6efd;
+    border-radius: 2px 2px 0 0;
+    transition: height 0.4s ease;
+}
+.spark-label {
+    position: absolute;
+    bottom: -1.5rem;
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    transform: rotate(-45deg);
+    transform-origin: top left;
+}
+.spark-bar:nth-child(even) .spark-label { display: none; }
+
+.rating-chart {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-end;
+    height: 160px;
+    padding: 0.5rem 0;
+}
+.rating-bar {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    height: 100%;
+    position: relative;
+}
+.rating-fill {
+    width: 100%;
+    background: #f59e0b;
+    border-radius: 4px 4px 0 0;
+    min-height: 2px;
+    transition: height 0.4s ease;
+}
+.rating-bar:first-child .rating-fill { background: var(--text-muted); }
+.rating-label {
+    margin-top: 0.4rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text);
+}
+.rating-count {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0.15rem;
+}
 
 /* ===== Backup Status Page ===== */
 .backup-summary {
