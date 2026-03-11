@@ -212,6 +212,13 @@ pub struct AiConfig {
     /// "auto" selects the best available provider for the platform.
     #[serde(default = "default_execution_provider")]
     pub execution_provider: String,
+    /// Default result limit for `text:` search filter (default 50).
+    #[serde(default = "default_text_limit")]
+    pub text_limit: usize,
+}
+
+fn default_text_limit() -> usize {
+    50
 }
 
 fn default_ai_model() -> String {
@@ -253,6 +260,7 @@ impl Default for AiConfig {
             face_cluster_threshold: 0.5,
             face_min_confidence: 0.5,
             execution_provider: "auto".to_string(),
+            text_limit: 50,
         }
     }
 }

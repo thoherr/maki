@@ -422,7 +422,20 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
             #[cfg(feature = "ai")]
             {
                 if !_value.is_empty() {
-                    parsed.text_query = Some(_value.to_string());
+                    // text:"query":limit or text:query:limit or text:"query" or text:query
+                    // Check if the value ends with :<number> after the query part
+                    if let Some((query_part, limit_str)) = _value.rsplit_once(':') {
+                        if let Ok(limit) = limit_str.parse::<usize>() {
+                            if !query_part.is_empty() {
+                                parsed.text_query = Some(query_part.to_string());
+                                parsed.text_query_limit = Some(limit);
+                            }
+                        } else {
+                            parsed.text_query = Some(_value.to_string());
+                        }
+                    } else {
+                        parsed.text_query = Some(_value.to_string());
+                    }
                 }
             }
         } else if negated {
@@ -911,7 +924,7 @@ impl QueryEngine {
             let query_emb = &query_emb[0];
 
             // Search embedding index
-            let limit = parsed.text_query_limit.unwrap_or(50);
+            let limit = parsed.text_query_limit.unwrap_or(config.ai.text_limit);
             let index = crate::embedding_store::EmbeddingIndex::load(
                 catalog.conn(), model_id, spec.embedding_dim,
             )?;

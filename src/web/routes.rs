@@ -191,7 +191,7 @@ pub async fn browse_page(
                         let results = {
                             let idx_guard = state.ai_embedding_index.read().unwrap();
                             if let Some(ref idx) = *idx_guard {
-                                idx.search(query_emb, 50, None)
+                                idx.search(query_emb, parsed.text_query_limit.unwrap_or(state.ai_config.text_limit), None)
                             } else {
                                 Vec::new()
                             }
@@ -481,7 +481,7 @@ pub async fn search_api(
                         let results = {
                             let idx_guard = state.ai_embedding_index.read().unwrap();
                             if let Some(ref idx) = *idx_guard {
-                                idx.search(query_emb, 50, None)
+                                idx.search(query_emb, parsed.text_query_limit.unwrap_or(state.ai_config.text_limit), None)
                             } else {
                                 Vec::new()
                             }
