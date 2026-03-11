@@ -369,6 +369,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/api/asset/{id}/stack",
             axum::routing::delete(routes::dissolve_stack),
         )
+        .route(
+            "/api/stack/{id}/members",
+            axum::routing::get(routes::stack_members_api),
+        )
         .route("/duplicates", axum::routing::get(routes::duplicates_page))
         .route("/api/dedup/resolve", axum::routing::post(routes::dedup_resolve_api))
         .route("/api/dedup/location", axum::routing::delete(routes::dedup_remove_location_api))

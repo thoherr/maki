@@ -1101,6 +1101,108 @@ window.triggerSearch = onFilterChange;
     });
 })();
 
+// --- Per-stack expand/collapse ---
+(function() {
+    var expandedStacks = {};  // stackId -> [inserted card elements]
+    var labelColors = {Red:'#e74c3c',Orange:'#e67e22',Yellow:'#f1c40f',Green:'#27ae60',Blue:'#3498db',Pink:'#e91e8e',Purple:'#9b59b6'};
+
+    function buildCardHtml(m) {
+        var stackStyle = m.stack_id ? '--stack-color: hsl(' + stackHue(m.stack_id) + ', 60%, 50%);' : '';
+        var ratingHtml = '';
+        if (m.rating > 0) {
+            var stars = '';
+            for (var i = 1; i <= 5; i++) stars += i <= m.rating ? '\u2605' : '\u2606';
+            var labelDot = m.label ? ' <span class="card-label-dot" style="background:' + (labelColors[m.label] || '#999') + ';"></span>' : '';
+            ratingHtml = '<div class="card-stars">' + stars + labelDot + '</div>';
+        } else if (m.label) {
+            ratingHtml = '<div class="card-stars"><span class="card-label-dot" style="background:' + (labelColors[m.label] || '#999') + ';"></span></div>';
+        }
+        return '<div class="asset-card stacked stack-expanded-member" data-asset-id="' + m.asset_id + '" data-preview="' + m.preview_url + '" data-name="' + esc(m.name) + '" data-type="' + m.asset_type + '" data-format="' + m.format + '" data-date="' + m.date + '" data-rating="' + m.rating + '" data-label="' + (m.label || '') + '" data-variants="' + m.variant_count + '" data-rotation="' + m.preview_rotation + '" data-stack="' + (m.stack_id || '') + '" data-prev="" data-next="" style="' + stackStyle + '">' +
+            '<label class="select-checkbox" onclick="event.stopPropagation()">' +
+                '<input type="checkbox" class="asset-select-cb" value="' + m.asset_id + '">' +
+                '<span class="checkmark"></span>' +
+            '</label>' +
+            '<img class="thumb" src="' + m.preview_url + '" alt="' + esc(m.name) + '" loading="lazy" draggable="false">' +
+            '<a class="card-body" href="/asset/' + m.asset_id + '">' +
+                '<div class="card-title">' + esc(m.name) + '</div>' +
+                '<div class="card-meta">' +
+                    '<span class="badge">' + m.asset_type + '</span>' +
+                    '<span class="badge">' + m.format + '</span>' +
+                    (m.variant_count > 1 ? '<span class="badge badge-count">' + m.variant_count + 'v</span>' : '') +
+                    '<span>' + m.date + '</span>' +
+                '</div>' +
+                ratingHtml +
+            '</a></div>';
+    }
+
+    function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    function stackHue(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) >>> 0; return h % 360; }
+
+    document.getElementById('results').addEventListener('click', function(e) {
+        var badge = e.target.closest('.badge-stack');
+        if (!badge) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        var stackId = badge.getAttribute('data-stack-id');
+        if (!stackId) return;
+        var card = badge.closest('.asset-card');
+        if (!card) return;
+
+        // If already expanded, collapse
+        if (expandedStacks[stackId]) {
+            expandedStacks[stackId].forEach(function(el) { el.remove(); });
+            delete expandedStacks[stackId];
+            badge.classList.remove('stack-expanded');
+            return;
+        }
+
+        // Fetch and expand
+        badge.classList.add('stack-loading');
+        fetch('/api/stack/' + stackId + '/members')
+            .then(function(r) { return r.json(); })
+            .then(function(members) {
+                badge.classList.remove('stack-loading');
+                badge.classList.add('stack-expanded');
+                var pickId = card.getAttribute('data-asset-id');
+                var inserted = [];
+                var insertAfter = card;
+                members.forEach(function(m) {
+                    if (m.asset_id === pickId) return; // skip the pick (already shown)
+                    var tmp = document.createElement('div');
+                    tmp.innerHTML = buildCardHtml(m);
+                    var newCard = tmp.firstChild;
+                    newCard.setAttribute('draggable', 'true');
+                    insertAfter.parentNode.insertBefore(newCard, insertAfter.nextSibling);
+                    inserted.push(newCard);
+                    insertAfter = newCard;
+                });
+                expandedStacks[stackId] = inserted;
+                // Sync checkboxes with selection state
+                if (window.damBatch) {
+                    inserted.forEach(function(el) {
+                        var cb = el.querySelector('.asset-select-cb');
+                        if (cb && window.damBatch.selected.has(cb.value)) {
+                            cb.checked = true;
+                            el.classList.add('selected');
+                        }
+                    });
+                }
+            })
+            .catch(function(err) {
+                badge.classList.remove('stack-loading');
+                console.error('Stack expand error:', err);
+            });
+    });
+
+    // Clean up expanded stacks on htmx page swap
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target && e.detail.target.id === 'results') {
+            expandedStacks = {};
+        }
+    });
+})();
+
 // --- Drag and drop ---
 (function() {
     var resultsEl = document.getElementById('results');

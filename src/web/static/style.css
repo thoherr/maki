@@ -1885,6 +1885,19 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     transform: translateX(-50%) translateY(0);
 }
 
+/* Per-stack expand/collapse badge */
+.badge-stack { cursor: pointer; user-select: none; transition: background 0.15s; }
+.badge-stack:hover { background: var(--primary); color: #fff; }
+.badge-stack.stack-expanded { background: var(--primary); color: #fff; }
+.badge-stack.stack-loading { opacity: 0.5; }
+.stack-expanded-member {
+    animation: stackExpand 0.2s ease;
+}
+@keyframes stackExpand {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+}
+
 /* Stack member drag reorder */
 .stack-member[draggable="true"] { cursor: grab; }
 .stack-member.dragging { opacity: 0.3; }

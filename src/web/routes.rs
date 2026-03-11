@@ -2249,6 +2249,53 @@ pub async fn dissolve_stack(
     }
 }
 
+/// GET /api/stack/{id}/members — return stack member cards as JSON for inline expand.
+pub async fn stack_members_api(
+    State(state): State<Arc<AppState>>,
+    Path(stack_id): Path<String>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+        let store = crate::stack::StackStore::new(catalog.conn());
+        let member_ids = store.ordered_members(&stack_id)?;
+        let preview_ext = &state.preview_ext;
+
+        let mut members = Vec::new();
+        for mid in &member_ids {
+            // Get SearchRow-like data from catalog for each member
+            let row = catalog.get_search_row(mid);
+            if let Ok(Some(r)) = row {
+                members.push(serde_json::json!({
+                    "asset_id": r.asset_id,
+                    "name": r.name.as_deref().unwrap_or(&r.original_filename),
+                    "asset_type": r.asset_type,
+                    "format": r.primary_format.as_deref().unwrap_or(&r.format),
+                    "date": super::templates::format_date(&r.created_at),
+                    "preview_url": super::templates::preview_url(&r.content_hash, preview_ext),
+                    "rating": r.rating.unwrap_or(0),
+                    "label": r.color_label.as_deref().unwrap_or(""),
+                    "variant_count": r.variant_count,
+                    "stack_id": r.stack_id,
+                    "stack_count": r.stack_count,
+                    "preview_rotation": r.preview_rotation.unwrap_or(0),
+                    "face_count": r.face_count,
+                }));
+            }
+        }
+        Ok::<_, anyhow::Error>(serde_json::json!(members))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::BAD_REQUEST, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
 // --- Saved searches management ---
 
 /// GET /saved-searches — saved searches management page.

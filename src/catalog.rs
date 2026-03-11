@@ -3151,6 +3151,51 @@ impl Catalog {
         Ok(rows)
     }
 
+    /// Fetch a single asset as a SearchRow by asset ID.
+    pub fn get_search_row(&self, asset_id: &str) -> Result<Option<SearchRow>> {
+        let sql = "SELECT a.id, a.name, a.asset_type, a.created_at, bv.original_filename, bv.format, \
+                   a.tags, a.description, bv.content_hash, a.rating, a.color_label, \
+                   a.primary_variant_format, a.variant_count, a.stack_id, s.member_count, \
+                   a.preview_rotation, a.face_count \
+                   FROM assets a \
+                   JOIN variants bv ON bv.content_hash = a.best_variant_hash \
+                   LEFT JOIN stacks s ON s.id = a.stack_id \
+                   WHERE a.id = ?1";
+        let result = self.conn.query_row(sql, rusqlite::params![asset_id], |row| {
+            let tags_json: String = row.get(6)?;
+            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            let rating_val: Option<i64> = row.get(9)?;
+            let variant_count_val: i64 = row.get(12)?;
+            let stack_member_count: Option<i64> = row.get(14)?;
+            let rotation_val: Option<i64> = row.get(15)?;
+            let face_count_val: i64 = row.get::<_, Option<i64>>(16)?.unwrap_or(0);
+            Ok(SearchRow {
+                asset_id: row.get(0)?,
+                name: row.get(1)?,
+                asset_type: row.get(2)?,
+                created_at: row.get(3)?,
+                original_filename: row.get(4)?,
+                format: row.get(5)?,
+                tags,
+                description: row.get(7)?,
+                content_hash: row.get(8)?,
+                rating: rating_val.map(|r| r as u8),
+                color_label: row.get(10)?,
+                primary_format: row.get(11)?,
+                variant_count: variant_count_val as u32,
+                stack_id: row.get(13)?,
+                stack_count: stack_member_count.map(|n| n as u32),
+                preview_rotation: rotation_val.map(|r| r as u16),
+                face_count: face_count_val as u32,
+            })
+        });
+        match result {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Count total results matching the same filters as search_paginated (without LIMIT/OFFSET).
     pub fn search_count(&self, opts: &SearchOptions) -> Result<u64> {
         let (where_clause, params, needs_fl_join, needs_v_join) = Self::build_search_where(opts);

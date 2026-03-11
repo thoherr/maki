@@ -265,7 +265,7 @@ impl<'a> StackStore<'a> {
     }
 
     /// Get ordered member asset IDs for a stack.
-    fn ordered_members(&self, stack_id: &str) -> Result<Vec<String>> {
+    pub fn ordered_members(&self, stack_id: &str) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT id FROM assets WHERE stack_id = ?1 ORDER BY stack_position",
         )?;
