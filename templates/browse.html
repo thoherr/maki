@@ -1138,6 +1138,11 @@ window.triggerSearch = onFilterChange;
     function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
     function stackHue(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) >>> 0; return h % 360; }
 
+    // Find all server-rendered members of a stack in the grid (in DOM order)
+    function findServerRenderedStack(stackId) {
+        return Array.from(document.querySelectorAll('.results-grid .asset-card[data-stack="' + stackId + '"]:not(.stack-expanded-member)'));
+    }
+
     document.getElementById('results').addEventListener('click', function(e) {
         var badge = e.target.closest('.badge-stack');
         if (!badge) return;
@@ -1149,26 +1154,51 @@ window.triggerSearch = onFilterChange;
         var card = badge.closest('.asset-card');
         if (!card) return;
 
-        // If already expanded, collapse
-        if (expandedStacks[stackId]) {
+        // If we have client-expanded cards, collapse them
+        if (expandedStacks[stackId] && expandedStacks[stackId].length > 0) {
             expandedStacks[stackId].forEach(function(el) { el.remove(); });
             delete expandedStacks[stackId];
-            badge.classList.remove('stack-expanded');
+            // Update badge on the pick card
+            var pickBadge = findServerRenderedStack(stackId)[0];
+            if (pickBadge) {
+                var pb = pickBadge.querySelector('.badge-stack');
+                if (pb) pb.classList.remove('stack-expanded');
+            }
             return;
         }
 
-        // Fetch and expand
+        // If server-rendered members are visible (global expand), hide all except the first (pick)
+        var serverCards = findServerRenderedStack(stackId);
+        var visibleCards = serverCards.filter(function(c) { return !c.classList.contains('stack-hidden'); });
+        if (visibleCards.length > 1) {
+            // First in DOM order is the pick (server sorts by stack_position)
+            for (var i = 1; i < visibleCards.length; i++) {
+                visibleCards[i].classList.add('stack-hidden');
+            }
+            expandedStacks[stackId] = []; // mark as collapsed (empty array = server-hidden)
+            return;
+        }
+
+        // If we previously hid server members, restore them
+        var hiddenCards = serverCards.filter(function(c) { return c.classList.contains('stack-hidden'); });
+        if (hiddenCards.length > 0) {
+            hiddenCards.forEach(function(el) { el.classList.remove('stack-hidden'); });
+            delete expandedStacks[stackId];
+            return;
+        }
+
+        // Fetch and expand (stacks are globally collapsed, need to load members)
         badge.classList.add('stack-loading');
         fetch('/api/stack/' + stackId + '/members')
             .then(function(r) { return r.json(); })
             .then(function(members) {
                 badge.classList.remove('stack-loading');
                 badge.classList.add('stack-expanded');
-                var pickId = card.getAttribute('data-asset-id');
                 var inserted = [];
                 var insertAfter = card;
+                var cardId = card.getAttribute('data-asset-id');
                 members.forEach(function(m) {
-                    if (m.asset_id === pickId) return; // skip the pick (already shown)
+                    if (m.asset_id === cardId) return; // skip the pick (already shown)
                     var tmp = document.createElement('div');
                     tmp.innerHTML = buildCardHtml(m);
                     var newCard = tmp.firstChild;
@@ -1714,12 +1744,39 @@ window.triggerSearch = onFilterChange;
     });
 
     // Re-apply focus after htmx swaps (pagination/sort/search)
+    var focusedAssetId = null;
+    document.body.addEventListener('htmx:beforeSwap', function(e) {
+        if (e.detail.target && e.detail.target.id === 'results') {
+            // Save focused asset ID before the swap replaces DOM
+            var cards = getCards();
+            if (focusedIndex >= 0 && focusedIndex < cards.length) {
+                focusedAssetId = cards[focusedIndex].getAttribute('data-asset-id');
+            }
+        }
+    });
     document.body.addEventListener('htmx:afterSwap', function(e) {
         if (e.detail.target && e.detail.target.id === 'results') {
-            var cards = getCards();
-            if (focusedIndex >= cards.length) focusedIndex = cards.length - 1;
-            if (focusedIndex >= 0 && cards.length > 0) {
-                cards[focusedIndex].classList.add('focused');
+            // Restore focus by asset ID, fall back to clamped index
+            if (focusedAssetId) {
+                var cards = getCards();
+                var found = false;
+                for (var i = 0; i < cards.length; i++) {
+                    if (cards[i].getAttribute('data-asset-id') === focusedAssetId) {
+                        focusedIndex = i;
+                        cards[i].classList.add('focused');
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    if (focusedIndex >= cards.length) focusedIndex = cards.length - 1;
+                    if (focusedIndex >= 0 && cards.length > 0) cards[focusedIndex].classList.add('focused');
+                }
+                focusedAssetId = null;
+            } else {
+                var cards = getCards();
+                if (focusedIndex >= cards.length) focusedIndex = cards.length - 1;
+                if (focusedIndex >= 0 && cards.length > 0) cards[focusedIndex].classList.add('focused');
             }
         }
     });
