@@ -440,6 +440,9 @@ pub struct SearchOptions<'a> {
     pub collection_exclude_ids: Option<&'a [String]>,
     pub copies_exact: Option<u64>,
     pub copies_min: Option<u64>,
+    pub variant_count_exact: Option<u64>,
+    pub variant_count_min: Option<u64>,
+    pub scattered_min: Option<u64>,
     pub date_prefix: Option<&'a str>,
     pub date_from: Option<&'a str>,
     pub date_until: Option<&'a str>,
@@ -502,6 +505,9 @@ impl<'a> Default for SearchOptions<'a> {
             collection_exclude_ids: None,
             copies_exact: None,
             copies_min: None,
+            variant_count_exact: None,
+            variant_count_min: None,
+            scattered_min: None,
             date_prefix: None,
             date_from: None,
             date_until: None,
@@ -2780,6 +2786,35 @@ impl Catalog {
         if let Some(n) = opts.copies_min {
             clauses.push(format!(
                 "(SELECT COUNT(*) FROM file_locations fl2 \
+                 JOIN variants v2 ON fl2.content_hash = v2.content_hash \
+                 WHERE v2.asset_id = a.id) >= {}",
+                n
+            ));
+        }
+
+        // Variant count filters (use denormalized variant_count column)
+        if let Some(n) = opts.variant_count_exact {
+            clauses.push("a.variant_count = ?".to_string());
+            params.push(Box::new(n as i64));
+        }
+        if let Some(n) = opts.variant_count_min {
+            clauses.push("a.variant_count >= ?".to_string());
+            params.push(Box::new(n as i64));
+        }
+
+        // Scattered filter: variants whose file locations span N+ distinct directories
+        // Counts distinct volume + parent-directory combinations across all variants.
+        // Parent directory = path with trailing filename removed (everything up to last '/').
+        // In SQLite: use instr on the reversed string to find the last '/' position — but
+        // SQLite lacks reverse(), so we approximate with the first two path components
+        // (volume_id + top-level dir), which is sufficient for detecting mis-grouped variants.
+        if let Some(n) = opts.scattered_min {
+            clauses.push(format!(
+                "(SELECT COUNT(DISTINCT fl2.volume_id || ':' || \
+                    CASE WHEN INSTR(fl2.relative_path, '/') > 0 \
+                    THEN SUBSTR(fl2.relative_path, 1, INSTR(fl2.relative_path, '/') - 1) \
+                    ELSE '' END \
+                 ) FROM file_locations fl2 \
                  JOIN variants v2 ON fl2.content_hash = v2.content_hash \
                  WHERE v2.asset_id = a.id) >= {}",
                 n

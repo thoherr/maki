@@ -95,6 +95,9 @@ pub struct ParsedSearch {
     pub volume_none: bool,
     pub copies_exact: Option<u64>,
     pub copies_min: Option<u64>,
+    pub variant_count_exact: Option<u64>,
+    pub variant_count_min: Option<u64>,
+    pub scattered_min: Option<u64>,
     pub date_prefix: Option<String>,
     pub date_from: Option<String>,
     pub date_until: Option<String>,
@@ -160,6 +163,9 @@ impl ParsedSearch {
             stale_days: self.stale_days,
             copies_exact: self.copies_exact,
             copies_min: self.copies_min,
+            variant_count_exact: self.variant_count_exact,
+            variant_count_min: self.variant_count_min,
+            scattered_min: self.scattered_min,
             date_prefix: self.date_prefix.as_deref(),
             date_from: self.date_from.as_deref(),
             date_until: self.date_until.as_deref(),
@@ -347,6 +353,14 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
             } else {
                 parsed.copies_exact = value.parse().ok();
             }
+        } else if let Some(value) = token_body.strip_prefix("variants:") {
+            if let Some(num_str) = value.strip_suffix('+') {
+                parsed.variant_count_min = num_str.parse().ok();
+            } else {
+                parsed.variant_count_exact = value.parse().ok();
+            }
+        } else if let Some(value) = token_body.strip_prefix("scattered:") {
+            parsed.scattered_min = value.parse().ok();
         } else if let Some(value) = token_body.strip_prefix("date:") {
             parsed.date_prefix = Some(value.to_string());
         } else if let Some(value) = token_body.strip_prefix("dateFrom:") {
@@ -3069,6 +3083,44 @@ mod tests {
         assert_eq!(p.copies_min, Some(3));
         assert_eq!(p.rating_min, Some(4));
         assert_eq!(p.tags, vec!["landscape"]);
+    }
+
+    // ── variants filter parse tests ─────────────────────────────────
+
+    #[test]
+    fn parse_variants_exact() {
+        let p = parse_search_query("variants:3");
+        assert_eq!(p.variant_count_exact, Some(3));
+        assert!(p.variant_count_min.is_none());
+    }
+
+    #[test]
+    fn parse_variants_min() {
+        let p = parse_search_query("variants:3+");
+        assert_eq!(p.variant_count_min, Some(3));
+        assert!(p.variant_count_exact.is_none());
+    }
+
+    #[test]
+    fn parse_variants_with_other_filters() {
+        let p = parse_search_query("variants:5+ tag:landscape");
+        assert_eq!(p.variant_count_min, Some(5));
+        assert_eq!(p.tags, vec!["landscape"]);
+    }
+
+    // ── scattered filter parse tests ─────────────────────────────────
+
+    #[test]
+    fn parse_scattered() {
+        let p = parse_search_query("scattered:2");
+        assert_eq!(p.scattered_min, Some(2));
+    }
+
+    #[test]
+    fn parse_scattered_with_variants() {
+        let p = parse_search_query("scattered:2 variants:3+");
+        assert_eq!(p.scattered_min, Some(2));
+        assert_eq!(p.variant_count_min, Some(3));
     }
 
     // ── date filter parse tests ─────────────────────────────────────
