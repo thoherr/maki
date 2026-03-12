@@ -896,6 +896,42 @@ pub async fn remove_tag(
     }
 }
 
+/// POST /api/asset/{id}/tags/clear — remove all tags, return tags fragment.
+pub async fn clear_tags(
+    State(state): State<Arc<AppState>>,
+    Path(asset_id): Path<String>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let engine = state.query_engine();
+        // Load current tags, then remove them all
+        let details = engine.show(&asset_id)?;
+        if details.tags.is_empty() {
+            let tmpl = TagsFragment {
+                asset_id,
+                tags: vec![],
+            };
+            return Ok::<_, anyhow::Error>(tmpl.render()?);
+        }
+        let result = engine.tag(&asset_id, &details.tags, true)?;
+        state.dropdown_cache.invalidate_tags();
+        let tmpl = TagsFragment {
+            asset_id,
+            tags: result.current_tags,
+        };
+        Ok::<_, anyhow::Error>(tmpl.render()?)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(html)) => Html(html).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
 /// GET /api/tags — all tags as JSON (for autocomplete).
 pub async fn tags_api(State(state): State<Arc<AppState>>) -> Response {
     let state = state.clone();

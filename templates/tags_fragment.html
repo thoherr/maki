@@ -10,6 +10,13 @@
     {% endfor %}
     {% if tags.is_empty() %}
     <span style="color: var(--text-muted); font-size: 0.85rem;">No tags</span>
+    {% else %}
+    <button class="clear-tags-btn"
+            hx-post="/api/asset/{{ asset_id }}/tags/clear"
+            hx-target="#tags"
+            hx-swap="innerHTML"
+            hx-confirm="Remove all tags from this asset?"
+            title="Clear all tags">&times; Clear</button>
     {% endif %}
     <form class="tag-add-form"
           hx-post="/api/asset/{{ asset_id }}/tags"

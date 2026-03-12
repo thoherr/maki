@@ -725,6 +725,18 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
     line-height: 1;
 }
 .tag-chip .remove-tag:hover { opacity: 1; }
+.clear-tags-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 12px;
+    margin-left: 0.3rem;
+    vertical-align: middle;
+}
+.clear-tags-btn:hover { color: var(--text); border-color: var(--text-muted); }
 
 /* AI tag suggestion chips */
 .ai-suggestions-header {

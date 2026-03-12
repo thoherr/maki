@@ -271,6 +271,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::delete(routes::remove_tag),
         )
         .route(
+            "/api/asset/{id}/tags/clear",
+            axum::routing::post(routes::clear_tags),
+        )
+        .route(
             "/api/asset/{id}/rating",
             axum::routing::put(routes::set_rating),
         )
