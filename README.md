@@ -134,3 +134,7 @@ Rust, SQLite, clap, axum, askama, htmx. See [`Cargo.toml`](Cargo.toml) for the f
 
 - Rust 2021 edition (stable)
 - macOS, Linux, or Windows
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.

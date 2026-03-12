@@ -42,4 +42,4 @@ Technical documentation for integrators and contributors.
 
 ---
 
-**Version**: v2.5.2 | **Source**: [GitHub](https://github.com/tblck/dam) | **License**: See repository
+**Version**: v2.5.2 | **Source**: [GitHub](https://github.com/thoherr/simple-digital-asset-manager) | **License**: Apache-2.0
