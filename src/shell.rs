@@ -215,12 +215,24 @@ fn expand_underscore(line: &str, last_ids: &[String]) -> String {
 }
 
 /// Split a command line into tokens, respecting quotes.
+///
+/// Quotes that wrap an entire token are stripped (grouping quotes):
+///   `"tag:landscape rating:4+"` → `tag:landscape rating:4+`
+///
+/// Quotes that appear mid-token are preserved (syntax quotes):
+///   `text:"woman with glasses"` → `text:"woman with glasses"`
+///
+/// This allows search syntax like `text:"query"` to pass through unchanged
+/// while still supporting shell-style grouping for multi-word arguments.
 fn shell_split(line: &str) -> Option<Vec<String>> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut in_single = false;
     let mut in_double = false;
     let mut escaped = false;
+    // Track whether the opening quote was at token start (for stripping)
+    let mut single_at_start = false;
+    let mut double_at_start = false;
 
     for c in line.chars() {
         if escaped {
@@ -234,10 +246,42 @@ fn shell_split(line: &str) -> Option<Vec<String>> {
                 escaped = true;
             }
             '\'' if !in_double => {
-                in_single = !in_single;
+                if in_single {
+                    // Closing single quote
+                    in_single = false;
+                    if !single_at_start {
+                        current.push('\''); // mid-token: preserve closing quote
+                    }
+                    single_at_start = false;
+                } else {
+                    // Opening single quote
+                    in_single = true;
+                    if current.is_empty() {
+                        single_at_start = true; // token-start: will strip
+                    } else {
+                        single_at_start = false;
+                        current.push('\''); // mid-token: preserve opening quote
+                    }
+                }
             }
             '"' if !in_single => {
-                in_double = !in_double;
+                if in_double {
+                    // Closing double quote
+                    in_double = false;
+                    if !double_at_start {
+                        current.push('"'); // mid-token: preserve closing quote
+                    }
+                    double_at_start = false;
+                } else {
+                    // Opening double quote
+                    in_double = true;
+                    if current.is_empty() {
+                        double_at_start = true; // token-start: will strip
+                    } else {
+                        double_at_start = false;
+                        current.push('"'); // mid-token: preserve opening quote
+                    }
+                }
             }
             ' ' | '\t' if !in_single && !in_double => {
                 if !current.is_empty() {
@@ -330,6 +374,40 @@ mod tests {
     fn test_expand_underscore_no_ids() {
         let ids: Vec<String> = vec![];
         assert_eq!(expand_underscore("edit --rating 5 _", &ids), "edit --rating 5 _");
+    }
+
+    #[test]
+    fn test_shell_split_mid_token_double_quotes_preserved() {
+        // text:"woman with glasses" → quotes are mid-token, preserved
+        assert_eq!(
+            shell_split(r#"search text:"woman with glasses""#),
+            Some(vec![
+                "search".to_string(),
+                r#"text:"woman with glasses""#.to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_shell_split_mid_token_single_quotes_preserved() {
+        // text:'woman with glasses' → quotes are mid-token, preserved
+        assert_eq!(
+            shell_split("search text:'woman with glasses'"),
+            Some(vec![
+                "search".to_string(),
+                "text:'woman with glasses'".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_shell_split_grouping_with_mid_token_quotes() {
+        // Wrapping quotes stripped, inner quotes preserved:
+        // "text:'woman with glasses'" → text:'woman with glasses'
+        assert_eq!(
+            shell_split(r#""text:'woman with glasses'""#),
+            Some(vec!["text:'woman with glasses'".to_string()])
+        );
     }
 
     #[test]
