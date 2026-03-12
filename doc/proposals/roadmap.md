@@ -52,6 +52,21 @@ Write metadata changes back into JPEG/TIFF files directly, not just XMP sidecars
 
 ## Tier 2 — Workflow Convenience
 
+### Asset Management Shell
+
+Interactive shell with cached state, named result sets, and script files. Eliminates per-invocation startup overhead and enables composable multi-step workflows.
+
+**Scope:**
+- `dam shell` — interactive session with readline (history, tab completion)
+- `dam shell script.dam` / `dam shell -c '...'` — script and one-liner modes
+- Named variables (`$picks = search "rating:5"`) and implicit `_` (last result)
+- `.dam` script files for repeatable workflows (post-import, nightly cleanup)
+- Session-wide defaults (`set --log`), `source` for script composition
+
+**Phases:** (1) Basic shell + `_` + script files, (2) named variables + tab completion, (3) session management + `source` + `-c`
+
+**Complexity:** Low–Medium. Command dispatcher exists; wrapping in a loop with `try_parse_from` is mechanical. Variables are string substitution. See [proposal](proposal-repl.md).
+
 ### Import Profiles
 
 Named preset configurations for different import scenarios (studio shoot, travel, phone backup).
