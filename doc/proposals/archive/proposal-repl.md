@@ -1,5 +1,7 @@
 # Proposal: Asset Management Shell
 
+**Status: Fully implemented in v3.0.0.** All three phases complete — basic shell with `_` and scripts (Phase 1), named variables and tab completion (Phase 2), session defaults, `source`, `reload`, `-c` mode, and `--strict` (Phase 3). See [User Guide](../../manual/user-guide/09-shell.md) and [Command Reference](../../manual/reference/04-retrieve-commands.md#dam-shell).
+
 ## Motivation
 
 Every `dam` invocation repeats the same startup work: locate catalog root, load `dam.toml`, open SQLite with pragmas, check schema version, construct services. For interactive workflows — browsing results, editing tags, checking stats — this overhead adds up.

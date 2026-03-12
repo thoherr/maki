@@ -1,5 +1,7 @@
 # Proposal: PDF Contact Sheet Export
 
+**Status: Implemented in v2.4.0.** The `dam contact-sheet` command is fully operational with configurable layouts, paper sizes, metadata fields, color label rendering, section grouping, and copyright text. Configurable via `[contact_sheet]` in `dam.toml`. See [User Guide](../../manual/reference/04-retrieve-commands.md#dam-contact-sheet) and [Configuration Reference](../../manual/reference/08-configuration.md).
+
 ## Motivation
 
 Photographers regularly need printed or shareable overview sheets of their work: reviewing a shoot with a client, selecting images for a portfolio, archiving a visual index alongside offline drives, or submitting a proof sheet to an agency. Currently, generating a contact sheet requires exporting files and using an external tool (Lightroom, InDesign, ImageMagick `montage`). A built-in command would complete the workflow inside the DAM.

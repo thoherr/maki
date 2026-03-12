@@ -30,7 +30,7 @@ Reorder stacks, add to collections, and manage groups via drag-and-drop in the b
 
 ## Ollama VLM Integration (v2.4.2–v2.5.3)
 
-Natural language image descriptions via local vision-language models. Phases 1–4 complete (v2.4.2: CLI + web UI; v2.5.0: auto-describe + text search; v2.5.3: concurrent requests). See [proposal](../proposal-vlm-integration.md).
+Natural language image descriptions via local vision-language models. Phases 1–4 complete (v2.4.2: CLI + web UI; v2.5.0: auto-describe + text search; v2.5.3: concurrent requests). See [proposal](proposal-vlm-integration.md).
 
 **Done:**
 - `dam describe` command with `--mode describe|tags|both`, `--apply`, `--force`, `--dry-run`

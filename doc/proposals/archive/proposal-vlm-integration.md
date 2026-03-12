@@ -1,10 +1,10 @@
 # Proposal: VLM Integration for Image Descriptions
 
-**Status: Phases 1–4 largely implemented.** v2.4.2: CLI + web UI (Phases 1–3). v2.5.0: auto-describe during import, text-to-image semantic search (Phase 4).
+**Status: Fully implemented.** v2.4.2: CLI + web UI (Phases 1–3). v2.5.0: auto-describe during import, text-to-image semantic search (Phase 4). v2.5.3: concurrent VLM requests. See [User Guide](../../manual/user-guide/03-ingest.md) and [Command Reference](../../manual/reference/02-ingest-commands.md#dam-describe).
 
 Natural language image descriptions via local vision-language models. Complements the existing SigLIP zero-shot classification (fixed tag vocabulary, fast, low memory) with open-ended understanding (scene descriptions, context, relationships, mood).
 
-Referenced from [roadmap.md](roadmap.md) item "Ollama VLM Integration".
+Referenced from [roadmap.md](../roadmap.md) item "Ollama VLM Integration".
 
 ---
 
