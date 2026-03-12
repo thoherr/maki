@@ -1,17 +1,21 @@
-# Proposal: Interactive REPL
+# Proposal: Asset Management Shell
 
 ## Motivation
 
 Every `dam` invocation repeats the same startup work: locate catalog root, load `dam.toml`, open SQLite with pragmas, check schema version, construct services. For interactive workflows — browsing results, editing tags, checking stats — this overhead adds up.
 
-A REPL (read-eval-print loop) keeps state alive between commands, giving instant response for the second command onward. It also enables workflow features that aren't possible with one-shot invocations: persistent search results, command history, tab completion, and session context.
+Beyond performance, one-shot CLI invocations can't compose naturally. A shell workflow like `dam search "rating:5" | xargs -I{} dam export {} /tmp/picks` works but is verbose, re-opens the catalog for each asset, and loses type information (IDs become plain strings).
+
+An asset management shell keeps state alive between commands, gives instant response, and introduces asset-typed variables and script files — turning `dam` from a command-line tool into a composable workflow environment.
 
 ## Design
 
 ### Entry Point
 
 ```
-dam repl
+dam shell                         # interactive session
+dam shell workflow.dam            # run a script file
+dam shell -c 'search "rating:5"' # run a single command
 ```
 
 Starts an interactive session in the current catalog. Displays a prompt, accepts any `dam` subcommand without the `dam` prefix:
@@ -20,9 +24,6 @@ Starts an interactive session in the current catalog. Displays a prompt, accepts
 dam> search "tag:landscape rating:4+"
   12 assets found
 dam> edit --rating 5 abc12345
-dam> search "tag:portrait date:2024"
-  8 assets found
-dam> show abc12345
 dam> stats
 dam> quit
 ```
@@ -38,77 +39,205 @@ Modeled after the existing `AppState` from `dam serve`:
 | `DeviceRegistry` | Session, invalidated on volume mutations | Volume add/remove/combine refreshes |
 | Preview/AI/VLM config | Session | Derived from `CatalogConfig` |
 | Catalog (SQLite) | Per-command | Fresh `Catalog::open_fast()` each command, same as web server |
+| Variables | Session | Named result sets, cleared on `reload` |
 
 Per-command catalog opens are cheap (~1ms with pragmas) and avoid stale-connection issues. This matches the proven `dam serve` pattern.
 
 ### Command Parsing
 
-Clap supports `try_parse_from(args)` which takes an iterator of strings. The REPL loop:
+Clap supports `try_parse_from(args)` which takes an iterator of strings. The shell loop:
 
 1. Read a line from the user (via rustyline)
-2. Shell-split into tokens (handle quotes, escapes)
-3. Prepend `"dam"` as argv[0]
-4. Call `Cli::try_parse_from(tokens)`
-5. Execute the command using the cached state
-6. Print result, loop
+2. Check for shell-specific syntax (variable assignment, `#` comments, blank lines)
+3. Expand variables (`$name` and `_`) to asset ID lists
+4. Shell-split into tokens (handle quotes, escapes)
+5. Prepend `"dam"` as argv[0]
+6. Call `Cli::try_parse_from(tokens)`
+7. Execute the command using the cached state
+8. Capture result set (if applicable), update `_`
+9. Print result, loop
 
-Parse errors are displayed without exiting. Commands like `init`, `migrate`, and `serve` are rejected inside the REPL (they don't make sense in an interactive session).
+Parse errors are displayed without exiting. Commands like `init`, `migrate`, and `serve` are rejected inside the shell (they don't make sense in an interactive session).
 
-### REPL-Only Commands
+### Result Sets and Variables
+
+Commands that return asset lists (`search`, `duplicates`, `show`) capture their results as the implicit `_` variable. Named variables store result sets for later use:
+
+```
+dam> $picks = search "rating:5 date:2024"
+  38 assets → $picks
+dam> $untagged = search "tags:none type:image"
+  142 assets → $untagged
+dam> tag --add "needs-review" $untagged
+  142 assets tagged
+dam> export --target /tmp/best $picks
+  38 assets exported
+```
+
+Variables hold asset ID lists. They expand to space-separated IDs when referenced. The implicit `_` always holds the result of the last command that produced asset IDs:
+
+```
+dam> search "tag:landscape rating:4+"
+  12 assets found
+dam> edit --rating 5 _
+  12 assets edited
+dam> tag --add "portfolio" _
+  12 assets tagged
+```
+
+Variable rules:
+- Names start with `$`, followed by letters/digits/underscores
+- `_` is the implicit last-result variable (updated after every command that returns assets)
+- Variables persist for the session (cleared on `reload` or `unset $name`)
+- `vars` command lists all defined variables with their asset counts
+- Variables are plain asset ID lists — no query re-execution, no staleness
+
+### Script Files
+
+A `.dam` script file is a sequence of commands, one per line:
+
+```bash
+# nightly-import.dam — run after each shoot day
+import /Volumes/Cards/DCIM --log
+auto-group
+generate-previews --log
+auto-tag --apply --log
+describe --query "description:none" --apply --log
+stats
+```
+
+Execute with:
+
+```
+dam shell nightly-import.dam
+dam shell -c 'search "rating:5"'   # one-liner
+```
+
+Script features:
+- `#` comments and blank lines are ignored
+- Variables work across lines (assign in one, use in another)
+- Exit code: 0 if all commands succeed, 1 on first error (with `--strict`), or continue-on-error by default
+- Scripts can be composed: `source other-script.dam` runs another script inline, sharing the session state
+
+### Shell-Only Commands
 
 | Command | Description |
 |---------|-------------|
 | `quit` / `exit` / Ctrl-D | End the session |
-| `reload` | Re-read `dam.toml` and refresh cached config |
+| `reload` | Re-read `dam.toml`, refresh cached config, clear variables |
 | `help` | Show available commands (delegates to clap `--help`) |
+| `set <flag>` | Session-wide defaults: `set --log`, `set --debug`, `set --json` |
+| `unset <flag>` | Remove a session default |
+| `vars` | List defined variables with asset counts |
+| `unset $name` | Remove a variable |
+| `source <file>` | Execute a script file in the current session |
 
 ### Readline Features
 
 Using `rustyline` crate (~4K lines, stable, MIT):
 
-- **Command history** — persisted to `~/.dam_history` (or catalog `.dam/history`)
-- **Tab completion** — complete subcommand names, `--flags`, volume labels, tag names (from cached dropdown data)
+- **Command history** — persisted to `.dam/shell_history` in the catalog directory
+- **Tab completion** — subcommand names, `--flags`, volume labels, tag names, variable names
 - **Line editing** — Emacs-style keybindings (Ctrl-A/E/K/W), Vi mode optional
 - **Multi-line** — not needed; commands are single-line
+
+### Prompt
+
+Shows the catalog name (directory basename) and variable context:
+
+```
+photos> search "rating:5"
+  38 assets found
+photos> $best = _
+photos [best=38]> tag --add "portfolio" $best
+```
+
+The bracket section appears when named variables are defined, showing their counts.
 
 ### Output Handling
 
 - Normal text output goes to stdout as usual
 - `--json` works per-command (e.g., `search --json "tag:landscape"`)
-- `--log` and `--debug` can be set as session defaults via REPL-only `set` command
+- Session defaults via `set` apply to all subsequent commands
 - `--time` works per-command
+- In script mode (`dam shell script.dam`), output goes to stdout/stderr normally — scripts are pipeable
 
 ### Excluded Commands
 
-These are blocked inside the REPL with a clear message:
+These are blocked inside the shell with a clear message:
 
 - `init` — creates a new catalog; meaningless inside an existing one
 - `migrate` — schema migration should be run standalone
-- `serve` — starts a long-running web server; conflicts with the REPL's own loop
-- `repl` — no nesting
+- `serve` — starts a long-running web server; conflicts with the shell's own loop
+- `shell` — no nesting (but `source` runs script files)
+
+## Example Workflows
+
+### Curate and Export
+
+```
+dam> $candidates = search "date:2024-06 type:image rating:3+"
+  287 assets → $candidates
+dam> $portraits = search "date:2024-06 tag:portrait rating:4+"
+  42 assets → $portraits
+dam> tag --add "june-selects" $portraits
+dam> export --target /tmp/june-portraits $portraits
+  42 assets exported
+```
+
+### Cleanup After Import
+
+```bash
+# post-import.dam
+$new = search "imported:today"
+auto-group $new
+generate-previews $new --log
+describe --query "description:none" --apply --log
+auto-tag --apply --query "tags:none type:image" --log
+stats
+```
+
+### Audit Mis-grouped Assets
+
+```
+dam> $scattered = search "scattered:2 variants:3+"
+  15 assets → $scattered
+dam> show $scattered
+  ... review each asset ...
+dam> split abc12345 --variants def678,ghi901
+dam> reimport-metadata abc12345
+```
 
 ## Implementation
 
-### Phase 1 — Basic REPL
+### Phase 1 — Basic Shell
 
 - Add `rustyline` dependency
-- New `Commands::Repl` variant (no arguments)
-- REPL loop: readline -> parse -> dispatch -> print
+- New `Commands::Shell` variant with optional script file and `-c` flag
+- Shell loop: readline -> parse -> dispatch -> print
 - Cache `catalog_root` and `CatalogConfig`
 - Command history (in-memory)
 - Block excluded commands
+- `_` implicit result variable
+- Script file execution (sequential, no variables yet)
 
-### Phase 2 — Completion & History
+### Phase 2 — Variables & Completion
 
-- Persist history to file
-- Tab completion for subcommand names and flags
+- Named variables (`$name = command`)
+- Variable expansion in command arguments
+- `vars`, `unset` commands
+- Persist history to `.dam/shell_history`
+- Tab completion for subcommand names, flags, variable names
 - Tab completion for volume labels and tag names (from catalog queries, cached)
 
-### Phase 3 — Session Context (Optional)
+### Phase 3 — Session Management & Scripts
 
-- `set` command for session-wide defaults (`set --log`, `set --debug`, `set --json`)
-- Last search results available as `_` for piping: `edit --rating 5 _` applies to all results from the previous search
-- Prompt customization showing catalog name
+- `set` / `unset` for session-wide defaults
+- `source` command for inline script execution
+- `reload` command
+- Prompt customization with catalog name and variable context
+- `--strict` flag for scripts (exit on first error)
+- `-c` single-command mode
 
 ## Dependencies
 
@@ -120,28 +249,32 @@ Alternative: `reedline` (Nushell's editor) — better Unicode, heavier (~30K lin
 
 ## Complexity
 
-**Phase 1:** Low. The command dispatcher already exists as a single `match` block in `main.rs`. Wrapping it in a loop with `try_parse_from` is mechanical.
+**Phase 1:** Low. The command dispatcher already exists as a single `match` block in `main.rs`. Wrapping it in a loop with `try_parse_from` is mechanical. Script execution is just reading lines from a file instead of stdin.
 
-**Phase 2:** Low-Medium. Rustyline's `Completer` trait is straightforward; the hard part is keeping completion data fresh after mutations.
+**Phase 2:** Low-Medium. Variable expansion is string substitution before parsing. Rustyline's `Completer` trait is straightforward; the hard part is keeping completion data fresh after mutations.
 
-**Phase 3:** Medium. Session context and result piping require threading state through the dispatcher.
+**Phase 3:** Medium. Session defaults require threading state through the dispatcher. `source` is recursive script execution sharing the session.
 
 ## Trade-offs
 
 **Pros:**
 - Near-instant command execution after first startup
-- Command history and tab completion for efficient workflows
+- Named result sets enable multi-step workflows without shell piping gymnastics
+- Script files make repeatable workflows trivial (`post-import.dam`, `nightly-cleanup.dam`)
+- Command history and tab completion for efficient interactive use
 - Natural fit for exploratory sessions (search, inspect, edit, repeat)
-- Mirrors the `sqlite3` / `python` / `psql` interactive experience
+- Mirrors the `sqlite3` / `psql` / `python` interactive experience
 
 **Cons:**
 - New dependency (rustyline)
 - Commands must be careful about process-level side effects (changing working directory, signal handlers)
-- `--json` output in a REPL is slightly awkward (but useful for scripting with `expect`)
 - Catalog changes from external `dam` invocations won't be visible without `reload`
+- Variable syntax adds a small learning curve (though `$name` is universally familiar)
 
 ## Not In Scope
 
-- TUI / ncurses interface — the REPL is text-based, not a full terminal UI
-- Concurrent command execution — commands run sequentially
-- Remote REPL / network protocol — local only
+- **Control flow** (if/else, for/while loops) — users who need this can use bash + `dam --json` + `jq`, or Python. Adding control flow means building a language, which is a different project entirely.
+- **TUI / ncurses interface** — the shell is text-based, not a full terminal UI
+- **Concurrent command execution** — commands run sequentially
+- **Remote shell / network protocol** — local only
+- **Expression evaluation** — variables hold asset ID lists, not computed values
