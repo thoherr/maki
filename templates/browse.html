@@ -865,7 +865,7 @@ window.triggerSearch = onFilterChange;
 
         var grid = overlay.querySelector('.group-confirm-grid');
         selected.forEach(function(id) {
-            var card = document.querySelector('.asset-card[data-id="' + id + '"]');
+            var card = document.querySelector('.asset-card[data-asset-id="' + id + '"]');
             var thumb = document.createElement('div');
             thumb.className = 'group-confirm-thumb';
             if (targetId && id === targetId) {
