@@ -298,6 +298,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/api/asset/{id}/rotate",
             axum::routing::post(routes::set_rotation),
         )
+        .route(
+            "/api/asset/{id}/reimport-metadata",
+            axum::routing::post(routes::reimport_metadata),
+        )
         .route("/api/tags", axum::routing::get(routes::tags_api))
         .route("/api/stats", axum::routing::get(routes::stats_api))
         .route(

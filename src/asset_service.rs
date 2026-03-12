@@ -6063,6 +6063,11 @@ pub fn normalize_rating(r: u8) -> u8 {
     }
 }
 
+/// Public wrapper for `apply_xmp_data` — used by `QueryEngine::reimport_metadata`.
+pub fn apply_xmp_data_pub(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant_hash: &str) {
+    apply_xmp_data(xmp, asset, variant_hash);
+}
+
 fn apply_xmp_data(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant_hash: &str) {
     let merged = merge_hierarchical_keywords(&xmp.keywords, &xmp.hierarchical_keywords);
     for kw in &merged {

@@ -1756,6 +1756,33 @@ pub async fn set_rotation(
     }
 }
 
+/// POST /api/asset/{id}/reimport-metadata — clear tags/description/rating/label and re-extract from source files.
+pub async fn reimport_metadata(
+    State(state): State<Arc<AppState>>,
+    Path(asset_id): Path<String>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let engine = state.query_engine();
+        let tags = engine.reimport_metadata(&asset_id)?;
+        state.dropdown_cache.invalidate_tags();
+        let tmpl = TagsFragment {
+            asset_id,
+            tags,
+        };
+        Ok::<_, anyhow::Error>(tmpl.render()?)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(html)) => Html(html).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct LabelForm {
     pub label: Option<String>,

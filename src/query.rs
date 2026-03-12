@@ -1547,6 +1547,84 @@ impl QueryEngine {
         })
     }
 
+    /// Clear asset-level metadata and re-extract from variant source files (XMP recipes + embedded XMP).
+    /// Returns the updated tags list.
+    pub fn reimport_metadata(&self, asset_id_prefix: &str) -> Result<Vec<String>> {
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let store = MetadataStore::new(&self.catalog_root);
+        let registry = DeviceRegistry::new(&self.catalog_root);
+
+        let full_id = catalog
+            .resolve_asset_id(asset_id_prefix)?
+            .ok_or_else(|| anyhow::anyhow!("No asset found matching '{asset_id_prefix}'"))?;
+
+        let uuid: uuid::Uuid = full_id.parse()?;
+        let mut asset = store.load(uuid)?;
+
+        // Clear asset-level metadata that comes from XMP sources
+        asset.tags.clear();
+        asset.description = None;
+        asset.rating = None;
+        asset.color_label = None;
+
+        // Build volume lookup (id string -> Volume)
+        let volumes = registry.list().unwrap_or_default();
+        let vol_map: HashMap<String, &crate::models::volume::Volume> =
+            volumes.iter().map(|v| (v.id.to_string(), v)).collect();
+
+        // Re-extract from XMP recipe files
+        let recipes = catalog.list_recipes_for_asset(&full_id)?;
+        for (_recipe_id, _content_hash, variant_hash, relative_path, volume_id) in &recipes {
+            let vol = match vol_map.get(volume_id) {
+                Some(v) if v.is_online => *v,
+                _ => continue,
+            };
+            let ext = std::path::Path::new(relative_path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            if !ext.eq_ignore_ascii_case("xmp") {
+                continue;
+            }
+            let full_path = vol.mount_point.join(relative_path);
+            if full_path.exists() {
+                let xmp = crate::xmp_reader::extract(&full_path);
+                crate::asset_service::apply_xmp_data_pub(&xmp, &mut asset, variant_hash);
+            }
+        }
+
+        // Re-extract from embedded XMP in JPEG/TIFF media files
+        let locations = catalog.list_file_locations_for_asset(&full_id)?;
+        for (content_hash, relative_path, volume_id) in &locations {
+            let vol = match vol_map.get(volume_id) {
+                Some(v) if v.is_online => *v,
+                _ => continue,
+            };
+            let ext = std::path::Path::new(relative_path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            if !matches!(ext.to_lowercase().as_str(), "jpg" | "jpeg" | "tif" | "tiff") {
+                continue;
+            }
+            let full_path = vol.mount_point.join(relative_path);
+            if full_path.exists() {
+                let embedded_xmp = crate::embedded_xmp::extract_embedded_xmp(&full_path);
+                if !embedded_xmp.keywords.is_empty()
+                    || embedded_xmp.description.is_some()
+                    || !embedded_xmp.source_metadata.is_empty()
+                {
+                    crate::asset_service::apply_xmp_data_pub(&embedded_xmp, &mut asset, content_hash);
+                }
+            }
+        }
+
+        store.save(&asset)?;
+        catalog.insert_asset(&asset)?;
+
+        Ok(asset.tags.clone())
+    }
+
     /// Edit asset metadata (name, description, rating). Updates both sidecar YAML and SQLite.
     pub fn edit(&self, asset_id_prefix: &str, fields: EditFields) -> Result<EditResult> {
         let catalog = Catalog::open(&self.catalog_root)?;

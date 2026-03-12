@@ -61,6 +61,8 @@
             <button id="suggest-tags-btn" class="btn btn-sm" onclick="suggestTags()">Suggest tags</button>
             <div id="tag-suggestions" style="display:none"></div>
             {% endif %}
+            <button class="btn btn-sm" id="reimport-metadata-btn"
+                    title="Clear metadata and re-read from variant source files (XMP sidecars + embedded XMP)">Re-import metadata</button>
         </details>
 
         {% if ai_enabled %}
@@ -500,6 +502,22 @@ function markBrowseDirty() { try { sessionStorage.setItem('dam-browse-dirty', '1
 document.body.addEventListener('htmx:afterRequest', function(e) {
     if (e.detail.successful) markBrowseDirty();
 });
+
+// Re-import metadata button
+(function() {
+    var btn = document.getElementById('reimport-metadata-btn');
+    if (!btn) return;
+    btn.addEventListener('click', function() {
+        if (!confirm('Clear all tags, description, rating, and label, then re-extract from source files?')) return;
+        fetch('/api/asset/{{ asset_id }}/reimport-metadata', { method: 'POST' })
+            .then(function(r) {
+                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+                return r.text();
+            })
+            .then(function() { markBrowseDirty(); window.location.reload(); })
+            .catch(function(err) { alert('Re-import failed: ' + err.message); });
+    });
+})();
 
 // --- Lightbox detail bridge ---
 (function() {
