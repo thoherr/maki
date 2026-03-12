@@ -878,6 +878,14 @@ enum Commands {
     Shell {
         /// Script file to execute (instead of interactive mode)
         script: Option<String>,
+
+        /// Run a single command and exit
+        #[arg(short = 'c', long = "command")]
+        command_str: Option<String>,
+
+        /// Exit on first error (scripts only)
+        #[arg(long)]
+        strict: bool,
     },
 }
 
@@ -1237,7 +1245,7 @@ Maintain:
   migrate            Run database schema migrations
 
 Shell:
-  shell              Interactive asset management shell
+  shell              Interactive asset management shell (variables, tab completion, scripts)
 
 Options:
       --json         Output machine-readable JSON
@@ -1303,7 +1311,7 @@ fn main() {
     let start = std::time::Instant::now();
 
     // Handle shell command specially — it has its own loop
-    if let Commands::Shell { script } = &cli.command {
+    if let Commands::Shell { script, command_str, strict } = &cli.command {
         check_schema();
         let catalog_root = match dam::config::find_catalog_root() {
             Ok(r) => r,
@@ -1312,8 +1320,12 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        let script_path = script.as_ref().map(PathBuf::from);
-        dam::shell::run(&catalog_root, script_path, |args| {
+        let opts = dam::shell::RunOptions {
+            script: script.as_ref().map(PathBuf::from),
+            command: command_str.clone(),
+            strict: *strict,
+        };
+        dam::shell::run(&catalog_root, opts, |args| {
             let shell_cli = Cli::try_parse_from(&args).map_err(|e| anyhow::anyhow!("{e}"))?;
             run_command(shell_cli)
         });

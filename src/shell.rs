@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -12,14 +12,26 @@ pub struct CommandResult {
     pub asset_ids: Vec<String>,
 }
 
-/// Run the interactive shell or execute a script file.
+/// Options for `run()`.
+pub struct RunOptions {
+    /// Script file to execute (instead of interactive mode).
+    pub script: Option<PathBuf>,
+    /// Single command to run and exit.
+    pub command: Option<String>,
+    /// Exit on first error (scripts and -c mode).
+    pub strict: bool,
+}
+
+/// Run the interactive shell, a script file, or a single command.
 pub fn run(
     catalog_root: &Path,
-    script: Option<PathBuf>,
+    opts: RunOptions,
     executor: impl Fn(Vec<String>) -> Result<Vec<String>>,
 ) {
-    if let Some(path) = script {
-        run_script(&path, &executor);
+    if let Some(ref cmd) = opts.command {
+        run_single_command(cmd, opts.strict, &executor);
+    } else if let Some(ref path) = opts.script {
+        run_script(path, opts.strict, &executor);
     } else {
         run_interactive(catalog_root, &executor);
     }
@@ -70,7 +82,9 @@ const SUBCOMMANDS: &[&str] = &[
 ];
 
 /// Shell built-in commands for completion.
-const BUILTINS: &[&str] = &["exit", "help", "quit", "unset", "vars"];
+const BUILTINS: &[&str] = &[
+    "exit", "help", "quit", "reload", "set", "source", "unset", "vars",
+];
 
 /// Common flags for completion (subset — the most universally useful).
 const COMMON_FLAGS: &[&str] = &[
@@ -109,8 +123,7 @@ impl ShellHelper {
         }
     }
 
-    /// Refresh completion data from the catalog (used after mutations).
-    #[allow(dead_code)]
+    /// Refresh completion data from the catalog.
     fn refresh(&mut self, catalog_root: &Path) {
         let (tags, volumes) = load_completion_data(catalog_root);
         self.tags = tags;
@@ -247,7 +260,7 @@ impl Completer for ShellHelper {
 }
 
 // ---------------------------------------------------------------------------
-// Variable state
+// Session state
 // ---------------------------------------------------------------------------
 
 /// Session variables: named result sets mapping $name → asset IDs.
@@ -286,6 +299,65 @@ impl Variables {
     }
 }
 
+/// Session-wide default flags that get injected into every command.
+struct SessionDefaults {
+    flags: HashSet<String>,
+}
+
+/// Flags that can be set as session defaults.
+const SETTABLE_FLAGS: &[&str] = &["--json", "--log", "--debug", "--time"];
+
+impl SessionDefaults {
+    fn new() -> Self {
+        Self {
+            flags: HashSet::new(),
+        }
+    }
+
+    fn set(&mut self, flag: &str) -> bool {
+        if SETTABLE_FLAGS.contains(&flag) {
+            self.flags.insert(flag.to_string());
+            true
+        } else {
+            false
+        }
+    }
+
+    fn unset_flag(&mut self, flag: &str) -> bool {
+        self.flags.remove(flag)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.flags.is_empty()
+    }
+
+    /// Inject session defaults into a token list (after "dam" argv[0], before other args).
+    fn inject(&self, tokens: &mut Vec<String>) {
+        if self.flags.is_empty() {
+            return;
+        }
+        // Insert after the first token (the subcommand) — but we insert into
+        // the args list after "dam" is prepended, so position 2 (after "dam" + subcommand).
+        // Actually, global flags go right after "dam" (before the subcommand) for clap.
+        // But clap also accepts them after the subcommand. Let's append to the end
+        // to avoid interfering with subcommand position detection.
+        for flag in &self.flags {
+            if !tokens.contains(flag) {
+                tokens.push(flag.clone());
+            }
+        }
+    }
+
+    fn display(&self) -> String {
+        if self.flags.is_empty() {
+            return String::new();
+        }
+        let mut sorted: Vec<&String> = self.flags.iter().collect();
+        sorted.sort();
+        sorted.iter().map(|f| f.as_str()).collect::<Vec<_>>().join(" ")
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Interactive mode
 // ---------------------------------------------------------------------------
@@ -311,6 +383,7 @@ fn run_interactive(
     }
 
     let mut vars = Variables::new();
+    let mut defaults = SessionDefaults::new();
 
     eprintln!("dam shell v{} — type 'help' or 'quit' to exit", env!("CARGO_PKG_VERSION"));
 
@@ -331,7 +404,7 @@ fn run_interactive(
 
                 let _ = rl.add_history_entry(trimmed);
 
-                match handle_line(trimmed, &mut vars, executor) {
+                match handle_line(trimmed, &mut vars, &mut defaults, catalog_root, executor) {
                     LineResult::Ok(ids) => {
                         if !ids.is_empty() {
                             vars.last_ids = ids;
@@ -343,6 +416,15 @@ fn run_interactive(
                         eprintln!("'{cmd}' cannot be used inside the shell.");
                     }
                     LineResult::Handled => {}
+                    LineResult::Reload => {
+                        vars = Variables::new();
+                        defaults = SessionDefaults::new();
+                        if let Some(h) = rl.helper_mut() {
+                            h.refresh(catalog_root);
+                            h.variable_names = Vec::new();
+                        }
+                        eprintln!("  Reloaded config, cleared variables and session defaults.");
+                    }
                 }
             }
             Err(ReadlineError::Interrupted) => {
@@ -374,6 +456,7 @@ fn run_interactive(
 /// Run a script file.
 fn run_script(
     path: &Path,
+    strict: bool,
     executor: &impl Fn(Vec<String>) -> Result<Vec<String>>,
 ) {
     let content = match std::fs::read_to_string(path) {
@@ -384,7 +467,28 @@ fn run_script(
         }
     };
 
+    run_lines(&content, Some(path), strict, executor);
+}
+
+/// Run a single command string (dam shell -c '...').
+fn run_single_command(
+    command: &str,
+    strict: bool,
+    executor: &impl Fn(Vec<String>) -> Result<Vec<String>>,
+) {
+    run_lines(command, None, strict, executor);
+}
+
+/// Run lines from a script or -c command, with shared variable state.
+fn run_lines(
+    content: &str,
+    source_path: Option<&Path>,
+    strict: bool,
+    executor: &impl Fn(Vec<String>) -> Result<Vec<String>>,
+) {
     let mut vars = Variables::new();
+    let mut defaults = SessionDefaults::new();
+    let catalog_root = crate::config::find_catalog_root().ok();
 
     for (line_num, line) in content.lines().enumerate() {
         let trimmed = line.trim();
@@ -392,25 +496,47 @@ fn run_script(
             continue;
         }
 
-        match handle_line(trimmed, &mut vars, executor) {
+        let result = handle_line(
+            trimmed,
+            &mut vars,
+            &mut defaults,
+            catalog_root.as_deref().unwrap_or(Path::new(".")),
+            executor,
+        );
+
+        match result {
             LineResult::Ok(ids) => {
                 if !ids.is_empty() {
                     vars.last_ids = ids;
                 }
             }
             LineResult::Err(msg) => {
-                eprintln!("{}:{}: Error: {msg:#}", path.display(), line_num + 1);
+                if let Some(path) = source_path {
+                    eprintln!("{}:{}: Error: {msg:#}", path.display(), line_num + 1);
+                } else {
+                    eprintln!("Error: {msg:#}");
+                }
+                if strict {
+                    std::process::exit(1);
+                }
             }
             LineResult::Quit => break,
             LineResult::Blocked(cmd) => {
-                eprintln!(
-                    "{}:{}: '{}' cannot be used in scripts.",
-                    path.display(),
-                    line_num + 1,
-                    cmd
-                );
+                if let Some(path) = source_path {
+                    eprintln!(
+                        "{}:{}: '{}' cannot be used in scripts.",
+                        path.display(),
+                        line_num + 1,
+                        cmd
+                    );
+                } else {
+                    eprintln!("'{cmd}' cannot be used in scripts.");
+                }
+                if strict {
+                    std::process::exit(1);
+                }
             }
-            LineResult::Handled => {}
+            LineResult::Handled | LineResult::Reload => {}
         }
     }
 }
@@ -426,20 +552,22 @@ enum LineResult {
     Blocked(String),
     /// Line was fully handled by a built-in (no IDs to capture).
     Handled,
+    /// Reload command — caller must refresh state.
+    Reload,
 }
 
 /// Process a single shell line.
 fn handle_line(
     line: &str,
     vars: &mut Variables,
+    defaults: &mut SessionDefaults,
+    catalog_root: &Path,
     executor: &impl Fn(Vec<String>) -> Result<Vec<String>>,
 ) -> LineResult {
     // Check for variable assignment: $name = <command...>
     if let Some(rest) = parse_variable_assignment(line) {
         let (var_name, command_part) = rest;
         if command_part.is_empty() {
-            // $name = _ (assign last result to named variable)
-            // Just assigning _ is handled via expand_variables
             return LineResult::Err(anyhow::anyhow!("No command after variable assignment"));
         }
 
@@ -452,15 +580,14 @@ fn handle_line(
 
         // If the expanded result is just IDs (from _ expansion), store directly
         if tokens.len() == 1 && tokens[0].contains(' ') {
-            // This was just _ expansion — store the IDs
-            vars.named.insert(var_name, vars.last_ids.clone());
+            vars.named.insert(var_name.clone(), vars.last_ids.clone());
             let count = vars.last_ids.len();
-            eprintln!("  {count} assets → ${}", vars.named.keys().last().unwrap_or(&String::new()));
+            eprintln!("  {count} assets → ${var_name}");
             return LineResult::Handled;
         }
 
         // Otherwise execute the command and store result
-        return match execute_tokens(tokens, executor) {
+        return match execute_tokens(tokens, defaults, executor) {
             LineResult::Ok(ids) => {
                 let count = ids.len();
                 if !ids.is_empty() {
@@ -482,23 +609,102 @@ fn handle_line(
             return LineResult::Handled;
         }
         "vars" => {
-            print_vars(vars);
+            print_vars(vars, defaults);
             return LineResult::Handled;
+        }
+        "reload" => {
+            return LineResult::Reload;
         }
         _ => {}
     }
 
-    // unset $name
-    if let Some(rest) = line.strip_prefix("unset ") {
-        let name = rest.trim();
-        if let Some(name) = name.strip_prefix('$') {
-            if vars.named.remove(name).is_some() {
-                eprintln!("  Removed ${name}");
+    // set --flag
+    if let Some(rest) = line.strip_prefix("set ") {
+        let flag = rest.trim();
+        if flag.starts_with("--") {
+            if defaults.set(flag) {
+                eprintln!("  Session default: {flag}");
+                if !defaults.is_empty() {
+                    eprintln!("  Active defaults: {}", defaults.display());
+                }
             } else {
-                eprintln!("  Variable ${name} not defined");
+                eprintln!("  Unknown flag '{flag}'. Settable flags: {}", SETTABLE_FLAGS.join(", "));
             }
         } else {
-            eprintln!("  Usage: unset $name");
+            eprintln!("  Usage: set --flag (e.g. set --log, set --json)");
+        }
+        return LineResult::Handled;
+    }
+
+    // unset $name or unset --flag
+    if let Some(rest) = line.strip_prefix("unset ") {
+        let name = rest.trim();
+        if let Some(var_name) = name.strip_prefix('$') {
+            if vars.named.remove(var_name).is_some() {
+                eprintln!("  Removed ${var_name}");
+            } else {
+                eprintln!("  Variable ${var_name} not defined");
+            }
+        } else if name.starts_with("--") {
+            if defaults.unset_flag(name) {
+                eprintln!("  Removed session default: {name}");
+            } else {
+                eprintln!("  '{name}' is not set as a session default");
+            }
+        } else {
+            eprintln!("  Usage: unset $name or unset --flag");
+        }
+        return LineResult::Handled;
+    }
+
+    // source <file>
+    if let Some(rest) = line.strip_prefix("source ") {
+        let file_path = rest.trim();
+        if file_path.is_empty() {
+            eprintln!("  Usage: source <file>");
+            return LineResult::Handled;
+        }
+        // Resolve relative to catalog root
+        let path = if Path::new(file_path).is_absolute() {
+            PathBuf::from(file_path)
+        } else {
+            catalog_root.join(file_path)
+        };
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                return LineResult::Err(anyhow::anyhow!(
+                    "Cannot read {}: {e}",
+                    path.display()
+                ));
+            }
+        };
+        // Execute each line in the sourced file, sharing our session state
+        for (line_num, src_line) in content.lines().enumerate() {
+            let trimmed = src_line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            match handle_line(trimmed, vars, defaults, catalog_root, executor) {
+                LineResult::Ok(ids) => {
+                    if !ids.is_empty() {
+                        vars.last_ids = ids;
+                    }
+                }
+                LineResult::Err(msg) => {
+                    eprintln!("{}:{}: Error: {msg:#}", path.display(), line_num + 1);
+                }
+                LineResult::Quit => return LineResult::Quit,
+                LineResult::Blocked(cmd) => {
+                    eprintln!(
+                        "{}:{}: '{}' cannot be used in scripts.",
+                        path.display(),
+                        line_num + 1,
+                        cmd
+                    );
+                }
+                LineResult::Handled | LineResult::Reload => {}
+            }
         }
         return LineResult::Handled;
     }
@@ -512,7 +718,7 @@ fn handle_line(
         None => return LineResult::Err(anyhow::anyhow!("Unmatched quote in command")),
     };
 
-    execute_tokens(tokens, executor)
+    execute_tokens(tokens, defaults, executor)
 }
 
 /// Parse a `$name = <command>` assignment. Returns (name, command_part).
@@ -572,6 +778,7 @@ fn expand_variables(line: &str, vars: &Variables) -> String {
 /// Execute a parsed token list as a dam command.
 fn execute_tokens(
     tokens: Vec<String>,
+    defaults: &SessionDefaults,
     executor: &impl Fn(Vec<String>) -> Result<Vec<String>>,
 ) -> LineResult {
     if tokens.is_empty() {
@@ -588,6 +795,9 @@ fn execute_tokens(
     let mut args = vec!["dam".to_string()];
     args.extend(tokens);
 
+    // Inject session defaults
+    defaults.inject(&mut args);
+
     match executor(args) {
         Ok(ids) => LineResult::Ok(ids),
         Err(e) => LineResult::Err(e),
@@ -595,10 +805,17 @@ fn execute_tokens(
 }
 
 /// Print all defined variables and their asset counts.
-fn print_vars(vars: &Variables) {
-    if vars.named.is_empty() && vars.last_ids.is_empty() {
-        eprintln!("  No variables defined.");
+fn print_vars(vars: &Variables, defaults: &SessionDefaults) {
+    let has_vars = !vars.named.is_empty() || !vars.last_ids.is_empty();
+    let has_defaults = !defaults.is_empty();
+
+    if !has_vars && !has_defaults {
+        eprintln!("  No variables or session defaults defined.");
         return;
+    }
+
+    if has_defaults {
+        eprintln!("  Session defaults: {}", defaults.display());
     }
 
     if !vars.last_ids.is_empty() {
@@ -743,21 +960,29 @@ Variables:
   $name = <command>  Store command results in a named variable
   $name              Expands to stored asset IDs in any command
   _                  Expands to asset IDs from the last command
-  vars               List all defined variables
+  vars               List all variables and session defaults
   unset $name        Remove a variable
+
+Session defaults:
+  set --flag         Add a default flag to all commands (--json, --log, --debug, --time)
+  unset --flag       Remove a session default
+
+Session management:
+  source <file>      Execute a script file in the current session (shares variables)
+  reload             Re-read config, refresh completions, clear variables and defaults
 
 Examples:
   $picks = search \"rating:5 date:2024\"
   tag --add \"portfolio\" $picks
   export --target /tmp/best $picks
+  set --log
+  source post-import.dam
 
 Other syntax:
   # comment          Lines starting with # are ignored
 
 Shell commands:
   help               Show this help
-  vars               List defined variables with asset counts
-  unset $name        Remove a named variable
   quit / exit        End the session (also Ctrl-D)
 
 Tab completion:
@@ -770,6 +995,14 @@ Blocked commands (use outside the shell):
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dummy_executor(ids: Vec<String>) -> impl Fn(Vec<String>) -> Result<Vec<String>> {
+        move |_args: Vec<String>| -> Result<Vec<String>> { Ok(ids.clone()) }
+    }
+
+    fn noop_executor(_args: Vec<String>) -> Result<Vec<String>> {
+        Ok(vec![])
+    }
 
     #[test]
     fn test_shell_split_simple() {
@@ -866,9 +1099,7 @@ mod tests {
             parse_variable_assignment("$my_var=search tag:landscape"),
             Some(("my_var".to_string(), "search tag:landscape".to_string()))
         );
-        // Not a variable assignment
         assert_eq!(parse_variable_assignment("search tag:landscape"), None);
-        // Invalid variable name
         assert_eq!(parse_variable_assignment("$ = search"), None);
         assert_eq!(parse_variable_assignment("$foo-bar = search"), None);
     }
@@ -908,7 +1139,6 @@ mod tests {
     #[test]
     fn test_expand_variables_dollar_not_var() {
         let vars = Variables::new();
-        // Bare $ not followed by a name is kept as-is
         assert_eq!(expand_variables("echo $ done", &vars), "echo $ done");
     }
 
@@ -916,22 +1146,24 @@ mod tests {
     fn test_handle_line_vars_command() {
         let mut vars = Variables::new();
         vars.named.insert("test".to_string(), vec!["id1".to_string()]);
-        let executor = |_args: Vec<String>| -> Result<Vec<String>> { Ok(vec![]) };
+        let mut defaults = SessionDefaults::new();
+        let root = Path::new(".");
 
-        match handle_line("vars", &mut vars, &executor) {
-            LineResult::Handled => {} // expected
+        match handle_line("vars", &mut vars, &mut defaults, root, &noop_executor) {
+            LineResult::Handled => {}
             _ => panic!("Expected Handled for vars command"),
         }
     }
 
     #[test]
-    fn test_handle_line_unset() {
+    fn test_handle_line_unset_variable() {
         let mut vars = Variables::new();
         vars.named.insert("test".to_string(), vec!["id1".to_string()]);
-        let executor = |_args: Vec<String>| -> Result<Vec<String>> { Ok(vec![]) };
+        let mut defaults = SessionDefaults::new();
+        let root = Path::new(".");
 
-        match handle_line("unset $test", &mut vars, &executor) {
-            LineResult::Handled => {} // expected
+        match handle_line("unset $test", &mut vars, &mut defaults, root, &noop_executor) {
+            LineResult::Handled => {}
             _ => panic!("Expected Handled for unset"),
         }
         assert!(!vars.named.contains_key("test"));
@@ -940,12 +1172,12 @@ mod tests {
     #[test]
     fn test_handle_line_variable_assignment() {
         let mut vars = Variables::new();
-        let executor = |_args: Vec<String>| -> Result<Vec<String>> {
-            Ok(vec!["a1".to_string(), "a2".to_string()])
-        };
+        let mut defaults = SessionDefaults::new();
+        let root = Path::new(".");
+        let executor = dummy_executor(vec!["a1".to_string(), "a2".to_string()]);
 
-        match handle_line("$picks = search rating:5", &mut vars, &executor) {
-            LineResult::Handled => {} // expected
+        match handle_line("$picks = search rating:5", &mut vars, &mut defaults, root, &executor) {
+            LineResult::Handled => {}
             _ => panic!("Expected Handled for variable assignment"),
         }
         assert_eq!(vars.named.get("picks").unwrap(), &vec!["a1".to_string(), "a2".to_string()]);
@@ -965,5 +1197,153 @@ mod tests {
         vars.named.insert("best".to_string(), vec!["c".to_string()]);
         let ctx = vars.prompt_context();
         assert_eq!(ctx, " [best=1 picks=2]");
+    }
+
+    // --- Phase 3: Session defaults, set/unset, source, reload ---
+
+    #[test]
+    fn test_session_defaults_set_valid() {
+        let mut defaults = SessionDefaults::new();
+        assert!(defaults.set("--json"));
+        assert!(defaults.set("--log"));
+        assert!(!defaults.set("--unknown"));
+        assert_eq!(defaults.display(), "--json --log");
+    }
+
+    #[test]
+    fn test_session_defaults_unset() {
+        let mut defaults = SessionDefaults::new();
+        defaults.set("--json");
+        defaults.set("--log");
+        assert!(defaults.unset_flag("--json"));
+        assert!(!defaults.unset_flag("--unknown"));
+        assert_eq!(defaults.display(), "--log");
+    }
+
+    #[test]
+    fn test_session_defaults_inject() {
+        let mut defaults = SessionDefaults::new();
+        defaults.set("--json");
+        defaults.set("--log");
+
+        let mut args = vec!["dam".to_string(), "search".to_string(), "tag:landscape".to_string()];
+        defaults.inject(&mut args);
+
+        assert!(args.contains(&"--json".to_string()));
+        assert!(args.contains(&"--log".to_string()));
+    }
+
+    #[test]
+    fn test_session_defaults_inject_no_duplicate() {
+        let mut defaults = SessionDefaults::new();
+        defaults.set("--json");
+
+        // Command already has --json
+        let mut args = vec!["dam".to_string(), "search".to_string(), "--json".to_string()];
+        defaults.inject(&mut args);
+
+        // Should not add a duplicate
+        let json_count = args.iter().filter(|a| a.as_str() == "--json").count();
+        assert_eq!(json_count, 1);
+    }
+
+    #[test]
+    fn test_handle_line_set_flag() {
+        let mut vars = Variables::new();
+        let mut defaults = SessionDefaults::new();
+        let root = Path::new(".");
+
+        match handle_line("set --json", &mut vars, &mut defaults, root, &noop_executor) {
+            LineResult::Handled => {}
+            _ => panic!("Expected Handled"),
+        }
+        assert!(defaults.flags.contains("--json"));
+    }
+
+    #[test]
+    fn test_handle_line_unset_flag() {
+        let mut vars = Variables::new();
+        let mut defaults = SessionDefaults::new();
+        defaults.set("--log");
+        let root = Path::new(".");
+
+        match handle_line("unset --log", &mut vars, &mut defaults, root, &noop_executor) {
+            LineResult::Handled => {}
+            _ => panic!("Expected Handled"),
+        }
+        assert!(!defaults.flags.contains("--log"));
+    }
+
+    #[test]
+    fn test_handle_line_reload() {
+        let mut vars = Variables::new();
+        let mut defaults = SessionDefaults::new();
+        let root = Path::new(".");
+
+        match handle_line("reload", &mut vars, &mut defaults, root, &noop_executor) {
+            LineResult::Reload => {}
+            _ => panic!("Expected Reload"),
+        }
+    }
+
+    #[test]
+    fn test_handle_line_source_missing_file() {
+        let mut vars = Variables::new();
+        let mut defaults = SessionDefaults::new();
+        let root = Path::new(".");
+
+        match handle_line("source nonexistent.dam", &mut vars, &mut defaults, root, &noop_executor) {
+            LineResult::Err(_) => {}
+            _ => panic!("Expected Err for missing source file"),
+        }
+    }
+
+    #[test]
+    fn test_handle_line_source_runs_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = dir.path().join("test.dam");
+        std::fs::write(&script_path, "# comment\nstats\n").unwrap();
+
+        let mut vars = Variables::new();
+        let mut defaults = SessionDefaults::new();
+
+        // source resolves relative to catalog_root
+        match handle_line("source test.dam", &mut vars, &mut defaults, dir.path(), &noop_executor) {
+            LineResult::Handled => {}
+            other => panic!("Expected Handled, got {:?}", line_result_name(&other)),
+        }
+    }
+
+    #[test]
+    fn test_execute_tokens_with_defaults() {
+        let mut defaults = SessionDefaults::new();
+        defaults.set("--json");
+
+        // Track what args the executor receives
+        let received = std::cell::RefCell::new(Vec::new());
+        let executor = |args: Vec<String>| -> Result<Vec<String>> {
+            *received.borrow_mut() = args;
+            Ok(vec![])
+        };
+
+        let tokens = vec!["stats".to_string()];
+        execute_tokens(tokens, &defaults, &executor);
+
+        let args = received.borrow();
+        assert_eq!(args[0], "dam");
+        assert_eq!(args[1], "stats");
+        assert!(args.contains(&"--json".to_string()));
+    }
+
+    /// Helper for debug output in test assertions.
+    fn line_result_name(r: &LineResult) -> &'static str {
+        match r {
+            LineResult::Ok(_) => "Ok",
+            LineResult::Err(_) => "Err",
+            LineResult::Quit => "Quit",
+            LineResult::Blocked(_) => "Blocked",
+            LineResult::Handled => "Handled",
+            LineResult::Reload => "Reload",
+        }
     }
 }
