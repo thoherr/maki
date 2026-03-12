@@ -2,6 +2,14 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v3.0.2 (2026-03-13)
+
+### New Features
+- **Preview variant override** — manually choose which variant represents an asset in the browse grid, detail page, and contact sheets, overriding the default Export > Processed > Original scoring. Click the star icon in the variant table on the detail page to set. Stored in sidecar YAML and respected by `generate-previews`, rotate, and regenerate.
+
+### Bug Fixes
+- **Group confirmation popup** — the merge confirmation dialog showed only truncated asset IDs instead of thumbnails and names. Fixed a `data-id` vs `data-asset-id` attribute mismatch that prevented card lookup.
+
 ## v3.0.1 (2026-03-12)
 
 ### Bug Fixes
