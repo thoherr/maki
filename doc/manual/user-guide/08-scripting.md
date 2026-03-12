@@ -2,7 +2,7 @@
 
 dam's CLI is designed for composability with shell scripts and external programs. Every command supports `--json` for structured output, `-q` for piping asset IDs, and stderr/stdout separation so human messages never pollute machine-readable output.
 
-This chapter covers practical scripting patterns beyond the basics shown in [Browsing & Searching](05-browse-and-search.md) and [CLI Conventions](../reference/00-cli-conventions.md).
+This chapter covers practical scripting patterns using bash and Python. For interactive multi-step workflows with variables and tab completion, see the [Interactive Shell](09-shell.md) chapter — `dam shell` provides a REPL that eliminates much of the piping and quoting complexity shown here.
 
 ---
 
@@ -282,6 +282,7 @@ dam verify --volume "Photos" || echo "Integrity check failed!"
 
 ## Related Topics
 
+- [Interactive Shell](09-shell.md) -- `dam shell` REPL with variables, tab completion, script files, and session management
 - [CLI Conventions](../reference/00-cli-conventions.md) -- global flags, exit codes, and basic scripting patterns
 - [Browsing & Searching](05-browse-and-search.md) -- search syntax and output format options
 - [Format Templates Reference](../reference/07-format-templates.md) -- custom output templates for `--format`

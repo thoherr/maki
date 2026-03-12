@@ -2,6 +2,26 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v3.0.0 (2026-03-12)
+
+### New Commands
+- **`dam shell`** — interactive asset management shell with readline-based REPL, replacing one-shot CLI invocations for interactive workflows. Features:
+  - **Named variables** — `$picks = search "rating:5 date:2024"` stores result sets; `$picks` expands to asset IDs in any subsequent command
+  - **Implicit `_` variable** — always holds asset IDs from the last command
+  - **Session defaults** — `set --json` / `set --log` / `set --debug` / `set --time` auto-inject flags into all commands
+  - **Tab completion** — subcommands, `--flags`, `$variables`, `tag:names`, `volume:labels` (cached from catalog)
+  - **Script files** — `dam shell script.dam` executes `.dam` files with variables, comments, and shared session state
+  - **Single-command mode** — `dam shell -c 'search "rating:5"'` for one-liners in external scripts
+  - **`--strict` flag** — exit on first error in scripts and `-c` mode
+  - **`source <file>`** — execute a script inline, sharing the current session's variables and defaults
+  - **`reload`** — re-read config, refresh tab completion data, clear variables and defaults
+  - **Smart quote handling** — `search text:"woman with glasses"` works without multi-level quoting (mid-token quotes preserved, token-wrapping quotes stripped)
+  - **Blocked commands** — `init`, `migrate`, `serve`, `shell` are rejected with a clear message
+  - **History** — persisted to `.dam/shell_history` in the catalog directory
+
+### Enhancements
+- **`dam --help` reorganization** — `serve` and `shell` grouped under new "Interactive" category (previously `serve` was under "Retrieve")
+
 ## v2.5.3 (2026-03-12)
 
 ### Enhancements

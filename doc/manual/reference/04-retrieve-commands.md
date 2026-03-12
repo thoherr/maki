@@ -845,5 +845,145 @@ dam serve --log --time
 
 ---
 
+## dam shell
+
+### NAME
+
+dam-shell -- interactive asset management shell
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] shell [SCRIPT]
+dam [GLOBAL FLAGS] shell -c <COMMAND>
+dam [GLOBAL FLAGS] shell [--strict] [SCRIPT | -c <COMMAND>]
+```
+
+### DESCRIPTION
+
+Starts an interactive shell that keeps catalog state cached across commands. Commands are entered without the `dam` prefix. The shell provides:
+
+- **Readline editing** with persistent history (stored in `.dam/shell_history`) and tab completion for subcommand names, `--flags`, `$variables`, `tag:` names, and `volume:` labels.
+- **Named variables** (`$name`) that store asset ID sets from command results, enabling multi-step workflows.
+- **Implicit last result** (`_`) that expands to the asset IDs produced by the most recent command.
+- **Session defaults** (`set --flag`) that inject flags into every command for the remainder of the session.
+- **Script files** for repeatable workflows — plain text files with one command per line, comments with `#`.
+- **Source command** that executes a script file within the current session, sharing variables and defaults.
+- **Reload** that re-reads configuration, refreshes tab-completion data, and clears all variables and defaults.
+
+In interactive mode, the prompt shows the catalog directory name and any active variable counts:
+
+```
+photos [picks=42 best=5]>
+```
+
+Certain commands are blocked inside the shell: `init`, `migrate`, `serve`, and `shell`.
+
+### ARGUMENTS
+
+**SCRIPT**
+: Path to a script file to execute. Each non-empty, non-comment line is run as a shell command. The shell exits after the script completes.
+
+### OPTIONS
+
+**-c, --command \<COMMAND\>**
+: Execute a single command string and exit. Supports multiple lines (separated by newlines) and variable assignments, just like a script.
+
+**--strict**
+: Exit with a non-zero status on the first error. Applies to script and `-c` modes. Without `--strict`, errors are printed but execution continues with the next line.
+
+### SHELL-ONLY COMMANDS
+
+These commands are available only inside the shell (interactive, script, and `-c` modes):
+
+| Command | Description |
+|---------|-------------|
+| `help` | Show a summary of shell features and syntax |
+| `quit` / `exit` | End the session (also Ctrl-D) |
+| `vars` | List all named variables with asset counts, plus active session defaults |
+| `unset $name` | Remove a named variable |
+| `unset --flag` | Remove a session default flag |
+| `set --flag` | Add a session default flag. Settable flags: `--json`, `--log`, `--debug`, `--time` |
+| `reload` | Re-read config, refresh completions, clear all variables and defaults |
+| `source <file>` | Execute a script file in the current session, sharing variables and defaults. Paths are resolved relative to the catalog root |
+
+### VARIABLE SYNTAX
+
+**Assignment:**
+
+```
+$name = <command>
+```
+
+Runs `<command>` and stores the resulting asset IDs in `$name`. The count is printed to stderr. Variable names may contain letters, digits, and underscores.
+
+**Expansion:**
+
+`$name` in any command expands to the space-separated asset IDs stored in that variable. Unknown variables are left as-is.
+
+`_` (standalone, not inside a word like `_foo` or `foo_bar`) expands to the asset IDs from the most recent command that produced results.
+
+### QUOTE HANDLING
+
+The shell uses a two-rule quoting model:
+
+- **Token-start quotes** (quotes at the beginning of a token) are stripped. They act as grouping quotes, like in a POSIX shell: `"tag:landscape rating:4+"` becomes a single token `tag:landscape rating:4+`.
+- **Mid-token quotes** (quotes appearing after other characters) are preserved. This keeps search filter syntax intact: `text:"woman with glasses"` passes through unchanged as a single token.
+
+### EXAMPLES
+
+Interactive session with variables:
+
+```
+$ dam shell
+photos> $picks = search "rating:5 date:2024"
+  42 assets → $picks
+photos [picks=42]> tag --add portfolio $picks
+photos [picks=42]> export --target /tmp/best $picks
+photos [picks=42]> quit
+```
+
+Run a script file:
+
+```bash
+dam shell workflow.dam
+```
+
+One-liner with `-c`:
+
+```bash
+dam shell -c 'search "tag:landscape rating:4+" --format ids'
+```
+
+Session defaults:
+
+```
+photos> set --log
+  Session default: --log
+  Active defaults: --log
+photos> search tag:landscape
+# (output includes per-file logging)
+photos> unset --log
+```
+
+Source a file into the current session:
+
+```
+photos> source post-import.dam
+```
+
+Strict mode for CI scripts:
+
+```bash
+dam shell --strict batch-updates.dam
+```
+
+### SEE ALSO
+
+[search](#dam-search) -- primary command for finding assets inside the shell.
+[CLI Conventions](00-cli-conventions.md) -- global flags (`--json`, `--log`, `--debug`, `--time`) usable as session defaults.
+
+---
+
 Previous: [Organize Commands](03-organize-commands.md) -- `collection`, `saved-search`, `stack`.
 Next: [Maintain Commands](05-maintain-commands.md) -- `verify`, `sync`, `refresh`, `cleanup`, `relocate`, `update-location`, `generate-previews`, `fix-roles`, `fix-dates`, `rebuild-catalog`.

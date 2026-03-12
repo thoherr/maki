@@ -6,6 +6,7 @@ The system is organized in four layers, from top to bottom:
 
 ### 1. Interface Layer
 - **CLI** — subcommand-based interface (`dam import`, `dam search`, `dam relocate`, etc.)
+- **Interactive Shell** — `dam shell` provides a readline-based REPL with cached catalog state, named variables (`$name = search ...`), session defaults (`set --json`), tab completion, `.dam` script files, and `source` for script composition. Shares the same command dispatcher as the CLI; each command opens a fresh SQLite connection (same per-request pattern as the web server).
 - **Web UI** — browser-based interface via `dam serve`. Uses axum (HTTP), askama (templates), htmx (interactivity). Opens fresh SQLite connections per request via `spawn_blocking`. Serves preview images from the catalog's `previews/` directory. Integrates with the local OS for file management (reveal in Finder, open terminal).
 
 ### 2. Core Library

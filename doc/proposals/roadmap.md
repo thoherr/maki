@@ -2,7 +2,7 @@
 
 Living document tracking planned enhancements. Previous proposals (all implemented or deferred) are in `archive/`.
 
-Current version: **v2.5.3** (2026-03-12)
+Current version: **v3.0.0** (2026-03-12)
 
 ---
 
@@ -51,21 +51,6 @@ Write metadata changes back into JPEG/TIFF files directly, not just XMP sidecars
 ---
 
 ## Tier 2 — Workflow Convenience
-
-### Asset Management Shell
-
-Interactive shell with cached state, named result sets, and script files. Eliminates per-invocation startup overhead and enables composable multi-step workflows.
-
-**Scope:**
-- `dam shell` — interactive session with readline (history, tab completion)
-- `dam shell script.dam` / `dam shell -c '...'` — script and one-liner modes
-- Named variables (`$picks = search "rating:5"`) and implicit `_` (last result)
-- `.dam` script files for repeatable workflows (post-import, nightly cleanup)
-- Session-wide defaults (`set --log`), `source` for script composition
-
-**Phases:** (1) Basic shell + `_` + script files, (2) named variables + tab completion, (3) session management + `source` + `-c`
-
-**Complexity:** Low–Medium. Command dispatcher exists; wrapping in a loop with `try_parse_from` is mechanical. Variables are string substitution. See [proposal](proposal-repl.md).
 
 ### Import Profiles
 
@@ -135,3 +120,4 @@ All previous proposals are in `doc/proposals/archive/`. Key milestones:
 - **v2.3**: Stroll, sync-metadata, comprehensive cleanup, faces/people
 - **v2.4**: Contact sheet export, split command, alternate variant role, grouped CLI help, CoreML GPU acceleration, VLM image descriptions
 - **v2.5**: Text-to-image semantic search, auto-describe during import, concurrent VLM, analytics dashboard, batch relocate, drag-and-drop, per-stack expand/collapse, audit filters (variants/scattered), metadata reimport
+- **v3.0**: Asset management shell — interactive REPL with named variables, tab completion, session defaults, script files, source command, `-c` one-liner mode

@@ -16,6 +16,7 @@ Workflow-oriented guides that walk you through common tasks.
 6. [Web UI](user-guide/06-web-ui.md) — Browser interface, batch operations, and keyboard navigation
 7. [Maintenance](user-guide/07-maintenance.md) — Verification, sync, refresh, cleanup, and relocation
 8. [Scripting](user-guide/08-scripting.md) — Shell and Python scripting patterns, workflow automation
+9. [Interactive Shell](user-guide/09-shell.md) — Variables, tab completion, script files, and session management
 
 ## Reference Guide
 
@@ -25,7 +26,7 @@ Man-page style documentation for every command, filter, and configuration option
 - [Setup Commands](reference/01-setup-commands.md) — `init`, `volume add`, `volume list`, `volume combine`, `volume remove`
 - [Ingest Commands](reference/02-ingest-commands.md) — `import`, `tag`, `edit`, `group`, `auto-group`, `auto-tag`, `describe`
 - [Organize Commands](reference/03-organize-commands.md) — `collection`, `saved-search`
-- [Retrieve Commands](reference/04-retrieve-commands.md) — `search`, `show`, `export`, `duplicates`, `stats`, `serve`
+- [Retrieve Commands](reference/04-retrieve-commands.md) — `search`, `show`, `export`, `duplicates`, `stats`, `serve`, `shell`
 - [Maintain Commands](reference/05-maintain-commands.md) — `verify`, `sync`, `refresh`, `cleanup`, `relocate`, `update-location`, `generate-previews`, `fix-roles`, `fix-dates`, `rebuild-catalog`
 - [Search Filters](reference/06-search-filters.md) — Complete filter syntax reference
 - [Format Templates](reference/07-format-templates.md) — Output format presets, custom templates, placeholders
@@ -42,4 +43,4 @@ Technical documentation for integrators and contributors.
 
 ---
 
-**Version**: v2.5.3 | **Source**: [GitHub](https://github.com/thoherr/simple-digital-asset-manager) | **License**: Apache-2.0
+**Version**: v3.0.0 | **Source**: [GitHub](https://github.com/thoherr/simple-digital-asset-manager) | **License**: Apache-2.0

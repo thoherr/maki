@@ -17,6 +17,7 @@ A command-line digital asset manager built in Rust, designed for large collectio
 - **Saved searches & collections** — smart albums (dynamic queries) and static albums (curated lists)
 - **AI auto-tagging** — zero-shot image classification using SigLIP vision-language models (ViT-B/16-256 or ViT-L/16-256) for automated tag suggestions, visual similarity search via stored embeddings, and natural language image search via `text:` filter (optional, requires `--features ai`)
 - **Face recognition** — detect faces with YuNet, generate ArcFace embeddings, auto-cluster into people groups, and manage named people across your catalog (optional, requires `--features ai`)
+- **Interactive shell** — `dam shell` REPL with named variables (`$picks = search "rating:5"`), tab completion, session defaults, `.dam` script files, and `source` for script composition
 - **Web UI** — browser-based interface with search, inline editing, batch operations, keyboard navigation, lightbox viewer, dark mode, grid density controls, calendar heatmap, faceted sidebar, visual similarity stroll page, and OS integration (reveal in Finder, open terminal)
 - **Flexible output** — JSON on all commands, custom format templates, quiet mode for scripting
 
@@ -41,6 +42,11 @@ dam stats --all
 # Start the web UI
 dam serve
 # Open http://127.0.0.1:8080
+
+# Or use the interactive shell
+dam shell
+# photos> $picks = search "rating:5 date:2024"
+# photos [picks=38]> export --target /tmp/best $picks
 ```
 
 ## Commands
