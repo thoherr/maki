@@ -21,17 +21,11 @@ Auto-import and sync on filesystem changes. After a CaptureOne session, new file
 
 **Complexity:** Medium. Core import/refresh logic exists; needs a polling loop and file-change detection.
 
-### GPU-Accelerated Embeddings
+### GPU-Accelerated Embeddings (Linux/Windows)
 
 SigLIP embedding generation on CPU is slow for large catalogs. GPU backends make batch embedding practical at scale.
 
 **Status:** CoreML (macOS) implemented in v2.4.1 via `--features ai-gpu`. Linux/Windows pending.
-
-**Done:**
-- `--features ai-gpu` enables CoreML execution provider on macOS (Neural Engine on Apple Silicon, Metal on Intel)
-- `[ai] execution_provider` config option ("auto", "cpu", "coreml")
-- Shared `build_onnx_session()` helper used by SigLIP and face detection/recognition
-- Automatic fallback to CPU when provider unavailable
 
 **Open:**
 - CUDA execution provider for Linux (requires `ort/cuda` feature, CUDA Toolkit + cuDNN)
@@ -95,19 +89,6 @@ Surface drive health and verification staleness proactively.
 
 **Complexity:** Low. Builds on existing verify timestamps and stats infrastructure.
 
-### Batch Relocate
-
-Move entire query results to a target volume in one command.
-
-**Status:** Implemented in v2.5.1.
-
-**Done:**
-- `dam relocate --query <QUERY> --target <VOLUME> [--remove-source] [--dry-run]`
-- Stdin piping: `dam search -q "date:2024 volume:Working" | dam relocate --target "Archive 2024"`
-- Multiple positional IDs with `--target`
-- Backward compatible with single-asset `dam relocate <ID> <VOL>`
-- Progress reporting with `--log`, batch summary with `--json`
-
 ---
 
 ## Tier 3 — Polish & Future
@@ -124,45 +105,6 @@ Track metadata changes with timestamps for audit trail and undo capability.
 
 **Complexity:** High. Requires change tracking in every write path (edit, tag, rating, label, import, refresh, sync-metadata).
 
-### Drag-and-Drop in Web UI
-
-Reorder stacks, add to collections, and manage groups via drag-and-drop in the browser.
-
-**Status:** Implemented in v2.5.1.
-
-**Done:**
-- Drag browse cards onto collection dropdown to add to collection
-- Drag stack members on detail page to reorder (drop to first = set pick)
-- HTML5 drag-and-drop API with visual feedback (drop highlights, toast notifications)
-
-### Ollama VLM Integration
-
-Natural language image descriptions via local vision-language models.
-
-**Status:** Implemented. Phases 1–4 complete (v2.4.2: CLI + web UI; v2.5.0: auto-describe + text search). See [proposal](proposal-vlm-integration.md).
-
-**Done:**
-- `dam describe` command with `--mode describe|tags|both`, `--apply`, `--force`, `--dry-run`
-- OpenAI-compatible API with Ollama native fallback
-- Configurable temperature, timeout, model, endpoint, prompt via `[vlm]` in `dam.toml`
-- "Describe" button on detail page, batch "Describe" in toolbar
-- VLM startup health check, `vlm_enabled` template flag
-- Truncated JSON recovery, tag deduplication
-- `text:` semantic search filter — natural language image search via SigLIP text encoder
-- `dam import --describe` — auto-describe during import via VLM post-import phase
-- Concurrent VLM requests via `[vlm] concurrency` setting (v2.5.3)
-
-### Statistics Dashboard
-
-Shooting analytics beyond the current `dam stats` command.
-
-**Status:** Implemented in v2.5.1.
-
-**Done:**
-- `/analytics` page with shooting frequency, camera/lens usage, rating distribution, format breakdown, monthly import volume, and storage per volume charts
-- Auto-scaling bar charts and sparkline rendering
-- Nav bar link under Maintain group
-
 ---
 
 ## Completed (Archived)
@@ -177,4 +119,4 @@ All previous proposals are in `doc/proposals/archive/`. Key milestones:
 - **v2.2**: Performance — SQLite pragmas, single connection, denormalized columns
 - **v2.3**: Stroll, sync-metadata, comprehensive cleanup, faces/people
 - **v2.4**: Contact sheet export, split command, alternate variant role, grouped CLI help, CoreML GPU acceleration, VLM image descriptions
-- **v2.5**: Text-to-image semantic search, auto-describe during import, analytics dashboard, batch relocate, drag-and-drop, per-stack expand/collapse
+- **v2.5**: Text-to-image semantic search, auto-describe during import, concurrent VLM, analytics dashboard, batch relocate, drag-and-drop, per-stack expand/collapse, audit filters (variants/scattered), metadata reimport
