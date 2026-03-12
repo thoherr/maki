@@ -512,7 +512,7 @@ Maximum time to wait for a VLM response. Larger models on CPU may need higher ti
 - **Type:** unsigned 32-bit integer
 - **Default:** `1`
 
-Reserved for future use. Currently, assets are processed sequentially.
+Number of concurrent VLM requests. When greater than 1, `dam describe`, `dam import --describe`, and web UI batch describe process multiple assets in parallel. Each batch of `concurrency` assets sends VLM HTTP calls concurrently using scoped threads; preparation (skip checks, image lookup) and result application (catalog writes) remain sequential. Set to the number of simultaneous requests your VLM server can handle efficiently — for local Ollama this depends on available VRAM and model size.
 
 ### CLI Override
 
@@ -526,6 +526,7 @@ max_tokens = 200
 timeout = 120
 temperature = 0.7
 mode = "describe"
+concurrency = 1
 # prompt = "Custom prompt here."
 ```
 

@@ -2,6 +2,11 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v2.5.3 (2026-03-12)
+
+### Enhancements
+- **Concurrent VLM requests** — the `[vlm] concurrency` setting is now fully functional. Set `concurrency = 4` in `dam.toml` to process multiple assets in parallel during `dam describe`, `dam import --describe`, and web UI batch describe. Uses scoped threads with chunked processing: preparation and result application remain sequential (catalog writes), while VLM HTTP calls (base64 encoding + curl) run concurrently. Default remains `1` (sequential) for backward compatibility.
+
 ## v2.5.2 (2026-03-12)
 
 ### New Features

@@ -124,7 +124,7 @@ dam import --describe /Volumes/Photos/NewShoot/        # auto-describe during im
 
 **Auto-describe on import**: `dam import --describe` generates descriptions for newly imported assets. Enable permanently with `[import] descriptions = true` in `dam.toml`. Silently skips if VLM endpoint is not available.
 
-**Config**: `[vlm]` section in `dam.toml` — endpoint, model, max_tokens, temperature, timeout, mode, prompt. CLI flags override config. See the [Configuration Reference](doc/manual/reference/08-configuration.md) for `[vlm]` settings.
+**Config**: `[vlm]` section in `dam.toml` — endpoint, model, max_tokens, temperature, timeout, mode, prompt, concurrency. CLI flags override config. Set `concurrency` to process multiple assets in parallel during batch describe. See the [Configuration Reference](doc/manual/reference/08-configuration.md) for `[vlm]` settings.
 
 ## Technology
 

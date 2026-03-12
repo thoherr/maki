@@ -625,6 +625,7 @@ model = "qwen2.5vl:3b"
 max_tokens = 200
 timeout = 120
 temperature = 0.7
+concurrency = 1  # parallel VLM requests (increase for faster batch processing)
 ```
 
 CLI flags (`--endpoint`, `--model`, `--prompt`, `--max-tokens`, `--timeout`, `--temperature`, `--mode`) override `dam.toml` for one-off runs.

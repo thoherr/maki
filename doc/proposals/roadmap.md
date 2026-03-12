@@ -2,7 +2,7 @@
 
 Living document tracking planned enhancements. Previous proposals (all implemented or deferred) are in `archive/`.
 
-Current version: **v2.5.2** (2026-03-12)
+Current version: **v2.5.3** (2026-03-12)
 
 ---
 
@@ -150,9 +150,7 @@ Natural language image descriptions via local vision-language models.
 - Truncated JSON recovery, tag deduplication
 - `text:` semantic search filter — natural language image search via SigLIP text encoder
 - `dam import --describe` — auto-describe during import via VLM post-import phase
-
-**Open:**
-- Concurrent VLM requests (`concurrency > 1`)
+- Concurrent VLM requests via `[vlm] concurrency` setting (v2.5.3)
 
 ### Statistics Dashboard
 
