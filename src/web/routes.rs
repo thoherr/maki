@@ -5116,6 +5116,7 @@ fn batch_vlm_describe_inner(
         .collect();
 
     let wants_description = mode == DescribeMode::Describe || mode == DescribeMode::Both;
+    let concurrency = (vlm.concurrency.max(1)) as usize;
 
     let mut result = BatchVlmDescribeResponse {
         succeeded: 0,
@@ -5124,6 +5125,15 @@ fn batch_vlm_describe_inner(
         tags_applied: 0,
         errors: Vec::new(),
     };
+
+    // Phase 1: Prepare work items (sequential — needs catalog reads)
+    struct WebWorkItem {
+        full_id: String,
+        original_id: String,
+        image_path: std::path::PathBuf,
+        existing_tags: std::collections::HashSet<String>,
+    }
+    let mut work_items: Vec<WebWorkItem> = Vec::new();
 
     for aid in asset_ids {
         let catalog = match state.catalog() {
@@ -5171,79 +5181,114 @@ fn batch_vlm_describe_inner(
             }
         };
 
-        // Encode and call VLM
-        let image_base64 = match vlm::encode_image_base64(&image_path) {
-            Ok(b) => b,
-            Err(e) => {
-                result.errors.push(format!("{aid}: {e}"));
-                result.failed += 1;
-                continue;
-            }
-        };
+        let existing_tags: std::collections::HashSet<String> = details
+            .tags
+            .iter()
+            .map(|t| t.to_lowercase())
+            .collect();
 
-        let output = match vlm::call_vlm_with_mode(
-            &vlm.endpoint,
-            &vlm.model,
-            &image_base64,
-            prompt,
-            vlm.max_tokens,
-            vlm.timeout,
-            vlm.temperature,
-            mode,
-            false,
-        ) {
-            Ok(o) => o,
-            Err(e) => {
-                result.errors.push(format!("{aid}: {e}"));
-                result.failed += 1;
-                continue;
-            }
-        };
+        work_items.push(WebWorkItem {
+            full_id,
+            original_id: aid.clone(),
+            image_path,
+            existing_tags,
+        });
+    }
 
-        // Apply description
-        if let Some(ref desc) = output.description {
-            if !desc.is_empty() {
-                let edit_fields = crate::query::EditFields {
-                    name: None,
-                    description: Some(Some(desc.clone())),
-                    rating: None,
-                    color_label: None,
-                    created_at: None,
-                };
-                if let Err(e) = engine.edit(&full_id, edit_fields) {
-                    result.errors.push(format!("{aid}: {e}"));
+    // Phase 2: VLM calls in parallel batches
+    let vlm_endpoint = &vlm.endpoint;
+    let vlm_model = &vlm.model;
+    let vlm_max_tokens = vlm.max_tokens;
+    let vlm_timeout = vlm.timeout;
+    let vlm_temperature = vlm.temperature;
+
+    for chunk in work_items.chunks(concurrency) {
+        let vlm_results: Vec<(String, String, std::collections::HashSet<String>, Result<vlm::VlmOutput, String>)> =
+            std::thread::scope(|s| {
+                let handles: Vec<_> = chunk
+                    .iter()
+                    .map(|item| {
+                        let image_path = &item.image_path;
+                        s.spawn(move || {
+                            let image_base64 = match vlm::encode_image_base64(image_path) {
+                                Ok(b) => b,
+                                Err(e) => return Err(format!("{}: {e}", item.original_id)),
+                            };
+
+                            vlm::call_vlm_with_mode(
+                                vlm_endpoint, vlm_model, &image_base64, prompt,
+                                vlm_max_tokens, vlm_timeout, vlm_temperature, mode, false,
+                            )
+                            .map_err(|e| format!("{}: {e}", item.original_id))
+                        })
+                    })
+                    .collect();
+
+                handles
+                    .into_iter()
+                    .zip(chunk.iter())
+                    .map(|(h, item)| {
+                        let vlm_result = h.join().unwrap();
+                        (
+                            item.full_id.clone(),
+                            item.original_id.clone(),
+                            item.existing_tags.clone(),
+                            vlm_result,
+                        )
+                    })
+                    .collect()
+            });
+
+        // Phase 3: Apply results sequentially
+        for (full_id, original_id, existing_tags, vlm_result) in vlm_results {
+            match vlm_result {
+                Err(msg) => {
+                    result.errors.push(msg);
                     result.failed += 1;
-                    continue;
                 }
-                result.descriptions_set += 1;
+                Ok(output) => {
+                    // Apply description
+                    if let Some(ref desc) = output.description {
+                        if !desc.is_empty() {
+                            let edit_fields = crate::query::EditFields {
+                                name: None,
+                                description: Some(Some(desc.clone())),
+                                rating: None,
+                                color_label: None,
+                                created_at: None,
+                            };
+                            if let Err(e) = engine.edit(&full_id, edit_fields) {
+                                result.errors.push(format!("{original_id}: {e}"));
+                                result.failed += 1;
+                                continue;
+                            }
+                            result.descriptions_set += 1;
+                        }
+                    }
+
+                    // Apply tags
+                    if !output.tags.is_empty() {
+                        let new_tags: Vec<String> = output
+                            .tags
+                            .iter()
+                            .filter(|t| !existing_tags.contains(&t.to_lowercase()))
+                            .cloned()
+                            .collect();
+                        if !new_tags.is_empty() {
+                            let count = new_tags.len();
+                            if let Err(e) = engine.tag(&full_id, &new_tags, false) {
+                                result.errors.push(format!("{original_id}: {e}"));
+                                result.failed += 1;
+                                continue;
+                            }
+                            result.tags_applied += count as u32;
+                        }
+                    }
+
+                    result.succeeded += 1;
+                }
             }
         }
-
-        // Apply tags
-        if !output.tags.is_empty() {
-            let existing_tags: std::collections::HashSet<String> = details
-                .tags
-                .iter()
-                .map(|t| t.to_lowercase())
-                .collect();
-            let new_tags: Vec<String> = output
-                .tags
-                .iter()
-                .filter(|t| !existing_tags.contains(&t.to_lowercase()))
-                .cloned()
-                .collect();
-            if !new_tags.is_empty() {
-                let count = new_tags.len();
-                if let Err(e) = engine.tag(&full_id, &new_tags, false) {
-                    result.errors.push(format!("{aid}: {e}"));
-                    result.failed += 1;
-                    continue;
-                }
-                result.tags_applied += count as u32;
-            }
-        }
-
-        result.succeeded += 1;
     }
 
     Ok(result)
