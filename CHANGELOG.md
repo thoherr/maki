@@ -2,6 +2,16 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v3.0.1 (2026-03-12)
+
+### Bug Fixes
+- **`volume:<label>` search filter** — the CLI `search` command silently ignored `volume:<label>` filters (only `volume:none` worked). Now resolves volume labels case-insensitively, supports comma-OR (`volume:Vol1,Vol2`), and negation (`-volume:Label`).
+- **Shell variable expansion for single-asset commands** — variables like `$picks` or `_` containing multiple asset IDs now correctly loop single-asset commands (`tag`, `edit`, `show`, `split`, `update-location`) per ID, instead of appending all IDs as trailing arguments.
+
+### Enhancements
+- **Clear tags button** — detail page now shows a "× Clear" button next to tags, with confirmation dialog, to remove all tags from an asset at once.
+- **Tag filter keyboard navigation** — browse page tag autocomplete now supports Arrow Up/Down to highlight suggestions, Enter to select, and Escape to dismiss (matching the detail page behavior).
+
 ## v3.0.0 (2026-03-12)
 
 ### New Commands

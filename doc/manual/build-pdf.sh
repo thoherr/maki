@@ -45,6 +45,7 @@ FILES=(
     user-guide/06-web-ui.md
     user-guide/07-maintenance.md
     user-guide/08-scripting.md
+    user-guide/09-shell.md
 
     # Reference Guide
     reference/00-cli-conventions.md
@@ -128,6 +129,7 @@ perl -i -pe '
         "02-module-reference.md"    => "module-reference",
         "03-building-and-testing.md"=> "building-testing",
         "08-scripting.md"           => "scripting",
+        "09-shell.md"               => "interactive-shell",
     );
 
     # Pattern 1: links with #anchor — strip path, keep anchor
