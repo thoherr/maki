@@ -98,6 +98,7 @@ struct DropdownCacheInner {
     formats: Option<Vec<(String, u64)>>,
     volumes: Option<Vec<(String, String)>>,
     collections: Option<Vec<String>>,
+    #[cfg(feature = "ai")]
     people: Option<Vec<(String, String)>>,
 }
 
@@ -113,6 +114,7 @@ impl DropdownCache {
                 formats: None,
                 volumes: None,
                 collections: None,
+                #[cfg(feature = "ai")]
                 people: None,
             }),
         }

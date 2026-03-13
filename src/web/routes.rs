@@ -14,13 +14,13 @@ use crate::device_registry::DeviceRegistry;
 use super::templates::{
     format_size, link_cards, AnalyticsPage, AssetCard, AssetPage, BackupPage, BrowsePage, CollectionOption,
     CompareAsset, ComparePage, DateFragment, DescriptionFragment, DuplicatesPage, FaceRow,
-    FormatGroup, FormatOption, LabelFragment, NameFragment, PeoplePage, PersonCard, PersonOption,
+    FormatGroup, FormatOption, LabelFragment, NameFragment, PersonOption,
     PreviewFragment, RatingFragment, ResultsPartial, SavedSearchChip, SavedSearchEntry,
     SavedSearchesPage, StackMemberCard, StatsPage, TagOption, TagTreeEntry, TagsFragment,
     TagsPage, VolumeOption,
 };
 #[cfg(feature = "ai")]
-use super::templates::{StrollPage, StrollCenter, StrollNeighbor};
+use super::templates::{PeoplePage, PersonCard, StrollPage, StrollCenter, StrollNeighbor};
 use super::AppState;
 
 #[derive(Debug, serde::Deserialize)]
