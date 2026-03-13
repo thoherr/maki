@@ -23,6 +23,20 @@ use super::templates::{
 use super::templates::{PeoplePage, PersonCard, StrollPage, StrollCenter, StrollNeighbor};
 use super::AppState;
 
+/// Resolve the best variant index for an asset, respecting user override.
+/// Looks up the stored best_variant_hash, falls back to algorithmic scoring.
+fn resolve_best_variant_idx(
+    catalog: &crate::catalog::Catalog,
+    asset_id: &str,
+    variants: &[crate::catalog::VariantDetails],
+) -> anyhow::Result<usize> {
+    let stored_hash = catalog.get_asset_best_variant_hash(asset_id).unwrap_or(None);
+    stored_hash.as_ref()
+        .and_then(|h| variants.iter().position(|v| &v.content_hash == h))
+        .or_else(|| crate::models::variant::best_preview_index_details(variants))
+        .ok_or_else(|| anyhow::anyhow!("Asset has no variants"))
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct SearchParams {
     pub q: Option<String>,
@@ -704,12 +718,9 @@ pub async fn asset_page(
             .ok_or_else(|| anyhow::anyhow!("Asset '{full_id}' not found in catalog"))?;
 
         let preview_gen = state.preview_generator();
-        // Use the stored best_variant_hash (respects user override) instead of algorithmic scoring
-        let stored_best_hash = catalog.get_asset_best_variant_hash(&full_id).unwrap_or(None);
-        let best_hash = stored_best_hash.or_else(|| {
-            crate::models::variant::best_preview_index_details(&details.variants)
-                .map(|i| details.variants[i].content_hash.clone())
-        });
+        let best_hash = resolve_best_variant_idx(&catalog, &full_id, &details.variants)
+            .ok()
+            .map(|i| details.variants[i].content_hash.clone());
         let preview_url = best_hash.as_ref().and_then(|h| {
             if preview_gen.has_preview(h) {
                 Some(super::templates::preview_url(h, &preview_ext))
@@ -1564,12 +1575,7 @@ pub async fn generate_preview(
         let engine = state.query_engine();
         let details = engine.show(&asset_id)?;
 
-        // Respect user's preview variant override
-        let stored_hash = catalog.get_asset_best_variant_hash(&asset_id).unwrap_or(None);
-        let best_idx = stored_hash.as_ref()
-            .and_then(|h| details.variants.iter().position(|v| &v.content_hash == h))
-            .or_else(|| crate::models::variant::best_preview_index_details(&details.variants))
-            .ok_or_else(|| anyhow::anyhow!("Asset has no variants"))?;
+        let best_idx = resolve_best_variant_idx(&catalog, &asset_id, &details.variants)?;
         let variant = &details.variants[best_idx];
         let content_hash = &variant.content_hash;
         let format = &variant.format;
@@ -1702,12 +1708,7 @@ pub async fn set_rotation(
         // Persist rotation
         engine.set_preview_rotation(&asset_id, new_rotation)?;
 
-        // Find the best variant (respecting user override) and resolve its source file
-        let stored_hash = catalog.get_asset_best_variant_hash(&asset_id).unwrap_or(None);
-        let best_idx = stored_hash.as_ref()
-            .and_then(|h| details.variants.iter().position(|v| &v.content_hash == h))
-            .or_else(|| crate::models::variant::best_preview_index_details(&details.variants))
-            .ok_or_else(|| anyhow::anyhow!("Asset has no variants"))?;
+        let best_idx = resolve_best_variant_idx(&catalog, &asset_id, &details.variants)?;
         let variant = &details.variants[best_idx];
         let content_hash = &variant.content_hash;
         let format = &variant.format;

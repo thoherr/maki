@@ -5537,14 +5537,15 @@ impl AssetService {
         Ok(result)
     }
 
-    /// Find the best image file for AI processing.
+    /// Find the best image file for processing.
     /// Priority: smart preview > regular preview > original on online volume.
-    #[cfg(feature = "ai")]
-    pub fn find_image_for_ai(
+    /// The `is_supported` predicate controls which original file extensions are accepted.
+    fn find_image_for_processing(
         &self,
         details: &crate::catalog::AssetDetails,
         preview_gen: &crate::preview::PreviewGenerator,
         online_volumes: &std::collections::HashMap<String, &crate::models::Volume>,
+        is_supported: impl Fn(&str) -> bool,
     ) -> Option<PathBuf> {
         // Try smart preview of best variant
         if let Some(best) = crate::models::variant::best_preview_index_details(&details.variants) {
@@ -5581,7 +5582,7 @@ impl AssetService {
                             .extension()
                             .and_then(|e| e.to_str())
                             .unwrap_or("");
-                        if crate::ai::is_supported_image(ext) {
+                        if is_supported(ext) {
                             return Some(full_path);
                         }
                     }
@@ -5592,68 +5593,32 @@ impl AssetService {
         None
     }
 
+    /// Find the best image file for AI embedding/detection.
+    #[cfg(feature = "ai")]
+    pub fn find_image_for_ai(
+        &self,
+        details: &crate::catalog::AssetDetails,
+        preview_gen: &crate::preview::PreviewGenerator,
+        online_volumes: &std::collections::HashMap<String, &crate::models::Volume>,
+    ) -> Option<PathBuf> {
+        self.find_image_for_processing(details, preview_gen, online_volumes, |ext| {
+            crate::ai::is_supported_image(ext)
+        })
+    }
+
     /// Find the best image file for VLM processing.
-    /// Priority: smart preview > regular preview > original on online volume.
-    /// Same logic as find_image_for_ai but not feature-gated.
     pub fn find_image_for_vlm(
         &self,
         details: &crate::catalog::AssetDetails,
         preview_gen: &crate::preview::PreviewGenerator,
         online_volumes: &std::collections::HashMap<String, &crate::models::Volume>,
     ) -> Option<PathBuf> {
-        // Image-like extensions for VLM (it can process JPEG previews)
-        fn is_image_ext(ext: &str) -> bool {
+        self.find_image_for_processing(details, preview_gen, online_volumes, |ext| {
             matches!(
                 ext.to_lowercase().as_str(),
                 "jpg" | "jpeg" | "png" | "webp" | "tif" | "tiff" | "bmp" | "gif"
             )
-        }
-
-        // Try smart preview of best variant
-        if let Some(best) = crate::models::variant::best_preview_index_details(&details.variants)
-        {
-            let variant = &details.variants[best];
-            let smart_path = preview_gen.smart_preview_path(&variant.content_hash);
-            if smart_path.exists() {
-                return Some(smart_path);
-            }
-            let preview_path = preview_gen.preview_path(&variant.content_hash);
-            if preview_path.exists() {
-                return Some(preview_path);
-            }
-        }
-
-        // Fall back to any preview we can find
-        for variant in &details.variants {
-            let smart_path = preview_gen.smart_preview_path(&variant.content_hash);
-            if smart_path.exists() {
-                return Some(smart_path);
-            }
-            let preview_path = preview_gen.preview_path(&variant.content_hash);
-            if preview_path.exists() {
-                return Some(preview_path);
-            }
-        }
-
-        // Fall back to original file on an online volume
-        for variant in &details.variants {
-            for loc in &variant.locations {
-                if let Some(vol) = online_volumes.get(&loc.volume_id) {
-                    let full_path = vol.mount_point.join(&loc.relative_path);
-                    if full_path.exists() {
-                        let ext = full_path
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("");
-                        if is_image_ext(ext) {
-                            return Some(full_path);
-                        }
-                    }
-                }
-            }
-        }
-
-        None
+        })
     }
 
     /// Batch-describe assets using a VLM endpoint.

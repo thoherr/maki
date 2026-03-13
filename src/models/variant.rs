@@ -39,17 +39,7 @@ fn is_standard_image_format(ext: &str) -> bool {
     )
 }
 
-fn role_score_enum(role: &VariantRole) -> u64 {
-    match role {
-        VariantRole::Export => 300,
-        VariantRole::Processed => 200,
-        VariantRole::Original => 100,
-        VariantRole::Alternate => 50,
-        VariantRole::Sidecar => 0,
-    }
-}
-
-fn role_score_str(role: &str) -> u64 {
+fn role_score(role: &str) -> u64 {
     match role.to_lowercase().as_str() {
         "export" => 300,
         "processed" => 200,
@@ -59,23 +49,36 @@ fn role_score_str(role: &str) -> u64 {
     }
 }
 
-fn variant_score(role_score: u64, format: &str, file_size: u64) -> u64 {
+fn variant_score(role: &str, format: &str, file_size: u64) -> u64 {
     let format_bonus: u64 = if is_standard_image_format(format) { 50 } else { 0 };
     let size_bonus = (file_size / 1_000_000).min(49);
-    role_score + format_bonus + size_bonus
+    role_score(role) + format_bonus + size_bonus
+}
+
+/// Return the index of the best preview from an iterator of (role, format, file_size) tuples.
+fn best_preview_index_scored(count: usize, scores: impl Iterator<Item = (usize, u64)>) -> Option<usize> {
+    if count == 0 {
+        return None;
+    }
+    scores.max_by_key(|(_, s)| *s).map(|(i, _)| i)
 }
 
 /// Return the index of the variant best suited for preview display.
 /// Prefers Export > Processed > Original > Alternate, image formats over RAW, larger files.
 pub fn best_preview_index(variants: &[Variant]) -> Option<usize> {
-    if variants.is_empty() {
-        return None;
-    }
-    variants
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, v)| variant_score(role_score_enum(&v.role), &v.format, v.file_size))
-        .map(|(i, _)| i)
+    best_preview_index_scored(
+        variants.len(),
+        variants.iter().enumerate().map(|(i, v)| {
+            let role_str = match &v.role {
+                VariantRole::Export => "export",
+                VariantRole::Processed => "processed",
+                VariantRole::Original => "original",
+                VariantRole::Alternate => "alternate",
+                VariantRole::Sidecar => "sidecar",
+            };
+            (i, variant_score(role_str, &v.format, v.file_size))
+        }),
+    )
 }
 
 /// Return the content hash of the best variant for display (browse grid, search results).
@@ -155,14 +158,12 @@ pub fn compute_gps_from_variants(variants: &[Variant]) -> (Option<f64>, Option<f
 
 /// Return the index of the best preview variant from catalog `VariantDetails` (role is a String).
 pub fn best_preview_index_details(variants: &[VariantDetails]) -> Option<usize> {
-    if variants.is_empty() {
-        return None;
-    }
-    variants
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, v)| variant_score(role_score_str(&v.role), &v.format, v.file_size))
-        .map(|(i, _)| i)
+    best_preview_index_scored(
+        variants.len(),
+        variants.iter().enumerate().map(|(i, v)| {
+            (i, variant_score(&v.role, &v.format, v.file_size))
+        }),
+    )
 }
 
 #[cfg(test)]

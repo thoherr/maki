@@ -663,6 +663,18 @@ impl Catalog {
              CREATE INDEX IF NOT EXISTS idx_variants_iso ON variants(iso);
              CREATE INDEX IF NOT EXISTS idx_variants_focal ON variants(focal_length_mm);",
         );
+        // Backfill metadata columns from existing JSON (only rows not yet populated)
+        let _ = self.conn.execute_batch(
+            "UPDATE variants SET
+                camera_model = json_extract(source_metadata, '$.camera_model'),
+                lens_model = json_extract(source_metadata, '$.lens_model'),
+                iso = CAST(json_extract(source_metadata, '$.iso') AS INTEGER),
+                focal_length_mm = CAST(REPLACE(json_extract(source_metadata, '$.focal_length'), ' mm', '') AS REAL),
+                f_number = CAST(json_extract(source_metadata, '$.f_number') AS REAL),
+                image_width = CAST(json_extract(source_metadata, '$.image_width') AS INTEGER),
+                image_height = CAST(json_extract(source_metadata, '$.image_height') AS INTEGER)
+            WHERE camera_model IS NULL AND source_metadata != '{}'"
+        );
         // best_variant_hash denormalization
         let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN best_variant_hash TEXT");
         let _ = self.conn.execute_batch(
@@ -787,6 +799,9 @@ impl Catalog {
     }
 
     /// Initialize the database schema.
+    ///
+    /// Creates base tables, then delegates to `run_migrations()` for all
+    /// ADD COLUMN, CREATE INDEX, backfill, and schema version stamping.
     pub fn initialize(&self) -> Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS assets (
@@ -795,15 +810,7 @@ impl Catalog {
                 created_at TEXT NOT NULL,
                 asset_type TEXT NOT NULL,
                 tags TEXT NOT NULL DEFAULT '[]',
-                description TEXT,
-                best_variant_hash TEXT,
-                primary_variant_format TEXT,
-                variant_count INTEGER NOT NULL DEFAULT 0,
-                latitude REAL,
-                longitude REAL,
-                preview_rotation INTEGER,
-                preview_variant TEXT,
-                face_count INTEGER NOT NULL DEFAULT 0
+                description TEXT
             );
 
             CREATE TABLE IF NOT EXISTS variants (
@@ -842,136 +849,9 @@ impl Catalog {
                 verified_at TEXT
             );",
         )?;
-        // Migration: add rating column to existing catalogs (ignored if already present)
-        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN rating INTEGER");
-        // Migration: add color_label column to existing catalogs (ignored if already present)
-        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN color_label TEXT");
-        // Migration: pending writeback tracking for XMP recipes
-        let _ = self.conn.execute_batch("ALTER TABLE recipes ADD COLUMN pending_writeback INTEGER NOT NULL DEFAULT 0");
 
-        // Migration: add indexed metadata columns to variants
-        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN camera_model TEXT");
-        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN lens_model TEXT");
-        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN focal_length_mm REAL");
-        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN f_number REAL");
-        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN iso INTEGER");
-        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN image_width INTEGER");
-        let _ = self.conn.execute_batch("ALTER TABLE variants ADD COLUMN image_height INTEGER");
-
-        self.conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_variants_camera ON variants(camera_model);
-             CREATE INDEX IF NOT EXISTS idx_variants_lens ON variants(lens_model);
-             CREATE INDEX IF NOT EXISTS idx_variants_iso ON variants(iso);
-             CREATE INDEX IF NOT EXISTS idx_variants_focal ON variants(focal_length_mm);
-             CREATE INDEX IF NOT EXISTS idx_variants_asset_id ON variants(asset_id);",
-        )?;
-
-        // Migration: denormalized asset columns
-        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN best_variant_hash TEXT");
-        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN primary_variant_format TEXT");
-        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN variant_count INTEGER NOT NULL DEFAULT 0");
-
-        // Collection tables
-        crate::collection::CollectionStore::initialize(&self.conn)?;
-
-        // Stack tables
-        crate::stack::StackStore::initialize(&self.conn)?;
-        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN stack_id TEXT");
-        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN stack_position INTEGER");
-        self.conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_assets_stack_id ON assets(stack_id);",
-        )?;
-
-        // Migration: add purpose column to volumes
-        let _ = self.conn.execute_batch("ALTER TABLE volumes ADD COLUMN purpose TEXT");
-
-        // Backfill metadata columns from existing JSON (only rows not yet populated)
-        let _ = self.conn.execute_batch(
-            "UPDATE variants SET
-                camera_model = json_extract(source_metadata, '$.camera_model'),
-                lens_model = json_extract(source_metadata, '$.lens_model'),
-                iso = CAST(json_extract(source_metadata, '$.iso') AS INTEGER),
-                focal_length_mm = CAST(REPLACE(json_extract(source_metadata, '$.focal_length'), ' mm', '') AS REAL),
-                f_number = CAST(json_extract(source_metadata, '$.f_number') AS REAL),
-                image_width = CAST(json_extract(source_metadata, '$.image_width') AS INTEGER),
-                image_height = CAST(json_extract(source_metadata, '$.image_height') AS INTEGER)
-            WHERE camera_model IS NULL AND source_metadata != '{}'"
-        );
-
-        // Backfill best_variant_hash for existing rows (runs once, idempotent)
-        let _ = self.conn.execute_batch(
-            "UPDATE assets SET best_variant_hash = (
-                SELECT content_hash FROM variants WHERE asset_id = assets.id
-                ORDER BY
-                    CASE role WHEN 'export' THEN 300 WHEN 'processed' THEN 200
-                        WHEN 'original' THEN 100 ELSE 0 END +
-                    CASE WHEN LOWER(format) IN ('jpg','jpeg','png','tiff','tif','webp')
-                        THEN 50 ELSE 0 END +
-                    MIN(file_size / 1000000, 49)
-                DESC LIMIT 1
-            ) WHERE best_variant_hash IS NULL",
-        );
-
-        // Backfill primary_variant_format + variant_count
-        let _ = self.conn.execute_batch(
-            "UPDATE assets SET primary_variant_format = COALESCE(
-                (SELECT format FROM variants WHERE asset_id = assets.id AND role = 'original'
-                 AND LOWER(format) IN ('raw','cr2','cr3','nef','arw','orf','rw2','dng','raf','pef','srw')
-                 LIMIT 1),
-                (SELECT format FROM variants WHERE asset_id = assets.id AND role = 'original' LIMIT 1),
-                (SELECT format FROM variants WHERE content_hash = assets.best_variant_hash)
-            ) WHERE primary_variant_format IS NULL",
-        );
-        let _ = self.conn.execute_batch(
-            "UPDATE assets SET variant_count = (
-                SELECT COUNT(*) FROM variants WHERE asset_id = assets.id
-            ) WHERE variant_count = 0",
-        );
-
-        // Performance indexes for search, stats, and join queries
-        self.conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_fl_content_hash ON file_locations(content_hash);
-             CREATE INDEX IF NOT EXISTS idx_fl_volume_id ON file_locations(volume_id);
-             CREATE INDEX IF NOT EXISTS idx_assets_created_at ON assets(created_at);
-             CREATE INDEX IF NOT EXISTS idx_assets_best_variant_hash ON assets(best_variant_hash);
-             CREATE INDEX IF NOT EXISTS idx_variants_format ON variants(format);
-             CREATE INDEX IF NOT EXISTS idx_recipes_variant_hash ON recipes(variant_hash);
-             CREATE INDEX IF NOT EXISTS idx_assets_stack_browse ON assets(stack_position, created_at DESC) WHERE stack_id IS NOT NULL;",
-        )?;
-
-        // GPS coordinate columns
-        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN latitude REAL");
-        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN longitude REAL");
-        self.conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_assets_geo ON assets(latitude, longitude) WHERE latitude IS NOT NULL",
-        )?;
-        self.backfill_gps_columns();
-
-        // Face count denormalized column
-        let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN face_count INTEGER NOT NULL DEFAULT 0");
-        let _ = self.conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_assets_face_count ON assets(face_count) WHERE face_count > 0",
-        );
-
-        // Embeddings table (always created so embed: search filter works without AI feature)
-        let _ = self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS embeddings (
-                asset_id TEXT NOT NULL,
-                model TEXT NOT NULL DEFAULT 'siglip-vit-b16-256',
-                embedding BLOB NOT NULL,
-                PRIMARY KEY (asset_id, model)
-            )",
-        );
-
-        // Stamp schema version
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
-             DELETE FROM schema_version;",
-        )?;
-        self.conn.execute(
-            "INSERT INTO schema_version (version) VALUES (?1)",
-            rusqlite::params![SCHEMA_VERSION],
-        )?;
+        // All columns, indexes, backfills, and version stamping handled by migrations
+        self.run_migrations();
 
         Ok(())
     }
