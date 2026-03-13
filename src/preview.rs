@@ -805,6 +805,43 @@ fn tool_available(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Display a preview image inline in the terminal using viuer.
+/// Returns Ok(true) if displayed, Ok(false) if no preview exists.
+pub fn display_in_terminal(path: &Path, max_width: Option<u32>, max_height: Option<u32>) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let conf = viuer::Config {
+        width: max_width,
+        height: max_height,
+        absolute_offset: false,
+        ..Default::default()
+    };
+    viuer::print_from_file(path, &conf)
+        .context("Failed to display image in terminal")?;
+    Ok(true)
+}
+
+/// Open a preview image in the OS default viewer.
+pub fn open_in_viewer(path: &Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(path).spawn().context("Failed to open image viewer")?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open").arg(path).spawn().context("Failed to open image viewer")?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd").args(["/c", "start", ""]).arg(path).spawn().context("Failed to open image viewer")?;
+    }
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

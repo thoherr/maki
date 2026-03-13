@@ -83,7 +83,7 @@ const SUBCOMMANDS: &[&str] = &[
 
 /// Shell built-in commands for completion.
 const BUILTINS: &[&str] = &[
-    "exit", "help", "quit", "reload", "set", "source", "unset", "vars",
+    "exit", "help", "preview", "quit", "reload", "set", "source", "unset", "vars",
 ];
 
 /// Common flags for completion (subset — the most universally useful).
@@ -628,6 +628,45 @@ fn handle_line(
         _ => {}
     }
 
+    // preview [--open] <asset_id|$var|_>
+    if line == "preview" || line.starts_with("preview ") {
+        let rest = line.strip_prefix("preview").unwrap_or("").trim();
+        let (open_mode, args) = if rest.starts_with("--open") {
+            (true, rest.strip_prefix("--open").unwrap_or("").trim())
+        } else {
+            (false, rest)
+        };
+        if args.is_empty() {
+            eprintln!("  Usage: preview [--open] <asset_id>");
+            return LineResult::Handled;
+        }
+        // Expand variables and _ in args
+        let tokens = match shell_split(args) {
+            Some(t) => t,
+            None => {
+                eprintln!("  Error: unmatched quotes");
+                return LineResult::Handled;
+            }
+        };
+        let expanded = expand_variables_in_tokens(tokens, vars);
+        let ids: Vec<String> = if expanded.asset_ids.is_empty() {
+            // No variable expansion — treat as literal asset ID(s)
+            expanded.command
+        } else {
+            expanded.asset_ids
+        };
+        // Display previews
+        match handle_preview_builtin(catalog_root, &ids, open_mode) {
+            Ok(displayed_ids) => {
+                if !displayed_ids.is_empty() {
+                    vars.last_ids = displayed_ids;
+                }
+            }
+            Err(e) => eprintln!("  Error: {e:#}"),
+        }
+        return LineResult::Handled;
+    }
+
     // set --flag
     if let Some(rest) = line.strip_prefix("set ") {
         let flag = rest.trim();
@@ -838,6 +877,61 @@ fn execute_with_ids(
     }
 }
 
+/// Handle the `preview` built-in: display preview images for one or more assets.
+fn handle_preview_builtin(
+    catalog_root: &Path,
+    asset_ids: &[String],
+    open_mode: bool,
+) -> Result<Vec<String>> {
+    let config = crate::config::CatalogConfig::load(catalog_root)?;
+    let catalog = crate::catalog::Catalog::open(catalog_root)?;
+    let preview_gen = crate::preview::PreviewGenerator::new(catalog_root, false, &config.preview);
+    let engine = crate::query::QueryEngine::new(catalog_root);
+
+    let mut displayed = Vec::new();
+    for raw_id in asset_ids {
+        let details = engine.show(raw_id)?;
+        let full_id = &details.id;
+        let name = details.name.as_deref().unwrap_or(full_id);
+
+        // Find best preview (stored override → algorithmic)
+        let best_hash = catalog.get_asset_best_variant_hash(full_id)
+            .unwrap_or(None)
+            .or_else(|| {
+                crate::models::variant::best_preview_index_details(&details.variants)
+                    .map(|i| details.variants[i].content_hash.clone())
+            });
+
+        let preview_path = best_hash.as_ref().and_then(|h| {
+            let smart = preview_gen.smart_preview_path(h);
+            if smart.exists() { return Some(smart); }
+            let regular = preview_gen.preview_path(h);
+            if regular.exists() { return Some(regular); }
+            None
+        });
+
+        match preview_path {
+            Some(path) => {
+                if open_mode {
+                    crate::preview::open_in_viewer(&path)?;
+                    eprintln!("  Opened {name}");
+                } else {
+                    eprintln!("  {name}");
+                    crate::preview::display_in_terminal(&path, None, None)?;
+                }
+                displayed.push(full_id.to_string());
+            }
+            None => {
+                eprintln!("  {name}: no preview available");
+            }
+        }
+    }
+    if !displayed.is_empty() {
+        eprintln!("  {} asset(s) previewed", displayed.len());
+    }
+    Ok(displayed)
+}
+
 /// Print all defined variables and their asset counts.
 fn print_vars(vars: &Variables, defaults: &SessionDefaults) {
     let has_vars = !vars.named.is_empty() || !vars.last_ids.is_empty();
@@ -1034,6 +1128,8 @@ Other syntax:
   # comment          Lines starting with # are ignored
 
 Shell commands:
+  preview <id>       Display asset preview in the terminal
+  preview --open <id>  Open preview in OS image viewer
   help               Show this help
   quit / exit        End the session (also Ctrl-D)
 

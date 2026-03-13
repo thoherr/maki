@@ -379,8 +379,19 @@ enum Commands {
         asset_id: String,
     },
 
-    /// Find duplicate files
+    /// Display asset preview in the terminal
     #[command(display_order = 32)]
+    Preview {
+        /// Asset ID (or prefix)
+        asset_id: String,
+
+        /// Open in the default OS image viewer instead of inline display
+        #[arg(long)]
+        open: bool,
+    },
+
+    /// Find duplicate files
+    #[command(display_order = 33)]
     Duplicates {
         /// Output format: ids, short, full, json, or a custom template (e.g. '{hash}\t{filename}')
         #[arg(long)]
@@ -1220,6 +1231,7 @@ Organize:
 Retrieve:
   search             Search assets
   show               Show asset details
+  preview            Display asset preview in the terminal (or --open in OS viewer)
   export             Export files matching a search query to a directory
   contact-sheet      Generate a PDF contact sheet from search results
   duplicates         Find duplicate files
@@ -2184,6 +2196,68 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                             let label = r.volume_label.as_deref().unwrap_or("?");
                             println!("    Location: {label}:{path}");
                         }
+                    }
+                }
+            }
+
+            Ok(())
+        }
+        Commands::Preview { asset_id, open } => {
+            let catalog_root = dam::config::find_catalog_root()?;
+            let config = CatalogConfig::load(&catalog_root)?;
+            let catalog = dam::catalog::Catalog::open(&catalog_root)?;
+            let engine = QueryEngine::new(&catalog_root);
+            let details = engine.show(&asset_id)?;
+            let full_id = &details.id;
+            let preview_gen = dam::preview::PreviewGenerator::new(&catalog_root, cli.debug, &config.preview);
+
+            // Find best preview file (smart preview > regular preview)
+            let best_hash = catalog.get_asset_best_variant_hash(full_id)
+                .unwrap_or(None)
+                .or_else(|| {
+                    dam::models::variant::best_preview_index_details(&details.variants)
+                        .map(|i| details.variants[i].content_hash.clone())
+                });
+
+            let preview_path = best_hash.as_ref().and_then(|h| {
+                let smart = preview_gen.smart_preview_path(h);
+                if smart.exists() { return Some(smart); }
+                let regular = preview_gen.preview_path(h);
+                if regular.exists() { return Some(regular); }
+                None
+            });
+
+            match preview_path {
+                Some(path) => {
+                    if open {
+                        dam::preview::open_in_viewer(&path)?;
+                        if !cli.json {
+                            let name = details.name.as_deref().unwrap_or(full_id);
+                            eprintln!("Opened preview for {name}");
+                        }
+                    } else {
+                        let name = details.name.as_deref().unwrap_or(full_id);
+                        if !cli.json {
+                            eprintln!("{name}");
+                        }
+                        dam::preview::display_in_terminal(&path, None, None)?;
+                    }
+                    if cli.json {
+                        println!("{}", serde_json::json!({
+                            "id": full_id,
+                            "preview": path.display().to_string(),
+                        }));
+                    }
+                }
+                None => {
+                    let name = details.name.as_deref().unwrap_or(full_id);
+                    if cli.json {
+                        println!("{}", serde_json::json!({
+                            "id": full_id,
+                            "preview": null,
+                        }));
+                    } else {
+                        eprintln!("No preview available for {name}");
                     }
                 }
             }
