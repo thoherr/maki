@@ -661,7 +661,7 @@ dam-auto-tag -- suggest or apply tags to images using AI (SigLIP zero-shot class
 ### SYNOPSIS
 
 ```
-dam [GLOBAL FLAGS] auto-tag [OPTIONS] --query <QUERY>
+dam [GLOBAL FLAGS] auto-tag [QUERY] [OPTIONS]
 dam [GLOBAL FLAGS] auto-tag [OPTIONS] --asset <ID>
 dam [GLOBAL FLAGS] auto-tag [OPTIONS] --volume <LABEL>
 dam [GLOBAL FLAGS] auto-tag --download [--model <ID>]
@@ -699,7 +699,7 @@ Model files are downloaded from HuggingFace on first use. Use `--download` to pr
 
 ### OPTIONS
 
-**--query \<QUERY\>**
+**\<QUERY\>** (positional, optional)
 : Filter which assets to process using the same search syntax as `dam search`.
 
 **--asset \<ID\>**
@@ -829,7 +829,7 @@ dam-embed -- batch-generate image embeddings for visual similarity search
 ### SYNOPSIS
 
 ```
-dam [GLOBAL FLAGS] embed --query <QUERY> [OPTIONS]
+dam [GLOBAL FLAGS] embed [QUERY] [OPTIONS]
 dam [GLOBAL FLAGS] embed --asset <ID> [OPTIONS]
 dam [GLOBAL FLAGS] embed --volume <LABEL> [OPTIONS]
 dam [GLOBAL FLAGS] embed --export
@@ -849,7 +849,7 @@ By default, assets that already have a stored embedding for the active model are
 
 ### OPTIONS
 
-**--query \<QUERY\>**
+**\<QUERY\>** (positional, optional)
 : Filter which assets to process using the same search syntax as `dam search`.
 
 **--asset \<ID\>**
@@ -931,7 +931,7 @@ dam-describe -- generate image descriptions using a vision-language model (VLM)
 ### SYNOPSIS
 
 ```
-dam [GLOBAL FLAGS] describe [OPTIONS]
+dam [GLOBAL FLAGS] describe [QUERY] [OPTIONS]
 ```
 
 ### DESCRIPTION
@@ -946,7 +946,7 @@ Three modes are available via `--mode`:
 
 By default, the command runs in **report-only mode**: results are generated and displayed but not saved. Use `--apply` to write descriptions/tags to assets. Use `--dry-run` to see what would be processed without calling the VLM at all.
 
-The command requires at least one scope filter (`--query`, `--asset`, or `--volume`) to prevent accidental processing of the entire catalog.
+The command requires at least one scope filter (a positional query, `--asset`, or `--volume`) to prevent accidental processing of the entire catalog.
 
 For each asset, the command:
 1. Checks if a description already exists (skips unless `--force` is set; tags mode always runs)
@@ -956,7 +956,7 @@ For each asset, the command:
 
 ### OPTIONS
 
-**--query \<QUERY\>**
+**\<QUERY\>** (positional, optional)
 : Search query to scope which assets are described. Same syntax as `dam search`.
 
 **--asset \<ID\>**

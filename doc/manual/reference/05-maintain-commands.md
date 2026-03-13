@@ -320,12 +320,12 @@ dam-sync-metadata -- bidirectional XMP metadata sync between DAM and recipe file
 ### SYNOPSIS
 
 ```
-dam [GLOBAL FLAGS] sync-metadata [OPTIONS]
+dam [GLOBAL FLAGS] sync-metadata [QUERY] [OPTIONS]
 ```
 
 ### DESCRIPTION
 
-Performs bidirectional metadata synchronization between the DAM catalog and XMP recipe files on disk. Runs in three phases:
+Performs bidirectional metadata synchronization between the DAM catalog and XMP recipe files on disk. Scope can be narrowed with a positional search query, `--asset`, or `--volume`. Runs in three phases:
 
 1. **Inbound (read external changes)**: Detects XMP recipe files that have been modified externally (e.g., by CaptureOne or Lightroom). Re-reads keywords, rating, description, and color label from the changed XMP file and updates the catalog and sidecar YAML.
 2. **Outbound (write pending edits)**: Finds recipes marked `pending_writeback` (edits made while the volume was offline) and writes the current DAM metadata back to the XMP file on disk.
@@ -336,6 +336,9 @@ When both the disk file and the DAM have changed (phase 1 detects a change AND `
 Without `--dry-run`, changes are applied immediately.
 
 ### OPTIONS
+
+**\<QUERY\>** (positional, optional)
+: Search query to scope which assets are synced (same syntax as `dam search`).
 
 **--volume \<LABEL\>**
 : Limit to recipes on a specific volume.
@@ -356,6 +359,12 @@ Without `--dry-run`, changes are applied immediately.
 `--time` shows elapsed wall-clock time.
 
 ### EXAMPLES
+
+Sync only assets matching a query:
+
+```bash
+dam sync-metadata "volume:Photos date:2024"
+```
 
 Preview what sync-metadata would do:
 
@@ -921,12 +930,12 @@ dam-fix-dates -- fix asset dates from variant EXIF metadata and file modificatio
 ### SYNOPSIS
 
 ```
-dam [GLOBAL FLAGS] fix-dates [OPTIONS]
+dam [GLOBAL FLAGS] fix-dates [QUERY] [OPTIONS]
 ```
 
 ### DESCRIPTION
 
-Scans assets and corrects their `created_at` date by examining the EXIF DateTimeOriginal metadata and file modification times of their variants. This fixes assets that were imported with the wrong date (e.g., import timestamp instead of capture date).
+Scans assets and corrects their `created_at` date by examining the EXIF DateTimeOriginal metadata and file modification times of their variants. This fixes assets that were imported with the wrong date (e.g., import timestamp instead of capture date). Scope can be narrowed with a positional search query, `--asset`, or `--volume`.
 
 For each asset, the command collects candidate dates from all variants:
 
@@ -940,11 +949,10 @@ Without `--apply`, runs in **report-only mode** and shows what dates would chang
 
 **Offline volume handling**: Assets whose only file locations are on offline volumes cannot be fixed (no file access for EXIF re-extraction or mtime). These are counted separately as "skipped (volume offline)" and a warning is printed for each offline volume. Mount the volume and re-run to fix these assets.
 
-### ARGUMENTS
-
-None.
-
 ### OPTIONS
+
+**\<QUERY\>** (positional, optional)
+: Search query to scope which assets are checked (same syntax as `dam search`).
 
 **--volume \<LABEL\>**
 : Limit to assets with locations on a specific volume.
@@ -1011,12 +1019,12 @@ dam-fix-recipes -- re-attach recipe files that were imported as standalone asset
 ### SYNOPSIS
 
 ```
-dam [GLOBAL FLAGS] fix-recipes [OPTIONS]
+dam [GLOBAL FLAGS] fix-recipes [QUERY] [OPTIONS]
 ```
 
 ### DESCRIPTION
 
-Finds assets that consist of a single variant with a recipe-type extension (xmp, cos, cot, cop, pp3, dop, on1) and `asset_type = other`, then tries to re-attach them as recipe records on a matching parent variant.
+Finds assets that consist of a single variant with a recipe-type extension (xmp, cos, cot, cop, pp3, dop, on1) and `asset_type = other`, then tries to re-attach them as recipe records on a matching parent variant. Scope can be narrowed with a positional search query, `--asset`, or `--volume`.
 
 This fixes a situation where recipe files were imported before their corresponding media files, or when a media format wasn't recognized at import time (e.g., NRW before extension support was added). In both cases, the recipe file ends up as a standalone asset instead of being attached to the media asset.
 
@@ -1031,11 +1039,10 @@ When a parent is found and `--apply` is specified:
 
 Without `--apply`, runs in **report-only mode** and shows what would change.
 
-### ARGUMENTS
-
-None.
-
 ### OPTIONS
+
+**\<QUERY\>** (positional, optional)
+: Search query to scope which assets are checked (same syntax as `dam search`).
 
 **--volume \<LABEL\>**
 : Limit to assets with locations on a specific volume.

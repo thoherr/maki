@@ -230,6 +230,56 @@ dam show a1b2c --json | jq '.variants[].file_locations[]'
 
 ---
 
+## dam preview
+
+### NAME
+
+`dam preview` -- display an asset's preview image in the terminal
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] preview <ASSET_ID> [--open]
+```
+
+### DESCRIPTION
+
+Renders the asset's best preview image directly in the terminal using the viuer library. Auto-detects the terminal's graphics protocol (iTerm2, Kitty, Sixel) and falls back to Unicode half-block characters.
+
+With `--open`, launches the preview file in the OS default image viewer instead of rendering in the terminal.
+
+Also available as a shell built-in: `preview <id>`, `preview $var`, `preview _ --open`.
+
+### OPTIONS
+
+- `<ASSET_ID>` -- Asset ID or prefix (required)
+- `--open` -- Open in the OS default viewer instead of terminal display
+
+### EXAMPLES
+
+Display a preview in the terminal:
+```
+dam preview a1b2c3d4
+```
+
+Open in the default viewer:
+```
+dam preview a1b2c --open
+```
+
+In the shell with variable expansion:
+```
+photos> $picks = search "rating:5 date:2024"
+photos [picks=12]> preview $picks
+```
+
+### SEE ALSO
+
+[show](#dam-show) -- display full asset metadata.
+[search](#dam-search) -- find assets to preview.
+
+---
+
 ## dam export
 
 ### NAME

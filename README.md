@@ -51,9 +51,9 @@ dam shell
 
 ## Commands
 
-38 commands covering setup, import, search, editing, maintenance, and more:
+39 commands covering setup, import, search, editing, maintenance, and more:
 
-`init` · `volume add/list/combine/remove` · `import` · `delete` · `export` · `contact-sheet` · `describe` · `search` · `show` · `edit` · `tag` · `group` · `split` · `auto-group` · `auto-tag` · `embed` · `faces` · `stack` · `duplicates` · `dedup` · `generate-previews` · `relocate` · `verify` · `sync` · `sync-metadata` · `refresh` · `cleanup` · `writeback` · `stats` · `backup-status` · `fix-roles` · `fix-dates` · `rebuild-catalog` · `migrate` · `saved-search` · `collection` · `serve` · `shell`
+`init` · `volume add/list/combine/remove` · `import` · `delete` · `export` · `contact-sheet` · `describe` · `search` · `show` · `preview` · `edit` · `tag` · `group` · `split` · `auto-group` · `auto-tag` · `embed` · `faces` · `stack` · `duplicates` · `dedup` · `generate-previews` · `relocate` · `verify` · `sync` · `sync-metadata` · `refresh` · `cleanup` · `writeback` · `stats` · `backup-status` · `fix-roles` · `fix-dates` · `rebuild-catalog` · `migrate` · `saved-search` · `collection` · `serve` · `shell`
 
 **Global flags**: `--json`, `--log`, `--debug`, `--time`. Run `dam --help` or `dam <command> --help` for usage.
 
@@ -120,9 +120,9 @@ Generate natural language descriptions and AI-suggested tags using a local visio
 
 ```
 ollama pull qwen2.5vl:3b                              # download a VLM
-dam describe --query "description:none" --apply        # describe undescribed assets
-dam describe --mode tags --query "date:2024-06" --apply  # suggest tags via VLM
-dam describe --mode both --volume "Photos" --apply     # both in one pass
+dam describe "description:none" --apply                 # describe undescribed assets
+dam describe "date:2024-06" --mode tags --apply          # suggest tags via VLM
+dam describe --mode both --volume "Photos" --apply       # both in one pass
 dam import --describe /Volumes/Photos/NewShoot/        # auto-describe during import
 ```
 
