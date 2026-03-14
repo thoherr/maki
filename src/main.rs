@@ -506,7 +506,7 @@ enum Commands {
         /// Search query (same syntax as dam search)
         query: String,
 
-        /// Target directory (created if needed)
+        /// Target directory (created if needed), or ZIP file path with --zip
         target: String,
 
         /// Layout: flat (default) or mirror (preserves directory structure)
@@ -532,6 +532,10 @@ enum Commands {
         /// Re-copy even if target already has matching content
         #[arg(long)]
         overwrite: bool,
+
+        /// Write a ZIP archive instead of copying files to a directory
+        #[arg(long)]
+        zip: bool,
     },
 
     /// Show catalog statistics
@@ -5522,6 +5526,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
             include_sidecars,
             dry_run,
             overwrite,
+            zip,
         } => {
             use dam::asset_service::{ExportLayout, ExportStatus};
 
@@ -5531,48 +5536,70 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                 _ => anyhow::bail!("Unknown layout '{}'. Valid layouts: flat, mirror", layout),
             };
 
-            let target_path = PathBuf::from(&target);
-            if !dry_run {
-                std::fs::create_dir_all(&target_path)?;
-            }
-
             let catalog_root = dam::config::find_catalog_root()?;
             let config = CatalogConfig::load(&catalog_root)?;
             let service = AssetService::new(&catalog_root, cli.debug, &config.preview);
 
             let show_log = cli.log;
-            let result = service.export(
-                &query,
-                &target_path,
-                export_layout,
-                symlink,
-                all_variants,
-                include_sidecars,
-                dry_run,
-                overwrite,
-                |path, status, elapsed| {
-                    if show_log {
-                        let name = path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy();
-                        match status {
-                            ExportStatus::Copied => {
-                                eprintln!("  {name} — copied ({})", format_duration(elapsed));
-                            }
-                            ExportStatus::Linked => {
-                                eprintln!("  {name} — linked ({})", format_duration(elapsed));
-                            }
-                            ExportStatus::Skipped => {
-                                eprintln!("  {name} — skipped ({})", format_duration(elapsed));
-                            }
-                            ExportStatus::Error(msg) => {
-                                eprintln!("  {name} — error: {msg}");
-                            }
+            let log_callback = |path: &std::path::Path, status: &ExportStatus, elapsed: std::time::Duration| {
+                if show_log {
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+                    match status {
+                        ExportStatus::Copied => {
+                            eprintln!("  {name} — added ({})", format_duration(elapsed));
+                        }
+                        ExportStatus::Linked => {
+                            eprintln!("  {name} — linked ({})", format_duration(elapsed));
+                        }
+                        ExportStatus::Skipped => {
+                            eprintln!("  {name} — skipped ({})", format_duration(elapsed));
+                        }
+                        ExportStatus::Error(msg) => {
+                            eprintln!("  {name} — error: {msg}");
                         }
                     }
-                },
-            )?;
+                }
+            };
+
+            let result = if zip {
+                if symlink {
+                    anyhow::bail!("--symlink cannot be used with --zip");
+                }
+                let zip_path = PathBuf::from(&target);
+                // Append .zip if not already present
+                let zip_path = if zip_path.extension().and_then(|e| e.to_str()) != Some("zip") {
+                    zip_path.with_extension("zip")
+                } else {
+                    zip_path
+                };
+                service.export_zip(
+                    &query,
+                    &zip_path,
+                    export_layout,
+                    all_variants,
+                    include_sidecars,
+                    log_callback,
+                )?
+            } else {
+                let target_path = PathBuf::from(&target);
+                if !dry_run {
+                    std::fs::create_dir_all(&target_path)?;
+                }
+                service.export(
+                    &query,
+                    &target_path,
+                    export_layout,
+                    symlink,
+                    all_variants,
+                    include_sidecars,
+                    dry_run,
+                    overwrite,
+                    log_callback,
+                )?
+            };
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -5592,6 +5619,18 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                     }
                 } else if result.assets_matched == 0 {
                     println!("No assets matched the query.");
+                } else if zip {
+                    let mut parts = vec![
+                        format!("{} files archived", result.files_exported),
+                    ];
+                    if result.sidecars_exported > 0 {
+                        parts.push(format!("{} sidecars", result.sidecars_exported));
+                    }
+                    println!("Export complete: {}", parts.join(", "));
+                    if result.total_bytes > 0 {
+                        println!("  Total size: {}", format_size(result.total_bytes));
+                    }
+                    println!("  Written to: {target}");
                 } else {
                     let verb = if symlink { "linked" } else { "copied" };
                     let mut parts = vec![

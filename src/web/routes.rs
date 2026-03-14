@@ -5571,71 +5571,21 @@ pub async fn export_zip(
     let include_sidecars = req.include_sidecars;
     let count = asset_ids.len();
 
-    // Build the export plan (blocking — reads catalog + checks online volumes)
+    // Build ZIP in a temp file using shared export_zip_for_ids
     let ids = asset_ids;
     let root = catalog_root.clone();
     let pc = preview_config.clone();
-    let plan_result = tokio::task::spawn_blocking(move || {
-        let service = AssetService::new(&root, false, &pc);
-        let dummy_base = std::path::Path::new("");
-        service.build_export_plan(&ids, dummy_base, layout, all_variants, include_sidecars)
-    }).await;
-
-    let (plan, _assets_matched, _errors) = match plan_result {
-        Ok(Ok(p)) => p,
-        Ok(Err(e)) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Export plan failed: {e}")).into_response();
-        }
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {e}")).into_response();
-        }
-    };
-
-    if plan.is_empty() {
-        return (StatusCode::BAD_REQUEST, "No exportable files found (volumes may be offline)").into_response();
-    }
-
-    // Build ZIP in a temp file (zip crate requires Seek for local file header updates),
-    // then stream it to the client.
+    let tmp = std::env::temp_dir().join(format!("dam-export-{}.zip", std::process::id()));
+    let tmp2 = tmp.clone();
     let zip_result = tokio::task::spawn_blocking(move || -> Result<std::path::PathBuf, String> {
-        use zip::write::{SimpleFileOptions, ZipWriter};
-        use std::io::Write;
-
-        let tmp = std::env::temp_dir().join(format!("dam-export-{}.zip", std::process::id()));
-        let file = std::fs::File::create(&tmp).map_err(|e| format!("Failed to create temp file: {e}"))?;
-        let writer = std::io::BufWriter::with_capacity(1024 * 1024, file);
-        let mut zip = ZipWriter::new(writer);
-        let options = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored); // no compression — media is already compressed
-
-        for entry in &plan {
-            let entry_name = entry.target_path.to_string_lossy().replace('\\', "/");
-            let entry_name = entry_name.trim_start_matches('/').trim_start_matches("./");
-
-            if zip.start_file(entry_name, options).is_err() {
-                continue;
-            }
-
-            let file = match std::fs::File::open(&entry.source_path) {
-                Ok(f) => f,
-                Err(_) => continue,
-            };
-            let mut reader = std::io::BufReader::with_capacity(256 * 1024, file);
-            let mut buf = vec![0u8; 256 * 1024];
-            loop {
-                let n = match std::io::Read::read(&mut reader, &mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(_) => break,
-                };
-                if zip.write_all(&buf[..n]).is_err() {
-                    break;
-                }
-            }
+        let service = AssetService::new(&root, false, &pc);
+        let result = service.export_zip_for_ids(&ids, &tmp2, layout, all_variants, include_sidecars, |_, _, _| {})
+            .map_err(|e| format!("Export failed: {e}"))?;
+        if result.files_exported == 0 && result.sidecars_exported == 0 {
+            let _ = std::fs::remove_file(&tmp2);
+            return Err("No exportable files found (volumes may be offline)".to_string());
         }
-
-        zip.finish().map_err(|e| format!("Failed to finalize ZIP: {e}"))?;
-        Ok(tmp)
+        Ok(tmp2)
     }).await;
 
     let zip_path = match zip_result {

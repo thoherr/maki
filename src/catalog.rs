@@ -401,7 +401,7 @@ impl SearchSort {
 
 /// Options for paginated search.
 pub struct SearchOptions<'a> {
-    pub asset_id: Option<&'a str>,
+    pub asset_ids: &'a [String],
     pub text: Option<&'a str>,
     pub text_exclude: &'a [String],
     pub asset_types: &'a [String],
@@ -468,7 +468,7 @@ pub struct SearchOptions<'a> {
 impl<'a> Default for SearchOptions<'a> {
     fn default() -> Self {
         Self {
-            asset_id: None,
+            asset_ids: &[],
             text: None,
             text_exclude: &[],
             asset_types: &[],
@@ -2443,11 +2443,17 @@ impl Catalog {
         let mut needs_fl_join = opts.volume.is_some() || !opts.volume_ids.is_empty() || !opts.volume_ids_exclude.is_empty();
         let mut needs_v_join = false;
 
-        // --- Asset ID prefix match ---
-        if let Some(id_prefix) = opts.asset_id {
-            if !id_prefix.is_empty() {
+        // --- Asset ID prefix match (supports multiple IDs) ---
+        if !opts.asset_ids.is_empty() {
+            if opts.asset_ids.len() == 1 {
                 clauses.push("a.id LIKE ?".to_string());
-                params.push(Box::new(format!("{id_prefix}%")));
+                params.push(Box::new(format!("{}%", opts.asset_ids[0])));
+            } else {
+                let placeholders: Vec<&str> = opts.asset_ids.iter().map(|_| "a.id LIKE ?").collect();
+                clauses.push(format!("({})", placeholders.join(" OR ")));
+                for id in opts.asset_ids {
+                    params.push(Box::new(format!("{id}%")));
+                }
             }
         }
 

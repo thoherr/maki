@@ -5337,6 +5337,125 @@ impl AssetService {
         Ok(result)
     }
 
+    /// Export matching assets as a ZIP archive.
+    pub fn export_zip(
+        &self,
+        query: &str,
+        zip_path: &Path,
+        layout: ExportLayout,
+        all_variants: bool,
+        include_sidecars: bool,
+        on_file: impl Fn(&Path, &ExportStatus, Duration),
+    ) -> Result<ExportResult> {
+        let engine = crate::query::QueryEngine::new(&self.catalog_root);
+
+        let search_results = engine.search(query)?;
+        let assets_matched = search_results.len();
+
+        if assets_matched == 0 {
+            return Ok(ExportResult {
+                dry_run: false,
+                assets_matched: 0,
+                files_exported: 0,
+                files_skipped: 0,
+                sidecars_exported: 0,
+                total_bytes: 0,
+                errors: Vec::new(),
+            });
+        }
+
+        let asset_ids: Vec<String> = search_results.iter().map(|r| r.asset_id.clone()).collect();
+        self.export_zip_for_ids(&asset_ids, zip_path, layout, all_variants, include_sidecars, on_file)
+    }
+
+    /// Export specific asset IDs as a ZIP archive.
+    pub fn export_zip_for_ids(
+        &self,
+        asset_ids: &[String],
+        zip_path: &Path,
+        layout: ExportLayout,
+        all_variants: bool,
+        include_sidecars: bool,
+        on_file: impl Fn(&Path, &ExportStatus, Duration),
+    ) -> Result<ExportResult> {
+        use std::io::Write;
+        use zip::write::{SimpleFileOptions, ZipWriter};
+
+        let dummy_base = Path::new("");
+        let (plan, assets_matched, errors) =
+            self.build_export_plan(asset_ids, dummy_base, layout, all_variants, include_sidecars)?;
+
+        let mut result = ExportResult {
+            dry_run: false,
+            assets_matched,
+            files_exported: 0,
+            files_skipped: 0,
+            sidecars_exported: 0,
+            total_bytes: 0,
+            errors,
+        };
+
+        if plan.is_empty() {
+            return Ok(result);
+        }
+
+        if let Some(parent) = zip_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let file = std::fs::File::create(zip_path)?;
+        let writer = std::io::BufWriter::with_capacity(1024 * 1024, file);
+        let mut zip = ZipWriter::new(writer);
+        let options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        for entry in &plan {
+            let file_start = Instant::now();
+            let entry_name = entry.target_path.to_string_lossy().replace('\\', "/");
+            let entry_name = entry_name.trim_start_matches('/').trim_start_matches("./");
+
+            if let Err(e) = zip.start_file(entry_name, options) {
+                let msg = format!("{entry_name} — zip entry failed: {e}");
+                result.errors.push(msg.clone());
+                on_file(&entry.target_path, &ExportStatus::Error(msg), file_start.elapsed());
+                continue;
+            }
+
+            let src = match std::fs::File::open(&entry.source_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    let msg = format!("{entry_name} — open failed: {e}");
+                    result.errors.push(msg.clone());
+                    on_file(&entry.target_path, &ExportStatus::Error(msg), file_start.elapsed());
+                    continue;
+                }
+            };
+            let mut reader = std::io::BufReader::with_capacity(256 * 1024, src);
+            let mut buf = vec![0u8; 256 * 1024];
+            loop {
+                let n = match std::io::Read::read(&mut reader, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(_) => break,
+                };
+                if zip.write_all(&buf[..n]).is_err() {
+                    break;
+                }
+            }
+
+            if entry.is_sidecar {
+                result.sidecars_exported += 1;
+            } else {
+                result.files_exported += 1;
+            }
+            result.total_bytes += entry.file_size;
+            on_file(&entry.target_path, &ExportStatus::Copied, file_start.elapsed());
+        }
+
+        zip.finish().map_err(|e| anyhow::anyhow!("Failed to finalize ZIP: {e}"))?;
+        Ok(result)
+    }
+
     /// Auto-tag assets using SigLIP zero-shot classification.
     #[cfg(feature = "ai")]
     pub fn auto_tag(

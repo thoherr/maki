@@ -55,7 +55,6 @@ const SUBCOMMANDS: &[&str] = &[
     "duplicates",
     "edit",
     "embed",
-    "export",
     "faces",
     "fix-dates",
     "fix-recipes",
@@ -83,7 +82,7 @@ const SUBCOMMANDS: &[&str] = &[
 
 /// Shell built-in commands for completion.
 const BUILTINS: &[&str] = &[
-    "exit", "help", "preview", "quit", "reload", "set", "source", "unset", "vars",
+    "exit", "export", "help", "preview", "quit", "reload", "set", "source", "unset", "vars",
 ];
 
 /// Common flags for completion (subset — the most universally useful).
@@ -667,6 +666,80 @@ fn handle_line(
         return LineResult::Handled;
     }
 
+    // export <query|$var|_> <target> [--layout flat|mirror] [--all-variants] [--include-sidecars] [--dry-run] [--overwrite] [--symlink] [--zip]
+    if line == "export" || line.starts_with("export ") {
+        let rest = line.strip_prefix("export").unwrap_or("").trim();
+        if rest.is_empty() {
+            eprintln!("  Usage: export <query|$var> <target> [--layout flat|mirror] [--all-variants] [--include-sidecars] [--dry-run] [--overwrite] [--symlink] [--zip]");
+            return LineResult::Handled;
+        }
+        let tokens = match shell_split(rest) {
+            Some(t) => t,
+            None => {
+                eprintln!("  Error: unmatched quotes");
+                return LineResult::Handled;
+            }
+        };
+        let expanded = expand_variables_in_tokens(tokens, vars);
+
+        // Separate flags from positional args
+        let mut flags = Vec::new();
+        let mut positionals = Vec::new();
+        let mut iter = expanded.command.iter();
+        while let Some(tok) = iter.next() {
+            if tok == "--layout" {
+                flags.push(tok.clone());
+                if let Some(val) = iter.next() {
+                    flags.push(val.clone());
+                }
+            } else if tok.starts_with("--") {
+                flags.push(tok.clone());
+            } else {
+                positionals.push(tok.clone());
+            }
+        }
+
+        // Build the query: if variable expansion produced IDs, use id:xxx; otherwise use positionals[0]
+        let (query, target) = if !expanded.asset_ids.is_empty() {
+            // Variable expanded — first positional (if any) is the target dir
+            let id_query = expanded.asset_ids.iter()
+                .map(|id| format!("id:{id}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let target = positionals.first().cloned().unwrap_or_default();
+            (id_query, target)
+        } else if positionals.len() >= 2 {
+            // No variable — first positional is query, second is target
+            (positionals[0].clone(), positionals[1].clone())
+        } else {
+            eprintln!("  Usage: export <query|$var> <target> [--layout flat|mirror] [--all-variants] [--include-sidecars] [--dry-run] [--zip]");
+            return LineResult::Handled;
+        };
+
+        if target.is_empty() {
+            eprintln!("  Error: target is required");
+            return LineResult::Handled;
+        }
+
+        let mut args = vec![
+            "dam".to_string(),
+            "export".to_string(),
+            query,
+            target,
+        ];
+        args.extend(flags);
+        defaults.inject(&mut args);
+        match executor(args) {
+            Ok(ids) => {
+                if !ids.is_empty() {
+                    vars.last_ids = ids;
+                }
+            }
+            Err(e) => eprintln!("  Error: {e:#}"),
+        }
+        return LineResult::Handled;
+    }
+
     // set --flag
     if let Some(rest) = line.strip_prefix("set ") {
         let flag = rest.trim();
@@ -971,6 +1044,16 @@ struct ExpandedTokens {
 /// Their asset IDs are collected separately so the shell can dispatch them
 /// correctly — either as trailing positional args (for batch commands) or
 /// by looping the command over each ID (for single-asset commands).
+/// Expand `~` or `~/...` to the user's home directory.
+fn expand_tilde(token: &str) -> String {
+    if token == "~" || token.starts_with("~/") {
+        if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+            return format!("{}{}", home, &token[1..]);
+        }
+    }
+    token.to_string()
+}
+
 fn expand_variables_in_tokens(tokens: Vec<String>, vars: &Variables) -> ExpandedTokens {
     let mut command_tokens = Vec::new();
     let mut asset_ids: Vec<String> = Vec::new();
@@ -995,7 +1078,8 @@ fn expand_variables_in_tokens(tokens: Vec<String>, vars: &Variables) -> Expanded
                 command_tokens.push(token.clone());
             }
         } else {
-            command_tokens.push(token.clone());
+            // Expand ~ to home directory in path-like tokens
+            command_tokens.push(expand_tilde(token));
         }
     }
 
@@ -1604,5 +1688,23 @@ mod tests {
             LineResult::Handled => "Handled",
             LineResult::Reload => "Reload",
         }
+    }
+
+    #[test]
+    fn tilde_expansion() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        assert_eq!(expand_tilde("~/Desktop"), format!("{home}/Desktop"));
+        assert_eq!(expand_tilde("~"), home);
+        assert_eq!(expand_tilde("/tmp/foo"), "/tmp/foo");
+        assert_eq!(expand_tilde("hello"), "hello");
+    }
+
+    #[test]
+    fn tilde_in_variable_expansion() {
+        let vars = Variables::new();
+        let tokens = vec!["export".into(), "~/out".into()];
+        let expanded = expand_variables_in_tokens(tokens, &vars);
+        let home = std::env::var("HOME").unwrap_or_default();
+        assert_eq!(expanded.command, vec!["export", &format!("{home}/out")]);
     }
 }
