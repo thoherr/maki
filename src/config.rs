@@ -338,7 +338,7 @@ impl Default for VlmConfig {
         Self {
             endpoint: "http://localhost:11434".to_string(),
             model: "qwen2.5vl:3b".to_string(),
-            max_tokens: 200,
+            max_tokens: 500,
             prompt: None,
             timeout: 120,
             mode: "describe".to_string(),

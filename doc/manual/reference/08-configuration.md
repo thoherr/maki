@@ -470,9 +470,9 @@ See [VLM Model Guide](10-vlm-models.md) for a comprehensive comparison including
 ### max_tokens
 
 - **Type:** unsigned 32-bit integer
-- **Default:** `200`
+- **Default:** `500`
 
-Maximum number of tokens in the VLM response. 200 tokens is typically 2--3 sentences. Increase for more detailed descriptions.
+Maximum number of tokens in the VLM response. 500 tokens is typically 3--5 sentences, leaving headroom for models that use internal reasoning tokens.
 
 ### prompt
 
@@ -524,7 +524,7 @@ The `--endpoint`, `--model`, `--prompt`, `--max-tokens`, `--timeout`, `--tempera
 [vlm]
 endpoint = "http://localhost:11434"
 model = "qwen2.5vl:3b"
-max_tokens = 200
+max_tokens = 500
 timeout = 120
 temperature = 0.7
 mode = "describe"
@@ -627,7 +627,7 @@ prompt = "a photograph of {}"
 [vlm]
 endpoint = "http://localhost:11434"
 model = "qwen2.5vl:3b"
-max_tokens = 200
+max_tokens = 500
 timeout = 120
 temperature = 0.7
 mode = "describe"
@@ -710,7 +710,7 @@ When a field is absent from `dam.toml`, these defaults apply:
 | `ai.text_limit` | `50` |
 | `vlm.endpoint` | `"http://localhost:11434"` |
 | `vlm.model` | `"qwen2.5vl:3b"` |
-| `vlm.max_tokens` | `200` |
+| `vlm.max_tokens` | `500` |
 | `vlm.prompt` | none (built-in) |
 | `vlm.mode` | `"describe"` |
 | `vlm.temperature` | `0.7` |

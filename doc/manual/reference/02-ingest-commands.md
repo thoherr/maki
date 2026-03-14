@@ -990,7 +990,7 @@ For each asset, the command:
 : Custom prompt sent to the VLM. Default from `[vlm] prompt` in `dam.toml`, or a built-in photography-focused prompt. In `--mode both`, custom prompts are ignored because each call uses its specialized built-in prompt.
 
 **--max-tokens \<N\>**
-: Maximum tokens in the VLM response. Default from `[vlm] max_tokens` in `dam.toml`, or `200`.
+: Maximum tokens in the VLM response. Default from `[vlm] max_tokens` in `dam.toml`, or `500`.
 
 **--timeout \<SECONDS\>**
 : Timeout for each VLM request. Default from `[vlm] timeout` in `dam.toml`, or `120`. Increase for larger models or first-time model loading.
