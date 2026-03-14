@@ -516,6 +516,21 @@ Maximum time to wait for a VLM response. Larger models on CPU may need higher ti
 
 Number of concurrent VLM requests. When greater than 1, `dam describe`, `dam import --describe`, and web UI batch describe process multiple assets in parallel. Each batch of `concurrency` assets sends VLM HTTP calls concurrently using scoped threads; preparation (skip checks, image lookup) and result application (catalog writes) remain sequential. Set to the number of simultaneous requests your VLM server can handle efficiently — for local Ollama this depends on available VRAM and model size.
 
+### models
+
+- **Type:** array of strings (optional)
+- **Default:** `[]` (empty — only the default model is shown)
+
+List of VLM model names to offer in the web UI model selector dropdown on the asset detail page. When configured with two or more models (including the default `model`), a dropdown appears next to the "Describe" button letting you choose which model to use per request. The first entry is pre-selected. Models not in this list are not offered in the web UI (useful when your Ollama server has many models loaded but only some are suitable for image description).
+
+```toml
+[vlm]
+model = "moondream"
+models = ["moondream", "qwen3-vl:4b"]
+```
+
+The CLI `dam describe --model` flag is unaffected by this setting — it accepts any model name regardless of the `models` list.
+
 ### CLI Override
 
 The `--endpoint`, `--model`, `--prompt`, `--max-tokens`, `--timeout`, `--temperature`, and `--mode` flags on `dam describe` override the values from `dam.toml`.
@@ -529,6 +544,7 @@ timeout = 120
 temperature = 0.7
 mode = "describe"
 concurrency = 1
+# models = ["qwen2.5vl:3b", "moondream"]
 # prompt = "Custom prompt here."
 ```
 
@@ -631,6 +647,8 @@ max_tokens = 500
 timeout = 120
 temperature = 0.7
 mode = "describe"
+# Models offered in web UI dropdown (empty = only default model, no dropdown).
+# models = ["qwen2.5vl:3b", "moondream"]
 # prompt = "Describe this photograph concisely."
 ```
 
@@ -716,6 +734,7 @@ When a field is absent from `dam.toml`, these defaults apply:
 | `vlm.temperature` | `0.7` |
 | `vlm.timeout` | `120` |
 | `vlm.concurrency` | `1` |
+| `vlm.models` | `[]` (empty) |
 
 ---
 

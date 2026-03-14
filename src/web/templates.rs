@@ -298,6 +298,7 @@ pub struct AssetPage {
     pub next_id: Option<String>,
     pub ai_enabled: bool,
     pub vlm_enabled: bool,
+    pub vlm_models: Vec<String>,
     pub faces: Vec<FaceRow>,
     pub all_people: Vec<PersonOption>,
 }
@@ -464,6 +465,7 @@ impl AssetPage {
             next_id: None,
             ai_enabled: false,
             vlm_enabled: false,
+            vlm_models: Vec::new(),
             faces: Vec::new(),
             all_people: Vec::new(),
         }

@@ -31,6 +31,13 @@
         <div class="description-wrapper">
             <strong>Description</strong>
             {% if vlm_enabled %}
+            {% if vlm_models.len() > 1 %}
+            <select id="vlm-model-select" class="btn btn-sm" style="font-size:0.75rem;padding:2px 4px;vertical-align:middle;">
+                {% for m in vlm_models %}
+                <option value="{{ m }}">{{ m }}</option>
+                {% endfor %}
+            </select>
+            {% endif %}
             <button id="vlm-describe-btn" class="btn btn-sm" onclick="vlmDescribe()">Describe</button>
             {% endif %}
             <div id="description">
@@ -1084,10 +1091,14 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
         btn.textContent = 'Generating...';
         btn.disabled = true;
 
+        var payload = {mode: 'describe'};
+        var modelSelect = document.getElementById('vlm-model-select');
+        if (modelSelect) payload.model = modelSelect.value;
+
         fetch('/api/asset/' + assetId + '/vlm-describe', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({mode: 'describe'})
+            body: JSON.stringify(payload)
         })
         .then(function(r) {
             if (!r.ok) return r.text().then(function(t) { throw new Error(t); });

@@ -813,6 +813,7 @@ pub async fn asset_page(
         tmpl.next_id = nav_params.next;
         tmpl.ai_enabled = state.ai_enabled;
         tmpl.vlm_enabled = state.vlm_enabled;
+        tmpl.vlm_models = state.vlm_config.available_models();
         tmpl.faces = faces;
         tmpl.all_people = all_people_detail;
         Ok::<_, anyhow::Error>(tmpl.render()?)
@@ -5058,6 +5059,8 @@ pub async fn stroll_neighbors_api(
 pub struct VlmDescribeRequest {
     #[serde(default)]
     pub mode: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// Response for single-asset VLM describe.
@@ -5076,7 +5079,7 @@ pub async fn vlm_describe_asset(
     let state = state.clone();
     let result: Result<Result<VlmDescribeResponse, String>, _> =
         tokio::task::spawn_blocking(move || {
-            vlm_describe_asset_inner(&state, &asset_id, body.mode.as_deref())
+            vlm_describe_asset_inner(&state, &asset_id, body.mode.as_deref(), body.model.as_deref())
         })
         .await;
 
@@ -5091,6 +5094,7 @@ fn vlm_describe_asset_inner(
     state: &super::AppState,
     asset_id: &str,
     mode_str: Option<&str>,
+    model_override: Option<&str>,
 ) -> Result<VlmDescribeResponse, String> {
     use crate::vlm::{self, DescribeMode};
 
@@ -5129,9 +5133,10 @@ fn vlm_describe_asset_inner(
 
     // Encode and call VLM
     let image_base64 = vlm::encode_image_base64(&image_path).map_err(|e| e.to_string())?;
+    let model = model_override.unwrap_or(&vlm.model);
     let output = vlm::call_vlm_with_mode(
         &vlm.endpoint,
-        &vlm.model,
+        model,
         &image_base64,
         prompt,
         vlm.max_tokens,
@@ -5186,6 +5191,8 @@ pub struct BatchVlmDescribeRequest {
     pub asset_ids: Vec<String>,
     #[serde(default)]
     pub mode: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// Response for batch VLM describe.
@@ -5206,7 +5213,7 @@ pub async fn batch_vlm_describe(
     let state2 = state.clone();
     let result: Result<Result<BatchVlmDescribeResponse, String>, _> =
         tokio::task::spawn_blocking(move || {
-            batch_vlm_describe_inner(&state2, &body.asset_ids, body.mode.as_deref())
+            batch_vlm_describe_inner(&state2, &body.asset_ids, body.mode.as_deref(), body.model.as_deref())
         })
         .await;
 
@@ -5228,6 +5235,7 @@ fn batch_vlm_describe_inner(
     state: &super::AppState,
     asset_ids: &[String],
     mode_str: Option<&str>,
+    model_override: Option<&str>,
 ) -> Result<BatchVlmDescribeResponse, String> {
     use crate::vlm::{self, DescribeMode};
 
@@ -5332,7 +5340,7 @@ fn batch_vlm_describe_inner(
 
     // Phase 2: VLM calls in parallel batches
     let vlm_endpoint = &vlm.endpoint;
-    let vlm_model = &vlm.model;
+    let vlm_model = model_override.unwrap_or(&vlm.model);
     let vlm_max_tokens = vlm.max_tokens;
     let vlm_timeout = vlm.timeout;
     let vlm_temperature = vlm.temperature;

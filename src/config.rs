@@ -303,6 +303,11 @@ pub struct VlmConfig {
     /// Concurrent requests (for servers that handle parallelism).
     #[serde(default = "default_vlm_concurrency")]
     pub concurrency: u32,
+
+    /// Additional models available for selection in the web UI.
+    /// The default `model` is always included as the first option.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
 }
 
 fn default_vlm_endpoint() -> String {
@@ -344,7 +349,22 @@ impl Default for VlmConfig {
             mode: "describe".to_string(),
             temperature: 0.7,
             concurrency: 1,
+            models: Vec::new(),
         }
+    }
+}
+
+impl VlmConfig {
+    /// Returns the full list of models for web UI selection.
+    /// Default `model` is always first, followed by any extras from `models`.
+    pub fn available_models(&self) -> Vec<String> {
+        let mut result = vec![self.model.clone()];
+        for m in &self.models {
+            if !result.contains(m) {
+                result.push(m.clone());
+            }
+        }
+        result
     }
 }
 
