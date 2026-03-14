@@ -5,7 +5,7 @@ This page documents the global flags, output behavior, exit codes, and scripting
 
 ## Global Flags
 
-Four flags are available on every command. They can appear before or after the subcommand name.
+Five flags are available on every command. They can appear before or after the subcommand name.
 
 ### `--json`
 
@@ -32,9 +32,26 @@ dam verify --volume "Archive" --log
 dam serve --log
 ```
 
+### `-v` / `--verbose`
+
+Shows operational decisions and program flow to stderr. Useful for understanding what a command is doing without the low-level detail of `--debug`. Examples of verbose output:
+
+- **import**: number of resolved files, detected volume, exclude patterns, auto-tags
+- **describe**: VLM endpoint, model, mode, concurrency, candidate count
+- **search**: parsed query, result count
+- **preview generation**: source format, generation method (image/RAW/video/info card), max edge size
+
+`--debug` implies `--verbose` — you never need to pass both.
+
+```bash
+dam import /Volumes/Photos/2026 --verbose
+dam describe "rating:5" --verbose
+dam search "tag:landscape" --verbose
+```
+
 ### `-d` / `--debug`
 
-Shows stderr output from external tools (ffmpeg, dcraw, dcraw_emu). Useful for diagnosing preview generation issues. Prints both the command line and the tool's stderr via `eprintln`.
+Shows stderr output from external tools (ffmpeg, dcraw, dcraw_emu) and implies `--verbose`. Useful for diagnosing preview generation issues. Prints both the command line and the tool's stderr via `eprintln`.
 
 ```bash
 dam generate-previews --force --debug

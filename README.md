@@ -55,7 +55,7 @@ dam shell
 
 `init` · `volume add/list/combine/remove` · `import` · `delete` · `export` · `contact-sheet` · `describe` · `search` · `show` · `preview` · `edit` · `tag` · `group` · `split` · `auto-group` · `auto-tag` · `embed` · `faces` · `stack` · `duplicates` · `dedup` · `generate-previews` · `relocate` · `verify` · `sync` · `sync-metadata` · `refresh` · `cleanup` · `writeback` · `stats` · `backup-status` · `fix-roles` · `fix-dates` · `rebuild-catalog` · `migrate` · `saved-search` · `collection` · `serve` · `shell`
 
-**Global flags**: `--json`, `--log`, `--debug`, `--time`. Run `dam --help` or `dam <command> --help` for usage.
+**Global flags**: `--json`, `--log`, `--verbose`, `--debug`, `--time`. Run `dam --help` or `dam <command> --help` for usage.
 
 See the [Command Reference](doc/manual/reference/01-setup-commands.md) for detailed documentation of every command, or the [Search Filters Reference](doc/manual/reference/06-search-filters.md) for the 20+ filter types available in `dam search`.
 

@@ -60,7 +60,7 @@ Rating, tag, description, and label changes are written back to `.xmp` recipe fi
 ### Output Formatting Conventions
 - All commands support `--json` (structured JSON to stdout, messages to stderr)
 - Multi-file commands support `--log` (per-file progress to stderr)
-- `--debug` shows external tool stderr; `--time` shows elapsed time
+- `--verbose` shows operational flow (file counts, volume detection, VLM settings); `--debug` shows external tool stderr and implies `--verbose`; `--time` shows elapsed time
 - `search --format` supports presets (`ids`, `short`, `full`, `json`) and custom templates (`'{id}\t{name}'`)
 
 ### Test Helpers

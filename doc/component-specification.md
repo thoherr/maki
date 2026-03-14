@@ -207,7 +207,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 - `verify(paths, volume, asset, config) -> VerifyResult` — re-hash files on disk and compare against stored content hashes. Reports `Ok`, `Mismatch`, `Modified` (recipe with changed hash), `Missing`, `Skipped`, `SkippedRecent`, or `Untracked`. Modified recipes are not treated as failures — their stored hash is updated. Supports path mode (verify specific files/dirs), catalog mode (verify all locations), `--volume`, `--asset`, `--include`/`--skip` filters, `--max-age` (skip files verified within N days), and `--force` (override `--max-age`). Persists `verified_at` timestamps to sidecar YAML for both variant and recipe locations.
 - `refresh(paths, volume, asset_id, dry_run, media) -> RefreshResult` — re-read metadata from changed recipe/sidecar files. Iterates recipe file locations, compares on-disk hash to stored hash, and for changed files re-extracts XMP metadata and updates catalog + sidecar. Reports `Unchanged`, `Refreshed`, `Missing`, or `Offline`. When `media` is true, also scans JPEG/TIFF variant files and re-extracts embedded XMP metadata. Lighter than `sync` — only touches metadata, never file locations.
 - `fix_roles(paths, volume, asset, apply) -> FixRolesResult` — scan multi-variant assets with a RAW variant and re-role non-RAW variants from `Original` to `Alternate`. Assets with only non-RAW variants are untouched. Dry-run by default; `--apply` writes changes to both sidecar YAML and SQLite catalog.
-- `cleanup(volume, apply) -> CleanupResult` — remove stale location/recipe records, orphaned assets, and all orphaned derived files (previews, smart previews, SigLIP embeddings, face crops, ArcFace embeddings).
+- `cleanup(volume, path_prefix, apply) -> CleanupResult` — remove stale location/recipe records, locationless variants, orphaned assets, and all orphaned derived files (previews, smart previews, SigLIP embeddings, face crops, ArcFace embeddings). `path_prefix` scopes scanning to files under a specific directory.
 - `delete_assets(asset_ids, apply, remove_files) -> DeleteResult` — remove assets from the catalog. Report-only by default; `apply` executes deletion (asset rows, variants, file locations, recipes, previews, smart previews, face crops, face/embedding DB records, embedding binaries, sidecar YAML, collection memberships, stack membership). `remove_files` (requires `apply`) also deletes physical files from disk. Supports ID prefix matching and stdin piping.
 - `sync_metadata(volume, asset, dry_run, media) -> SyncMetadataResult` — bidirectional XMP metadata sync. Inbound: re-reads externally modified XMP recipes. Outbound: writes pending DAM edits. Detects conflicts when both sides changed.
 - `sync(paths, volume, apply, remove_stale) -> SyncResult` — reconcile catalog with disk after external file moves/renames/modifications.
@@ -287,7 +287,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 
 **Routes**:
 - `GET /` — browse page with search, filter dropdowns (type, tag, volume, collection, rating), grouped multi-select format filter (RAW/Image/Video/Audio/Other categories with group-level toggles and variant counts), color label filter dots, sort, pagination, grid density controls (compact/normal/large), thumbnail grid with star ratings and color label dots. Grid/Calendar view toggle (calendar shows year-at-a-glance heatmap with per-day asset counts, year navigation, day-click filtering). Lightbox overlay on card click (prev/next navigation, info panel with rating/label editing). Batch operations toolbar with tag, rating, and label editing. Dark mode toggle in nav bar (persisted in localStorage, follows OS preference). Favorite saved searches shown as chips with "Manage..." link to `/saved-searches`.
-- `GET /asset/{id}` — asset detail with preview, metadata, editable tags, inline editable star rating, inline color label picker (7 color dots), rotate button (cycles 90° CW, regenerates previews with EXIF auto-orientation), variants, recipes
+- `GET /asset/{id}` — asset detail with preview, metadata, editable tags, inline editable star rating, inline color label picker (7 color dots), rotate button (cycles 90° CW, regenerates previews with EXIF auto-orientation), variants (with inline role dropdown for multi-variant assets), recipes
 - `GET /tags` — tags page with sortable columns (name/count), live text filter, multi-column layout
 - `GET /api/search` — results partial (htmx target) with pagination
 - `POST /api/asset/{id}/tags` — add tags, returns tags fragment
@@ -297,6 +297,7 @@ This is a **derived cache**, not the source of truth. Running `dam rebuild-catal
 - `PUT /api/asset/{id}/label` — set/clear color label (form: `label=Red`), returns label fragment
 - `POST /api/asset/{id}/preview` — regenerate preview and smart preview (cache-busted)
 - `POST /api/asset/{id}/rotate` — cycle preview rotation 90° CW, regenerate previews
+- `POST /api/asset/{id}/variant-role` — change a variant's role (JSON: `content_hash`, `role`), returns `{"ok": true, "role": "..."}`
 - `POST /api/asset/{id}/reimport-metadata` — clear metadata and re-extract from variant source files
 - `PUT /api/batch/rating` — batch set/clear rating for multiple assets
 - `POST /api/batch/tags` — batch add/remove tags for multiple assets
@@ -481,7 +482,7 @@ dam import <paths...> [--volume V] [--include G] [--skip G]  # import files
 dam search <query> [--format F] [-q]              # search assets (label:Red filter)
 dam show <asset-id>                               # show asset details
 dam tag <asset-id> [--remove] <tags...>           # add/remove tags
-dam edit <id> [--name N] [--description T] [--rating R] [--label C] [--clear-*]  # edit metadata
+dam edit <id> [--name N] [--description T] [--rating R] [--label C] [--role ROLE --variant HASH] [--clear-*]  # edit metadata
 dam delete <ids...> [--apply] [--remove-files]    # remove assets from catalog
 dam contact-sheet <query> <output> [--columns N] [--thumb-size N] [--title T] [--metadata]  # generate thumbnail grid image
 dam group <variant-hashes...>                     # group variants into one asset

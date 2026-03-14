@@ -2,6 +2,21 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v3.2.3 (2026-03-14)
+
+### New Features
+- **`--verbose` (-v) global flag** — shows operational decisions and program flow to stderr. Placed between `--log` and `--debug` in verbosity hierarchy. `--debug` implies `--verbose`. Shows info like file counts, volume detection, exclude patterns, VLM endpoint/model/mode, search query details, and preview generation method.
+- **`dam edit --role --variant`** — change a variant's role (original, alternate, processed, export, sidecar) from the CLI. Updates both YAML sidecar and SQLite catalog, recomputes denormalized columns.
+- **`dam cleanup --path`** — scope stale-location scanning to a path prefix instead of full volume. Absolute paths auto-detect the volume and convert to relative prefix.
+- **Locationless variant pruning** — new cleanup pass removes variants with zero file locations from assets that still have other located variants. Prevents ghost variants from accumulating after file moves or reimports.
+
+### Web UI
+- **Variant role dropdown** — inline dropdown selector on asset detail page variants table for multi-variant assets, with immediate save via API.
+
+### Enhancements
+- **Improved VLM error messages** — detect empty responses (with `finish_reason` hints), unexpected formats, and suggest `ollama ps` for Ollama-specific issues. Show configured model at startup with availability warning.
+- **VLM Model Guide** — new reference document (`doc/manual/reference/10-vlm-models.md`) with tested models, backends, and hardware recommendations.
+
 ## v3.2.2 (2026-03-14)
 
 ### New Features

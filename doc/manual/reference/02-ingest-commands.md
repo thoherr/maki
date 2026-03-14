@@ -322,7 +322,7 @@ done
 
 ### NAME
 
-dam-edit -- edit asset metadata (name, description, rating, color label, date)
+dam-edit -- edit asset metadata (name, description, rating, color label, date, variant role)
 
 ### SYNOPSIS
 
@@ -332,7 +332,7 @@ dam [GLOBAL FLAGS] edit <ASSET_ID> [OPTIONS]
 
 ### DESCRIPTION
 
-Sets or clears an asset's name, description, rating, color label, and creation date from the CLI. At least one option must be provided.
+Sets or clears an asset's name, description, rating, color label, and creation date from the CLI. Can also change the role of a specific variant. At least one option must be provided.
 
 Changes are written to both the YAML sidecar file (source of truth) and the SQLite catalog. Rating, description, and color label changes also trigger XMP write-back to any associated `.xmp` recipe files.
 
@@ -345,6 +345,8 @@ Changes are written to both the YAML sidecar file (source of truth) and the SQLi
 **Description** is free-form text. Passing an empty string (`--description ""`) is equivalent to `--clear-description`.
 
 **Date** accepts an ISO date string (e.g. `2024-12-25` or `2024-12-25T14:30:00`). This overrides the asset's `created_at` timestamp. Clearing it is not recommended since the field is always populated at import time.
+
+**Variant role** (`--role` + `--variant`) changes the role of a specific variant within a multi-variant asset. Valid roles: `original`, `alternate`, `processed`, `export`, `sidecar`. This is useful when import or `fix-roles` assigns an incorrect role (e.g. marking a re-exported JPEG as "alternate" when it should be "export"). Role changes update both sidecar YAML and SQLite catalog, and recompute denormalized columns (best preview variant, primary format).
 
 Asset IDs support unique prefix matching (see [CLI Conventions](00-cli-conventions.md#asset-id-matching)).
 
@@ -384,6 +386,12 @@ Asset IDs support unique prefix matching (see [CLI Conventions](00-cli-conventio
 
 **--clear-date**
 : Remove the asset's creation date.
+
+**--role \<ROLE\>**
+: Change a variant's role. Must be used with `--variant`. Accepts: original, alternate, processed, export, sidecar.
+
+**--variant \<HASH\>**
+: The content hash of the variant whose role should be changed. Must be used with `--role`. Use `dam show <id>` to find variant hashes.
 
 `--json` outputs an `EditResult` with the fields that were changed and their new values.
 
@@ -426,11 +434,18 @@ dam edit a1b2c3d4 --clear-description
 dam edit a1b2c3d4 --description ""
 ```
 
+Change a variant's role from alternate to export:
+
+```bash
+dam edit a1b2c3d4 --role export --variant sha256:abcdef1234567890...
+```
+
 ### SEE ALSO
 
 [tag](#dam-tag) -- add or remove tags.
 [show](04-retrieve-commands.md#dam-show) -- display full asset details including edited fields.
 [search](04-retrieve-commands.md#dam-search) -- `rating:`, `label:` filters for finding assets.
+[fix-roles](05-maintain-commands.md#dam-fix-roles) -- batch re-role non-RAW variants in RAW+non-RAW groups.
 
 ---
 

@@ -496,15 +496,16 @@ dam [GLOBAL FLAGS] cleanup [OPTIONS]
 
 ### DESCRIPTION
 
-Scans all file locations and recipes across online volumes, checking for files that no longer exist on disk. Performs seven passes:
+Scans all file locations and recipes across online volumes, checking for files that no longer exist on disk. Performs eight passes:
 
 1. **Stale locations and recipes**: Removes catalog and sidecar records for files that are missing from disk.
-2. **Orphaned assets**: Deletes assets where all variants have zero remaining file locations, along with their recipes, variants, faces, embeddings, previews, smart previews, face crops, embedding binaries, catalog rows, and sidecar YAML files.
-3. **Orphaned previews**: Removes preview files whose content hash no longer matches any variant in the catalog.
-4. **Orphaned smart previews**: Same as above for the `smart_previews/` directory.
-5. **Orphaned SigLIP embeddings**: Removes embedding binary files (`embeddings/<model>/`) whose asset ID no longer exists in the catalog.
-6. **Orphaned face crops**: Removes face crop thumbnails (`faces/`) whose face ID no longer exists in the catalog.
-7. **Orphaned ArcFace embeddings**: Removes face embedding binaries (`embeddings/arcface/`) whose face ID no longer exists in the catalog.
+2. **Locationless variants**: Removes variants with zero remaining file locations from assets that still have other located variants. Prevents ghost variants from accumulating after file moves or reimports. Cleans up derived files (previews, smart previews) and updates denormalized columns.
+3. **Orphaned assets**: Deletes assets where all variants have zero remaining file locations, along with their recipes, variants, faces, embeddings, previews, smart previews, face crops, embedding binaries, catalog rows, and sidecar YAML files.
+4. **Orphaned previews**: Removes preview files whose content hash no longer matches any variant in the catalog.
+5. **Orphaned smart previews**: Same as above for the `smart_previews/` directory.
+6. **Orphaned SigLIP embeddings**: Removes embedding binary files (`embeddings/<model>/`) whose asset ID no longer exists in the catalog.
+7. **Orphaned face crops**: Removes face crop thumbnails (`faces/`) whose face ID no longer exists in the catalog.
+8. **Orphaned ArcFace embeddings**: Removes face embedding binaries (`embeddings/arcface/`) whose face ID no longer exists in the catalog.
 
 Without `--apply`, runs in **report-only mode** (safe default) and predicts what would be removed, including orphaned assets and derived files that would result from removing stale locations.
 
@@ -519,13 +520,16 @@ None.
 **--volume \<LABEL\>**
 : Limit stale-location scanning to a specific volume. When omitted, checks all online volumes.
 
+**--path \<PREFIX\>**
+: Limit stale-location scanning to files under this path prefix. Accepts either a relative path on the volume or an absolute path (auto-detects the volume and converts to a relative prefix). Useful for scoping cleanup to a specific subdirectory without scanning the full volume.
+
 **--list**
 : Print stale entries to stderr (shows only stale items, unlike `--log` which prints all entries including OK ones).
 
 **--apply**
 : Apply changes: remove stale records, delete orphaned assets, and remove all orphaned derived files.
 
-`--json` outputs a `CleanupResult` with counts for stale locations, orphaned assets, orphaned previews, orphaned smart previews, orphaned embeddings, and orphaned face files.
+`--json` outputs a `CleanupResult` with counts for stale locations, locationless variants, orphaned assets, orphaned previews, orphaned smart previews, orphaned embeddings, and orphaned face files.
 
 `--log` prints per-file status to stderr (both OK and stale entries).
 
@@ -555,6 +559,13 @@ Cleanup a specific volume:
 
 ```bash
 dam cleanup --volume "Photos" --apply
+```
+
+Cleanup a specific directory:
+
+```bash
+dam cleanup --path "Capture/2026-02" --list
+dam cleanup --volume "Photos" --path "Archive/Old" --apply --log
 ```
 
 Cleanup with JSON output for scripting:

@@ -378,7 +378,7 @@ Shows what would change without modifying any files.
 
 ## Cleanup
 
-`dam cleanup` scans all file locations and recipes across online volumes, checking whether the referenced files still exist on disk. It removes stale records and orphaned derived files in seven passes.
+`dam cleanup` scans all file locations and recipes across online volumes, checking whether the referenced files still exist on disk. It removes stale records, locationless variants, and orphaned derived files in eight passes.
 
 ### Report mode (safe default)
 
@@ -399,15 +399,16 @@ Cleanup complete: 1500 checked, 12 stale, 3 orphaned assets, 5 orphaned previews
 dam cleanup --apply
 ```
 
-The seven passes:
+The eight passes:
 
 1. **Stale location and recipe records**: Removes catalog entries for files that no longer exist on disk (variant file locations and recipe file locations). Updates sidecar YAML files accordingly.
-2. **Orphaned assets**: Deletes assets where all variants have zero file locations remaining. Their recipes, variants, faces, embeddings, previews, smart previews, face crops, embedding binaries, catalog rows, and sidecar YAML files are removed.
-3. **Orphaned previews**: Removes preview JPEG files whose content hash no longer matches any variant in the catalog.
-4. **Orphaned smart previews**: Same for the `smart_previews/` directory.
-5. **Orphaned embeddings**: Removes SigLIP embedding binaries whose asset ID no longer exists.
-6. **Orphaned face crops**: Removes face crop thumbnails whose face ID no longer exists.
-7. **Orphaned ArcFace embeddings**: Removes face embedding binaries whose face ID no longer exists.
+2. **Locationless variants**: Removes variants with zero remaining file locations from assets that still have other located variants. Prevents ghost variants from accumulating after file moves or reimports.
+3. **Orphaned assets**: Deletes assets where all variants have zero file locations remaining. Their recipes, variants, faces, embeddings, previews, smart previews, face crops, embedding binaries, catalog rows, and sidecar YAML files are removed.
+4. **Orphaned previews**: Removes preview JPEG files whose content hash no longer matches any variant in the catalog.
+5. **Orphaned smart previews**: Same for the `smart_previews/` directory.
+6. **Orphaned embeddings**: Removes SigLIP embedding binaries whose asset ID no longer exists.
+7. **Orphaned face crops**: Removes face crop thumbnails whose face ID no longer exists.
+8. **Orphaned ArcFace embeddings**: Removes face embedding binaries whose face ID no longer exists.
 
 ### Limit to a specific volume
 
@@ -416,6 +417,15 @@ dam cleanup --volume "Photos 2024" --apply
 ```
 
 Only scans file locations on the specified volume. Useful after removing a drive's contents intentionally.
+
+### Limit to a specific path
+
+```bash
+dam cleanup --path "Capture/2026-02" --apply
+dam cleanup --volume "Photos" --path "Archive/Old" --apply --log
+```
+
+Scopes stale-location scanning to files under a path prefix. Absolute paths are auto-detected to extract the volume and relative prefix.
 
 ### List stale entries
 
