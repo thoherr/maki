@@ -3712,6 +3712,10 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     font-family: monospace;
 }
 
+/* Delete confirm button (danger) */
+.delete-confirm-btn { background: var(--danger, #dc3545) !important; border-color: var(--danger, #dc3545) !important; color: #fff !important; }
+.delete-confirm-btn:hover { filter: brightness(1.1); }
+
 /* Export modal */
 .export-modal { max-width: 420px; }
 .export-modal h3 { margin: 0 0 1rem; }

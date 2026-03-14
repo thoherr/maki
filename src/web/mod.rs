@@ -452,6 +452,10 @@ fn build_router(state: Arc<AppState>) -> Router {
                 .delete(routes::batch_unstack),
         )
         .route(
+            "/api/batch/delete",
+            axum::routing::post(routes::batch_delete),
+        )
+        .route(
             "/api/asset/{id}/stack-pick",
             axum::routing::put(routes::set_stack_pick),
         )

@@ -2361,6 +2361,42 @@ pub async fn batch_unstack(
     }
 }
 
+/// POST /api/batch/delete — delete selected assets from catalog.
+#[derive(serde::Deserialize)]
+pub struct BatchDeleteRequest {
+    pub asset_ids: Vec<String>,
+    #[serde(default)]
+    pub remove_files: bool,
+}
+
+pub async fn batch_delete(
+    State(state): State<Arc<super::AppState>>,
+    Json(req): Json<BatchDeleteRequest>,
+) -> Response {
+    let catalog_root = state.catalog_root.clone();
+    let preview_config = state.preview_config.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let service = crate::asset_service::AssetService::new(&catalog_root, false, &preview_config);
+        let result = service.delete_assets(&req.asset_ids, true, req.remove_files, |_id, _status, _elapsed| {})?;
+        Ok::<_, anyhow::Error>(serde_json::json!({
+            "deleted": result.deleted,
+            "files_removed": result.files_removed,
+            "previews_removed": result.previews_removed,
+            "not_found": result.not_found,
+            "errors": result.errors,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
 /// PUT /api/asset/{id}/stack-pick — set this asset as the stack pick.
 pub async fn set_stack_pick(
     State(state): State<Arc<AppState>>,

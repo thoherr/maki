@@ -109,6 +109,8 @@
         <button class="batch-btn" id="batch-autotag">Auto-tag</button>
         <button class="batch-btn" id="batch-detect-faces">Detect faces</button>
         {% endif %}
+        <span class="batch-sep"></span>
+        <button class="batch-btn batch-btn-danger" id="batch-delete" title="Delete selected assets">Delete</button>
     </div>
 </div>
 
@@ -1135,6 +1137,69 @@ window.triggerSearch = onFilterChange;
         if (!link) return;
         e.preventDefault();
         showExportModal('all', null, getFilterParams());
+    });
+
+    // Batch delete — confirmation modal with thumbnails
+    document.getElementById('batch-delete').addEventListener('click', function() {
+        if (selected.size === 0 || batchBusy) return;
+        var ids = Array.from(selected);
+        var overlay = document.createElement('div');
+        overlay.className = 'group-confirm-overlay';
+        overlay.innerHTML = '<div class="group-confirm-modal">' +
+            '<h3>Delete ' + ids.length + ' asset' + (ids.length === 1 ? '' : 's') + '?</h3>' +
+            '<p class="group-confirm-hint">This removes assets from the catalog and their sidecar files. This cannot be undone.</p>' +
+            '<div class="export-options">' +
+                '<div class="export-row"><label><input type="checkbox" id="delete-remove-files"> Also delete media files from disk</label></div>' +
+            '</div>' +
+            '<div class="group-confirm-grid"></div>' +
+            '<div class="group-confirm-buttons">' +
+                '<button class="group-confirm-cancel">Cancel</button>' +
+                '<button class="group-confirm-ok delete-confirm-btn">Delete</button>' +
+            '</div></div>';
+
+        var grid = overlay.querySelector('.group-confirm-grid');
+        ids.forEach(function(id) {
+            var card = document.querySelector('.asset-card[data-asset-id="' + id + '"]');
+            var thumb = document.createElement('div');
+            thumb.className = 'group-confirm-thumb';
+            var img = card ? card.querySelector('img') : null;
+            var src = img ? img.src : '';
+            var nameEl = card ? card.querySelector('.card-title') : null;
+            var name = nameEl ? nameEl.textContent.trim() : id.substring(0, 8) + '\u2026';
+            thumb.innerHTML = (src ? '<img src="' + src + '" alt="">' : '<div class="group-confirm-placeholder">' + id.substring(0, 8) + '</div>') +
+                '<span class="group-confirm-name">' + name + '</span>';
+            grid.appendChild(thumb);
+        });
+
+        document.body.appendChild(overlay);
+
+        overlay.querySelector('.group-confirm-cancel').addEventListener('click', function() { overlay.remove(); });
+        overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+
+        overlay.querySelector('.delete-confirm-btn').addEventListener('click', function() {
+            var removeFiles = document.getElementById('delete-remove-files').checked;
+            overlay.remove();
+            setButtonsBusy(true);
+            fetch('/api/batch/delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({asset_ids: ids, remove_files: removeFiles})
+            })
+            .then(function(r) {
+                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+                return r.json();
+            })
+            .then(function(data) {
+                clearSelection();
+                refreshResults();
+                var msg = data.deleted + ' asset' + (data.deleted === 1 ? '' : 's') + ' deleted';
+                if (data.files_removed > 0) msg += ', ' + data.files_removed + ' file' + (data.files_removed === 1 ? '' : 's') + ' removed';
+                if (data.errors && data.errors.length > 0) msg += ' (' + data.errors.length + ' error' + (data.errors.length === 1 ? '' : 's') + ')';
+                showToast(msg);
+            })
+            .catch(function(err) { alert('Delete failed: ' + err.message); })
+            .finally(function() { setButtonsBusy(false); });
+        });
     });
 
     // Persist selection to sessionStorage so it survives fresh page loads (back-nav)
