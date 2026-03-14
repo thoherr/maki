@@ -269,6 +269,7 @@ pub enum CleanupStatus {
     Ok,
     Stale,
     Offline,
+    LocationlessVariant,
     OrphanedAsset,
     OrphanedFile,
 }
@@ -291,6 +292,8 @@ pub struct CleanupResult {
     pub stale: usize,
     pub removed: usize,
     pub skipped_offline: usize,
+    pub locationless_variants: usize,
+    pub removed_variants: usize,
     pub orphaned_assets: usize,
     pub removed_assets: usize,
     pub orphaned_previews: usize,
@@ -2692,6 +2695,8 @@ impl AssetService {
             stale: 0,
             removed: 0,
             skipped_offline: 0,
+            locationless_variants: 0,
+            removed_variants: 0,
             orphaned_assets: 0,
             removed_assets: 0,
             orphaned_previews: 0,
@@ -2808,7 +2813,68 @@ impl AssetService {
             }
         }
 
-        // Pass 2: Orphaned assets (all variants have zero file_locations)
+        // Pass 2: Locationless variants (variant has no locations but asset has other located variants)
+        let locationless = if apply {
+            catalog.list_locationless_variants()?
+        } else {
+            catalog.list_would_be_locationless_variants(&stale_locations)?
+        };
+        result.locationless_variants = locationless.len();
+
+        if apply {
+            let preview_gen2 = crate::preview::PreviewGenerator::new(
+                &self.catalog_root,
+                self.verbosity,
+                &self.preview_config,
+            );
+            // Group by asset_id so we can update sidecars and denormalized columns once per asset
+            let mut by_asset: std::collections::HashMap<String, Vec<String>> =
+                std::collections::HashMap::new();
+            for (asset_id, content_hash) in &locationless {
+                by_asset
+                    .entry(asset_id.clone())
+                    .or_default()
+                    .push(content_hash.clone());
+            }
+
+            for (asset_id, hashes) in &by_asset {
+                for hash in hashes {
+                    let file_start = Instant::now();
+                    let hash_path = PathBuf::from(hash);
+
+                    // Delete variant from catalog (cascades to file_locations, recipes, embeddings)
+                    if let Err(e) = catalog.delete_variant(hash) {
+                        result.errors.push(format!(
+                            "Failed to delete locationless variant {}: {e}",
+                            &hash[..16.min(hash.len())]
+                        ));
+                        continue;
+                    }
+
+                    // Delete derived files
+                    let _ = std::fs::remove_file(preview_gen2.preview_path(hash));
+                    let _ = std::fs::remove_file(preview_gen2.smart_preview_path(hash));
+
+                    result.removed_variants += 1;
+                    on_file(&hash_path, CleanupStatus::LocationlessVariant, file_start.elapsed());
+                }
+
+                // Update sidecar: remove the variant(s) from YAML
+                if let Ok(uuid) = uuid::Uuid::parse_str(asset_id) {
+                    if let Ok(mut asset) = metadata_store.load(uuid) {
+                        let hash_set: std::collections::HashSet<&str> =
+                            hashes.iter().map(|h| h.as_str()).collect();
+                        asset.variants.retain(|v| !hash_set.contains(v.content_hash.as_str()));
+                        asset.recipes.retain(|r| !hash_set.contains(r.variant_hash.as_str()));
+                        let _ = metadata_store.save(&asset);
+                        // Update denormalized columns
+                        let _ = catalog.update_denormalized_variant_columns(&asset);
+                    }
+                }
+            }
+        }
+
+        // Pass 3: Orphaned assets (all variants have zero file_locations)
         // In apply mode, locations were already removed so we query directly.
         // In report mode, we predict which assets would become orphaned.
         let orphaned_ids = if apply {
@@ -2915,7 +2981,7 @@ impl AssetService {
             }
         }
 
-        // Pass 3: Orphaned previews (preview files with no matching variant)
+        // Pass 4: Orphaned previews (preview files with no matching variant)
         let variant_hashes = catalog.list_all_variant_hashes()?;
         scan_orphaned_sharded_files(
             &self.catalog_root.join("previews"),
@@ -2930,7 +2996,7 @@ impl AssetService {
             &on_file,
         );
 
-        // Pass 4: Orphaned smart previews (same logic, different directory)
+        // Pass 5: Orphaned smart previews (same logic, different directory)
         scan_orphaned_sharded_files(
             &self.catalog_root.join("smart_previews"),
             |stem| {
@@ -2944,7 +3010,7 @@ impl AssetService {
             &on_file,
         );
 
-        // Pass 5: Orphaned embedding binaries (asset_id.bin under embeddings/<model>/)
+        // Pass 6: Orphaned embedding binaries (asset_id.bin under embeddings/<model>/)
         let asset_ids_set: HashSet<String> = catalog.list_all_asset_ids()?;
         let emb_base = self.catalog_root.join("embeddings");
         if emb_base.is_dir() {
@@ -2970,7 +3036,7 @@ impl AssetService {
             }
         }
 
-        // Pass 6: Orphaned face crop thumbnails (face_id.jpg under faces/)
+        // Pass 7: Orphaned face crop thumbnails (face_id.jpg under faces/)
         let face_ids_set: HashSet<String> = catalog.conn()
             .prepare("SELECT id FROM faces")
             .and_then(|mut s| s.query_map([], |r| r.get(0))

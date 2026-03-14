@@ -1575,6 +1575,10 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                                         .unwrap_or_else(|| path.to_str().unwrap_or("?"));
                                     eprintln!("  {} — removed ({})", name, format_duration(elapsed));
                                 }
+                                CleanupStatus::LocationlessVariant => {
+                                    let name = path.to_str().unwrap_or("?");
+                                    eprintln!("  {} — locationless variant removed ({})", name, format_duration(elapsed));
+                                }
                                 CleanupStatus::OrphanedAsset => {
                                     let name = path.to_str().unwrap_or("?");
                                     eprintln!("  {} — orphaned asset removed ({})", name, format_duration(elapsed));
@@ -4543,6 +4547,10 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                                     .unwrap_or_else(|| path.to_str().unwrap_or("?"));
                                 eprintln!("  {} — offline", name);
                             }
+                            CleanupStatus::LocationlessVariant => {
+                                let name = path.to_str().unwrap_or("?");
+                                eprintln!("  {} — locationless variant removed ({})", name, format_duration(elapsed));
+                            }
                             CleanupStatus::OrphanedAsset => {
                                 let name = path.to_str().unwrap_or("?");
                                 eprintln!("  {} — orphaned asset removed ({})", name, format_duration(elapsed));
@@ -4586,6 +4594,9 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                         format!("{} stale", result.stale),
                         format!("{} removed", result.removed),
                     ];
+                    if result.removed_variants > 0 {
+                        parts.push(format!("{} locationless variants removed", result.removed_variants));
+                    }
                     if result.removed_assets > 0 {
                         parts.push(format!("{} orphaned assets removed", result.removed_assets));
                     }
@@ -4607,6 +4618,9 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                         format!("{} checked", result.checked),
                         format!("{} stale", result.stale),
                     ];
+                    if result.locationless_variants > 0 {
+                        parts.push(format!("{} locationless variants", result.locationless_variants));
+                    }
                     if result.orphaned_assets > 0 {
                         parts.push(format!("{} orphaned assets", result.orphaned_assets));
                     }
@@ -4624,6 +4638,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                     }
                     println!("Cleanup complete: {}", parts.join(", "));
                     let has_orphans = result.stale > 0
+                        || result.locationless_variants > 0
                         || result.orphaned_assets > 0
                         || result.orphaned_previews > 0
                         || result.orphaned_smart_previews > 0
