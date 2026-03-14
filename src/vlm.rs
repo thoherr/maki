@@ -258,6 +258,27 @@ fn strip_markdown_json(raw: &str) -> String {
     trimmed.to_string()
 }
 
+/// Strip `<think>...</think>` blocks from model output.
+///
+/// Reasoning models (qwen3, deepseek-r1, etc.) wrap internal chain-of-thought
+/// in `<think>` tags. The actual answer follows after the closing tag.
+fn strip_think_tags(text: &str) -> &str {
+    let trimmed = text.trim();
+    // Fast path: no think tags
+    if !trimmed.contains("<think>") {
+        return trimmed;
+    }
+    // Find the last </think> and return everything after it
+    if let Some(pos) = trimmed.rfind("</think>") {
+        return trimmed[pos + 8..].trim();
+    }
+    // Unclosed <think> — model spent all tokens thinking, no answer produced
+    if trimmed.starts_with("<think>") {
+        return "";
+    }
+    trimmed
+}
+
 /// Call a VLM endpoint with an image.
 ///
 /// Tries OpenAI-compatible `/v1/chat/completions` first, falls back to
@@ -329,7 +350,8 @@ fn call_openai_compatible(
         }],
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "stream": false
+        "stream": false,
+        "think": false
     });
 
     let url = format!("{}/v1/chat/completions", endpoint.trim_end_matches('/'));
@@ -348,31 +370,39 @@ fn call_openai_compatible(
         anyhow::bail!("VLM error: {msg}");
     }
 
-    let text = resp
+    let raw_text = resp
         .pointer("/choices/0/message/content")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            // Include response snippet for debugging
-            let snippet = response.chars().take(300).collect::<String>();
-            anyhow::anyhow!("Unexpected VLM response format: no choices[0].message.content\n  Response: {snippet}")
-        })?;
+        .unwrap_or("");
 
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        // Ollama can return empty content when the model fails to process
-        // the image (e.g. after a model swap failure, OOM, or unsupported vision input)
-        let finish = resp
-            .pointer("/choices/0/finish_reason")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        anyhow::bail!(
-            "VLM returned empty content (finish_reason: {finish}). \
-             The model may have failed to process the image — check if \"{model}\" \
-             supports vision and is fully loaded (try `ollama ps` to check loaded models)"
-        );
+    // Strip <think>...</think> blocks (qwen3 and other reasoning models)
+    let trimmed = strip_think_tags(raw_text).trim().to_string();
+
+    if !trimmed.is_empty() {
+        return Ok(trimmed);
     }
 
-    Ok(trimmed.to_string())
+    // Some reasoning models put the answer in reasoning_content when content is empty
+    if let Some(reasoning) = resp
+        .pointer("/choices/0/message/reasoning_content")
+        .and_then(|v| v.as_str())
+    {
+        let stripped = strip_think_tags(reasoning).trim().to_string();
+        if !stripped.is_empty() {
+            return Ok(stripped);
+        }
+    }
+
+    // Truly empty — report error with diagnostics
+    let finish = resp
+        .pointer("/choices/0/finish_reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    anyhow::bail!(
+        "VLM returned empty content (finish_reason: {finish}). \
+         The model may have failed to process the image — check if \"{model}\" \
+         supports vision and is fully loaded (try `ollama ps` to check loaded models)"
+    );
 }
 
 /// Call Ollama's native /api/generate endpoint.
@@ -393,7 +423,8 @@ fn call_ollama_native(
         "stream": false,
         "options": {
             "temperature": temperature
-        }
+        },
+        "think": false
     });
 
     let url = format!("{}/api/generate", endpoint.trim_end_matches('/'));
@@ -407,7 +438,7 @@ fn call_ollama_native(
         anyhow::bail!("Ollama error: {msg}");
     }
 
-    let text = resp
+    let raw_text = resp
         .get("response")
         .and_then(|v| v.as_str())
         .ok_or_else(|| {
@@ -415,7 +446,8 @@ fn call_ollama_native(
             anyhow::anyhow!("Unexpected Ollama response format: no 'response' field\n  Response: {snippet}")
         })?;
 
-    let trimmed = text.trim();
+    // Strip <think>...</think> blocks (qwen3 and other reasoning models)
+    let trimmed = strip_think_tags(raw_text).trim().to_string();
     if trimmed.is_empty() {
         anyhow::bail!(
             "VLM returned empty content. \
@@ -424,7 +456,7 @@ fn call_ollama_native(
         );
     }
 
-    Ok(trimmed.to_string())
+    Ok(trimmed)
 }
 
 /// Send a POST request via curl with JSON body on stdin.
@@ -816,5 +848,34 @@ mod tests {
     fn test_find_matching_model_not_found() {
         let available = vec!["moondream:latest".into()];
         assert_eq!(find_matching_model("qwen2.5vl:3b", &available), None);
+    }
+
+    #[test]
+    fn test_strip_think_tags_no_tags() {
+        assert_eq!(strip_think_tags("Hello world"), "Hello world");
+    }
+
+    #[test]
+    fn test_strip_think_tags_with_answer() {
+        let input = "<think>\nLet me analyze this image...\n</think>\nA photo of a sunset.";
+        assert_eq!(strip_think_tags(input), "A photo of a sunset.");
+    }
+
+    #[test]
+    fn test_strip_think_tags_unclosed() {
+        let input = "<think>\nStill thinking about this very complex image...";
+        assert_eq!(strip_think_tags(input), "");
+    }
+
+    #[test]
+    fn test_strip_think_tags_multiple() {
+        let input = "<think>first</think>middle<think>second</think>The answer.";
+        assert_eq!(strip_think_tags(input), "The answer.");
+    }
+
+    #[test]
+    fn test_strip_think_tags_whitespace() {
+        let input = "  <think>reasoning</think>  \n  A description.  ";
+        assert_eq!(strip_think_tags(input), "A description.");
     }
 }
