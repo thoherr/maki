@@ -476,7 +476,16 @@ fn curl_post(
 }
 
 /// Check if a VLM endpoint is reachable.
-pub fn check_endpoint(endpoint: &str, timeout: u32, debug: bool) -> Result<String> {
+/// Result of checking a VLM endpoint.
+pub struct EndpointStatus {
+    /// Human-readable status message.
+    pub message: String,
+    /// Model names available on the server (empty if server doesn't list models).
+    pub available_models: Vec<String>,
+}
+
+/// Check VLM endpoint connectivity and list available models.
+pub fn check_endpoint_status(endpoint: &str, timeout: u32, debug: bool) -> Result<EndpointStatus> {
     let url = format!("{}/api/tags", endpoint.trim_end_matches('/'));
 
     if debug {
@@ -506,20 +515,46 @@ pub fn check_endpoint(endpoint: &str, timeout: u32, debug: bool) -> Result<Strin
     // Try to parse as Ollama /api/tags response
     if let Ok(resp) = serde_json::from_str::<serde_json::Value>(&response) {
         if let Some(models) = resp.get("models").and_then(|m| m.as_array()) {
-            let names: Vec<&str> = models
+            let names: Vec<String> = models
                 .iter()
-                .filter_map(|m| m.get("name").and_then(|n| n.as_str()))
+                .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()))
                 .collect();
-            return Ok(format!(
+            let msg = format!(
                 "Connected to {}. {} model(s) available: {}",
                 endpoint,
                 names.len(),
                 names.join(", ")
-            ));
+            );
+            return Ok(EndpointStatus { message: msg, available_models: names });
         }
     }
 
-    Ok(format!("Connected to {endpoint}. Server is responding."))
+    Ok(EndpointStatus {
+        message: format!("Connected to {endpoint}. Server is responding."),
+        available_models: Vec::new(),
+    })
+}
+
+pub fn check_endpoint(endpoint: &str, timeout: u32, debug: bool) -> Result<String> {
+    check_endpoint_status(endpoint, timeout, debug).map(|s| s.message)
+}
+
+/// Check if a model name matches any available model on the server.
+/// Matches by exact name, by unique base name (e.g. "qwen3-vl" matches "qwen3-vl:8b"
+/// only if there's one match), or by prefix (e.g. "qwen2.5vl:3b" matches "qwen2.5vl:3b-fp16").
+pub fn find_matching_model(configured: &str, available: &[String]) -> Option<String> {
+    // Exact match
+    if available.iter().any(|m| m == configured) {
+        return Some(configured.to_string());
+    }
+    // Configured name as prefix — collect all matches
+    let prefix_matches: Vec<&String> = available.iter()
+        .filter(|m| m.starts_with(configured))
+        .collect();
+    if prefix_matches.len() == 1 {
+        return Some(prefix_matches[0].clone());
+    }
+    None
 }
 
 /// Read an image file and return its base64 encoding.
@@ -706,5 +741,45 @@ mod tests {
             dedup_tags(vec!["a".into(), "B".into(), "A".into(), "b".into(), "c".into()]),
             vec!["a", "B", "c"]
         );
+    }
+
+    #[test]
+    fn test_find_matching_model_exact() {
+        let available = vec!["qwen2.5vl:3b".into(), "moondream:latest".into()];
+        assert_eq!(
+            find_matching_model("qwen2.5vl:3b", &available),
+            Some("qwen2.5vl:3b".into())
+        );
+    }
+
+    #[test]
+    fn test_find_matching_model_prefix() {
+        let available = vec!["qwen2.5vl:3b".into(), "qwen2.5vl:7b".into()];
+        // Ambiguous prefix — two matches, no result
+        assert_eq!(find_matching_model("qwen2.5vl", &available), None);
+    }
+
+    #[test]
+    fn test_find_matching_model_unique_prefix() {
+        let available = vec!["qwen3-vl:8b".into(), "moondream:latest".into()];
+        assert_eq!(
+            find_matching_model("qwen3-vl", &available),
+            Some("qwen3-vl:8b".into())
+        );
+    }
+
+    #[test]
+    fn test_find_matching_model_starts_with() {
+        let available = vec!["qwen2.5vl:3b-fp16".into()];
+        assert_eq!(
+            find_matching_model("qwen2.5vl:3b", &available),
+            Some("qwen2.5vl:3b-fp16".into())
+        );
+    }
+
+    #[test]
+    fn test_find_matching_model_not_found() {
+        let available = vec!["moondream:latest".into()];
+        assert_eq!(find_matching_model("qwen2.5vl:3b", &available), None);
     }
 }

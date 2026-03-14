@@ -2630,16 +2630,39 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                 .unwrap_or_else(|| dam::vlm::default_prompt_for_mode(vlm_mode));
 
             if check {
-                match dam::vlm::check_endpoint(endpoint, timeout, cli.debug) {
-                    Ok(msg) => {
+                match dam::vlm::check_endpoint_status(endpoint, timeout, cli.debug) {
+                    Ok(status) => {
+                        let model_status = if status.available_models.is_empty() {
+                            format!("Configured model: {model}")
+                        } else {
+                            match dam::vlm::find_matching_model(model, &status.available_models) {
+                                Some(matched) if matched == model => {
+                                    format!("Model {model} is available")
+                                }
+                                Some(matched) => {
+                                    format!("Model {matched} matched (from \"{model}\")")
+                                }
+                                None => {
+                                    format!(
+                                        "WARNING: model \"{model}\" not found. Pull it with `ollama pull {model}` or set [vlm] model in dam.toml"
+                                    )
+                                }
+                            }
+                        };
                         if cli.json {
+                            let model_ok = status.available_models.is_empty()
+                                || dam::vlm::find_matching_model(model, &status.available_models).is_some();
                             println!("{}", serde_json::json!({
                                 "status": "ok",
                                 "endpoint": endpoint,
-                                "message": msg,
+                                "model": model,
+                                "model_available": model_ok,
+                                "available_models": status.available_models,
+                                "message": status.message,
                             }));
                         } else {
-                            println!("{msg}");
+                            println!("{}", status.message);
+                            println!("{model_status}");
                         }
                     }
                     Err(e) => {
@@ -2647,6 +2670,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                             println!("{}", serde_json::json!({
                                 "status": "error",
                                 "endpoint": endpoint,
+                                "model": model,
                                 "message": format!("{e}"),
                             }));
                         } else {

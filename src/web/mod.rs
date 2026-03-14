@@ -602,10 +602,34 @@ async fn log_request(
 }
 
 /// Quick non-blocking check if the VLM endpoint is reachable at startup.
+/// Validates that the configured model is available on the server.
 fn check_vlm_at_startup(vlm_config: &crate::config::VlmConfig) -> bool {
-    match crate::vlm::check_endpoint(&vlm_config.endpoint, 5, false) {
-        Ok(msg) => {
-            eprintln!("VLM: {msg}");
+    match crate::vlm::check_endpoint_status(&vlm_config.endpoint, 5, false) {
+        Ok(status) => {
+            eprintln!("VLM: {}", status.message);
+            if !status.available_models.is_empty() {
+                let configured = &vlm_config.model;
+                match crate::vlm::find_matching_model(configured, &status.available_models) {
+                    Some(matched) if matched == *configured => {
+                        eprintln!("VLM: using model {configured}");
+                    }
+                    Some(matched) => {
+                        eprintln!("VLM: using model {matched} (matched from \"{configured}\")");
+                    }
+                    None => {
+                        eprintln!(
+                            "VLM: warning: configured model \"{configured}\" not found on server"
+                        );
+                        eprintln!(
+                            "VLM: available models: {}",
+                            status.available_models.join(", ")
+                        );
+                        eprintln!(
+                            "VLM: pull it with `ollama pull {configured}` or set [vlm] model in dam.toml"
+                        );
+                    }
+                }
+            }
             true
         }
         Err(_) => {
