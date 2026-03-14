@@ -351,9 +351,28 @@ fn call_openai_compatible(
     let text = resp
         .pointer("/choices/0/message/content")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Unexpected VLM response format: no choices[0].message.content"))?;
+        .ok_or_else(|| {
+            // Include response snippet for debugging
+            let snippet = response.chars().take(300).collect::<String>();
+            anyhow::anyhow!("Unexpected VLM response format: no choices[0].message.content\n  Response: {snippet}")
+        })?;
 
-    Ok(text.trim().to_string())
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        // Ollama can return empty content when the model fails to process
+        // the image (e.g. after a model swap failure, OOM, or unsupported vision input)
+        let finish = resp
+            .pointer("/choices/0/finish_reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        anyhow::bail!(
+            "VLM returned empty content (finish_reason: {finish}). \
+             The model may have failed to process the image — check if \"{model}\" \
+             supports vision and is fully loaded (try `ollama ps` to check loaded models)"
+        );
+    }
+
+    Ok(trimmed.to_string())
 }
 
 /// Call Ollama's native /api/generate endpoint.
@@ -391,9 +410,21 @@ fn call_ollama_native(
     let text = resp
         .get("response")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Unexpected Ollama response format: no 'response' field"))?;
+        .ok_or_else(|| {
+            let snippet = response.chars().take(300).collect::<String>();
+            anyhow::anyhow!("Unexpected Ollama response format: no 'response' field\n  Response: {snippet}")
+        })?;
 
-    Ok(text.trim().to_string())
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!(
+            "VLM returned empty content. \
+             The model may have failed to process the image — check if \"{model}\" \
+             supports vision and is fully loaded (try `ollama ps` to check loaded models)"
+        );
+    }
+
+    Ok(trimmed.to_string())
 }
 
 /// Send a POST request via curl with JSON body on stdin.

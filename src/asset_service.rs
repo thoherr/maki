@@ -5985,7 +5985,10 @@ impl AssetService {
                                             (
                                                 aid.clone(),
                                                 start.elapsed(),
-                                                Err(format!("VLM returned empty response for {short_id}")),
+                                                Err(format!(
+                                                    "VLM returned empty response for {short_id} — \
+                                                     model \"{model}\" may not support vision or failed to load"
+                                                )),
                                             )
                                         } else {
                                             (aid.clone(), start.elapsed(), Ok(output))
