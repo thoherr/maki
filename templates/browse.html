@@ -1034,12 +1034,19 @@ window.triggerSearch = onFilterChange;
     function showExportModal(mode, ids, filters) {
         var overlay = document.createElement('div');
         overlay.className = 'group-confirm-overlay';
+        var count = mode === 'selection' ? ids.length : 0;
         var title = mode === 'selection'
-            ? 'Export ' + ids.length + ' selected asset' + (ids.length === 1 ? '' : 's')
+            ? 'Export ' + count + ' selected asset' + (count === 1 ? '' : 's')
             : 'Export all results';
+        var defaultName = mode === 'selection'
+            ? 'dam-export-' + count + '-assets'
+            : 'dam-export';
         overlay.innerHTML = '<div class="group-confirm-modal export-modal">' +
             '<h3>' + title + '</h3>' +
             '<div class="export-options">' +
+                '<div class="export-row"><label>Filename</label>' +
+                    '<span class="export-filename-wrap"><input type="text" id="export-filename" value="' + defaultName + '">.zip</span>' +
+                '</div>' +
                 '<div class="export-row"><label>Layout</label>' +
                     '<label class="export-radio"><input type="radio" name="export-layout" value="flat" checked> Flat</label>' +
                     '<label class="export-radio"><input type="radio" name="export-layout" value="mirror"> Mirror</label>' +
@@ -1087,13 +1094,12 @@ window.triggerSearch = onFilterChange;
                     return r.text().then(function(t) { throw new Error(t); });
                 }
                 return r.blob().then(function(blob) {
-                    var cd = r.headers.get('Content-Disposition') || '';
-                    var match = cd.match(/filename="?([^"]+)"?/);
-                    var filename = match ? match[1] : 'dam-export.zip';
+                    var userFilename = (document.getElementById('export-filename').value || 'dam-export').trim();
+                    if (!userFilename.endsWith('.zip')) userFilename += '.zip';
                     var url = URL.createObjectURL(blob);
                     var a = document.createElement('a');
                     a.href = url;
-                    a.download = filename;
+                    a.download = userFilename;
                     a.click();
                     URL.revokeObjectURL(url);
                     overlay.remove();

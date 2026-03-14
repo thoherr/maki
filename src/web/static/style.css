@@ -3720,6 +3720,8 @@ body.has-batch-toolbar { padding-bottom: 60px; }
 .export-row label { font-size: 0.9rem; cursor: pointer; }
 .export-radio { display: inline-flex; align-items: center; gap: 0.25rem; }
 .export-download-btn:disabled { opacity: 0.6; cursor: wait; }
+.export-filename-wrap { display: inline-flex; align-items: center; gap: 0; font-size: 0.9rem; color: var(--text, #222); }
+.export-filename-wrap input { width: 200px; padding: 0.3rem 0.4rem; border: 1px solid var(--border, #ccc); border-radius: var(--radius, 4px); background: var(--bg-input, #fff); color: var(--text, #222); font-size: 0.9rem; }
 
 /* Export all link in results bar */
 .export-all-link {
