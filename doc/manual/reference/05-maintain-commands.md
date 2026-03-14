@@ -387,8 +387,98 @@ dam sync-metadata --media --log --time
 ### SEE ALSO
 
 [refresh](#dam-refresh) -- one-way inbound metadata re-read.
-[writeback](04-retrieve-commands.md#dam-writeback) -- one-way outbound metadata write.
+[writeback](#dam-writeback) -- one-way outbound metadata write.
 [sync](#dam-sync) -- file-level reconciliation (moves, renames, missing files).
+
+---
+
+## dam writeback
+
+### NAME
+
+dam-writeback -- write pending metadata changes to XMP recipe files
+
+### SYNOPSIS
+
+```
+dam [GLOBAL FLAGS] writeback [QUERY] [OPTIONS]
+```
+
+### DESCRIPTION
+
+Replays pending metadata writes to XMP recipe files on disk. When metadata is edited (rating, label, tags, description) while a volume is offline, XMP write-back is skipped and the recipe is marked with `pending_writeback`. This command pushes those pending changes to XMP when the volume comes back online.
+
+Without `--all`, only recipes with `pending_writeback=1` are processed. Each recipe's XMP file is updated with the current asset metadata (rating, label, tags, description), then re-hashed and the pending flag is cleared.
+
+Scope can be narrowed with a positional search query, `--asset`, or `--volume`. Without scope options, all pending recipes across all online volumes are processed.
+
+### OPTIONS
+
+**\<QUERY\>** (positional, optional)
+: Search query to scope which assets are written back (same syntax as `dam search`).
+
+**--volume \<LABEL\>**
+: Limit to recipes on a specific volume.
+
+**--asset \<ID\>**
+: Limit to recipes belonging to a specific asset (prefix match).
+
+**--all**
+: Write current metadata to every XMP recipe, not just pending ones. Useful for an initial sync or to force-push all DAM metadata to XMP files.
+
+**--dry-run**
+: Report what would be written without modifying any files.
+
+`--json` outputs a result object with counts for written, skipped, failed, and cleared recipes.
+
+`--log` prints per-recipe status to stderr.
+
+`--time` shows elapsed wall-clock time.
+
+### EXAMPLES
+
+Process all pending write-backs:
+
+```bash
+dam writeback
+```
+
+Write back only assets matching a query:
+
+```bash
+dam writeback "rating:4+ tag:landscape"
+```
+
+Write back to a specific volume after reconnecting:
+
+```bash
+dam writeback --volume "Photos 2024" --log
+```
+
+Force-write all metadata to XMP (initial sync):
+
+```bash
+dam writeback --all --log --time
+```
+
+Preview what would be written:
+
+```bash
+dam writeback --dry-run
+```
+
+Shell variable expansion:
+
+```bash
+# In dam shell
+writeback $picks
+writeback _
+```
+
+### SEE ALSO
+
+[sync-metadata](#dam-sync-metadata) -- bidirectional metadata sync (read + write).
+[refresh](#dam-refresh) -- one-way inbound metadata re-read.
 
 ---
 
