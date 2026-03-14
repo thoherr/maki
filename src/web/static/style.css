@@ -3604,7 +3604,7 @@ body.has-batch-toolbar { padding-bottom: 60px; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 .group-confirm-modal {
     background: var(--bg-card, #fff);
-    color: var(--text-main, #222);
+    color: var(--text, #222);
     border-radius: 12px;
     padding: 1.5rem;
     max-width: 600px;
@@ -3685,10 +3685,10 @@ body.has-batch-toolbar { padding-bottom: 60px; }
 }
 .group-confirm-cancel {
     background: var(--bg-card, #fff);
-    color: var(--text-main, #222);
+    color: var(--text, #222);
 }
 .group-confirm-cancel:hover {
-    background: var(--bg-hover, #f0f0f0);
+    background: var(--bg-input, #f0f0f0);
 }
 .group-confirm-ok {
     background: var(--accent, #4a90d9);
@@ -3702,7 +3702,7 @@ body.has-batch-toolbar { padding-bottom: 60px; }
 .group-confirm-placeholder {
     width: 100%;
     aspect-ratio: 1;
-    background: var(--bg-hover, #f0f0f0);
+    background: var(--bg-input, #f0f0f0);
     border-radius: 4px;
     display: flex;
     align-items: center;
@@ -3711,3 +3711,21 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     color: var(--text-muted, #888);
     font-family: monospace;
 }
+
+/* Export modal */
+.export-modal { max-width: 420px; }
+.export-modal h3 { margin: 0 0 1rem; }
+.export-options { margin-bottom: 1.2rem; }
+.export-row { margin-bottom: 0.6rem; display: flex; align-items: center; gap: 0.75rem; }
+.export-row label { font-size: 0.9rem; cursor: pointer; }
+.export-radio { display: inline-flex; align-items: center; gap: 0.25rem; }
+.export-download-btn:disabled { opacity: 0.6; cursor: wait; }
+
+/* Export all link in results bar */
+.export-all-link {
+    font-size: 0.8rem;
+    color: var(--text-muted, #888);
+    text-decoration: none;
+    margin-left: 0.5rem;
+}
+.export-all-link:hover { color: var(--accent, #4a90d9); text-decoration: underline; }

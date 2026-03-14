@@ -98,6 +98,8 @@
         <button class="batch-btn batch-btn-danger" id="batch-unstack">Unstack</button>
         <span class="batch-sep"></span>
         <button class="batch-btn" id="batch-compare" title="Compare 2–4 selected assets (c)">Compare</button>
+        <span class="batch-sep"></span>
+        <button class="batch-btn" id="batch-export" title="Download selected assets as ZIP">Export</button>
         {% if vlm_enabled %}
         <span class="batch-sep"></span>
         <button class="batch-btn" id="batch-describe">Describe</button>
@@ -1027,6 +1029,107 @@ window.triggerSearch = onFilterChange;
             });
         });
     }
+
+    // --- Export ZIP ---
+    function showExportModal(mode, ids, filters) {
+        var overlay = document.createElement('div');
+        overlay.className = 'group-confirm-overlay';
+        var title = mode === 'selection'
+            ? 'Export ' + ids.length + ' selected asset' + (ids.length === 1 ? '' : 's')
+            : 'Export all results';
+        overlay.innerHTML = '<div class="group-confirm-modal export-modal">' +
+            '<h3>' + title + '</h3>' +
+            '<div class="export-options">' +
+                '<div class="export-row"><label>Layout</label>' +
+                    '<label class="export-radio"><input type="radio" name="export-layout" value="flat" checked> Flat</label>' +
+                    '<label class="export-radio"><input type="radio" name="export-layout" value="mirror"> Mirror</label>' +
+                '</div>' +
+                '<div class="export-row"><label><input type="checkbox" id="export-all-variants"> All variants</label></div>' +
+                '<div class="export-row"><label><input type="checkbox" id="export-sidecars"> Include sidecars (.xmp, .cos, \u2026)</label></div>' +
+            '</div>' +
+            '<div class="group-confirm-buttons">' +
+                '<button class="group-confirm-cancel">Cancel</button>' +
+                '<button class="group-confirm-ok export-download-btn">Download .zip</button>' +
+            '</div>' +
+        '</div>';
+        document.body.appendChild(overlay);
+
+        overlay.querySelector('.group-confirm-cancel').addEventListener('click', function() {
+            overlay.remove();
+        });
+        overlay.addEventListener('click', function(e) {
+            if (e.target === overlay) overlay.remove();
+        });
+
+        overlay.querySelector('.export-download-btn').addEventListener('click', function() {
+            var btn = this;
+            var layout = overlay.querySelector('input[name="export-layout"]:checked').value;
+            var allVariants = document.getElementById('export-all-variants').checked;
+            var sidecars = document.getElementById('export-sidecars').checked;
+
+            var body = {layout: layout, all_variants: allVariants, include_sidecars: sidecars};
+            if (mode === 'selection') {
+                body.asset_ids = ids;
+            } else {
+                body.filters = filters || {};
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Preparing\u2026';
+
+            fetch('/api/batch/export', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            })
+            .then(function(r) {
+                if (!r.ok) {
+                    return r.text().then(function(t) { throw new Error(t); });
+                }
+                return r.blob().then(function(blob) {
+                    var cd = r.headers.get('Content-Disposition') || '';
+                    var match = cd.match(/filename="?([^"]+)"?/);
+                    var filename = match ? match[1] : 'dam-export.zip';
+                    var url = URL.createObjectURL(blob);
+                    var a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    overlay.remove();
+                });
+            })
+            .catch(function(err) {
+                btn.disabled = false;
+                btn.textContent = 'Download .zip';
+                alert('Export failed: ' + err.message);
+            });
+        });
+    }
+
+    document.getElementById('batch-export').addEventListener('click', function() {
+        if (selected.size === 0 || batchBusy) return;
+        showExportModal('selection', Array.from(selected), null);
+    });
+
+    // Collect current browse filter params from the URL
+    function getFilterParams() {
+        var params = new URLSearchParams(window.location.search);
+        var filters = {};
+        ['q', 'type', 'tag', 'format', 'volume', 'rating', 'label', 'collection', 'path', 'person'].forEach(function(k) {
+            var v = params.get(k);
+            if (v) filters[k] = v;
+        });
+        return filters;
+    }
+
+    // "Export all" link — delegated since results are loaded via htmx
+    document.addEventListener('click', function(e) {
+        var link = e.target.closest('#export-all-link');
+        if (!link) return;
+        e.preventDefault();
+        showExportModal('all', null, getFilterParams());
+    });
 
     // Persist selection to sessionStorage so it survives fresh page loads (back-nav)
     window.addEventListener('pagehide', function() {

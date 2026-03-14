@@ -11,6 +11,7 @@
 {% else %}
 <div class="results-bar">
     <span class="results-count">{{ total }} asset{% if total != 1 %}s{% endif %}{% if !query.is_empty() %} matching &ldquo;{{ query }}&rdquo;{% endif %}</span>
+    <a href="#" class="export-all-link" id="export-all-link" title="Download all {{ total }} results as ZIP">Export all</a>
 
     <div class="sort-controls">
         {% if sort == "name_asc" %}

@@ -479,6 +479,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/batch/describe",
             axum::routing::post(routes::batch_vlm_describe),
+        )
+        .route(
+            "/api/batch/export",
+            axum::routing::post(routes::export_zip),
         );
 
     #[cfg(feature = "ai")]

@@ -512,14 +512,13 @@ pub struct ExportResult {
 }
 
 /// Internal plan entry for a single file to export.
-struct ExportFilePlan {
-    #[allow(dead_code)]
-    asset_id: String,
-    content_hash: String,
-    source_path: PathBuf,
-    target_path: PathBuf,
-    file_size: u64,
-    is_sidecar: bool,
+pub struct ExportFilePlan {
+    pub asset_id: String,
+    pub content_hash: String,
+    pub source_path: PathBuf,
+    pub target_path: PathBuf,
+    pub file_size: u64,
+    pub is_sidecar: bool,
 }
 
 /// Resolve a flat-mode target path, handling filename collisions.
@@ -5003,6 +5002,183 @@ impl AssetService {
     /// (or symlinks) files to the target directory. By default exports only the best
     /// variant per asset; `all_variants` exports every variant. `include_sidecars`
     /// also copies recipe files. `dry_run` reports the plan without writing files.
+    /// Build an export plan: resolve assets, find online file locations, compute target paths.
+    ///
+    /// Returns `(plan, assets_matched, errors)`. The plan entries have `target_path` set
+    /// relative to `target_base` (for directory export) or as ZIP entry names.
+    pub fn build_export_plan(
+        &self,
+        asset_ids: &[String],
+        target_base: &Path,
+        layout: ExportLayout,
+        all_variants: bool,
+        include_sidecars: bool,
+    ) -> Result<(Vec<ExportFilePlan>, usize, Vec<String>)> {
+        use crate::catalog::Catalog;
+        use crate::models::variant::best_preview_index_details;
+
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let registry = DeviceRegistry::new(&self.catalog_root);
+
+        let assets_matched = asset_ids.len();
+
+        // Load volumes for resolving online mount points
+        let volumes = registry.list()?;
+        let online_volumes: std::collections::HashMap<String, &crate::models::Volume> = volumes
+            .iter()
+            .filter(|v| v.is_online)
+            .map(|v| (v.id.to_string(), v))
+            .collect();
+
+        let mut involved_volume_ids: HashSet<String> = HashSet::new();
+        let mut plan: Vec<ExportFilePlan> = Vec::new();
+        let mut planned_hashes: HashSet<String> = HashSet::new();
+        let mut flat_seen: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let mut errors: Vec<String> = Vec::new();
+
+        for asset_id in asset_ids {
+            let details = match catalog.load_asset_details(asset_id)? {
+                Some(d) => d,
+                None => {
+                    errors.push(format!("Asset {} not found in catalog", &asset_id[..8]));
+                    continue;
+                }
+            };
+
+            let variant_indices: Vec<usize> = if all_variants {
+                (0..details.variants.len()).collect()
+            } else {
+                match best_preview_index_details(&details.variants) {
+                    Some(i) => vec![i],
+                    None => {
+                        errors.push(format!("Asset {} has no variants", &asset_id[..8]));
+                        continue;
+                    }
+                }
+            };
+
+            for vi in &variant_indices {
+                let variant = &details.variants[*vi];
+                if planned_hashes.contains(&variant.content_hash) {
+                    continue;
+                }
+
+                let loc = variant.locations.iter().find(|l| {
+                    online_volumes.contains_key(&l.volume_id)
+                });
+                let loc = match loc {
+                    Some(l) => l,
+                    None => {
+                        errors.push(format!(
+                            "Asset {} variant {} — all locations offline",
+                            &asset_id[..8],
+                            &variant.content_hash[..12]
+                        ));
+                        continue;
+                    }
+                };
+
+                let vol = online_volumes[&loc.volume_id];
+                let source_path = vol.mount_point.join(&loc.relative_path);
+
+                let target_path = match layout {
+                    ExportLayout::Flat => {
+                        resolve_flat_target(
+                            target_base,
+                            &variant.original_filename,
+                            &variant.content_hash,
+                            &mut flat_seen,
+                        )
+                    }
+                    ExportLayout::Mirror => {
+                        involved_volume_ids.insert(loc.volume_id.clone());
+                        target_base.join(&loc.relative_path)
+                    }
+                };
+
+                planned_hashes.insert(variant.content_hash.clone());
+                plan.push(ExportFilePlan {
+                    asset_id: asset_id.clone(),
+                    content_hash: variant.content_hash.clone(),
+                    source_path,
+                    target_path,
+                    file_size: variant.file_size,
+                    is_sidecar: false,
+                });
+            }
+
+            if include_sidecars {
+                for recipe in &details.recipes {
+                    let (vol_id, rel_path) = match (&recipe.volume_id, &recipe.relative_path) {
+                        (Some(vid), Some(rp)) => (vid, rp),
+                        _ => continue,
+                    };
+
+                    if planned_hashes.contains(&recipe.content_hash) {
+                        continue;
+                    }
+
+                    let vol = match online_volumes.get(vol_id.as_str()) {
+                        Some(v) => v,
+                        None => continue,
+                    };
+
+                    let source_path = vol.mount_point.join(rel_path);
+                    let filename = Path::new(rel_path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+
+                    let target_path = match layout {
+                        ExportLayout::Flat => {
+                            resolve_flat_target(
+                                target_base,
+                                &filename,
+                                &recipe.content_hash,
+                                &mut flat_seen,
+                            )
+                        }
+                        ExportLayout::Mirror => {
+                            involved_volume_ids.insert(vol_id.clone());
+                            target_base.join(rel_path)
+                        }
+                    };
+
+                    let file_size = source_path.metadata().map(|m| m.len()).unwrap_or(0);
+                    planned_hashes.insert(recipe.content_hash.clone());
+                    plan.push(ExportFilePlan {
+                        asset_id: asset_id.clone(),
+                        content_hash: recipe.content_hash.clone(),
+                        source_path,
+                        target_path,
+                        file_size,
+                        is_sidecar: true,
+                    });
+                }
+            }
+        }
+
+        // Mirror layout: if multiple volumes involved, prefix with volume label
+        if layout == ExportLayout::Mirror && involved_volume_ids.len() > 1 {
+            for entry in &mut plan {
+                for vol in &volumes {
+                    if vol.is_online
+                        && entry.source_path.starts_with(&vol.mount_point)
+                    {
+                        if let Ok(rel) = entry.source_path.strip_prefix(&vol.mount_point) {
+                            entry.target_path = target_base.join(&vol.label).join(rel);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok((plan, assets_matched, errors))
+    }
+
     pub fn export(
         &self,
         query: &str,
@@ -5015,13 +5191,8 @@ impl AssetService {
         overwrite: bool,
         on_file: impl Fn(&Path, &ExportStatus, Duration),
     ) -> Result<ExportResult> {
-        use crate::catalog::Catalog;
-        use crate::models::variant::best_preview_index_details;
-
-        let catalog = Catalog::open(&self.catalog_root)?;
-        let registry = DeviceRegistry::new(&self.catalog_root);
-        let content_store = ContentStore::new(&self.catalog_root);
         let engine = crate::query::QueryEngine::new(&self.catalog_root);
+        let content_store = ContentStore::new(&self.catalog_root);
 
         // Phase 1: Search
         let search_results = engine.search(query)?;
@@ -5039,176 +5210,9 @@ impl AssetService {
             });
         }
 
-        // Load volumes for resolving online mount points
-        let volumes = registry.list()?;
-        let online_volumes: std::collections::HashMap<String, &crate::models::Volume> = volumes
-            .iter()
-            .filter(|v| v.is_online)
-            .map(|v| (v.id.to_string(), v))
-            .collect();
-
-        // Determine if multiple volumes are involved (for mirror layout prefix)
-        let mut involved_volume_ids: HashSet<String> = HashSet::new();
-
         // Phase 2: Build plan
-        let mut plan: Vec<ExportFilePlan> = Vec::new();
-        let mut planned_hashes: HashSet<String> = HashSet::new();
-        let mut flat_seen: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        let mut errors: Vec<String> = Vec::new();
-
-        for row in &search_results {
-            let details = match catalog.load_asset_details(&row.asset_id)? {
-                Some(d) => d,
-                None => {
-                    errors.push(format!("Asset {} not found in catalog", &row.asset_id[..8]));
-                    continue;
-                }
-            };
-
-            // Select variant(s)
-            let variant_indices: Vec<usize> = if all_variants {
-                (0..details.variants.len()).collect()
-            } else {
-                match best_preview_index_details(&details.variants) {
-                    Some(i) => vec![i],
-                    None => {
-                        errors.push(format!(
-                            "Asset {} has no variants",
-                            &row.asset_id[..8]
-                        ));
-                        continue;
-                    }
-                }
-            };
-
-            for vi in &variant_indices {
-                let variant = &details.variants[*vi];
-
-                // Skip if we already planned this content hash
-                if planned_hashes.contains(&variant.content_hash) {
-                    continue;
-                }
-
-                // Find first online location
-                let loc = variant.locations.iter().find(|l| {
-                    online_volumes.contains_key(&l.volume_id)
-                });
-                let loc = match loc {
-                    Some(l) => l,
-                    None => {
-                        errors.push(format!(
-                            "Asset {} variant {} — all locations offline",
-                            &row.asset_id[..8],
-                            &variant.content_hash[..12]
-                        ));
-                        continue;
-                    }
-                };
-
-                let vol = online_volumes[&loc.volume_id];
-                let source_path = vol.mount_point.join(&loc.relative_path);
-
-                let target_path = match layout {
-                    ExportLayout::Flat => {
-                        resolve_flat_target(
-                            target_dir,
-                            &variant.original_filename,
-                            &variant.content_hash,
-                            &mut flat_seen,
-                        )
-                    }
-                    ExportLayout::Mirror => {
-                        involved_volume_ids.insert(loc.volume_id.clone());
-                        // Will finalize prefix after scanning all variants
-                        target_dir.join(&loc.relative_path)
-                    }
-                };
-
-                planned_hashes.insert(variant.content_hash.clone());
-                plan.push(ExportFilePlan {
-                    asset_id: row.asset_id.clone(),
-                    content_hash: variant.content_hash.clone(),
-                    source_path,
-                    target_path,
-                    file_size: variant.file_size,
-                    is_sidecar: false,
-                });
-            }
-
-            // Plan recipe (sidecar) files
-            if include_sidecars {
-                for recipe in &details.recipes {
-                    let (vol_id, rel_path) = match (&recipe.volume_id, &recipe.relative_path) {
-                        (Some(vid), Some(rp)) => (vid, rp),
-                        _ => continue,
-                    };
-
-                    if planned_hashes.contains(&recipe.content_hash) {
-                        continue;
-                    }
-
-                    let vol = match online_volumes.get(vol_id.as_str()) {
-                        Some(v) => v,
-                        None => continue, // offline, skip silently
-                    };
-
-                    let source_path = vol.mount_point.join(rel_path);
-                    let filename = Path::new(rel_path)
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-
-                    let target_path = match layout {
-                        ExportLayout::Flat => {
-                            resolve_flat_target(
-                                target_dir,
-                                &filename,
-                                &recipe.content_hash,
-                                &mut flat_seen,
-                            )
-                        }
-                        ExportLayout::Mirror => {
-                            involved_volume_ids.insert(vol_id.clone());
-                            target_dir.join(rel_path)
-                        }
-                    };
-
-                    let file_size = source_path.metadata().map(|m| m.len()).unwrap_or(0);
-                    planned_hashes.insert(recipe.content_hash.clone());
-                    plan.push(ExportFilePlan {
-                        asset_id: row.asset_id.clone(),
-                        content_hash: recipe.content_hash.clone(),
-                        source_path,
-                        target_path,
-                        file_size,
-                        is_sidecar: true,
-                    });
-                }
-            }
-        }
-
-        // Mirror layout: if multiple volumes involved, prefix with volume label
-        if layout == ExportLayout::Mirror && involved_volume_ids.len() > 1 {
-            // Rebuild target paths with volume label prefix
-            for entry in &mut plan {
-                // Find which volume this file is on
-                for vol in &volumes {
-                    if vol.is_online
-                        && entry
-                            .source_path
-                            .starts_with(&vol.mount_point)
-                    {
-                        if let Ok(rel) = entry.source_path.strip_prefix(&vol.mount_point) {
-                            entry.target_path =
-                                target_dir.join(&vol.label).join(rel);
-                        }
-                        break;
-                    }
-                }
-            }
-        }
+        let asset_ids: Vec<String> = search_results.iter().map(|r| r.asset_id.clone()).collect();
+        let (plan, _, errors) = self.build_export_plan(&asset_ids, target_dir, layout, all_variants, include_sidecars)?;
 
         // Phase 3: Execute or dry-run
         let mut result = ExportResult {

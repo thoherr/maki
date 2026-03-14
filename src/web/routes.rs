@@ -5365,3 +5365,288 @@ fn batch_vlm_describe_inner(
 
     Ok(result)
 }
+
+// ─── Export ZIP ─────────────────────────────────────────────────────
+
+/// Browse filter params for "export all" — mirrors SearchParams from the URL.
+#[derive(serde::Deserialize, Default)]
+pub struct ExportFilters {
+    pub q: Option<String>,
+    #[serde(rename = "type")]
+    pub asset_type: Option<String>,
+    pub tag: Option<String>,
+    pub format: Option<String>,
+    pub volume: Option<String>,
+    pub rating: Option<String>,
+    pub label: Option<String>,
+    pub collection: Option<String>,
+    pub path: Option<String>,
+    pub person: Option<String>,
+}
+
+/// Request for batch export as ZIP download.
+#[derive(serde::Deserialize)]
+pub struct ExportZipRequest {
+    /// Asset IDs to export (used when exporting selection)
+    #[serde(default)]
+    pub asset_ids: Vec<String>,
+    /// Browse filter params (used for "export all")
+    #[serde(default)]
+    pub filters: Option<ExportFilters>,
+    /// Layout: "flat" (default) or "mirror"
+    #[serde(default = "default_layout")]
+    pub layout: String,
+    /// Export all variants (default: best only)
+    #[serde(default)]
+    pub all_variants: bool,
+    /// Include recipe/sidecar files
+    #[serde(default)]
+    pub include_sidecars: bool,
+}
+
+fn default_layout() -> String {
+    "flat".to_string()
+}
+
+/// Stream a ZIP archive of exported assets as a download.
+pub async fn export_zip(
+    State(state): State<Arc<super::AppState>>,
+    Json(req): Json<ExportZipRequest>,
+) -> Response {
+    use axum::body::Body;
+    use axum::http::header;
+    use crate::asset_service::{AssetService, ExportLayout};
+
+    let catalog_root = state.catalog_root.clone();
+    let preview_config = state.preview_config.clone();
+
+    // Resolve asset IDs: from explicit list or browse filters
+    let asset_ids = if !req.asset_ids.is_empty() {
+        req.asset_ids
+    } else {
+        let state2 = state.clone();
+        let filters = req.filters.unwrap_or_default();
+        match tokio::task::spawn_blocking(move || {
+            let catalog = state2.catalog()?;
+
+            let query = filters.q.as_deref().unwrap_or("");
+            let asset_type = filters.asset_type.as_deref().unwrap_or("");
+            let tag = filters.tag.as_deref().unwrap_or("");
+            let format = filters.format.as_deref().unwrap_or("");
+            let volume = filters.volume.as_deref().unwrap_or("");
+            let rating_str = filters.rating.as_deref().unwrap_or("");
+            let label_str = filters.label.as_deref().unwrap_or("");
+            let collection_str = filters.collection.as_deref().unwrap_or("");
+            let path_str = filters.path.as_deref().unwrap_or("");
+            let person_str = filters.person.as_deref().unwrap_or("");
+
+            let mut parsed = merge_search_params(query, asset_type, tag, format, rating_str, label_str);
+
+            // Path normalization
+            let path_volume_id = if !path_str.is_empty() {
+                let registry = crate::device_registry::DeviceRegistry::new(&state2.catalog_root);
+                let vols = registry.list().unwrap_or_default();
+                let (normalized, vol_id) = normalize_path_for_search(path_str, &vols, None);
+                if !normalized.is_empty() {
+                    parsed.path_prefixes.push(normalized);
+                }
+                vol_id
+            } else {
+                None
+            };
+
+            if !collection_str.is_empty() {
+                parsed.collections.push(collection_str.to_string());
+            }
+            if !person_str.is_empty() {
+                parsed.persons.push(person_str.to_string());
+            }
+
+            let mut opts = parsed.to_search_options();
+            if !volume.is_empty() {
+                opts.volume = Some(volume);
+            }
+            if let Some(ref vid) = path_volume_id {
+                if opts.volume.is_none() {
+                    opts.volume = Some(vid);
+                }
+            }
+
+            // Resolve collection filter to asset IDs
+            let collection_ids;
+            if !parsed.collections.is_empty() {
+                let col_store = crate::collection::CollectionStore::new(catalog.conn());
+                let mut all_ids = std::collections::HashSet::new();
+                for col_entry in parsed.collections.iter() {
+                    for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                        if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
+                            all_ids.extend(ids);
+                        }
+                    }
+                }
+                collection_ids = all_ids.into_iter().collect::<Vec<_>>();
+                opts.collection_asset_ids = Some(&collection_ids);
+            }
+
+            // Resolve person filter to asset IDs
+            let person_ids;
+            if !parsed.persons.is_empty() {
+                #[cfg(feature = "ai")]
+                {
+                    let face_store = crate::face_store::FaceStore::new(catalog.conn());
+                    let mut all_ids = std::collections::HashSet::new();
+                    for person_entry in parsed.persons.iter() {
+                        for person_name in person_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                            if let Ok(ids) = face_store.find_person_asset_ids(person_name) {
+                                all_ids.extend(ids);
+                            }
+                        }
+                    }
+                    person_ids = all_ids.into_iter().collect::<Vec<_>>();
+                    opts.person_asset_ids = Some(&person_ids);
+                }
+                #[cfg(not(feature = "ai"))]
+                {
+                    person_ids = Vec::<String>::new();
+                    opts.person_asset_ids = Some(&person_ids);
+                }
+            }
+
+            opts.per_page = u32::MAX;
+            opts.page = 1;
+            catalog.search_paginated(&opts)
+        }).await {
+            Ok(Ok(rows)) => rows.into_iter().map(|r| r.asset_id).collect(),
+            Ok(Err(e)) => {
+                return (StatusCode::BAD_REQUEST, format!("Search failed: {e}")).into_response();
+            }
+            Err(e) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {e}")).into_response();
+            }
+        }
+    };
+
+    if asset_ids.is_empty() {
+        return (StatusCode::BAD_REQUEST, "No assets matched").into_response();
+    }
+
+    let layout = if req.layout == "mirror" { ExportLayout::Mirror } else { ExportLayout::Flat };
+    let all_variants = req.all_variants;
+    let include_sidecars = req.include_sidecars;
+    let count = asset_ids.len();
+
+    // Build the export plan (blocking — reads catalog + checks online volumes)
+    let ids = asset_ids;
+    let root = catalog_root.clone();
+    let pc = preview_config.clone();
+    let plan_result = tokio::task::spawn_blocking(move || {
+        let service = AssetService::new(&root, false, &pc);
+        let dummy_base = std::path::Path::new("");
+        service.build_export_plan(&ids, dummy_base, layout, all_variants, include_sidecars)
+    }).await;
+
+    let (plan, _assets_matched, _errors) = match plan_result {
+        Ok(Ok(p)) => p,
+        Ok(Err(e)) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Export plan failed: {e}")).into_response();
+        }
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {e}")).into_response();
+        }
+    };
+
+    if plan.is_empty() {
+        return (StatusCode::BAD_REQUEST, "No exportable files found (volumes may be offline)").into_response();
+    }
+
+    // Build ZIP in a temp file (zip crate requires Seek for local file header updates),
+    // then stream it to the client.
+    let zip_result = tokio::task::spawn_blocking(move || -> Result<std::path::PathBuf, String> {
+        use zip::write::{SimpleFileOptions, ZipWriter};
+        use std::io::Write;
+
+        let tmp = std::env::temp_dir().join(format!("dam-export-{}.zip", std::process::id()));
+        let file = std::fs::File::create(&tmp).map_err(|e| format!("Failed to create temp file: {e}"))?;
+        let writer = std::io::BufWriter::with_capacity(1024 * 1024, file);
+        let mut zip = ZipWriter::new(writer);
+        let options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored); // no compression — media is already compressed
+
+        for entry in &plan {
+            let entry_name = entry.target_path.to_string_lossy().replace('\\', "/");
+            let entry_name = entry_name.trim_start_matches('/').trim_start_matches("./");
+
+            if zip.start_file(entry_name, options).is_err() {
+                continue;
+            }
+
+            let file = match std::fs::File::open(&entry.source_path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let mut reader = std::io::BufReader::with_capacity(256 * 1024, file);
+            let mut buf = vec![0u8; 256 * 1024];
+            loop {
+                let n = match std::io::Read::read(&mut reader, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(_) => break,
+                };
+                if zip.write_all(&buf[..n]).is_err() {
+                    break;
+                }
+            }
+        }
+
+        zip.finish().map_err(|e| format!("Failed to finalize ZIP: {e}"))?;
+        Ok(tmp)
+    }).await;
+
+    let zip_path = match zip_result {
+        Ok(Ok(p)) => p,
+        Ok(Err(e)) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+        }
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {e}")).into_response();
+        }
+    };
+
+    // Stream the temp file to the client, then delete it
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(32);
+    let zip_path_clone = zip_path.clone();
+    tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+        let file = match std::fs::File::open(&zip_path_clone) {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let mut reader = std::io::BufReader::with_capacity(512 * 1024, file);
+        let mut buf = vec![0u8; 512 * 1024];
+        loop {
+            let n = match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => break,
+            };
+            if tx.blocking_send(Ok(buf[..n].to_vec())).is_err() {
+                break;
+            }
+        }
+        drop(tx);
+        let _ = std::fs::remove_file(&zip_path_clone);
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    let body = Body::from_stream(stream);
+
+    let filename = format!("dam-export-{}-assets.zip", count);
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/zip")
+        .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\""))
+        .body(body)
+        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response").into_response())
+}
+
