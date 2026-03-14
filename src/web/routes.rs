@@ -312,6 +312,7 @@ pub async fn browse_page(
             collapse_stacks,
             ai_enabled: state.ai_enabled,
             vlm_enabled: state.vlm_enabled,
+            vlm_models: state.vlm_config.available_models(),
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })

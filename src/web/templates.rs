@@ -245,6 +245,7 @@ pub struct BrowsePage {
     pub collapse_stacks: bool,
     pub ai_enabled: bool,
     pub vlm_enabled: bool,
+    pub vlm_models: Vec<String>,
 }
 
 #[derive(Template)]

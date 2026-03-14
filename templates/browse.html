@@ -102,6 +102,13 @@
         <button class="batch-btn" id="batch-export" title="Download selected assets as ZIP">Export</button>
         {% if vlm_enabled %}
         <span class="batch-sep"></span>
+        {% if vlm_models.len() > 1 %}
+        <select id="batch-vlm-model-select" class="batch-btn" style="font-size:0.75rem;padding:2px 4px;">
+            {% for m in vlm_models %}
+            <option value="{{ m }}">{{ m }}</option>
+            {% endfor %}
+        </select>
+        {% endif %}
         <button class="batch-btn" id="batch-describe">Describe</button>
         {% endif %}
         {% if ai_enabled %}
@@ -983,10 +990,13 @@ window.triggerSearch = onFilterChange;
             if (selected.size === 0 || batchBusy) return;
             if (!confirm('Describe ' + selected.size + ' selected asset(s) using VLM? This may take a few seconds per asset.')) return;
             setButtonsBusy(true);
+            var batchPayload = {asset_ids: Array.from(selected)};
+            var batchModelSelect = document.getElementById('batch-vlm-model-select');
+            if (batchModelSelect) batchPayload.model = batchModelSelect.value;
             fetch('/api/batch/describe', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({asset_ids: Array.from(selected)})
+                body: JSON.stringify(batchPayload)
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
