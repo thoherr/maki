@@ -1974,6 +1974,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                         false, // force: don't overwrite existing descriptions
                         false, // dry_run
                         config.vlm.concurrency,
+                        config.vlm.max_image_edge,
                         |aid, status, elapsed| {
                             if log {
                                 let short = &aid[..8.min(aid.len())];
@@ -2778,6 +2779,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                 force,
                 dry_run,
                 config.vlm.concurrency,
+                config.vlm.max_image_edge,
                 |id, status, elapsed| {
                     if show_log {
                         let short_id = &id[..8.min(id.len())];

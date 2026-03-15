@@ -304,6 +304,11 @@ pub struct VlmConfig {
     #[serde(default = "default_vlm_concurrency")]
     pub concurrency: u32,
 
+    /// Maximum pixel size of the longest edge for images sent to VLM.
+    /// Images larger than this are resized before encoding. 0 = no resizing.
+    #[serde(default)]
+    pub max_image_edge: u32,
+
     /// Additional models available for selection in the web UI.
     /// The default `model` is always included as the first option.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -319,7 +324,7 @@ fn default_vlm_model() -> String {
 }
 
 fn default_vlm_max_tokens() -> u32 {
-    200
+    500
 }
 
 fn default_vlm_timeout() -> u32 {
@@ -349,6 +354,7 @@ impl Default for VlmConfig {
             mode: "describe".to_string(),
             temperature: 0.7,
             concurrency: 1,
+            max_image_edge: 0,
             models: Vec::new(),
         }
     }

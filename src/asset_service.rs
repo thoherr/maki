@@ -5834,9 +5834,10 @@ impl AssetService {
         force: bool,
         dry_run: bool,
         concurrency: u32,
+        max_image_edge: u32,
         on_asset: impl Fn(&str, &crate::vlm::DescribeStatus, std::time::Duration) + Sync,
     ) -> Result<crate::vlm::BatchDescribeResult> {
-        self.describe_inner(query, asset_id, volume, None, endpoint, model, prompt, max_tokens, timeout, temperature, mode, apply, force, dry_run, concurrency, on_asset)
+        self.describe_inner(query, asset_id, volume, None, endpoint, model, prompt, max_tokens, timeout, temperature, mode, apply, force, dry_run, concurrency, max_image_edge, on_asset)
     }
 
     /// Describe specific assets by ID (for post-import phase).
@@ -5853,9 +5854,10 @@ impl AssetService {
         force: bool,
         dry_run: bool,
         concurrency: u32,
+        max_image_edge: u32,
         on_asset: impl Fn(&str, &crate::vlm::DescribeStatus, std::time::Duration) + Sync,
     ) -> Result<crate::vlm::BatchDescribeResult> {
-        self.describe_inner(None, None, None, Some(asset_ids), endpoint, model, prompt, max_tokens, timeout, temperature, mode, true, force, dry_run, concurrency, on_asset)
+        self.describe_inner(None, None, None, Some(asset_ids), endpoint, model, prompt, max_tokens, timeout, temperature, mode, true, force, dry_run, concurrency, max_image_edge, on_asset)
     }
 
     fn describe_inner(
@@ -5875,6 +5877,7 @@ impl AssetService {
         force: bool,
         dry_run: bool,
         concurrency: u32,
+        max_image_edge: u32,
         on_asset: impl Fn(&str, &crate::vlm::DescribeStatus, std::time::Duration) + Sync,
     ) -> Result<crate::vlm::BatchDescribeResult> {
         use crate::vlm::{self, BatchDescribeResult, DescribeMode, DescribeResult, DescribeStatus};
@@ -6038,7 +6041,8 @@ impl AssetService {
                                 let short_id = &aid[..8.min(aid.len())];
 
                                 // Encode image to base64
-                                let image_base64 = match vlm::encode_image_base64(image_path) {
+                                let vlm_max_edge = if max_image_edge > 0 { Some(max_image_edge) } else { None };
+                                let image_base64 = match vlm::encode_image_base64(image_path, vlm_max_edge) {
                                     Ok(b) => b,
                                     Err(e) => {
                                         return (

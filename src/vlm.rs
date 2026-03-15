@@ -624,15 +624,39 @@ pub fn find_matching_model(configured: &str, available: &[String]) -> Option<Str
     None
 }
 
-/// Read an image file and return its base64 encoding.
-pub fn encode_image_base64(path: &std::path::Path) -> Result<String> {
+/// Read an image file, optionally resize, and return its base64 encoding.
+///
+/// When `max_edge` is `Some(n)` with `n > 0`, images whose longest edge exceeds `n`
+/// are resized (preserving aspect ratio) before encoding. This reduces the data sent
+/// to the VLM and — more importantly — the time the vision encoder spends processing
+/// the image, which can cause timeouts on memory-constrained machines.
+pub fn encode_image_base64(path: &std::path::Path, max_edge: Option<u32>) -> Result<String> {
     use std::io::Read;
+
+    // If max_edge is set, try to resize via the `image` crate
+    if let Some(max) = max_edge {
+        if max > 0 {
+            if let Ok(img) = image::open(path) {
+                let (w, h) = (img.width(), img.height());
+                if w.max(h) > max {
+                    let nw = (w as f64 * max as f64 / w.max(h) as f64).round() as u32;
+                    let nh = (h as f64 * max as f64 / w.max(h) as f64).round() as u32;
+                    let resized = image::DynamicImage::ImageRgba8(
+                        image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Lanczos3),
+                    );
+                    let mut buf = std::io::Cursor::new(Vec::new());
+                    resized.write_to(&mut buf, image::ImageFormat::Jpeg)?;
+                    return Ok(base64_encode(buf.get_ref()));
+                }
+            }
+            // Fall through to raw read if image crate can't open (e.g. unsupported format)
+        }
+    }
+
     let mut file = std::fs::File::open(path)
         .with_context(|| format!("Failed to open image: {}", path.display()))?;
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)?;
-
-    // Use a simple base64 encoder (no extra dependency)
     Ok(base64_encode(&buf))
 }
 
