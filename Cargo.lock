@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "dam"
-version = "3.2.4"
+version = "3.2.5"
 dependencies = [
  "ab_glyph",
  "anyhow",

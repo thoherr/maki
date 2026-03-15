@@ -2,14 +2,23 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v3.2.5 (2026-03-15)
+
+### New Features
+- **Per-model VLM configuration** — `[vlm.model_config."model-name"]` sections in `dam.toml` let you override `max_tokens`, `temperature`, `timeout`, `max_image_edge`, `num_ctx`, `top_p`, `top_k`, `repeat_penalty`, and `prompt` per model. Parameters merge: per-model overrides global, CLI overrides both.
+- **Ollama sampling parameters** — new `num_ctx`, `top_p`, `top_k`, `repeat_penalty` fields in `[vlm]` config and as CLI flags (`--num-ctx`, `--top-p`, `--top-k`, `--repeat-penalty`). Passed in Ollama `options` object; `top_p` and `repeat_penalty` also sent to OpenAI-compatible endpoints.
+- **VLM image resizing** — new `[vlm] max_image_edge` config (and per-model override) resizes images before sending to the VLM, reducing vision encoder processing time and preventing timeouts on memory-constrained machines.
+- **Pending writeback indicator** — the asset detail page now shows an orange sync icon on recipes with pending XMP write-back changes (edits made while the volume was offline). A "Write back to XMP" button replays queued edits when the volume comes online.
+
+### Enhancements
+- **Default VLM timeout increased** — raised from 120s to 300s to accommodate model swapping on memory-constrained machines (Ollama unloads/reloads when switching models).
+
 ## v3.2.4 (2026-03-15)
 
 ### New Features
 - **VLM model selector in web UI** — when `[vlm] models` is configured in `dam.toml`, a dropdown appears next to the "Describe" button on the asset detail page and the batch Describe button in the browse toolbar, letting you choose which VLM model to use per request.
 
 ### Enhancements
-- **Per-model VLM configuration** — `[vlm.model_config."model-name"]` sections in `dam.toml` let you override `max_tokens`, `temperature`, `timeout`, `max_image_edge`, `num_ctx`, `top_p`, `top_k`, `repeat_penalty`, and `prompt` per model. Parameters merge: per-model overrides global, CLI overrides both.
-- **Ollama sampling parameters** — new `num_ctx`, `top_p`, `top_k`, `repeat_penalty` fields in `[vlm]` config and as CLI flags (`--num-ctx`, `--top-p`, `--top-k`, `--repeat-penalty`). Passed in Ollama `options` object; `top_p` and `repeat_penalty` also sent to OpenAI-compatible endpoints.
 - **Thinking model support** — Qwen3-VL and other models that use `<think>` reasoning tags now work correctly. dam sends `think: false` to disable extended thinking and strips any `<think>...</think>` tags from responses.
 - **Ollama-first endpoint order** — VLM calls now try the Ollama native API (`/api/generate`) first, falling back to the OpenAI-compatible endpoint (`/v1/chat/completions`) on 404. This avoids a double round-trip for Ollama users and ensures `think: false` is honored.
 - **Default max_tokens increased** — VLM default `max_tokens` raised from 200 to 500, giving models enough headroom for detailed descriptions.
