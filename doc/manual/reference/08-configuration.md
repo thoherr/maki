@@ -531,9 +531,62 @@ models = ["moondream", "qwen3-vl:4b"]
 
 The CLI `dam describe --model` flag is unaffected by this setting — it accepts any model name regardless of the `models` list.
 
+### num_ctx
+
+- **Type:** unsigned 32-bit integer
+- **Default:** `0` (not set — use server default)
+
+Context window size passed to the VLM server. When non-zero, overrides the model's default context length. Useful for models that benefit from a larger context (e.g., `num_ctx = 4096` for Qwen models). A value of `0` means "not set" — the server uses its own default.
+
+### top_p
+
+- **Type:** float
+- **Default:** `0.0` (not set — use server default)
+
+Nucleus sampling parameter. When non-zero, only tokens whose cumulative probability exceeds `top_p` are considered. Lower values produce more focused output. A value of `0.0` means "not set" — the server uses its own default.
+
+### top_k
+
+- **Type:** unsigned 32-bit integer
+- **Default:** `0` (not set — use server default)
+
+Top-K sampling parameter. When non-zero, limits token selection to the K most probable candidates. A value of `0` means "not set" — the server uses its own default.
+
+### repeat_penalty
+
+- **Type:** float
+- **Default:** `0.0` (not set — use server default)
+
+Repetition penalty applied to tokens that have already appeared. Values above `1.0` discourage repetition; `1.0` disables the penalty. A value of `0.0` means "not set" — the server uses its own default.
+
+### Per-Model Configuration
+
+You can override any VLM setting for specific models using `[vlm.model_config."model-name"]` sections. When `dam describe` runs with a given model (via `--model` or `[vlm] model`), any matching per-model section is merged on top of the global `[vlm]` settings. CLI flags always win over both.
+
+This is useful when different models need different timeouts, context sizes, or sampling parameters:
+
+```toml
+[vlm]
+model = "qwen2.5vl:3b"
+timeout = 120
+
+[vlm.model_config."qwen3-vl:4b"]
+max_image_edge = 384
+timeout = 300
+num_ctx = 4096
+
+[vlm.model_config."moondream:latest"]
+max_tokens = 200
+temperature = 0.1
+```
+
+When running `dam describe --model qwen3-vl:4b`, the per-model overrides apply: `timeout` becomes 300, `num_ctx` becomes 4096, and `max_image_edge` becomes 384. All other settings fall through from the global `[vlm]` section.
+
+Per-model sections support all the same fields as the global `[vlm]` section (except `model`, `models`, and `model_config` itself).
+
 ### CLI Override
 
-The `--endpoint`, `--model`, `--prompt`, `--max-tokens`, `--timeout`, `--temperature`, and `--mode` flags on `dam describe` override the values from `dam.toml`.
+The `--endpoint`, `--model`, `--prompt`, `--max-tokens`, `--timeout`, `--temperature`, `--mode`, `--num-ctx`, `--top-p`, `--top-k`, and `--repeat-penalty` flags on `dam describe` override the values from `dam.toml` (including per-model overrides).
 
 ```toml
 [vlm]
@@ -544,8 +597,17 @@ timeout = 120
 temperature = 0.7
 mode = "describe"
 concurrency = 1
+num_ctx = 0
+top_p = 0.0
+top_k = 0
+repeat_penalty = 0.0
 # models = ["qwen2.5vl:3b", "moondream"]
 # prompt = "Custom prompt here."
+
+# Per-model overrides (optional)
+# [vlm.model_config."qwen3-vl:4b"]
+# timeout = 300
+# num_ctx = 4096
 ```
 
 ---
@@ -650,6 +712,16 @@ mode = "describe"
 # Models offered in web UI dropdown (empty = only default model, no dropdown).
 # models = ["qwen2.5vl:3b", "moondream"]
 # prompt = "Describe this photograph concisely."
+# Sampling parameters (0 = not set, use server default).
+# num_ctx = 4096
+# top_p = 0.9
+# top_k = 40
+# repeat_penalty = 1.1
+
+# Per-model VLM overrides (optional).
+# [vlm.model_config."moondream:latest"]
+# max_tokens = 200
+# temperature = 0.1
 ```
 
 ---
@@ -735,6 +807,10 @@ When a field is absent from `dam.toml`, these defaults apply:
 | `vlm.timeout` | `120` |
 | `vlm.concurrency` | `1` |
 | `vlm.models` | `[]` (empty) |
+| `vlm.num_ctx` | `0` (server default) |
+| `vlm.top_p` | `0.0` (server default) |
+| `vlm.top_k` | `0` (server default) |
+| `vlm.repeat_penalty` | `0.0` (server default) |
 
 ---
 

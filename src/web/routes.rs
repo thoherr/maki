@@ -5139,7 +5139,9 @@ fn vlm_describe_asset_inner(
         .map(|s| DescribeMode::from_str(s).map_err(|e| e.to_string()))
         .transpose()?
         .unwrap_or(DescribeMode::Describe);
-    let prompt = vlm.prompt.as_deref()
+    let model = model_override.unwrap_or(&vlm.model);
+    let params = vlm.params_for_model(model);
+    let prompt = params.prompt.as_deref()
         .unwrap_or_else(|| vlm::default_prompt_for_mode(mode));
 
     let engine = state.query_engine();
@@ -5168,17 +5170,14 @@ fn vlm_describe_asset_inner(
         .ok_or_else(|| "No preview image available. Run `dam generate-previews` first.".to_string())?;
 
     // Encode and call VLM
-    let max_edge = if vlm.max_image_edge > 0 { Some(vlm.max_image_edge) } else { None };
+    let max_edge = if params.max_image_edge > 0 { Some(params.max_image_edge) } else { None };
     let image_base64 = vlm::encode_image_base64(&image_path, max_edge).map_err(|e| e.to_string())?;
-    let model = model_override.unwrap_or(&vlm.model);
     let output = vlm::call_vlm_with_mode(
         &vlm.endpoint,
         model,
         &image_base64,
         prompt,
-        vlm.max_tokens,
-        vlm.timeout,
-        vlm.temperature,
+        &params,
         mode,
         crate::Verbosity::quiet(),
     )
@@ -5281,7 +5280,9 @@ fn batch_vlm_describe_inner(
         .map(|s| DescribeMode::from_str(s).map_err(|e| e.to_string()))
         .transpose()?
         .unwrap_or(DescribeMode::Describe);
-    let prompt = vlm.prompt.as_deref()
+    let vlm_model = model_override.unwrap_or(&vlm.model);
+    let params = vlm.params_for_model(vlm_model);
+    let prompt = params.prompt.as_deref()
         .unwrap_or_else(|| vlm::default_prompt_for_mode(mode));
 
     let engine = state.query_engine();
@@ -5377,11 +5378,7 @@ fn batch_vlm_describe_inner(
 
     // Phase 2: VLM calls in parallel batches
     let vlm_endpoint = &vlm.endpoint;
-    let vlm_model = model_override.unwrap_or(&vlm.model);
-    let vlm_max_tokens = vlm.max_tokens;
-    let vlm_timeout = vlm.timeout;
-    let vlm_temperature = vlm.temperature;
-    let vlm_max_edge = if vlm.max_image_edge > 0 { Some(vlm.max_image_edge) } else { None };
+    let vlm_max_edge = if params.max_image_edge > 0 { Some(params.max_image_edge) } else { None };
 
     for chunk in work_items.chunks(concurrency) {
         let vlm_results: Vec<(String, String, std::collections::HashSet<String>, Result<vlm::VlmOutput, String>)> =
@@ -5390,6 +5387,7 @@ fn batch_vlm_describe_inner(
                     .iter()
                     .map(|item| {
                         let image_path = &item.image_path;
+                        let params = &params;
                         s.spawn(move || {
                             let image_base64 = match vlm::encode_image_base64(image_path, vlm_max_edge) {
                                 Ok(b) => b,
@@ -5398,7 +5396,7 @@ fn batch_vlm_describe_inner(
 
                             vlm::call_vlm_with_mode(
                                 vlm_endpoint, vlm_model, &image_base64, prompt,
-                                vlm_max_tokens, vlm_timeout, vlm_temperature, mode, crate::Verbosity::quiet(),
+                                params, mode, crate::Verbosity::quiet(),
                             )
                             .map_err(|e| format!("{}: {e}", item.original_id))
                         })

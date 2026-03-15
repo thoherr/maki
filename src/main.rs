@@ -341,6 +341,22 @@ enum Commands {
         #[arg(long, display_order = 10)]
         temperature: Option<f32>,
 
+        /// Context window size for Ollama (num_ctx)
+        #[arg(long, display_order = 11)]
+        num_ctx: Option<u32>,
+
+        /// Top-p (nucleus) sampling threshold
+        #[arg(long, display_order = 12)]
+        top_p: Option<f32>,
+
+        /// Top-k sampling: limit to k most likely tokens
+        #[arg(long, display_order = 13)]
+        top_k: Option<u32>,
+
+        /// Repeat penalty (1.0 = no penalty)
+        #[arg(long, display_order = 14)]
+        repeat_penalty: Option<f32>,
+
         /// Apply descriptions to assets (default: report-only)
         #[arg(long, display_order = 20)]
         apply: bool,
@@ -1958,23 +1974,18 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                 if vlm_available {
                     let mode = dam::vlm::DescribeMode::from_str(&config.vlm.mode)
                         .unwrap_or(dam::vlm::DescribeMode::Describe);
-                    let prompt = config.vlm.prompt.as_deref()
-                        .unwrap_or_else(|| dam::vlm::default_prompt_for_mode(mode));
+                    let import_params = config.vlm.params_for_model(vlm_model);
                     let service = AssetService::new(&catalog_root, verbosity, &config.preview);
                     let log = cli.log;
                     match service.describe_assets(
                         &result.new_asset_ids,
                         endpoint,
                         vlm_model,
-                        prompt,
-                        config.vlm.max_tokens,
-                        config.vlm.timeout,
-                        config.vlm.temperature,
+                        &import_params,
                         mode,
                         false, // force: don't overwrite existing descriptions
                         false, // dry_run
                         config.vlm.concurrency,
-                        config.vlm.max_image_edge,
                         |aid, status, elapsed| {
                             if log {
                                 let short = &aid[..8.min(aid.len())];
@@ -2670,6 +2681,10 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
             timeout,
             mode,
             temperature,
+            num_ctx,
+            top_p,
+            top_k,
+            repeat_penalty,
             apply,
             force,
             dry_run,
@@ -2681,17 +2696,21 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
 
             let endpoint = endpoint.as_deref().unwrap_or(&config.vlm.endpoint);
             let model = model.as_deref().unwrap_or(&config.vlm.model);
-            let max_tokens = max_tokens.unwrap_or(config.vlm.max_tokens);
-            let timeout = timeout.unwrap_or(config.vlm.timeout);
-            let temperature = temperature.unwrap_or(config.vlm.temperature);
             let vlm_mode = dam::vlm::DescribeMode::from_str(&mode)?;
-            let prompt = prompt
-                .as_deref()
-                .or(config.vlm.prompt.as_deref())
-                .unwrap_or_else(|| dam::vlm::default_prompt_for_mode(vlm_mode));
+
+            // Build params: per-model config merged with CLI overrides
+            let mut vlm_params = config.vlm.params_for_model(model);
+            if let Some(v) = max_tokens { vlm_params.max_tokens = v; }
+            if let Some(v) = timeout { vlm_params.timeout = v; }
+            if let Some(v) = temperature { vlm_params.temperature = v; }
+            if let Some(v) = num_ctx { vlm_params.num_ctx = v; }
+            if let Some(v) = top_p { vlm_params.top_p = v; }
+            if let Some(v) = top_k { vlm_params.top_k = v; }
+            if let Some(v) = repeat_penalty { vlm_params.repeat_penalty = v; }
+            if let Some(ref p) = prompt { vlm_params.prompt = Some(p.clone()); }
 
             if check {
-                match dam::vlm::check_endpoint_status(endpoint, timeout, verbosity) {
+                match dam::vlm::check_endpoint_status(endpoint, vlm_params.timeout, verbosity) {
                     Ok(status) => {
                         let model_status = if status.available_models.is_empty() {
                             format!("Configured model: {model}")
@@ -2758,7 +2777,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
 
             if verbosity.verbose {
                 eprintln!("  VLM: endpoint={endpoint}, model={model}, mode={mode}");
-                eprintln!("  VLM: max_tokens={max_tokens}, timeout={timeout}s, temperature={temperature}, concurrency={}", config.vlm.concurrency);
+                eprintln!("  VLM: max_tokens={}, timeout={}s, temperature={}, concurrency={}", vlm_params.max_tokens, vlm_params.timeout, vlm_params.temperature, config.vlm.concurrency);
             }
 
             let service = AssetService::new(&catalog_root, verbosity, &config.preview);
@@ -2770,16 +2789,12 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                 volume.as_deref(),
                 endpoint,
                 model,
-                prompt,
-                max_tokens,
-                timeout,
-                temperature,
+                &vlm_params,
                 vlm_mode,
                 apply,
                 force,
                 dry_run,
                 config.vlm.concurrency,
-                config.vlm.max_image_edge,
                 |id, status, elapsed| {
                     if show_log {
                         let short_id = &id[..8.min(id.len())];

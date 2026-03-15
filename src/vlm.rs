@@ -4,6 +4,20 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+/// Resolved VLM parameters for a single request (global + per-model overrides merged).
+#[derive(Debug, Clone)]
+pub struct VlmParams {
+    pub max_tokens: u32,
+    pub timeout: u32,
+    pub temperature: f32,
+    pub max_image_edge: u32,
+    pub num_ctx: u32,
+    pub top_p: f32,
+    pub top_k: u32,
+    pub repeat_penalty: f32,
+    pub prompt: Option<String>,
+}
+
 /// Describe mode: what to generate from the VLM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -100,23 +114,21 @@ pub fn call_vlm_with_mode(
     model: &str,
     image_base64: &str,
     prompt: &str,
-    max_tokens: u32,
-    timeout: u32,
-    temperature: f32,
+    params: &VlmParams,
     mode: DescribeMode,
     verbosity: crate::Verbosity,
 ) -> Result<VlmOutput> {
     match mode {
         DescribeMode::Both => {
             // Two separate calls: describe first, then tags
-            let desc_raw = call_vlm(endpoint, model, image_base64, DEFAULT_DESCRIBE_PROMPT, max_tokens, timeout, temperature, verbosity)?;
-            let tags_raw = call_vlm(endpoint, model, image_base64, DEFAULT_TAGS_PROMPT, max_tokens, timeout, temperature, verbosity)?;
+            let desc_raw = call_vlm(endpoint, model, image_base64, DEFAULT_DESCRIBE_PROMPT, params, verbosity)?;
+            let tags_raw = call_vlm(endpoint, model, image_base64, DEFAULT_TAGS_PROMPT, params, verbosity)?;
             let description = Some(desc_raw.trim().to_string());
             let tags = extract_tags_from_json(&tags_raw).unwrap_or_default();
             Ok(VlmOutput { description, tags })
         }
         _ => {
-            let raw = call_vlm(endpoint, model, image_base64, prompt, max_tokens, timeout, temperature, verbosity)?;
+            let raw = call_vlm(endpoint, model, image_base64, prompt, params, verbosity)?;
             parse_vlm_output(&raw, mode)
         }
     }
@@ -288,14 +300,11 @@ pub fn call_vlm(
     model: &str,
     image_base64: &str,
     prompt: &str,
-    max_tokens: u32,
-    timeout: u32,
-    temperature: f32,
+    params: &VlmParams,
     verbosity: crate::Verbosity,
 ) -> Result<String> {
     // Try Ollama native endpoint first (properly supports think: false)
-    match call_ollama_native(endpoint, model, image_base64, prompt, max_tokens, timeout, temperature, verbosity)
-    {
+    match call_ollama_native(endpoint, model, image_base64, prompt, params, verbosity) {
         Ok(text) => return Ok(text),
         Err(e) => {
             let err_str = format!("{e}");
@@ -305,14 +314,7 @@ pub fn call_vlm(
                 }
                 // Not Ollama — fall back to OpenAI-compatible API
                 return call_openai_compatible(
-                    endpoint,
-                    model,
-                    image_base64,
-                    prompt,
-                    max_tokens,
-                    timeout,
-                    temperature,
-                    verbosity,
+                    endpoint, model, image_base64, prompt, params, verbosity,
                 );
             }
             return Err(e);
@@ -326,12 +328,10 @@ fn call_openai_compatible(
     model: &str,
     image_base64: &str,
     prompt: &str,
-    max_tokens: u32,
-    timeout: u32,
-    temperature: f32,
+    params: &VlmParams,
     verbosity: crate::Verbosity,
 ) -> Result<String> {
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
         "messages": [{
             "role": "user",
@@ -348,14 +348,22 @@ fn call_openai_compatible(
                 }
             ]
         }],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
+        "max_tokens": params.max_tokens,
+        "temperature": params.temperature,
         "stream": false,
         "think": false
     });
 
+    // Add optional sampling parameters
+    if params.top_p > 0.0 {
+        body["top_p"] = serde_json::json!(params.top_p);
+    }
+    if params.repeat_penalty > 0.0 {
+        body["repeat_penalty"] = serde_json::json!(params.repeat_penalty);
+    }
+
     let url = format!("{}/v1/chat/completions", endpoint.trim_end_matches('/'));
-    let response = curl_post(&url, &body, timeout, verbosity)?;
+    let response = curl_post(&url, &body, params.timeout, verbosity)?;
 
     // Parse OpenAI response format
     let resp: serde_json::Value =
@@ -411,24 +419,36 @@ fn call_ollama_native(
     model: &str,
     image_base64: &str,
     prompt: &str,
-    _max_tokens: u32,
-    timeout: u32,
-    temperature: f32,
+    params: &VlmParams,
     verbosity: crate::Verbosity,
 ) -> Result<String> {
+    let mut options = serde_json::json!({
+        "temperature": params.temperature
+    });
+    if params.num_ctx > 0 {
+        options["num_ctx"] = serde_json::json!(params.num_ctx);
+    }
+    if params.top_p > 0.0 {
+        options["top_p"] = serde_json::json!(params.top_p);
+    }
+    if params.top_k > 0 {
+        options["top_k"] = serde_json::json!(params.top_k);
+    }
+    if params.repeat_penalty > 0.0 {
+        options["repeat_penalty"] = serde_json::json!(params.repeat_penalty);
+    }
+
     let body = serde_json::json!({
         "model": model,
         "prompt": prompt,
         "images": [image_base64],
         "stream": false,
-        "options": {
-            "temperature": temperature
-        },
+        "options": options,
         "think": false
     });
 
     let url = format!("{}/api/generate", endpoint.trim_end_matches('/'));
-    let response = curl_post(&url, &body, timeout, verbosity)?;
+    let response = curl_post(&url, &body, params.timeout, verbosity)?;
 
     let resp: serde_json::Value =
         serde_json::from_str(&response).context("Failed to parse Ollama response as JSON")?;

@@ -269,6 +269,23 @@ fn is_default_ai(a: &AiConfig) -> bool {
     *a == AiConfig::default()
 }
 
+/// Per-model VLM parameter overrides.
+///
+/// All fields are optional — when absent, the global `[vlm]` value is used.
+/// Configured under `[vlm.model_config."model-name"]` in `dam.toml`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct VlmModelConfig {
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f32>,
+    pub timeout: Option<u32>,
+    pub max_image_edge: Option<u32>,
+    pub num_ctx: Option<u32>,
+    pub top_p: Option<f32>,
+    pub top_k: Option<u32>,
+    pub repeat_penalty: Option<f32>,
+    pub prompt: Option<String>,
+}
+
 /// VLM (vision-language model) configuration for image descriptions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VlmConfig {
@@ -309,10 +326,30 @@ pub struct VlmConfig {
     #[serde(default)]
     pub max_image_edge: u32,
 
+    /// Context window size (Ollama `num_ctx`). 0 = use model default.
+    #[serde(default)]
+    pub num_ctx: u32,
+
+    /// Nucleus sampling threshold. 0.0 = disabled (use temperature only).
+    #[serde(default)]
+    pub top_p: f32,
+
+    /// Top-K sampling. 0 = disabled.
+    #[serde(default)]
+    pub top_k: u32,
+
+    /// Repeat penalty. 0.0 = disabled.
+    #[serde(default)]
+    pub repeat_penalty: f32,
+
     /// Additional models available for selection in the web UI.
     /// The default `model` is always included as the first option.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<String>,
+
+    /// Per-model parameter overrides.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub model_config: std::collections::HashMap<String, VlmModelConfig>,
 }
 
 fn default_vlm_endpoint() -> String {
@@ -355,12 +392,34 @@ impl Default for VlmConfig {
             temperature: 0.7,
             concurrency: 1,
             max_image_edge: 0,
+            num_ctx: 0,
+            top_p: 0.0,
+            top_k: 0,
+            repeat_penalty: 0.0,
             models: Vec::new(),
+            model_config: std::collections::HashMap::new(),
         }
     }
 }
 
 impl VlmConfig {
+    /// Build resolved parameters for a specific model, merging per-model overrides
+    /// over global defaults.
+    pub fn params_for_model(&self, model: &str) -> crate::vlm::VlmParams {
+        let mc = self.model_config.get(model);
+        crate::vlm::VlmParams {
+            max_tokens: mc.and_then(|c| c.max_tokens).unwrap_or(self.max_tokens),
+            timeout: mc.and_then(|c| c.timeout).unwrap_or(self.timeout),
+            temperature: mc.and_then(|c| c.temperature).unwrap_or(self.temperature),
+            max_image_edge: mc.and_then(|c| c.max_image_edge).unwrap_or(self.max_image_edge),
+            num_ctx: mc.and_then(|c| c.num_ctx).unwrap_or(self.num_ctx),
+            top_p: mc.and_then(|c| c.top_p).unwrap_or(self.top_p),
+            top_k: mc.and_then(|c| c.top_k).unwrap_or(self.top_k),
+            repeat_penalty: mc.and_then(|c| c.repeat_penalty).unwrap_or(self.repeat_penalty),
+            prompt: mc.and_then(|c| c.prompt.clone()).or_else(|| self.prompt.clone()),
+        }
+    }
+
     /// Returns the full list of models for web UI selection.
     /// Default `model` is always first, followed by any extras from `models`.
     pub fn available_models(&self) -> Vec<String> {

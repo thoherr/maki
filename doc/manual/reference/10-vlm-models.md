@@ -270,6 +270,31 @@ dam describe "type:image" --temperature 0 --apply --log
 dam describe --model qwen3-vl:8b --timeout 300 --asset a1b2c3d4
 ```
 
+**Use per-model config for multi-model workflows.** If you switch between models frequently, set per-model overrides so each model gets its optimal settings automatically:
+
+```toml
+[vlm]
+model = "qwen2.5vl:3b"
+max_image_edge = 512
+timeout = 120
+
+[vlm.model_config."qwen3-vl:8b"]
+timeout = 300
+num_ctx = 8192
+
+[vlm.model_config."moondream:latest"]
+max_tokens = 200
+temperature = 0.1
+```
+
+Now `dam describe --model qwen3-vl:8b` automatically uses the longer timeout and larger context window, while `dam describe --model moondream:latest` uses lower temperature and fewer tokens. See [Configuration Reference — per-model config](08-configuration.md#per-model-configuration) for full details.
+
+**Tune sampling parameters per model.** Some models benefit from non-default sampling. Use `--num-ctx`, `--top-p`, `--top-k`, and `--repeat-penalty` on the CLI, or set them in `dam.toml` (globally or per-model). A value of zero means "not set — use server default":
+
+```bash
+dam describe "rating:5" --model qwen3-vl:8b --num-ctx 8192 --top-p 0.9 --apply --log
+```
+
 **Use concurrency with capable servers.** If your server handles parallel requests (vLLM, GPU Ollama with `OLLAMA_NUM_PARALLEL`):
 
 ```toml
