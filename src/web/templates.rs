@@ -192,6 +192,7 @@ pub struct RecipeRow {
     pub volume_id: String,
     pub relative_path: String,
     pub is_online: bool,
+    pub pending_writeback: bool,
 }
 
 /// A saved search for display in the browse page.
@@ -292,6 +293,7 @@ pub struct AssetPage {
     pub best_variant_hash: String,
     pub variants: Vec<VariantRow>,
     pub recipes: Vec<RecipeRow>,
+    pub has_pending_writeback: bool,
     pub collections: Vec<AssetCollectionChip>,
     pub stack_members: Vec<StackMemberCard>,
     pub is_stack_pick: bool,
@@ -410,7 +412,7 @@ impl AssetPage {
             })
             .collect();
 
-        let recipes = details
+        let recipes: Vec<RecipeRow> = details
             .recipes
             .iter()
             .map(|r| {
@@ -423,6 +425,7 @@ impl AssetPage {
                     volume_id: vid,
                     relative_path: r.relative_path.as_deref().unwrap_or("-").to_string(),
                     is_online: online,
+                    pending_writeback: r.pending_writeback,
                 }
             })
             .collect();
@@ -455,6 +458,7 @@ impl AssetPage {
             error: None,
             best_variant_hash,
             variants,
+            has_pending_writeback: recipes.iter().any(|r| r.pending_writeback),
             recipes,
             collections: collections
                 .into_iter()

@@ -134,6 +134,7 @@ pub struct RecipeDetails {
     pub volume_id: Option<String>,
     pub volume_label: Option<String>,
     pub relative_path: Option<String>,
+    pub pending_writeback: bool,
 }
 
 /// Top-level container for catalog statistics.
@@ -1398,7 +1399,7 @@ impl Catalog {
         // Load recipes linked to any variant of this asset
         let mut rstmt = self.conn.prepare(
             "SELECT r.variant_hash, r.software, r.recipe_type, r.content_hash, r.volume_id, \
-                    vol.label, r.relative_path \
+                    vol.label, r.relative_path, r.pending_writeback \
              FROM recipes r \
              JOIN variants v ON r.variant_hash = v.content_hash \
              LEFT JOIN volumes vol ON r.volume_id = vol.id \
@@ -1414,6 +1415,7 @@ impl Catalog {
                     volume_id: rrow.get(4)?,
                     volume_label: rrow.get(5)?,
                     relative_path: rrow.get(6)?,
+                    pending_writeback: rrow.get::<_, i32>(7).unwrap_or(0) != 0,
                 })
             })?
             .filter_map(|r| r.ok())

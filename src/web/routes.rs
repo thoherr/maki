@@ -5053,6 +5053,41 @@ pub async fn stroll_neighbors_api(
     }
 }
 
+// --- Writeback ---
+
+/// POST /api/asset/{id}/writeback — write pending metadata changes to XMP recipe files.
+pub async fn writeback_asset(
+    State(state): State<Arc<super::AppState>>,
+    Path(asset_id): Path<String>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let engine = state.query_engine();
+        let catalog = state.catalog().map_err(|e| e.to_string())?;
+        let full_id = catalog
+            .resolve_asset_id(&asset_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Asset not found: {asset_id}"))?;
+
+        let wb_result = engine
+            .writeback(None, Some(&full_id), None, false, false, false, None)
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(wb_result)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(wb)) => Json(serde_json::json!({
+            "written": wb.written,
+            "skipped": wb.skipped,
+            "failed": wb.failed,
+        }))
+        .into_response(),
+        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
 // --- VLM Describe ---
 
 /// Request body for single-asset VLM describe.

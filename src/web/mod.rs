@@ -481,6 +481,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/open-location", axum::routing::post(routes::open_location))
         .route("/api/open-terminal", axum::routing::post(routes::open_terminal))
         .route(
+            "/api/asset/{id}/writeback",
+            axum::routing::post(routes::writeback_asset),
+        )
+        .route(
             "/api/asset/{id}/vlm-describe",
             axum::routing::post(routes::vlm_describe_asset),
         )

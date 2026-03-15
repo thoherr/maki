@@ -495,7 +495,7 @@
 
         {% if !recipes.is_empty() %}
         <details>
-            <summary>Recipes ({{ recipes.len() }})</summary>
+            <summary>Recipes ({{ recipes.len() }}){% if has_pending_writeback %} <span class="badge" style="background:#e67e22;color:#fff;font-size:0.7rem;margin-left:4px;">pending</span>{% endif %}</summary>
             <table class="variants-table">
                 <thead>
                     <tr>
@@ -507,7 +507,7 @@
                 <tbody>
                     {% for r in recipes %}
                     <tr>
-                        <td><span class="badge">{{ r.recipe_type }}</span></td>
+                        <td><span class="badge">{{ r.recipe_type }}</span>{% if r.pending_writeback %} <span title="Metadata changes not yet written to this XMP file" style="color:#e67e22;cursor:help;">&#x21bb;</span>{% endif %}</td>
                         <td>{{ r.software }}</td>
                         <td>{{ r.volume_label }}: {{ r.relative_path }}{% if r.is_online %}
                             <button class="reveal-btn" title="Reveal in file manager"
@@ -517,6 +517,9 @@
                     {% endfor %}
                 </tbody>
             </table>
+            {% if has_pending_writeback %}
+            <button class="btn btn-sm" id="writeback-btn" onclick="writebackAsset()" style="margin-top:6px;" title="Write pending metadata changes to XMP recipe files on disk">Write back to XMP</button>
+            {% endif %}
         </details>
         {% endif %}
 
@@ -1124,6 +1127,29 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
             btn.textContent = 'Describe';
             btn.disabled = false;
             alert('VLM describe failed: ' + err.message);
+        });
+    };
+
+    // --- Write back pending XMP changes ---
+    window.writebackAsset = function() {
+        var btn = document.getElementById('writeback-btn');
+        if (!btn) return;
+        btn.textContent = 'Writing...';
+        btn.disabled = true;
+        fetch('/api/asset/' + assetId + '/writeback', {method: 'POST'})
+        .then(function(r) {
+            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            return r.json();
+        })
+        .then(function(result) {
+            btn.textContent = 'Done';
+            // Reload page to reflect cleared pending state
+            setTimeout(function() { window.location.reload(); }, 500);
+        })
+        .catch(function(err) {
+            btn.textContent = 'Write back to XMP';
+            btn.disabled = false;
+            alert('Writeback failed: ' + err.message);
         });
     };
 
