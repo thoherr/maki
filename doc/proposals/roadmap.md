@@ -2,7 +2,7 @@
 
 Living document tracking planned enhancements. Previous proposals (all implemented or deferred) are in `archive/`.
 
-Current version: **v3.2.5** (2026-03-15)
+Current version: **v3.2.6** (2026-03-15)
 
 ---
 
@@ -131,7 +131,7 @@ Track metadata changes with timestamps for audit trail and undo capability.
 
 ## Completed (Archived)
 
-All previous proposals are in `doc/proposals/archive/`. Key milestones:
+Design documents for completed features are in `doc/proposals/archive/` (AI auto-tagging, contact sheets, export-based previews, pending writeback, photo workflow integration, REPL shell, stroll page, storage workflow, VLM integration, v2.5 milestone). Key milestones:
 
 - **v0.1–v1.0**: Core CLI — import, search, metadata, volumes, previews
 - **v1.1–v1.4**: Storage workflow — dedup, backup-status, copies filter, volume purpose
@@ -144,4 +144,4 @@ All previous proposals are in `doc/proposals/archive/`. Key milestones:
 - **v2.5**: Text-to-image semantic search, auto-describe during import, concurrent VLM, analytics dashboard, batch relocate, drag-and-drop, per-stack expand/collapse, audit filters (variants/scattered), metadata reimport
 - **v3.0**: Asset management shell — interactive REPL with named variables, tab completion, session defaults, script files, source command, `-c` one-liner mode
 - **v3.1**: Preview command, consistent positional query and shell variable expansion for all multi-asset commands
-- **v3.2**: Web UI export as ZIP download, batch delete, shell export built-in with tilde expansion, CLI `--zip` flag, dark mode modal fixes
+- **v3.2**: Web UI export as ZIP download, batch delete, shell export built-in with tilde expansion, CLI `--zip` flag, dark mode modal fixes, per-model VLM config, sampling parameters, verbose threading through web server, documentation consolidation

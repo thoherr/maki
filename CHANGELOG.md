@@ -2,6 +2,13 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v3.2.6 (2026-03-15)
+
+### Enhancements
+- **Document `dam import --describe` flag** — the `--describe` flag for generating VLM descriptions during import was missing from the command reference. Now fully documented with usage, config equivalent, and JSON output keys.
+- **Consolidate planning documents** — removed 4 obsolete planning files from `doc/proposals/archive/` (superseded roadmap, idea notebook, completed enhancement lists). Retained 10 design documents for implemented features as architectural reference. Updated roadmap with current status.
+- **Thread verbosity through web server** — `--verbose` / `-v` flag now works with `dam serve`, showing VLM prompts, timing, and operational flow in server logs. Previously all web routes silently used quiet mode.
+
 ## v3.2.5 (2026-03-15)
 
 ### New Features
