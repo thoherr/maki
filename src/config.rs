@@ -328,7 +328,7 @@ fn default_vlm_max_tokens() -> u32 {
 }
 
 fn default_vlm_timeout() -> u32 {
-    120
+    300
 }
 
 fn default_vlm_mode() -> String {
@@ -350,7 +350,7 @@ impl Default for VlmConfig {
             model: "qwen2.5vl:3b".to_string(),
             max_tokens: 500,
             prompt: None,
-            timeout: 120,
+            timeout: 300,
             mode: "describe".to_string(),
             temperature: 0.7,
             concurrency: 1,
