@@ -993,13 +993,25 @@ For each asset, the command:
 : Maximum tokens in the VLM response. Default from `[vlm] max_tokens` in `dam.toml`, or `500`.
 
 **--timeout \<SECONDS\>**
-: Timeout for each VLM request. Default from `[vlm] timeout` in `dam.toml`, or `120`. Increase for larger models or first-time model loading.
+: Timeout for each VLM request. Default from `[vlm] timeout` in `dam.toml`, or `300`. Increase for larger models or first-time model loading.
 
 **--mode \<MODE\>**
 : Output mode: `describe` (default), `tags`, or `both`. In `both` mode, two VLM calls are made per asset — one for description, one for tags.
 
 **--temperature \<FLOAT\>**
 : Sampling temperature controlling randomness. `0.0` = deterministic (always picks the most likely token), `0.7` = balanced (default), `1.0+` = more creative. Lower values produce more consistent but potentially blander output. Default from `[vlm] temperature` in `dam.toml`, or `0.7`.
+
+**--num-ctx \<N\>**
+: Context window size passed to the VLM server (Ollama `num_ctx`). When non-zero, overrides the model's default context length. Useful for models that benefit from a larger context (e.g., `--num-ctx 4096`). Default: `0` (server default).
+
+**--top-p \<FLOAT\>**
+: Nucleus sampling threshold. Only tokens whose cumulative probability exceeds this value are considered. Lower values produce more focused output. Default: `0.0` (server default).
+
+**--top-k \<N\>**
+: Top-k sampling: limit token selection to the k most likely candidates. Lower values produce more deterministic output. Default: `0` (server default).
+
+**--repeat-penalty \<FLOAT\>**
+: Repetition penalty factor. Values above `1.0` discourage the model from repeating tokens. Default: `0.0` (server default).
 
 **--apply**
 : Write descriptions and/or tags to assets. Without this flag, results are generated and displayed but not saved.
@@ -1079,6 +1091,12 @@ Increase timeout for a large model's first load:
 
 ```bash
 dam describe --model qwen2.5vl:7b --timeout 300 --asset a1b2c3d4
+```
+
+Use a larger context window and nucleus sampling with a specific model:
+
+```bash
+dam describe --model qwen3-vl:4b --num-ctx 4096 --top-p 0.9 --apply
 ```
 
 Overwrite existing descriptions with a better model:

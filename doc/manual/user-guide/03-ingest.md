@@ -623,7 +623,7 @@ Persistent settings go in `dam.toml`:
 endpoint = "http://localhost:11434"
 model = "qwen2.5vl:3b"
 max_tokens = 500
-timeout = 120
+timeout = 300
 temperature = 0.7
 concurrency = 1  # parallel VLM requests (increase for faster batch processing)
 ```

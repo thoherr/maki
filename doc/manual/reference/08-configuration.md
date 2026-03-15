@@ -505,7 +505,7 @@ Sampling temperature controlling randomness in VLM output. `0.0` = deterministic
 ### timeout
 
 - **Type:** unsigned 32-bit integer (seconds)
-- **Default:** `120`
+- **Default:** `300`
 
 Maximum time to wait for a VLM response. Larger models on CPU may need higher timeouts. Assets that time out are reported as errors and skipped.
 
@@ -568,7 +568,7 @@ This is useful when different models need different timeouts, context sizes, or 
 ```toml
 [vlm]
 model = "qwen2.5vl:3b"
-timeout = 120
+timeout = 300
 
 [vlm.model_config."qwen3-vl:4b"]
 max_image_edge = 384
@@ -593,7 +593,7 @@ The `--endpoint`, `--model`, `--prompt`, `--max-tokens`, `--timeout`, `--tempera
 endpoint = "http://localhost:11434"
 model = "qwen2.5vl:3b"
 max_tokens = 500
-timeout = 120
+timeout = 300
 temperature = 0.7
 mode = "describe"
 concurrency = 1
@@ -706,7 +706,7 @@ prompt = "a photograph of {}"
 endpoint = "http://localhost:11434"
 model = "qwen2.5vl:3b"
 max_tokens = 500
-timeout = 120
+timeout = 300
 temperature = 0.7
 mode = "describe"
 # Models offered in web UI dropdown (empty = only default model, no dropdown).
@@ -804,7 +804,7 @@ When a field is absent from `dam.toml`, these defaults apply:
 | `vlm.prompt` | none (built-in) |
 | `vlm.mode` | `"describe"` |
 | `vlm.temperature` | `0.7` |
-| `vlm.timeout` | `120` |
+| `vlm.timeout` | `300` |
 | `vlm.concurrency` | `1` |
 | `vlm.models` | `[]` (empty) |
 | `vlm.num_ctx` | `0` (server default) |

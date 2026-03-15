@@ -276,7 +276,7 @@ dam describe --model qwen3-vl:8b --timeout 300 --asset a1b2c3d4
 [vlm]
 model = "qwen2.5vl:3b"
 max_image_edge = 512
-timeout = 120
+timeout = 300
 
 [vlm.model_config."qwen3-vl:8b"]
 timeout = 300

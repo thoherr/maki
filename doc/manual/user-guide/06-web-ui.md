@@ -430,7 +430,7 @@ For locations on online volumes, two action buttons appear next to each path:
 
 ### Recipes
 
-An expandable section lists attached recipe files (XMP sidecars, CaptureOne settings, etc.) with columns for recipe type, software, and file path.
+An expandable section lists attached recipe files (XMP sidecars, CaptureOne settings, etc.) with columns for recipe type, software, and file path. Recipes with pending write-back changes (edits made while the volume was offline) show an orange sync indicator. When any recipe has pending changes, a "Write back to XMP" button appears at the top of the section — clicking it replays the queued edits to the recipe files on disk (equivalent to `dam writeback --asset`).
 
 ### Source metadata
 
