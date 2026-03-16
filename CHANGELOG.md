@@ -10,14 +10,14 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v3.2.6 (2026-03-15)
 
 ### Enhancements
-- **Document `dam import --describe` flag** — the `--describe` flag for generating VLM descriptions during import was missing from the command reference. Now fully documented with usage, config equivalent, and JSON output keys.
+- **Document `maki import --describe` flag** — the `--describe` flag for generating VLM descriptions during import was missing from the command reference. Now fully documented with usage, config equivalent, and JSON output keys.
 - **Consolidate planning documents** — removed 4 obsolete planning files from `doc/proposals/archive/` (superseded roadmap, idea notebook, completed enhancement lists). Retained 10 design documents for implemented features as architectural reference. Updated roadmap with current status.
-- **Thread verbosity through web server** — `--verbose` / `-v` flag now works with `dam serve`, showing VLM prompts, timing, and operational flow in server logs. Previously all web routes silently used quiet mode.
+- **Thread verbosity through web server** — `--verbose` / `-v` flag now works with `maki serve`, showing VLM prompts, timing, and operational flow in server logs. Previously all web routes silently used quiet mode.
 
 ## v3.2.5 (2026-03-15)
 
 ### New Features
-- **Per-model VLM configuration** — `[vlm.model_config."model-name"]` sections in `dam.toml` let you override `max_tokens`, `temperature`, `timeout`, `max_image_edge`, `num_ctx`, `top_p`, `top_k`, `repeat_penalty`, and `prompt` per model. Parameters merge: per-model overrides global, CLI overrides both.
+- **Per-model VLM configuration** — `[vlm.model_config."model-name"]` sections in `maki.toml` let you override `max_tokens`, `temperature`, `timeout`, `max_image_edge`, `num_ctx`, `top_p`, `top_k`, `repeat_penalty`, and `prompt` per model. Parameters merge: per-model overrides global, CLI overrides both.
 - **Ollama sampling parameters** — new `num_ctx`, `top_p`, `top_k`, `repeat_penalty` fields in `[vlm]` config and as CLI flags (`--num-ctx`, `--top-p`, `--top-k`, `--repeat-penalty`). Passed in Ollama `options` object; `top_p` and `repeat_penalty` also sent to OpenAI-compatible endpoints.
 - **VLM image resizing** — new `[vlm] max_image_edge` config (and per-model override) resizes images before sending to the VLM, reducing vision encoder processing time and preventing timeouts on memory-constrained machines.
 - **Pending writeback indicator** — the asset detail page now shows an orange sync icon on recipes with pending XMP write-back changes (edits made while the volume was offline). A "Write back to XMP" button replays queued edits when the volume comes online.
@@ -28,10 +28,10 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v3.2.4 (2026-03-15)
 
 ### New Features
-- **VLM model selector in web UI** — when `[vlm] models` is configured in `dam.toml`, a dropdown appears next to the "Describe" button on the asset detail page and the batch Describe button in the browse toolbar, letting you choose which VLM model to use per request.
+- **VLM model selector in web UI** — when `[vlm] models` is configured in `maki.toml`, a dropdown appears next to the "Describe" button on the asset detail page and the batch Describe button in the browse toolbar, letting you choose which VLM model to use per request.
 
 ### Enhancements
-- **Thinking model support** — Qwen3-VL and other models that use `<think>` reasoning tags now work correctly. dam sends `think: false` to disable extended thinking and strips any `<think>...</think>` tags from responses.
+- **Thinking model support** — Qwen3-VL and other models that use `<think>` reasoning tags now work correctly. maki sends `think: false` to disable extended thinking and strips any `<think>...</think>` tags from responses.
 - **Ollama-first endpoint order** — VLM calls now try the Ollama native API (`/api/generate`) first, falling back to the OpenAI-compatible endpoint (`/v1/chat/completions`) on 404. This avoids a double round-trip for Ollama users and ensures `think: false` is honored.
 - **Default max_tokens increased** — VLM default `max_tokens` raised from 200 to 500, giving models enough headroom for detailed descriptions.
 
@@ -42,8 +42,8 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ### New Features
 - **`--verbose` (-v) global flag** — shows operational decisions and program flow to stderr. Placed between `--log` and `--debug` in verbosity hierarchy. `--debug` implies `--verbose`. Shows info like file counts, volume detection, exclude patterns, VLM endpoint/model/mode, search query details, and preview generation method.
-- **`dam edit --role --variant`** — change a variant's role (original, alternate, processed, export, sidecar) from the CLI. Updates both YAML sidecar and SQLite catalog, recomputes denormalized columns.
-- **`dam cleanup --path`** — scope stale-location scanning to a path prefix instead of full volume. Absolute paths auto-detect the volume and convert to relative prefix.
+- **`maki edit --role --variant`** — change a variant's role (original, alternate, processed, export, sidecar) from the CLI. Updates both YAML sidecar and SQLite catalog, recomputes denormalized columns.
+- **`maki cleanup --path`** — scope stale-location scanning to a path prefix instead of full volume. Absolute paths auto-detect the volume and convert to relative prefix.
 - **Locationless variant pruning** — new cleanup pass removes variants with zero file locations from assets that still have other located variants. Prevents ghost variants from accumulating after file moves or reimports.
 
 #### Web UI
@@ -57,7 +57,7 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v3.2.2 (2026-03-14)
 
 ### New Features
-- **CLI `--zip` export** — `dam export <query> <target> --zip` writes a ZIP archive instead of copying files to a directory. Appends `.zip` extension if missing. Layout, all-variants, and sidecar options work the same as directory export.
+- **CLI `--zip` export** — `maki export <query> <target> --zip` writes a ZIP archive instead of copying files to a directory. Appends `.zip` extension if missing. Layout, all-variants, and sidecar options work the same as directory export.
 - **Shell tilde expansion** — `~` and `~/path` expand to `$HOME` in shell tokens (e.g. `export $picks ~/Desktop/out`).
 - **Shell `export` built-in** — `export` is now a shell built-in with full variable expansion and `--zip` support. Multi-ID variables export all assets in a single operation.
 - **Web UI batch delete** — delete button in the browse toolbar with confirmation modal, asset thumbnails, "remove files from disk" checkbox, and automatic grid refresh. New `POST /api/batch/delete` endpoint.
@@ -72,7 +72,7 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v3.2.1 (2026-03-14)
 
 ### Documentation
-- **Writeback reference entry** — added formal `dam writeback` section to the maintain commands reference (SYNOPSIS, OPTIONS, EXAMPLES, SEE ALSO), matching the format of all other commands.
+- **Writeback reference entry** — added formal `maki writeback` section to the maintain commands reference (SYNOPSIS, OPTIONS, EXAMPLES, SEE ALSO), matching the format of all other commands.
 - **Manual index completeness** — updated command lists to include all documented commands (added `delete`, `split`, `embed`, `preview`, `contact-sheet`, `backup-status`, `stack`, `faces`, `sync-metadata`, `writeback`, `dedup`, `fix-recipes`, `migrate`).
 - Fixed stale version reference in shell example output.
 
@@ -87,12 +87,12 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v3.1.0 (2026-03-13)
 
 ### New Features
-- **`dam preview`** — display asset preview images directly in the terminal using viuer (auto-detects iTerm2, Kitty, Sixel, Unicode half-block fallback). Also available as a shell built-in (`preview $picks`). `--open` flag launches the preview in the OS default viewer instead.
+- **`maki preview`** — display asset preview images directly in the terminal using viuer (auto-detects iTerm2, Kitty, Sixel, Unicode half-block fallback). Also available as a shell built-in (`preview $picks`). `--open` flag launches the preview in the OS default viewer instead.
 
 ### Enhancements
-- **Consistent positional query** — `writeback`, `fix-dates`, `fix-recipes`, `sync-metadata`, `describe`, `auto-tag`, and `embed` now accept a positional search query as the first argument (same syntax as `dam search`), replacing the previous `--query` flag. Example: `dam describe "rating:4+"` instead of `dam describe --query "rating:4+"`.
+- **Consistent positional query** — `writeback`, `fix-dates`, `fix-recipes`, `sync-metadata`, `describe`, `auto-tag`, and `embed` now accept a positional search query as the first argument (same syntax as `maki search`), replacing the previous `--query` flag. Example: `maki describe "rating:4+"` instead of `maki describe --query "rating:4+"`.
 - **Shell variable expansion** — all seven commands above now support shell variable expansion (`$var`, `_`) via hidden trailing asset IDs, so `describe $picks` and `writeback _` work in the interactive shell.
-- **Scope filtering for writeback** — `dam writeback` can now be narrowed by query, `--asset`, or `--volume` to process only matching recipes instead of the entire catalog.
+- **Scope filtering for writeback** — `maki writeback` can now be narrowed by query, `--asset`, or `--volume` to process only matching recipes instead of the entire catalog.
 - **Scope filtering for fix-dates/fix-recipes/sync-metadata** — these commands now support the same query/asset/asset_ids scope resolution as other multi-asset commands.
 
 ## v3.0.3 (2026-03-13)
@@ -130,34 +130,34 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v3.0.0 (2026-03-12)
 
 ### New Commands
-- **`dam shell`** — interactive asset management shell with readline-based REPL, replacing one-shot CLI invocations for interactive workflows. Features:
+- **`maki shell`** — interactive asset management shell with readline-based REPL, replacing one-shot CLI invocations for interactive workflows. Features:
   - **Named variables** — `$picks = search "rating:5 date:2024"` stores result sets; `$picks` expands to asset IDs in any subsequent command
   - **Implicit `_` variable** — always holds asset IDs from the last command
   - **Session defaults** — `set --json` / `set --log` / `set --debug` / `set --time` auto-inject flags into all commands
   - **Tab completion** — subcommands, `--flags`, `$variables`, `tag:names`, `volume:labels` (cached from catalog)
-  - **Script files** — `dam shell script.dam` executes `.dam` files with variables, comments, and shared session state
-  - **Single-command mode** — `dam shell -c 'search "rating:5"'` for one-liners in external scripts
+  - **Script files** — `maki shell script.maki` executes `.maki` files with variables, comments, and shared session state
+  - **Single-command mode** — `maki shell -c 'search "rating:5"'` for one-liners in external scripts
   - **`--strict` flag** — exit on first error in scripts and `-c` mode
   - **`source <file>`** — execute a script inline, sharing the current session's variables and defaults
   - **`reload`** — re-read config, refresh tab completion data, clear variables and defaults
   - **Smart quote handling** — `search text:"woman with glasses"` works without multi-level quoting (mid-token quotes preserved, token-wrapping quotes stripped)
   - **Blocked commands** — `init`, `migrate`, `serve`, `shell` are rejected with a clear message
-  - **History** — persisted to `.dam/shell_history` in the catalog directory
+  - **History** — persisted to `.maki/shell_history` in the catalog directory
 
 ### Enhancements
-- **`dam --help` reorganization** — `serve` and `shell` grouped under new "Interactive" category (previously `serve` was under "Retrieve")
+- **`maki --help` reorganization** — `serve` and `shell` grouped under new "Interactive" category (previously `serve` was under "Retrieve")
 
 ## v2.5.3 (2026-03-12)
 
 ### Enhancements
-- **Concurrent VLM requests** — the `[vlm] concurrency` setting is now fully functional. Set `concurrency = 4` in `dam.toml` to process multiple assets in parallel during `dam describe`, `dam import --describe`, and web UI batch describe. Uses scoped threads with chunked processing: preparation and result application remain sequential (catalog writes), while VLM HTTP calls (base64 encoding + curl) run concurrently. Default remains `1` (sequential) for backward compatibility.
+- **Concurrent VLM requests** — the `[vlm] concurrency` setting is now fully functional. Set `concurrency = 4` in `maki.toml` to process multiple assets in parallel during `maki describe`, `maki import --describe`, and web UI batch describe. Uses scoped threads with chunked processing: preparation and result application remain sequential (catalog writes), while VLM HTTP calls (base64 encoding + curl) run concurrently. Default remains `1` (sequential) for backward compatibility.
 
 ## v2.5.2 (2026-03-12)
 
 ### New Features
 - **`variants:` search filter** — filter by variant count per asset. `variants:3` (exactly 3), `variants:5+` (5 or more). Uses denormalized `variant_count` column — no JOIN needed.
 - **`scattered:` search filter** — find assets whose variants span multiple directories. `scattered:2` finds assets with file locations in 2+ distinct volume:directory combinations. Useful for auditing mis-grouped assets after import.
-- **Configurable `text:` search limit** — the result count for AI text-to-image search is now configurable at three levels: inline syntax `text:"query":100`, `[ai] text_limit` in `dam.toml` (default 50), and hardcoded fallback of 50. Applies to both CLI and web UI.
+- **Configurable `text:` search limit** — the result count for AI text-to-image search is now configurable at three levels: inline syntax `text:"query":100`, `[ai] text_limit` in `maki.toml` (default 50), and hardcoded fallback of 50. Applies to both CLI and web UI.
 - **Re-import metadata** — button on the asset detail page that clears tags, description, rating, and color label, then re-extracts from variant source files (XMP sidecars and embedded XMP in JPEG/TIFF). Useful for cleaning up metadata after splitting mis-grouped assets.
 
 ### Bug Fixes
@@ -169,7 +169,7 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ### New Features
 - **Analytics dashboard** (`/analytics`) — shooting frequency, camera/lens usage, rating distribution, format breakdown, monthly import volume, and storage per volume charts. Accessible from the nav bar under Maintain.
-- **Batch relocate** — `dam relocate --query <QUERY> --target <VOLUME>` moves entire search results to a target volume in one command. Also supports stdin piping (`dam search -q "..." | dam relocate --target <VOL>`) and multiple positional IDs. Backward compatible with the existing single-asset `dam relocate <ID> <VOL>` syntax.
+- **Batch relocate** — `maki relocate --query <QUERY> --target <VOLUME>` moves entire search results to a target volume in one command. Also supports stdin piping (`maki search -q "..." | maki relocate --target <VOL>`) and multiple positional IDs. Backward compatible with the existing single-asset `maki relocate <ID> <VOL>` syntax.
 - **Drag-and-drop** — drag browse cards onto the collection dropdown to add assets to a collection. Drag stack members on the detail page to reorder (drop to first position sets the pick). Visual feedback with drop highlights and toast notifications.
 - **Per-stack expand/collapse** — click the stack badge (⊞ N) on a browse card to expand or collapse just that stack, independent of the global collapse toggle. When globally expanded, clicking a badge collapses only that stack; re-clicking restores it.
 
@@ -181,18 +181,18 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v2.5.0 (2026-03-11)
 
 ### New Features
-- **`text:` semantic search filter** — natural language image search using SigLIP's text encoder. Encode a text query into the same embedding space as image embeddings and find matching images via dot-product similarity. Supports quoted multi-word queries: `text:"sunset on the beach"`, `text:"colorful flowers" rating:3+`. Returns top 50 results, composable with all other filters. Requires `--features ai` and embeddings generated via `dam embed` or `dam import --embed`. Available in CLI, web UI, and saved searches.
-- **`dam import --describe`** — auto-describe imported assets via VLM as a post-import phase. Checks VLM endpoint availability (5s timeout), then calls the configured VLM for each new asset. Silently skips if endpoint is not reachable. Can be enabled permanently via `[import] descriptions = true` in `dam.toml`. JSON output includes `descriptions_generated`, `descriptions_skipped`, and `describe_tags_applied` keys.
+- **`text:` semantic search filter** — natural language image search using SigLIP's text encoder. Encode a text query into the same embedding space as image embeddings and find matching images via dot-product similarity. Supports quoted multi-word queries: `text:"sunset on the beach"`, `text:"colorful flowers" rating:3+`. Returns top 50 results, composable with all other filters. Requires `--features ai` and embeddings generated via `maki embed` or `maki import --embed`. Available in CLI, web UI, and saved searches.
+- **`maki import --describe`** — auto-describe imported assets via VLM as a post-import phase. Checks VLM endpoint availability (5s timeout), then calls the configured VLM for each new asset. Silently skips if endpoint is not reachable. Can be enabled permanently via `[import] descriptions = true` in `maki.toml`. JSON output includes `descriptions_generated`, `descriptions_skipped`, and `describe_tags_applied` keys.
 
 ## v2.4.2 (2026-03-10)
 
 ### New Commands
-- **`dam describe`** — generate image descriptions and tags using a vision-language model (VLM). Sends preview images to any OpenAI-compatible API server (Ollama, LM Studio, vLLM) — no feature gate or special build needed. Three modes: `--mode describe` (default, natural language descriptions), `--mode tags` (JSON tag suggestions), `--mode both` (two separate VLM calls for description + tags). Report-only by default; `--apply` writes results. `--force` overwrites existing descriptions. `--dry-run` skips VLM calls entirely. Supports `--json`, `--log`, `--time`.
+- **`maki describe`** — generate image descriptions and tags using a vision-language model (VLM). Sends preview images to any OpenAI-compatible API server (Ollama, LM Studio, vLLM) — no feature gate or special build needed. Three modes: `--mode describe` (default, natural language descriptions), `--mode tags` (JSON tag suggestions), `--mode both` (two separate VLM calls for description + tags). Report-only by default; `--apply` writes results. `--force` overwrites existing descriptions. `--dry-run` skips VLM calls entirely. Supports `--json`, `--log`, `--time`.
 
 ### New Features
 - **VLM web UI integration** — "Describe" button on asset detail page and batch "Describe" button in browse toolbar. VLM availability detected at server startup with a 5-second health check. Buttons hidden when no VLM endpoint is reachable.
 - **Configurable VLM temperature** — `--temperature` CLI flag and `[vlm] temperature` config option (default 0.7) control sampling randomness. Lower values (0.0) give deterministic output; higher values give more varied results.
-- **`[vlm]` configuration section** — full VLM config in `dam.toml`: endpoint, model, max_tokens, prompt, timeout, temperature, mode, concurrency. CLI flags override config values.
+- **`[vlm]` configuration section** — full VLM config in `maki.toml`: endpoint, model, max_tokens, prompt, timeout, temperature, mode, concurrency. CLI flags override config values.
 - **Truncated JSON recovery** — VLM tag responses that are cut off by max_tokens are salvaged: complete JSON strings are extracted from partial arrays.
 - **Tag deduplication** — VLM-suggested tags are deduplicated case-insensitively before merging with existing asset tags.
 - **Ollama native API fallback** — if the OpenAI-compatible `/v1/chat/completions` endpoint returns 404, automatically falls back to Ollama's native `/api/generate` endpoint.
@@ -201,7 +201,7 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ### New Features
 - **CoreML GPU acceleration** — new `--features ai-gpu` enables CoreML execution provider on macOS for SigLIP and face detection/recognition. `[ai] execution_provider` config option (`"auto"`, `"cpu"`, `"coreml"`). Shared `build_onnx_session()` helper with automatic CPU fallback. Linux CUDA and Windows DirectML tracked as roadmap items.
-- **Clickable tags on detail page** — tag chips on the asset detail page link to `/?tag=...` for browsing by tag. Sets `dam-browse-focus` before navigating so the browse page scrolls to the originating asset.
+- **Clickable tags on detail page** — tag chips on the asset detail page link to `/?tag=...` for browsing by tag. Sets `maki-browse-focus` before navigating so the browse page scrolls to the originating asset.
 
 ### Bug Fixes
 - **Fix stroll page Escape key navigation loop** — popstate handler was pushing new history entries, creating an infinite back loop. Added `skipPush` parameter and history depth tracking.
@@ -212,13 +212,13 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v2.4.0 (2026-03-09)
 
 ### New Commands
-- **`dam contact-sheet`** — Generate PDF contact sheets from search results. Image-based rendering at 300 DPI with configurable layout (dense/standard/large), paper size (A4/letter/A3), metadata fields, color label display (border/dot/none), section grouping (date/volume/collection/label), and copyright text. Smart previews used by default with fallback to regular. Configurable via `[contact_sheet]` in `dam.toml` and CLI flags.
-- **`dam split`** — Extract variants from an asset into new standalone assets. Each extracted variant becomes a separate asset with role `original`, inheriting tags, rating, color label, and description. Associated recipes move with the variant. Available via CLI, web API (`POST /api/asset/{id}/split`), and detail page UI (variant checkboxes + "Extract as new asset(s)" button).
+- **`maki contact-sheet`** — Generate PDF contact sheets from search results. Image-based rendering at 300 DPI with configurable layout (dense/standard/large), paper size (A4/letter/A3), metadata fields, color label display (border/dot/none), section grouping (date/volume/collection/label), and copyright text. Smart previews used by default with fallback to regular. Configurable via `[contact_sheet]` in `maki.toml` and CLI flags.
+- **`maki split`** — Extract variants from an asset into new standalone assets. Each extracted variant becomes a separate asset with role `original`, inheriting tags, rating, color label, and description. Associated recipes move with the variant. Available via CLI, web API (`POST /api/asset/{id}/split`), and detail page UI (variant checkboxes + "Extract as new asset(s)" button).
 
 ### New Features
 - **Alternate variant role** — New `alternate` role (score 50) for donor originals during grouping and import. Replaces the semantically incorrect `export` role when re-roling donor variants in `group`, `auto-group`, `split`, `import` (RAW+JPEG pairs), and `fix-roles`. Ranks below `original` (100) for preview selection, reflecting "second best" status.
 - **Group button in web UI** — Direct merge of selected assets (distinct from "Group by name" which uses stem matching). Focused asset (keyboard navigation) becomes the merge target. Thumbnail confirm modal shows all selected assets with target highlighted.
-- **Grouped help output** — `dam --help` now shows commands organized by category (Setup, Ingest & Edit, Organize, Retrieve, Maintain) with section headers. Output paginated through `less` when stdout is a terminal.
+- **Grouped help output** — `maki --help` now shows commands organized by category (Setup, Ingest & Edit, Organize, Retrieve, Maintain) with section headers. Output paginated through `less` when stdout is a terminal.
 - **Browse selection fix** — Selection cleared on forced page reload (Ctrl+Shift+R) but preserved across back-navigation and query changes for shopping-cart workflow.
 - **Group confirm modal** — Visual confirmation dialog with thumbnails of selected assets before merging, replacing plain text confirm. Off-page assets show ID placeholder.
 
@@ -229,12 +229,12 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v2.3.5 (2026-03-09)
 
 ### New Features
-- **`dam sync-metadata` command** — bidirectional XMP metadata sync in a single command. Phase 1 (Inbound): detects externally modified XMP recipe files and re-reads metadata. Phase 2 (Outbound): writes pending DAM edits to XMP. Phase 3 (Media, with `--media`): re-extracts embedded XMP from JPEG/TIFF files. Detects conflicts when both sides changed. Supports `--volume`, `--asset`, `--dry-run`, `--json`, `--log`, `--time`.
-- **`id:` search filter** — query assets by UUID prefix in both CLI and web UI. `dam search "id:c654e"` matches assets whose ID starts with the given prefix.
+- **`maki sync-metadata` command** — bidirectional XMP metadata sync in a single command. Phase 1 (Inbound): detects externally modified XMP recipe files and re-reads metadata. Phase 2 (Outbound): writes pending DAM edits to XMP. Phase 3 (Media, with `--media`): re-extracts embedded XMP from JPEG/TIFF files. Detects conflicts when both sides changed. Supports `--volume`, `--asset`, `--dry-run`, `--json`, `--log`, `--time`.
+- **`id:` search filter** — query assets by UUID prefix in both CLI and web UI. `maki search "id:c654e"` matches assets whose ID starts with the given prefix.
 
 ### Enhancements
-- **Comprehensive derived file cleanup** — `dam cleanup`, `dam delete`, and `dam volume remove` now handle all derived file types: regular previews, smart previews, SigLIP embedding binaries, face crop thumbnails, ArcFace embedding binaries, and embedding/face DB records. Previously only regular previews were cleaned up, leaving orphaned files to accumulate.
-- **Seven-pass cleanup** — `dam cleanup` now runs 7 passes (up from 3): stale locations, orphaned assets (with full derived file removal), orphaned previews, orphaned smart previews, orphaned SigLIP embeddings, orphaned face crops, and orphaned ArcFace embeddings. New counters reported in both human and JSON output.
+- **Comprehensive derived file cleanup** — `maki cleanup`, `maki delete`, and `maki volume remove` now handle all derived file types: regular previews, smart previews, SigLIP embedding binaries, face crop thumbnails, ArcFace embedding binaries, and embedding/face DB records. Previously only regular previews were cleaned up, leaving orphaned files to accumulate.
+- **Seven-pass cleanup** — `maki cleanup` now runs 7 passes (up from 3): stale locations, orphaned assets (with full derived file removal), orphaned previews, orphaned smart previews, orphaned SigLIP embeddings, orphaned face crops, and orphaned ArcFace embeddings. New counters reported in both human and JSON output.
 
 ### Bug Fixes
 - **FK constraint error in cleanup/delete** — cleanup and volume-remove failed with "FOREIGN KEY constraint failed" when deleting orphaned assets that had faces, stacks, or collection memberships. Now clears all dependent records before asset deletion.
@@ -254,7 +254,7 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ### New Features
 - **`embed:` search filter** — `embed:any` and `embed:none` filters to find assets with or without AI embeddings. Works in CLI, web UI, and saved searches. Composable with all other filters.
-- **`dam writeback` command** — writes back pending metadata changes (rating, label, tags, description) to XMP recipe files. When edits are made while a volume is offline, recipes are automatically marked `pending_writeback`. The new command replays writes when volumes come online. Flags: `--volume`, `--asset`, `--all`, `--dry-run`. Supports `--json`, `--log`, `--time`.
+- **`maki writeback` command** — writes back pending metadata changes (rating, label, tags, description) to XMP recipe files. When edits are made while a volume is offline, recipes are automatically marked `pending_writeback`. The new command replays writes when volumes come online. Flags: `--volume`, `--asset`, `--all`, `--dry-run`. Supports `--json`, `--log`, `--time`.
 
 ### Bug Fixes
 - **Stroll→detail→back navigation** — opening an asset detail page from the stroll page now correctly returns to stroll (not browse) on Escape, Back, or image click. Stroll stores navigation context in sessionStorage.
@@ -270,7 +270,7 @@ All notable changes to the Digital Asset Manager are documented here.
 ### New Features
 - **Stroll modes** — three modes for neighbor selection: **Nearest** (default, top N by similarity), **Discover** (random N from configurable pool), **Explore** (skip first K nearest, then take N). Mode selector buttons in the stroll control panel.
 - **Cross-session filtering** — "Other shoots" toggle excludes assets from the same directory/session when finding similar neighbors. Uses parent directory as session root.
-- **`stroll_discover_pool` config** — `dam.toml` `[serve]` section supports `stroll_discover_pool` (default 80) to control the candidate pool size for Discover mode.
+- **`stroll_discover_pool` config** — `maki.toml` `[serve]` section supports `stroll_discover_pool` (default 80) to control the candidate pool size for Discover mode.
 
 ## v2.3.1 (2026-03-08)
 
@@ -280,58 +280,58 @@ All notable changes to the Digital Asset Manager are documented here.
 - **Direction-dependent L2 radius** — L2 neighbor arcs spread wider horizontally and narrower vertically, making better use of available screen space.
 - **L2 thumbnail metadata** — L2 (transitive neighbor) thumbnails now show name, rating, color label, and similarity score, consistent with L1 satellite display.
 - **L1/L2 keyboard navigation** — Arrow Up/Down moves between L1 satellites and their L2 neighbors. Hover suppression during keyboard navigation prevents focus catch-back.
-- **Stroll slider configuration** — `dam.toml` `[serve]` section supports `stroll_neighbors`, `stroll_neighbors_max`, `stroll_fanout`, and `stroll_fanout_max` to configure stroll page slider defaults and ranges.
+- **Stroll slider configuration** — `maki.toml` `[serve]` section supports `stroll_neighbors`, `stroll_neighbors_max`, `stroll_fanout`, and `stroll_fanout_max` to configure stroll page slider defaults and ranges.
 
 ## v2.3.0 (2026-03-07)
 
 ### New Features
 - **Stroll page** (feature-gated: `--features ai`) — graph-based visual similarity exploration at `/stroll`. A center image surrounded by radially arranged satellite images shows visually similar assets. Click any satellite to navigate — it becomes the new center with fresh neighbors. Features: viewport-adaptive sizing, smart preview loading, keyboard navigation (arrow keys cycle satellites, Enter navigates, `d` opens detail page), rating stars and color label dots on all images, similarity percentage badges, browser history integration (`pushState`/`popstate`). Neighbor count adjustable via slider (5–25, default 12) in a fixed bottom-left overlay. Entry points: nav bar "Stroll" link, `s` keyboard shortcut on browse/lightbox/detail pages, "Stroll from here" button on detail page, or direct URL `/stroll?id=<asset-id>`. Without an `id`, picks a random embedded asset.
 - Stroll page depth slider (0–8) for exploring neighbors-of-neighbors — lazy-loaded, cached, with deduplication and fade-in animation
-- **`similar:` search filter** (feature-gated: `--features ai`) — find visually similar assets from the CLI using stored embeddings. Syntax: `similar:<asset-id>` (top 20 results) or `similar:<asset-id>:<limit>` (custom limit). Composable with all other search filters, e.g. `dam search "similar:abc12345 rating:3+ tag:landscape"`. Uses the in-memory `EmbeddingIndex` for fast dot-product search. Requires embeddings to have been generated via `dam embed` or `dam import --embed`.
+- **`similar:` search filter** (feature-gated: `--features ai`) — find visually similar assets from the CLI using stored embeddings. Syntax: `similar:<asset-id>` (top 20 results) or `similar:<asset-id>:<limit>` (custom limit). Composable with all other search filters, e.g. `maki search "similar:abc12345 rating:3+ tag:landscape"`. Uses the in-memory `EmbeddingIndex` for fast dot-product search. Requires embeddings to have been generated via `maki embed` or `maki import --embed`.
 - **Collapsible filter bar** — the browse and stroll pages share an identical filter bar (search input, tag chips, rating stars, color label dots, type/format/volume/collection/person dropdowns, path prefix). Toggle with Shift+F or the "Filters" button. State persisted in localStorage. Auto-opens when filters are active.
 
 ### Performance
-- **Schema version fast-check** — CLI commands no longer run ~30 migration statements on every invocation. A `schema_version` table tracks the current schema version; commands check it with a single fast query and exit with an error if outdated (`Error: catalog schema is outdated ... Run 'dam migrate' to update.`). Saves ~2 seconds per CLI invocation on migrated catalogs. Only `dam init` and `dam migrate` modify the schema.
+- **Schema version fast-check** — CLI commands no longer run ~30 migration statements on every invocation. A `schema_version` table tracks the current schema version; commands check it with a single fast query and exit with an error if outdated (`Error: catalog schema is outdated ... Run 'maki migrate' to update.`). Saves ~2 seconds per CLI invocation on migrated catalogs. Only `maki init` and `maki migrate` modify the schema.
 
 ### Bug Fixes
-- **MicrosoftPhoto:Rating normalization** — XMP parser matched both `xmp:Rating` (0–5) and `MicrosoftPhoto:Rating` (percentage scale 0–100) as "Rating" after stripping namespace prefix. Percentage values (20/40/60/80/100) are now converted to 1–5 scale. `dam migrate` fixes existing SQLite and YAML sidecar data automatically.
+- **MicrosoftPhoto:Rating normalization** — XMP parser matched both `xmp:Rating` (0–5) and `MicrosoftPhoto:Rating` (percentage scale 0–100) as "Rating" after stripping namespace prefix. Percentage values (20/40/60/80/100) are now converted to 1–5 scale. `maki migrate` fixes existing SQLite and YAML sidecar data automatically.
 - **Rating display clamp** — star rendering in JS (stroll satellite navigation) and API responses now clamped to max 5, preventing display corruption from out-of-range values.
 
 ### Enhancements
 - **Shared filter bar partials** — extracted `filter_bar.html` and `filter_bar_js.html` as reusable Askama template includes, eliminating ~400 lines of duplicated filter UI code between browse and stroll pages. Both pages define an `onFilterChange()` callback; browse triggers htmx form submit, stroll rebuilds the similarity query.
-- **`dam migrate` rating repair** — migration now fixes YAML sidecar files with out-of-range rating values (MicrosoftPhoto:Rating percentages) alongside the SQLite fix. Reports count of fixed sidecars.
-- **`dam migrate` output** — now prints the schema version number: `Schema migrations applied successfully (schema version N).` JSON output includes `schema_version` and `fixed_ratings` fields.
+- **`maki migrate` rating repair** — migration now fixes YAML sidecar files with out-of-range rating values (MicrosoftPhoto:Rating percentages) alongside the SQLite fix. Reports count of fixed sidecars.
+- **`maki migrate` output** — now prints the schema version number: `Schema migrations applied successfully (schema version N).` JSON output includes `schema_version` and `fixed_ratings` fields.
 
 ## v2.2.2 (2026-03-07)
 
 ### New Features
-- **`dam migrate` command** — explicit CLI command for running database schema migrations. Migrations now run once at program startup for all commands (not per-connection), making this command useful for manual migration or scripting.
-- **`dam import --embed`** — generate SigLIP image embeddings for visual similarity search during import (requires `--features ai`). Runs as a post-import phase using preview images. Can be enabled permanently via `[import] embeddings = true` in `dam.toml`. Silently skips if the AI model is not downloaded.
+- **`maki migrate` command** — explicit CLI command for running database schema migrations. Migrations now run once at program startup for all commands (not per-connection), making this command useful for manual migration or scripting.
+- **`maki import --embed`** — generate SigLIP image embeddings for visual similarity search during import (requires `--features ai`). Runs as a post-import phase using preview images. Can be enabled permanently via `[import] embeddings = true` in `maki.toml`. Silently skips if the AI model is not downloaded.
 
 ### Performance
 - **SQLite performance pragmas** — all database connections now use WAL journal mode, 256 MB mmap, 20 MB cache, `synchronous=NORMAL`, and in-memory temp store. Significant improvement for read-heavy web UI workloads.
 - **Single DB connection per detail page request** — asset detail page went from 3 separate SQLite connections to 1, eliminating redundant connection overhead.
 - **Combined search query** — browse page now uses `COUNT(*) OVER()` window function to get row count and results in a single query instead of two separate queries.
 - **Migrations removed from hot path** — `Catalog::open()` no longer runs schema migrations. Migrations run once at program startup via `Catalog::open_and_migrate()`. Per-request connections in the web server skip migration checks entirely.
-- **Dropdown cache warming at server startup** — tag, format, volume, collection, and people dropdown data is pre-loaded when `dam serve` starts, so the first browse page load is as fast as subsequent ones.
+- **Dropdown cache warming at server startup** — tag, format, volume, collection, and people dropdown data is pre-loaded when `maki serve` starts, so the first browse page load is as fast as subsequent ones.
 
 ## v2.2.1 (2026-03-06)
 
 ### New Features
-- **`dam faces export`** — exports faces and people from SQLite to YAML files (`faces.yaml`, `people.yaml`) and ArcFace face embeddings to binary files (`embeddings/arcface/<prefix>/<face_id>.bin`). One-time migration command to populate the new file-based persistence layer from existing SQLite data.
-- **`dam embed --export`** — exports SigLIP image similarity embeddings from SQLite to binary files (`embeddings/<model>/<prefix>/<asset_id>.bin`). One-time migration for existing embedding data.
+- **`maki faces export`** — exports faces and people from SQLite to YAML files (`faces.yaml`, `people.yaml`) and ArcFace face embeddings to binary files (`embeddings/arcface/<prefix>/<face_id>.bin`). One-time migration command to populate the new file-based persistence layer from existing SQLite data.
+- **`maki embed --export`** — exports SigLIP image similarity embeddings from SQLite to binary files (`embeddings/<model>/<prefix>/<asset_id>.bin`). One-time migration for existing embedding data.
 
 ### Enhancements
 - **Dual persistence for faces, people, and embeddings** — all face/people/embedding write paths (CLI and web UI) now persist data to both SQLite and YAML/binary files. Face records are stored in `faces.yaml`, people in `people.yaml`, ArcFace embeddings as binary files under `embeddings/arcface/`, and SigLIP embeddings under `embeddings/<model>/`. This mirrors the existing pattern used by collections and stacks.
 - **`rebuild-catalog` restores AI data** — `rebuild-catalog` now drops and restores the `faces`, `people`, and `embeddings` SQLite tables from YAML and binary files, ensuring no AI data is lost during catalog rebuilds.
-- **`dam delete` cleans up AI files** — deleting assets now removes associated ArcFace and SigLIP binary files and updates `faces.yaml`/`people.yaml`.
+- **`maki delete` cleans up AI files** — deleting assets now removes associated ArcFace and SigLIP binary files and updates `faces.yaml`/`people.yaml`.
 
 ## v2.2.0 (2026-03-05)
 
 ### New Features
-- **Face detection** (feature-gated: `--features ai`) — `dam faces detect [--query <Q>] [--asset <id>] [--volume <label>] [--apply]` detects faces in images using YuNet ONNX model. Stores face bounding boxes, confidence scores, and 512-dim ArcFace embeddings. Generates 150×150 JPEG crop thumbnails in `faces/` directory. Reports faces found per asset. Supports `--json`, `--log`, `--time`.
-- **Face auto-clustering** — `dam faces cluster [--query <Q>] [--asset <id>] [--volume <label>] [--threshold <F>] [--apply]` groups similar face embeddings into unnamed person groups using greedy single-linkage clustering. Default threshold 0.5 (configurable via `[ai] face_cluster_threshold`). Without `--apply` shows dry-run cluster sizes. Scope filters (`--query`, `--asset`, `--volume`) limit which faces are clustered.
-- **People management CLI** — `dam faces people [--json]` lists all people with face counts. `dam faces name <ID> <NAME>` names a person. `dam faces merge <TARGET> <SOURCE>` merges two people. `dam faces delete-person <ID>` deletes a person. `dam faces unassign <FACE_ID>` removes a face from its person.
+- **Face detection** (feature-gated: `--features ai`) — `maki faces detect [--query <Q>] [--asset <id>] [--volume <label>] [--apply]` detects faces in images using YuNet ONNX model. Stores face bounding boxes, confidence scores, and 512-dim ArcFace embeddings. Generates 150×150 JPEG crop thumbnails in `faces/` directory. Reports faces found per asset. Supports `--json`, `--log`, `--time`.
+- **Face auto-clustering** — `maki faces cluster [--query <Q>] [--asset <id>] [--volume <label>] [--threshold <F>] [--apply]` groups similar face embeddings into unnamed person groups using greedy single-linkage clustering. Default threshold 0.5 (configurable via `[ai] face_cluster_threshold`). Without `--apply` shows dry-run cluster sizes. Scope filters (`--query`, `--asset`, `--volume`) limit which faces are clustered.
+- **People management CLI** — `maki faces people [--json]` lists all people with face counts. `maki faces name <ID> <NAME>` names a person. `maki faces merge <TARGET> <SOURCE>` merges two people. `maki faces delete-person <ID>` deletes a person. `maki faces unassign <FACE_ID>` removes a face from its person.
 - **People web page** (`/people`) — gallery grid of person cards with representative face crop thumbnails, names, face counts. Inline rename, merge, delete. "Cluster" button to run auto-clustering from the UI.
 - **Asset detail faces section** — detected faces shown as chips with crop thumbnails and confidence scores. "Detect faces" button triggers on-demand detection. Assign/unassign faces to people via dropdown.
 - **Browse face filters** — `faces:any` / `faces:none` / `faces:N` / `faces:N+` filter by face count. `person:<name>` / `-person:<name>` filter by assigned person. Person dropdown in browse filter row.
@@ -350,27 +350,27 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ### Bug Fixes
 - Fix multi-stride YuNet model output parsing (12 separate tensors at strides 8/16/32)
-- Fix `dam faces detect --asset` finding zero results (use direct asset ID resolution)
+- Fix `maki faces detect --asset` finding zero results (use direct asset ID resolution)
 
 ## v2.1.2 (2026-03-05)
 
 ### New Features
-- **`dam embed` command** (feature-gated: `--features ai`) — batch-generate image embeddings for visual similarity search without tagging. `dam embed [--query <Q>] [--asset <id>] [--volume <label>] [--model <id>] [--force]`. Requires at least one scope filter. `--force` regenerates even if an embedding already exists. Reports embedded/skipped/error counts. Supports `--json`, `--log`, `--time`.
+- **`maki embed` command** (feature-gated: `--features ai`) — batch-generate image embeddings for visual similarity search without tagging. `maki embed [--query <Q>] [--asset <id>] [--volume <label>] [--model <id>] [--force]`. Requires at least one scope filter. `--force` regenerates even if an embedding already exists. Reports embedded/skipped/error counts. Supports `--json`, `--log`, `--time`.
 
 ### Enhancements
-- **In-memory embedding index** — similarity search (`dam auto-tag --similar`, web UI "Find similar") now uses a contiguous in-memory float buffer (`EmbeddingIndex`) instead of per-query SQLite blob scanning. The index is loaded lazily on first query and cached for the server lifetime. At 100k assets, search drops from seconds to <10ms. Top-K selection uses a min-heap instead of full sort.
-- **Opportunistic embedding storage** — the web UI "Suggest tags" and batch "Auto-tag" endpoints now store image embeddings as a side effect, building up the similarity search index without requiring a separate `dam embed` step.
+- **In-memory embedding index** — similarity search (`maki auto-tag --similar`, web UI "Find similar") now uses a contiguous in-memory float buffer (`EmbeddingIndex`) instead of per-query SQLite blob scanning. The index is loaded lazily on first query and cached for the server lifetime. At 100k assets, search drops from seconds to <10ms. Top-K selection uses a min-heap instead of full sort.
+- **Opportunistic embedding storage** — the web UI "Suggest tags" and batch "Auto-tag" endpoints now store image embeddings as a side effect, building up the similarity search index without requiring a separate `maki embed` step.
 - **Deferred model loading in similarity search** — `find_similar_inner` no longer acquires the AI model lock when the query embedding already exists in the store, avoiding unnecessary contention and startup latency on repeat searches.
 
 ## v2.1.1 (2026-03-04)
 
 ### New Features
-- **Multi-model support for AI auto-tagging** — the system now supports multiple SigLIP model variants. A new `--model` flag on `dam auto-tag` selects the model (default: `siglip-vit-b16-256`). Available models: SigLIP ViT-B/16-256 (768-dim, ~207 MB) and SigLIP ViT-L/16-256 (1024-dim, ~670 MB). `--list-models` shows all known models with download status, size, and active indicator. Embeddings are stored per-model (composite PK) so switching models doesn't corrupt existing data. Configurable via `[ai] model` in `dam.toml`.
+- **Multi-model support for AI auto-tagging** — the system now supports multiple SigLIP model variants. A new `--model` flag on `maki auto-tag` selects the model (default: `siglip-vit-b16-256`). Available models: SigLIP ViT-B/16-256 (768-dim, ~207 MB) and SigLIP ViT-L/16-256 (1024-dim, ~670 MB). `--list-models` shows all known models with download status, size, and active indicator. Embeddings are stored per-model (composite PK) so switching models doesn't corrupt existing data. Configurable via `[ai] model` in `maki.toml`.
 - **AI tag suggestions show already-applied tags** — the web UI "Suggest tags" panel now shows all matching tags, including ones already on the asset. Already-applied tags appear dimmed with an "already applied" label and cannot be re-added. "Accept all" renamed to "Accept new" and only applies tags not yet on the asset.
 
 ### Enhancements
 - **Merged preview regeneration button** — the asset detail page now has a single "Regenerate previews" button that regenerates both the regular preview and the smart preview in one operation, with cache-busted URLs so the browser shows the new images without requiring a page reload.
-- **Scope guard for auto-tag** — `dam auto-tag` now requires at least one scope filter (`--query`, `--asset`, `--volume`, or `--similar`) to prevent accidental full-catalog processing.
+- **Scope guard for auto-tag** — `maki auto-tag` now requires at least one scope filter (`--query`, `--asset`, `--volume`, or `--similar`) to prevent accidental full-catalog processing.
 
 ### Bug Fixes
 - **Fix RAW preview orientation** — `dcraw_emu` already pixel-rotates its output, but the code was reading EXIF orientation from the source RAW file and applying it again, turning portrait images back to landscape (affected e.g. Nikon Z9 NEF files). Fixed by reading orientation from the output TIFF instead. Also fixed the `dcraw -e -c` path to apply EXIF orientation from the embedded JPEG (for cameras that don't pixel-rotate their embedded previews).
@@ -388,7 +388,7 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v2.0.1 (2026-03-03)
 
 ### New Features
-- **AI auto-tagging** — `dam auto-tag [--query <QUERY>] [--asset <id>] [--volume <label>] [--threshold 0.25] [--labels <file>] [--apply]` uses SigLIP ViT-B/16-256 (via ONNX Runtime) for zero-shot image classification against a configurable tag vocabulary (~100 default photography categories). Report-only by default; `--apply` writes suggested tags to assets. Feature-gated behind `--features ai` so non-AI users pay zero binary/dependency cost. Model files (~207 MB quantized) downloaded from HuggingFace on first use via `--download`. Model management: `--list-models`, `--remove-model`. Visual similarity search: `--similar <asset-id>` finds the 20 most visually similar assets using stored 768-dim embeddings. Configurable via `[ai]` section in `dam.toml` (threshold, labels file, model directory, prompt template). Supports `--json`, `--log`, `--time`.
+- **AI auto-tagging** — `maki auto-tag [--query <QUERY>] [--asset <id>] [--volume <label>] [--threshold 0.25] [--labels <file>] [--apply]` uses SigLIP ViT-B/16-256 (via ONNX Runtime) for zero-shot image classification against a configurable tag vocabulary (~100 default photography categories). Report-only by default; `--apply` writes suggested tags to assets. Feature-gated behind `--features ai` so non-AI users pay zero binary/dependency cost. Model files (~207 MB quantized) downloaded from HuggingFace on first use via `--download`. Model management: `--list-models`, `--remove-model`. Visual similarity search: `--similar <asset-id>` finds the 20 most visually similar assets using stored 768-dim embeddings. Configurable via `[ai]` section in `maki.toml` (threshold, labels file, model directory, prompt template). Supports `--json`, `--log`, `--time`.
 
 ### New Modules (ai feature)
 - `src/ai.rs` — SigLIP model wrapper: ONNX session management, image preprocessing (256×256 squash resize, normalize to [-1,1]), SentencePiece tokenization (pad to 64), sigmoid scoring (`logit_scale * dot + logit_bias`), ~100 default photography labels.
@@ -401,7 +401,7 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v1.8.9 (2026-03-02)
 
 ### New Features
-- **Export command** — `dam export <QUERY> <TARGET> [--layout flat|mirror] [--symlink] [--all-variants] [--include-sidecars] [--dry-run] [--overwrite]` copies files matching a search query to a target directory. Default exports the best variant per asset in flat layout (filename collisions resolved by appending an 8-character hash suffix). `--layout mirror` preserves source directory structure (multi-volume assets get a volume-label prefix). `--symlink` creates symlinks instead of copies. `--all-variants` exports every variant instead of just the best. `--include-sidecars` also copies recipe files (.xmp, .cos, etc.). `--dry-run` reports the plan without writing. `--overwrite` re-copies even if the target already has a matching hash. Files are integrity-verified via SHA-256 after copy. Supports `--json`, `--log`, `--time`.
+- **Export command** — `maki export <QUERY> <TARGET> [--layout flat|mirror] [--symlink] [--all-variants] [--include-sidecars] [--dry-run] [--overwrite]` copies files matching a search query to a target directory. Default exports the best variant per asset in flat layout (filename collisions resolved by appending an 8-character hash suffix). `--layout mirror` preserves source directory structure (multi-volume assets get a volume-label prefix). `--symlink` creates symlinks instead of copies. `--all-variants` exports every variant instead of just the best. `--include-sidecars` also copies recipe files (.xmp, .cos, etc.). `--dry-run` reports the plan without writing. `--overwrite` re-copies even if the target already has a matching hash. Files are integrity-verified via SHA-256 after copy. Supports `--json`, `--log`, `--time`.
 
 ### Testing
 - Added 5 unit tests for flat-mode filename collision resolution and 12 integration tests covering all export modes (flat, mirror, dry-run, skip existing, overwrite, sidecars, symlink, all-variants, best-variant-only, filename collision, JSON output, no results).
@@ -414,17 +414,17 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v1.8.7 (2026-03-02)
 
 ### New Features
-- **Delete command** — `dam delete <ASSET_IDS...> [--apply] [--remove-files]` removes assets from the catalog. Default is report-only mode (shows what would be deleted). `--apply` executes deletion (asset rows, variants, file locations, recipes, previews, sidecar YAML, collection memberships, stack membership). `--remove-files` (requires `--apply`) also deletes physical files from disk. Supports stdin piping (`dam search -q "orphan:true" | dam delete --apply`), asset ID prefix matching, `--json`, `--log`, `--time`.
+- **Delete command** — `maki delete <ASSET_IDS...> [--apply] [--remove-files]` removes assets from the catalog. Default is report-only mode (shows what would be deleted). `--apply` executes deletion (asset rows, variants, file locations, recipes, previews, sidecar YAML, collection memberships, stack membership). `--remove-files` (requires `--apply`) also deletes physical files from disk. Supports stdin piping (`maki search -q "orphan:true" | maki delete --apply`), asset ID prefix matching, `--json`, `--log`, `--time`.
 
 ## v1.8.6 (2026-03-02)
 
 ### New Features
-- **Incremental verify** — `dam verify --max-age <DAYS>` skips files verified within the given number of days, enabling fast periodic checks on large catalogs. `--force` overrides the skip and re-verifies everything. Configurable default via `[verify] max_age_days` in `dam.toml`.
+- **Incremental verify** — `maki verify --max-age <DAYS>` skips files verified within the given number of days, enabling fast periodic checks on large catalogs. `--force` overrides the skip and re-verifies everything. Configurable default via `[verify] max_age_days` in `maki.toml`.
 - **Search negation and OR operators** — prefix any filter or free-text term with `-` to exclude matches (`-tag:rejected`, `-sunset`). Use commas within a filter value for OR logic (`tag:alice,bob`, `format:nef,cr3`, `label:Red,Orange`). Combinable: `type:image,video -format:xmp`.
 
 ### Enhancements
 - **Recipe verified_at persistence** — verify now persists `verified_at` timestamps to sidecar YAML for both variant locations and recipe locations, so incremental verify works correctly across catalog rebuilds.
-- **Show command recipe details** — `dam show` now displays variant hash and volume:path for each recipe, matching the detail level shown for variant locations.
+- **Show command recipe details** — `maki show` now displays variant hash and volume:path for each recipe, matching the detail level shown for variant locations.
 - **Fix orphaned XMP script** — added `--remove` flag to `scripts/fix-orphaned-xmp.py` for deleting the orphaned standalone asset after relocation.
 
 ### Bug Fixes
@@ -453,7 +453,7 @@ All notable changes to the Digital Asset Manager are documented here.
 ### New Features
 - **EXIF auto-orientation** — preview generation now reads EXIF orientation tags and automatically rotates/flips the image to its correct display orientation. Applies to JPEG, TIFF, and RAW previews (both standard and smart). Previously, images shot in portrait mode could appear sideways in the browse grid and lightbox.
 - **Manual rotation** — a "Rotate" button on the asset detail page cycles the preview rotation 90° clockwise (0° → 90° → 180° → 270° → 0°). Rotation is persisted per asset (sidecar YAML + SQLite) and applied on top of EXIF auto-orientation. Both regular and smart previews are regenerated with the new rotation. The rotation state is stored in `preview_rotation` on the asset model.
-- **Configurable page size** — the number of results per page in the browse grid is now configurable via `[serve] per_page` in `dam.toml` (default: 60). Also available as `dam serve --per-page N` CLI flag.
+- **Configurable page size** — the number of results per page in the browse grid is now configurable via `[serve] per_page` in `maki.toml` (default: 60). Also available as `maki serve --per-page N` CLI flag.
 - **Page-turn keyboard shortcuts** — Shift+Left/Right arrow keys navigate to the previous/next page in the browse grid and lightbox. In the lightbox, regular arrow keys at page boundaries automatically trigger cross-page navigation with a loading spinner overlay.
 
 ### Enhancements
@@ -463,12 +463,12 @@ All notable changes to the Digital Asset Manager are documented here.
 - **Detail page nav loading indicator** — small spinners appear next to the Prev/Next buttons while adjacent page IDs are being fetched at page boundaries.
 - **Preserve selection after batch operations** — batch tag, rating, and label operations no longer clear the selection, allowing multiple operations on the same set of assets.
 - **Preview cache freshness** — preview and smart preview HTTP responses now include `Cache-Control: no-cache`, ensuring browsers revalidate after rotation or regeneration instead of serving stale cached images. Combined with `Last-Modified` headers, unchanged previews still get fast 304 responses.
-- **Batch operation timing logs** — when `dam serve --log` is enabled, batch operations log timing to stderr (e.g. `batch_tag: 30 assets in 1.2s (30 ok, 0 err)`).
+- **Batch operation timing logs** — when `maki serve --log` is enabled, batch operations log timing to stderr (e.g. `batch_tag: 30 assets in 1.2s (30 ok, 0 err)`).
 
 ## v1.8.2 (2026-03-01)
 
 ### New Features
-- **Editable asset date** — set or clear an asset's creation date via CLI (`dam edit --date 2024-12-25` / `--clear-date`) or the web UI (inline date editor on the asset detail page, `PUT /api/asset/{id}/date` endpoint). Updates both sidecar YAML and SQLite catalog.
+- **Editable asset date** — set or clear an asset's creation date via CLI (`maki edit --date 2024-12-25` / `--clear-date`) or the web UI (inline date editor on the asset detail page, `PUT /api/asset/{id}/date` endpoint). Updates both sidecar YAML and SQLite catalog.
 - **Reveal in file manager** — asset detail page shows a folder icon button (📂) next to each file location on online volumes. Clicking it reveals the file in Finder (macOS), Explorer (Windows), or the file manager (Linux). Backed by `POST /api/open-location` endpoint.
 - **Open terminal** — a `>_` button next to the reveal icon opens a terminal window in the file's parent directory (Terminal.app on macOS, cmd on Windows, system terminal emulator on Linux). Backed by `POST /api/open-terminal` endpoint.
 
@@ -491,8 +491,8 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v1.7.1 (2026-02-28)
 
 ### Enhancements
-- **Unified browse/lightbox/detail navigation** — clicking the lightbox image opens the detail page; clicking the detail page image opens the lightbox. All three views form a seamless navigation loop with focus tracked via `dam-browse-focus` in sessionStorage. Lightbox open, navigate, and close sync the focused card. Arrow key navigation in lightbox and detail updates which card will be focused on return to browse.
-- **Browse state preservation on back-navigation** — scroll position, batch selection, and keyboard focus are now preserved when navigating back from the detail or compare page. Selection is persisted to sessionStorage (`dam-browse-selection`) on `pagehide` and restored on fresh page loads. On bfcache return, the DOM is preserved as-is (no more htmx refresh that was destroying state). Focus is restored from sessionStorage with `scrollIntoView` to approximate scroll position.
+- **Unified browse/lightbox/detail navigation** — clicking the lightbox image opens the detail page; clicking the detail page image opens the lightbox. All three views form a seamless navigation loop with focus tracked via `maki-browse-focus` in sessionStorage. Lightbox open, navigate, and close sync the focused card. Arrow key navigation in lightbox and detail updates which card will be focused on return to browse.
+- **Browse state preservation on back-navigation** — scroll position, batch selection, and keyboard focus are now preserved when navigating back from the detail or compare page. Selection is persisted to sessionStorage (`maki-browse-selection`) on `pagehide` and restored on fresh page loads. On bfcache return, the DOM is preserved as-is (no more htmx refresh that was destroying state). Focus is restored from sessionStorage with `scrollIntoView` to approximate scroll position.
 - **Compare page Escape fix** — added `preventDefault()` to the Escape key handler on the compare page, fixing unreliable back-navigation that required double-pressing Escape.
 - **Cursor feedback** — lightbox and detail page preview images now show `cursor: pointer` to indicate they are clickable navigation targets.
 
@@ -500,8 +500,8 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ### New Features
 - **Smart previews** — a second preview tier at 2560px (configurable) for high-resolution offline browsing. Smart previews are stored alongside regular thumbnails in `smart_previews/<hash-prefix>/<hash>.jpg` and enable zoom and pan in the web UI even when the original media volume is offline.
-  - **Import `--smart` flag**: `dam import --smart <PATHS...>` generates smart previews alongside regular thumbnails during import. Can also be enabled permanently via `[import] smart_previews = true` in `dam.toml`.
-  - **On-demand generation**: Set `[preview] generate_on_demand = true` in `dam.toml` to have the web server generate smart previews automatically when first requested. The first load takes a few seconds (pulsing HD badge shown); subsequent loads are instant.
+  - **Import `--smart` flag**: `maki import --smart <PATHS...>` generates smart previews alongside regular thumbnails during import. Can also be enabled permanently via `[import] smart_previews = true` in `maki.toml`.
+  - **On-demand generation**: Set `[preview] generate_on_demand = true` in `maki.toml` to have the web server generate smart previews automatically when first requested. The first load takes a few seconds (pulsing HD badge shown); subsequent loads are instant.
   - **Manual generation**: "Generate smart preview" button on the asset detail page (`POST /api/asset/{id}/smart-preview`).
   - **Configuration**: `[preview]` section gains `smart_max_edge` (default 2560), `smart_quality` (default 85), and `generate_on_demand` (default false). `[import]` section gains `smart_previews` (default false).
 - **Compare view** — side-by-side comparison of 2–4 assets at `/compare?ids=...`. Select assets in the browse grid and click the "Compare" button in the batch toolbar.
@@ -512,7 +512,7 @@ All notable changes to the Digital Asset Manager are documented here.
   - Smart preview upgrade with HD badge
 - **Zoom and pan** — mouse wheel zoom, drag-to-pan, and click-to-toggle (fit ↔ 100%) for smart previews in the lightbox, asset detail page, and compare view. Keyboard shortcuts: `,` (fit), `.` (100%), `+` (zoom in), `-` (zoom out). Zoom is enabled when a smart preview is available.
 - **Progressive smart preview loading** — the lightbox and detail page show the regular preview instantly, then background-load the smart preview and swap it in when ready. A pulsing "HD" badge provides visual feedback while the smart preview generates. The badge briefly shows with solid opacity after the smart preview loads as a status indicator.
-- **Import `--add-tag` flag** — `dam import --add-tag landscape --add-tag 2026 <PATHS...>` adds tags to every imported asset. Repeatable. Merged with `[import] auto_tags` from config and XMP tags.
+- **Import `--add-tag` flag** — `maki import --add-tag landscape --add-tag 2026 <PATHS...>` adds tags to every imported asset. Repeatable. Merged with `[import] auto_tags` from config and XMP tags.
 - **Asset folder link** — the asset detail page shows clickable links to the folder containing each variant file.
 
 ### Bug Fixes
@@ -521,10 +521,10 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v1.6.3 (2026-02-27)
 
 ### Enhancements
-- **Recipe cleanup during dedup** — when dedup removes a duplicate file location, co-located recipe files (XMP sidecars etc.) in the same directory are automatically cleaned up from disk, catalog, and sidecar YAML. Applies to both `dam dedup --apply` and the web UI's per-location "Remove" and "Auto-resolve" actions. Recipe counts shown in dry-run output and web UI confirm dialog.
-- **Dedup prefer config default** — new `[dedup]` section in `dam.toml` with a `prefer` field. Sets a default path substring for the `--prefer` flag in both CLI and web UI. The web UI duplicates page pre-populates a "Prefer keeping" input from config. CLI `--prefer` overrides the config value.
+- **Recipe cleanup during dedup** — when dedup removes a duplicate file location, co-located recipe files (XMP sidecars etc.) in the same directory are automatically cleaned up from disk, catalog, and sidecar YAML. Applies to both `maki dedup --apply` and the web UI's per-location "Remove" and "Auto-resolve" actions. Recipe counts shown in dry-run output and web UI confirm dialog.
+- **Dedup prefer config default** — new `[dedup]` section in `maki.toml` with a `prefer` field. Sets a default path substring for the `--prefer` flag in both CLI and web UI. The web UI duplicates page pre-populates a "Prefer keeping" input from config. CLI `--prefer` overrides the config value.
 - **Dedup prefer uses substring matching** — the `--prefer` flag now matches anywhere in the relative path (substring) rather than requiring the path to start with the prefix. This correctly handles nested directories like `Session/Selects/photo.nef` when prefer is set to `Selects`.
-- **CLI filter flags for duplicates and dedup** — `dam duplicates` gains `--filter-format` and `--path` flags matching the web UI's filter controls. `dam dedup` gains `--filter-format` and `--path` flags to scope dedup operations by file format or path prefix. The `--volume` flag on `duplicates` now uses proper SQL filtering instead of post-filtering.
+- **CLI filter flags for duplicates and dedup** — `maki duplicates` gains `--filter-format` and `--path` flags matching the web UI's filter controls. `maki dedup` gains `--filter-format` and `--path` flags to scope dedup operations by file format or path prefix. The `--volume` flag on `duplicates` now uses proper SQL filtering instead of post-filtering.
 
 ## v1.6.2 (2026-02-27)
 
@@ -546,7 +546,7 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ### New Features
 - **Stacks (scene grouping)** — group burst shots, bracketing sequences, and similar-scene images into lightweight anonymous stacks. The browse grid collapses stacks to show only the "pick" image with a count badge, reducing visual clutter. Click the stack toggle (⊞) in the results bar to expand/collapse all stacks globally. Stacks are position-ordered (index 0 = pick), one stack per asset, with auto-dissolve when only one member remains.
-  - **CLI**: `dam stack create/add/remove/pick/dissolve/list/show` (alias `st`). Full `--json` support. Stacks persist in `stacks.yaml` and survive `rebuild-catalog`.
+  - **CLI**: `maki stack create/add/remove/pick/dissolve/list/show` (alias `st`). Full `--json` support. Stacks persist in `stacks.yaml` and survive `rebuild-catalog`.
   - **Web UI browse**: Stack badge (⊞ N) on cards, colored left border per stack (hue derived from stack ID) for visual grouping, collapse/expand toggle button, "Stack" and "Unstack" batch toolbar buttons.
   - **Web UI asset detail**: Stack members section with thumbnail strip, "Set as pick" and "Dissolve stack" buttons.
   - **Search filter**: `stacked:true` / `stacked:false` to find stacked or unstacked assets.
@@ -575,7 +575,7 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ### Enhancements
 - **Browse page Save button** — now defaults to `favorite: true` so newly saved searches appear immediately as browse chips. Before prompting for a name, checks for duplicate queries and alerts if the search is already saved.
-- **CLI `--favorite` flag** — `dam ss save --favorite "Name" "query"` marks a saved search as favorite. `dam ss list` shows `[*]` marker next to favorites.
+- **CLI `--favorite` flag** — `maki ss save --favorite "Name" "query"` marks a saved search as favorite. `maki ss list` shows `[*]` marker next to favorites.
 - **New API endpoints** — `PUT /api/saved-searches/{name}/favorite` toggles favorite status, `PUT /api/saved-searches/{name}/rename` renames a saved search with collision detection.
 - **Simplified browse chips** — saved search chips on the browse page are now clean links without inline rename/delete buttons (those moved to the management page).
 
@@ -598,14 +598,14 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v1.4.1 (2026-02-25)
 
 ### New Commands
-- **`dam dedup`** — remove same-volume duplicate file locations. Identifies variants with 2+ copies on the same volume, keeps the "best" copy (by `--prefer` path prefix, verification recency, path length), and removes the rest. `--min-copies N` ensures at least N total copies survive across all volumes. Report-only by default; `--apply` to delete files and remove location records. Supports `--volume`, `--json`, `--log`, `--time`.
-- **`dam backup-status`** — check backup coverage and find under-backed-up assets. Shows aggregate overview (totals, coverage by volume purpose, location distribution, volume gaps, at-risk count). `--at-risk` lists under-backed-up assets using the same output formats as `dam search`. `--min-copies N` sets the threshold (default: 2). `--volume <label>` shows which assets are missing from a specific volume. Optional positional query scopes the analysis to matching assets. Supports `--format`, `-q`, `--json`, `--time`.
+- **`maki dedup`** — remove same-volume duplicate file locations. Identifies variants with 2+ copies on the same volume, keeps the "best" copy (by `--prefer` path prefix, verification recency, path length), and removes the rest. `--min-copies N` ensures at least N total copies survive across all volumes. Report-only by default; `--apply` to delete files and remove location records. Supports `--volume`, `--json`, `--log`, `--time`.
+- **`maki backup-status`** — check backup coverage and find under-backed-up assets. Shows aggregate overview (totals, coverage by volume purpose, location distribution, volume gaps, at-risk count). `--at-risk` lists under-backed-up assets using the same output formats as `maki search`. `--min-copies N` sets the threshold (default: 2). `--volume <label>` shows which assets are missing from a specific volume. Optional positional query scopes the analysis to matching assets. Supports `--format`, `-q`, `--json`, `--time`.
 
 ## v1.4.0 (2026-02-24)
 
 ### New Features
-- **Volume purpose** — volumes can now be assigned a logical purpose (`working`, `archive`, `backup`, `cloud`) describing their role in the storage hierarchy. `dam volume add --purpose <purpose>` sets purpose at registration, `dam volume set-purpose <volume> <purpose>` changes it later. Purpose is shown in `dam volume list` and included in `--json` output. This metadata lays the groundwork for smart duplicate analysis and backup coverage reporting (see storage workflow proposal).
-- **Enhanced `dam duplicates`** — three new flags for targeted duplicate analysis:
+- **Volume purpose** — volumes can now be assigned a logical purpose (`working`, `archive`, `backup`, `cloud`) describing their role in the storage hierarchy. `maki volume add --purpose <purpose>` sets purpose at registration, `maki volume set-purpose <volume> <purpose>` changes it later. Purpose is shown in `maki volume list` and included in `--json` output. This metadata lays the groundwork for smart duplicate analysis and backup coverage reporting (see storage workflow proposal).
+- **Enhanced `maki duplicates`** — three new flags for targeted duplicate analysis:
   - `--same-volume` — find variants with 2+ locations on the same volume (likely unwanted copies)
   - `--cross-volume` — find variants on 2+ different volumes (intentional backups)
   - `--volume <label>` — post-filter results to entries involving a specific volume
@@ -619,7 +619,7 @@ All notable changes to the Digital Asset Manager are documented here.
 - **PDF manual generation** — `doc/manual/build-pdf.sh` script produces a complete PDF manual from the 21 Markdown source files. Renders mermaid diagrams to PNG, generates table of contents, headers/footers with version and date, and per-command page breaks in the reference section. Requires pandoc, XeLaTeX, and mermaid-cli.
 
 ### New Commands
-- **`dam fix-recipes`** — re-attach recipe files (`.xmp`, `.cos`, etc.) that were misclassified as standalone assets during import. Scans the catalog for assets whose only variant is a recipe-type file, finds the correct parent variant by matching filename stem and directory, and re-attaches them. Dry-run by default (`--apply` to execute).
+- **`maki fix-recipes`** — re-attach recipe files (`.xmp`, `.cos`, etc.) that were misclassified as standalone assets during import. Scans the catalog for assets whose only variant is a recipe-type file, finds the correct parent variant by matching filename stem and directory, and re-attaches them. Dry-run by default (`--apply` to execute).
 
 ### Enhancements
 - **15 additional RAW format extensions** — added support for `.3fr`, `.cap`, `.dcr`, `.eip`, `.fff`, `.iiq`, `.k25`, `.kdc`, `.mdc`, `.mef`, `.mos`, `.mrw`, `.obm`, `.ptx`, `.rwz` camera formats
@@ -628,7 +628,7 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v1.3.1 (2026-02-24)
 
 ### New Features
-- **`dam fix-dates` command** — scan assets and correct `created_at` dates from variant EXIF metadata and file modification times. Fixes assets imported with wrong dates (import timestamp instead of capture date). Re-extracts EXIF from files on disk for assets imported before `date_taken` was stored in metadata. Backfills `date_taken` into variant source_metadata on apply so future runs work without the volume online. Reports offline volumes clearly with skip counts and mount instructions. Dry-run by default (`--apply` to execute). Supports `--volume`, `--asset`, `--json`, `--log`, `--time`.
+- **`maki fix-dates` command** — scan assets and correct `created_at` dates from variant EXIF metadata and file modification times. Fixes assets imported with wrong dates (import timestamp instead of capture date). Re-extracts EXIF from files on disk for assets imported before `date_taken` was stored in metadata. Backfills `date_taken` into variant source_metadata on apply so future runs work without the volume online. Reports offline volumes clearly with skip counts and mount instructions. Dry-run by default (`--apply` to execute). Supports `--volume`, `--asset`, `--json`, `--log`, `--time`.
 
 ### Enhancements
 - **Import date fallback chain** — import now uses EXIF DateTimeOriginal → file modification time → current time (previously fell through to current time when EXIF was missing, causing many assets to get the import timestamp as their date)
@@ -649,7 +649,7 @@ All notable changes to the Digital Asset Manager are documented here.
 - **Browse grid deduplication** — assets with multiple variants (e.g. RAW+JPEG) now appear as a single card in the browse grid instead of one card per variant. Implemented via a denormalized `best_variant_hash` column on the `assets` table, computed at write time using the same Export > Processed > Original scoring as preview selection. Search queries with no variant-level filters skip the `variants` JOIN entirely for faster queries.
 - **Primary format display** — browse cards now show the asset's identity format (e.g. NEF, RAF) instead of the preview variant's format (JPG). A denormalized `primary_variant_format` column prefers Original+RAW, then Original+any, then the best variant's format.
 - **Variant count badge** — browse cards show a variant count badge (e.g. "3v") when an asset has more than one variant, making multi-variant assets visible at a glance.
-- **`dam serve --log`** — the global `--log` flag now enables request logging on the web server, printing `METHOD /path -> STATUS (duration)` to stderr for each HTTP request.
+- **`maki serve --log`** — the global `--log` flag now enables request logging on the web server, printing `METHOD /path -> STATUS (duration)` to stderr for each HTTP request.
 
 ## v1.1.1 (2026-02-23)
 
@@ -659,7 +659,7 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v1.1.0 (2026-02-23)
 
 ### New Features
-- **Export-based preview selection** — previews now prefer Export > Processed > Original variants for display. RAW+JPEG assets show the processed JPEG preview instead of the flat dcraw rendering. Affects `dam show`, web UI asset detail page, and `generate-previews` catalog mode.
+- **Export-based preview selection** — previews now prefer Export > Processed > Original variants for display. RAW+JPEG assets show the processed JPEG preview instead of the flat dcraw rendering. Affects `maki show`, web UI asset detail page, and `generate-previews` catalog mode.
 - **`generate-previews --upgrade`** — regenerate previews for assets where a better variant (export/processed) exists than the one currently previewed. Useful after importing exports alongside existing RAW files.
 
 ## v1.0.0 (2026-02-23)
@@ -683,13 +683,13 @@ First stable release. All planned features are implemented, all tests pass, docu
 ## v0.7.1 (2026-02-23)
 
 ### New Features
-- **`dam fix-roles` command** — scan multi-variant assets and re-role non-RAW variants from Original to Export when a RAW variant exists. Fixes assets imported before the auto-grouping role fix. Dry-run by default (`--apply` to execute). Supports `--volume`, `--asset`, `--json`, `--log`, `--time`.
+- **`maki fix-roles` command** — scan multi-variant assets and re-role non-RAW variants from Original to Export when a RAW variant exists. Fixes assets imported before the auto-grouping role fix. Dry-run by default (`--apply` to execute). Supports `--volume`, `--asset`, `--json`, `--log`, `--time`.
 - **Import auto-grouping role fix** — newly imported RAW+non-RAW pairs now correctly assign Export role to non-RAW variants (previously both were marked Original)
 
 ## v0.7.0 (2026-02-23)
 
 ### New Features
-- **`dam auto-group` command** — automatically group assets by filename stem across directories, solving the problem where CaptureOne exports land in different directories than their RAW originals. Uses fuzzy prefix + separator matching (e.g., `Z91_8561.ARW` matches `Z91_8561-1-HighRes-(c)_2025_Thomas Herrmann.tif`). Chain resolution ensures multiple export levels all group to the shortest root stem. RAW files are preferred as the group target; donors are re-roled from Original to Export. Dry-run by default (`--apply` to execute). Supports `--json`, `--log`, `--time`.
+- **`maki auto-group` command** — automatically group assets by filename stem across directories, solving the problem where CaptureOne exports land in different directories than their RAW originals. Uses fuzzy prefix + separator matching (e.g., `Z91_8561.ARW` matches `Z91_8561-1-HighRes-(c)_2025_Thomas Herrmann.tif`). Chain resolution ensures multiple export levels all group to the shortest root stem. RAW files are preferred as the group target; donors are re-roled from Original to Export. Dry-run by default (`--apply` to execute). Supports `--json`, `--log`, `--time`.
 - **"Group by name" batch button** in web UI — select assets on the browse page and click "Group by name" to auto-group them by filename stem with a confirmation dialog
 
 ### Bug Fixes
@@ -722,8 +722,8 @@ First stable release. All planned features are implemented, all tests pass, docu
 ## v0.6.0 (2026-02-22)
 
 ### New Features
-- **Saved searches** (smart albums) — `dam saved-search` (alias `ss`) with save, list, run, delete subcommands; stored in `searches.toml`; web UI chips on browse page with rename/delete on hover
-- **Collections** (static albums) — `dam collection` (alias `col`) with create, list, show, add, remove, delete subcommands; SQLite-backed with YAML persistence; search filter `collection:<name>`; web UI batch toolbar integration
+- **Saved searches** (smart albums) — `maki saved-search` (alias `ss`) with save, list, run, delete subcommands; stored in `searches.toml`; web UI chips on browse page with rename/delete on hover
+- **Collections** (static albums) — `maki collection` (alias `col`) with create, list, show, add, remove, delete subcommands; SQLite-backed with YAML persistence; search filter `collection:<name>`; web UI batch toolbar integration
 - **Quoted filter values** — search parser supports double-quoted values for multi-word filters (`tag:"Fools Theater"`, `collection:"My Favorites"`)
 
 ### Bug Fixes
@@ -743,12 +743,12 @@ First stable release. All planned features are implemented, all tests pass, docu
 ## v0.4.5 (2026-02-21)
 
 ### New Features
-- **`dam refresh` command** — re-read metadata from changed sidecar/recipe files without full re-import; supports `--dry-run`, `--json`, `--log`, `--time`
+- **`maki refresh` command** — re-read metadata from changed sidecar/recipe files without full re-import; supports `--dry-run`, `--json`, `--log`, `--time`
 
 ## v0.4.4 (2026-02-21)
 
 ### New Features
-- **Color labels** — first-class 7-color label support (Red, Orange, Yellow, Green, Blue, Pink, Purple); XMP `xmp:Label` extraction, CLI editing (`dam edit --label`), web UI color dot picker, browse filtering, batch operations, XMP write-back
+- **Color labels** — first-class 7-color label support (Red, Orange, Yellow, Green, Blue, Pink, Purple); XMP `xmp:Label` extraction, CLI editing (`maki edit --label`), web UI color dot picker, browse filtering, batch operations, XMP write-back
 - **Batch operations** in web UI — multi-select checkboxes, fixed bottom toolbar with tag add/remove, rating stars, color label dots
 - **Keyboard shortcut hints** — platform-aware Cmd/Ctrl labels on toolbar buttons
 
@@ -788,28 +788,28 @@ First stable release. All planned features are implemented, all tests pass, docu
 
 ### New Features
 - **Tags page enhancements** — sortable columns (name/count), live text filter, multi-column CSS layout
-- **`dam update-location` command** — update file path in catalog after manual moves on disk
+- **`maki update-location` command** — update file path in catalog after manual moves on disk
 
 ## v0.3.4 (2026-02-20)
 
 ### New Features
-- **Extended `dam cleanup`** — now removes orphaned assets (all variants have zero locations) and orphaned preview files, in addition to stale location records
+- **Extended `maki cleanup`** — now removes orphaned assets (all variants have zero locations) and orphaned preview files, in addition to stale location records
 - **Search location health filters** — `orphan:true`, `missing:true`, `stale:N`, `volume:none`
 
 ## v0.3.3 (2026-02-20)
 
 ### New Features
-- **`dam cleanup` command** — remove stale file location records for files no longer on disk
+- **`maki cleanup` command** — remove stale file location records for files no longer on disk
 
 ## v0.3.2 (2026-02-20)
 
 ### New Features
-- **`dam sync` command** — reconcile catalog with disk after external file moves, renames, or modifications
+- **`maki sync` command** — reconcile catalog with disk after external file moves, renames, or modifications
 
 ## v0.3.1 (2026-02-20)
 
 ### New Features
-- **`dam edit` command** — set or clear asset name, description, and rating from CLI
+- **`maki edit` command** — set or clear asset name, description, and rating from CLI
 - **Photo workflow integration proposal** — documented gaps and planned features for CaptureOne integration
 
 ## v0.3.0 (2026-02-20)
@@ -820,14 +820,14 @@ First stable release. All planned features are implemented, all tests pass, docu
 ## v0.2.0 (2026-02-19)
 
 ### New Features
-- **Web UI** (`dam serve`) — browse/search page with filter dropdowns, asset detail page, tag editing, rating support
+- **Web UI** (`maki serve`) — browse/search page with filter dropdowns, asset detail page, tag editing, rating support
 - **First-class rating** — `Option<u8>` field on Asset with CLI search, web UI stars, XMP extraction
 - **Stats page** in web UI with bar charts and tag cloud
 - **Tags page** in web UI
 - **Multi-tag chip input** with autocomplete on browse page
 - **Metadata search** with indexed columns and extended filter syntax (camera, lens, ISO, focal, aperture, dimensions)
 - **Info card previews** for non-visual formats (audio, documents) and as fallback for missing external tools
-- **`dam.toml` configuration** — preview settings, serve settings, import exclude/auto_tags
+- **`maki.toml` configuration** — preview settings, serve settings, import exclude/auto_tags
 - **`--log` flag** on `generate-previews` for per-file progress
 
 ### Bug Fixes
@@ -836,17 +836,17 @@ First stable release. All planned features are implemented, all tests pass, docu
 ## v0.1.0 (2026-02-18)
 
 ### New Features
-- **`dam init`** — initialize catalog with SQLite schema, volume registry, config
-- **`dam volume add/list`** — register and list storage volumes with online/offline detection
-- **`dam import`** — SHA-256 hashing, EXIF extraction, stem-based auto-grouping, recipe handling, duplicate location tracking, preview generation
-- **`dam search`** — text, type, tag, format filters
-- **`dam show`** — full asset details with variants, locations, metadata
-- **`dam tag`** — add/remove tags
-- **`dam group`** — manually merge variant assets
-- **`dam duplicates`** — find files with identical content across locations
-- **`dam generate-previews`** — thumbnails for images, RAW (dcraw/LibRaw), video (ffmpeg)
-- **`dam rebuild-catalog`** — regenerate SQLite from YAML sidecars
-- **`dam relocate`** — copy/move assets between volumes with integrity verification
-- **`dam verify`** — re-hash files to detect corruption or bit rot
+- **`maki init`** — initialize catalog with SQLite schema, volume registry, config
+- **`maki volume add/list`** — register and list storage volumes with online/offline detection
+- **`maki import`** — SHA-256 hashing, EXIF extraction, stem-based auto-grouping, recipe handling, duplicate location tracking, preview generation
+- **`maki search`** — text, type, tag, format filters
+- **`maki show`** — full asset details with variants, locations, metadata
+- **`maki tag`** — add/remove tags
+- **`maki group`** — manually merge variant assets
+- **`maki duplicates`** — find files with identical content across locations
+- **`maki generate-previews`** — thumbnails for images, RAW (dcraw/LibRaw), video (ffmpeg)
+- **`maki rebuild-catalog`** — regenerate SQLite from YAML sidecars
+- **`maki relocate`** — copy/move assets between volumes with integrity verification
+- **`maki verify`** — re-hash files to detect corruption or bit rot
 - **Output formatting** — `--json`, `--format` templates, `-q` quiet mode, `-t` elapsed time
 - **XMP metadata extraction** — keywords, rating, description, color label, creator, rights
