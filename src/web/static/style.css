@@ -189,6 +189,16 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
 }
 .filter-row {
     display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.filter-row-top {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+.filter-row-bottom {
+    display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
     align-items: center;
@@ -200,9 +210,6 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
     font-size: 0.9rem;
     background: var(--bg-input);
     min-width: 100px;
-}
-.filter-row select:first-of-type {
-    margin-left: auto;
 }
 /* Format multi-select filter */
 .format-filter { position: relative; }
@@ -259,7 +266,6 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
     background: var(--bg-input);
     flex: 1;
     min-width: 140px;
-    max-width: 450px;
 }
 
 /* Saved searches row */
@@ -929,8 +935,7 @@ select.badge {
     flex-wrap: wrap;
     align-items: center;
     gap: 0.2rem;
-    min-width: 250px;
-    max-width: 450px;
+    min-width: 200px;
     flex: 1;
     padding: 0.3rem 0.5rem;
     border: 1px solid var(--border);
