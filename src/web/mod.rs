@@ -474,6 +474,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::delete(routes::dissolve_stack),
         )
         .route(
+            "/api/asset/{id}/stack-add",
+            axum::routing::post(routes::add_to_stack),
+        )
+        .route(
             "/api/stack/{id}/members",
             axum::routing::get(routes::stack_members_api),
         )

@@ -2534,6 +2534,37 @@ pub async fn batch_create_stack(
     }
 }
 
+/// POST /api/asset/{id}/stack-add — add this asset to an existing stack identified by {id} (any member).
+pub async fn add_to_stack(
+    State(state): State<Arc<AppState>>,
+    Path(reference_id): Path<String>,
+    Json(req): Json<BatchStackRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+        let ref_full = catalog
+            .resolve_asset_id(&reference_id)?
+            .ok_or_else(|| anyhow::anyhow!("No asset found matching '{reference_id}'"))?;
+        let store = crate::stack::StackStore::new(catalog.conn());
+        let added = store.add(&ref_full, &req.asset_ids)?;
+        let yaml = store.export_all()?;
+        crate::stack::save_yaml(&state.catalog_root, &yaml)?;
+        Ok::<_, anyhow::Error>(serde_json::json!({
+            "added": added,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => {
+            (StatusCode::BAD_REQUEST, format!("Error: {e:#}")).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
 /// DELETE /api/batch/stack — unstack selected assets.
 pub async fn batch_unstack(
     State(state): State<Arc<AppState>>,

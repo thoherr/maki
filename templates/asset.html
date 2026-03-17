@@ -259,6 +259,7 @@
                 {% if !is_stack_pick %}
                 <button class="btn btn-sm" id="set-pick-btn">Set as pick</button>
                 {% endif %}
+                <button class="btn btn-sm" id="remove-from-stack-btn">Remove from stack</button>
                 <button class="btn btn-sm btn-danger" id="dissolve-stack-btn">Dissolve stack</button>
             </div>
         </details>
@@ -294,6 +295,24 @@
                     })
                     .then(function() { markBrowseDirty(); window.location.reload(); })
                     .catch(function(err) { alert('Failed to dissolve stack: ' + err.message); });
+                });
+            }
+
+            var removeBtn = document.getElementById('remove-from-stack-btn');
+            if (removeBtn) {
+                removeBtn.addEventListener('click', function() {
+                    if (!confirm('Remove this asset from its stack?')) return;
+                    fetch('/api/batch/stack', {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ asset_ids: [assetId] })
+                    })
+                    .then(function(r) {
+                        if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+                        return r.json();
+                    })
+                    .then(function() { markBrowseDirty(); window.location.reload(); })
+                    .catch(function(err) { alert('Failed to remove from stack: ' + err.message); });
                 });
             }
 

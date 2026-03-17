@@ -95,6 +95,9 @@
         <button class="batch-btn" id="batch-auto-group">Group by name</button>
         <span class="batch-sep"></span>
         <button class="batch-btn" id="batch-stack">Stack</button>
+        <button class="batch-btn" id="batch-add-to-stack" style="display:none">+ Stack</button>
+        <button class="batch-btn" id="batch-remove-from-stack" style="display:none">&minus; Stack</button>
+        <button class="batch-btn" id="batch-set-pick" style="display:none">Set pick</button>
         <button class="batch-btn batch-btn-danger" id="batch-unstack">Unstack</button>
         <span class="batch-sep"></span>
         <button class="batch-btn" id="batch-compare" title="Compare 2–4 selected assets (c)">Compare</button>
@@ -354,6 +357,30 @@ window.triggerSearch = onFilterChange;
             document.body.classList.remove('batch-active');
         }
         syncCheckboxes();
+        updateStackButtons();
+    }
+
+    function updateStackButtons() {
+        var ids = Array.from(selected);
+        var stacked = [];
+        var unstacked = [];
+        var stackIds = new Set();
+        ids.forEach(function(id) {
+            var card = document.querySelector('[data-asset-id="' + id + '"]');
+            if (!card) return;
+            var sid = card.getAttribute('data-stack');
+            if (sid) { stacked.push(id); stackIds.add(sid); }
+            else { unstacked.push(id); }
+        });
+        var addBtn = document.getElementById('batch-add-to-stack');
+        var removeBtn = document.getElementById('batch-remove-from-stack');
+        var pickBtn = document.getElementById('batch-set-pick');
+        // Add to stack: at least one unstacked + exactly one stacked (identifies the target stack)
+        addBtn.style.display = (unstacked.length >= 1 && stacked.length >= 1 && stackIds.size === 1) ? '' : 'none';
+        // Remove from stack: one or more stacked selected
+        removeBtn.style.display = (stacked.length >= 1) ? '' : 'none';
+        // Set pick: exactly one stacked asset selected
+        pickBtn.style.display = (stacked.length === 1 && unstacked.length === 0) ? '' : 'none';
     }
 
     function syncCheckboxes() {
@@ -878,6 +905,74 @@ window.triggerSearch = onFilterChange;
             refreshResults();
         })
         .catch(function(err) { console.error('Batch unstack error:', err); })
+        .finally(function() { setButtonsBusy(false); });
+    });
+
+    // Add to stack: add unstacked assets to the stack of the stacked asset
+    document.getElementById('batch-add-to-stack').addEventListener('click', function() {
+        if (batchBusy) return;
+        var ids = Array.from(selected);
+        var referenceId = null;
+        var addIds = [];
+        ids.forEach(function(id) {
+            var card = document.querySelector('[data-asset-id="' + id + '"]');
+            if (!card) return;
+            if (card.getAttribute('data-stack')) { referenceId = id; }
+            else { addIds.push(id); }
+        });
+        if (!referenceId || addIds.length === 0) return;
+        setButtonsBusy(true);
+        fetch('/api/asset/' + encodeURIComponent(referenceId) + '/stack-add', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({asset_ids: addIds})
+        })
+        .then(function(r) {
+            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            return r.json();
+        })
+        .then(function() { clearSelection(); refreshResults(); })
+        .catch(function(err) { alert('Failed to add to stack: ' + err.message); })
+        .finally(function() { setButtonsBusy(false); });
+    });
+
+    // Remove from stack: remove selected stacked assets from their stacks
+    document.getElementById('batch-remove-from-stack').addEventListener('click', function() {
+        if (batchBusy) return;
+        var ids = Array.from(selected).filter(function(id) {
+            var card = document.querySelector('[data-asset-id="' + id + '"]');
+            return card && card.getAttribute('data-stack');
+        });
+        if (ids.length === 0) return;
+        setButtonsBusy(true);
+        fetch('/api/batch/stack', {
+            method: 'DELETE',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({asset_ids: ids})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function() { clearSelection(); refreshResults(); })
+        .catch(function(err) { console.error('Remove from stack error:', err); })
+        .finally(function() { setButtonsBusy(false); });
+    });
+
+    // Set pick: set the single selected stacked asset as its stack's pick
+    document.getElementById('batch-set-pick').addEventListener('click', function() {
+        if (batchBusy) return;
+        var ids = Array.from(selected);
+        if (ids.length !== 1) return;
+        setButtonsBusy(true);
+        fetch('/api/asset/' + encodeURIComponent(ids[0]) + '/stack-pick', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({})
+        })
+        .then(function(r) {
+            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            return r.json();
+        })
+        .then(function() { clearSelection(); refreshResults(); })
+        .catch(function(err) { alert('Failed to set pick: ' + err.message); })
         .finally(function() { setButtonsBusy(false); });
     });
 
