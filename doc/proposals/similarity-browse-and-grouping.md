@@ -1,52 +1,71 @@
-# Proposal: Similarity Browse and Grouping
+# Proposal: Similarity Browse and Stacking
 
 ## Motivation
 
-The SigLIP embedding-based similarity search works very well for finding visually related images. Currently it's used in stroll navigation and the detail page's "similar images" section, but there's no easy way to go from "these images are similar" to "let me process them" (tag, group, cull).
+The SigLIP embedding-based similarity search works very well for finding visually related images. Currently it's used in stroll navigation and the detail page's "similar images" section, but there's no easy way to go from "these images are similar" to "let me process them" (tag, stack, cull).
 
-Key use case: burst shots and near-duplicates. A photographer shoots 15 similar frames, wants to keep the best 2-3 rated, and either group the rest under a hero shot or tag them as `rest` so they don't clutter browsing.
+Key use case: burst shots and near-duplicates. A photographer shoots 15 similar frames, wants to keep the best 2-3 rated, and stack the rest behind the hero shot so they don't clutter browsing.
 
-## Phase 1: Browse with Similarity Scores
+## Grouping vs. Stacking
 
-**Goal:** Navigate from the detail page to a browse view filtered by similarity, with scores visible and a threshold control.
+**Grouping** (variants) merges assets into one — the others become alternate versions of a single asset, sharing identity, rating, tags, and description. This is appropriate for RAW + JPEG of the same shot, edited exports, or different crops.
 
-- **"Browse similar" link** on the detail page → navigates to browse with `similar:<asset_id>` query pre-filled.
-- **Similarity score on browse cards** — when a `similar:` query is active, display the similarity percentage on each card (small overlay or badge). The cosine similarity is already computed; it needs to flow through SearchRow → AssetCard → template.
-- **Minimum similarity filter** — new `min_sim:` search prefix (e.g. `similar:abc123 min_sim:0.9`). Currently `similar_limit` caps the result count; a threshold filter is more natural for "show me everything above 90%."
-- **Sort by similarity** — when `similar:` is active, default sort to similarity descending. Add `similarity` as a sort option.
+**Stacking** keeps assets independent — each retains its own rating, tags, and description. The stack pick (highest-rated or manually chosen) represents the stack in the browse grid. Expanding the stack shows all members. Unstacking is non-destructive.
 
-From the browse grid, existing batch tools (tag, group, delete) handle the rest.
+For burst shots and visually similar images, **stacking is the right concept**. These are genuinely different photographs (different moment, slightly different composition) — not variants of the same asset. The existing `auto-group` command groups by filename stem (RAW+JPEG pairs). Similarity-based organization should use stacking instead.
 
-## Phase 2: Group by Similarity (Targeted)
+Summary:
+- `group` / `auto-group` — by filename stem, creates variants (same asset)
+- `stack` / `auto-stack` — by similarity or manual selection, keeps independent assets, collapses in browse
 
-**Goal:** One-click grouping of similar images around a hero shot.
+## Phase 1: Browse with Similarity Scores (implemented)
 
-- **"Group similar" button** on the detail page — finds all assets above a configurable threshold and groups them under the current asset as primary.
-- **Batch version** — select multiple in browse, group around the highest-rated one.
-- Threshold configurable via `[ai] similarity_group_threshold` in `maki.toml` (default ~0.85).
+- **"Browse similar" button** on the detail page → navigates to browse with `similar:<asset_id>`.
+- **Similarity score on browse cards** — teal percentage badge when `similar:` is active.
+- **`min_sim:` filter** — percentage threshold (e.g. `similar:abc123 min_sim:90` for >= 90%).
+- **Sort by similarity** — auto-default when `similar:` is active, with toolbar button.
+- Source asset included at 100%. Results fetched on single page for correct sorting.
 
-## Phase 3: Auto-Cluster by Similarity
+## Phase 2: Stack by Similarity (Targeted)
 
-**Goal:** Discover natural visual clusters across the entire catalog.
+**Goal:** One-click stacking of similar images around a hero shot from the detail page.
 
-- `maki auto-group --by similarity --threshold 0.85` — scan all embedded assets, find groups where pairwise similarity exceeds threshold, propose as groups.
-- Similar to face clustering (DBSCAN or greedy connected-components), but over whole-image embeddings.
-- `--dry-run` for review before applying.
-- Computationally O(n²) pairwise, but can be optimized with approximate nearest neighbors or batched cosine similarity over the embedding matrix.
+- **"Stack similar" button** on the detail page — finds all assets above a configurable threshold and stacks them with the current asset as pick.
+- **Threshold** configurable via `[ai] similarity_stack_threshold` in `maki.toml` (default ~85, meaning 85% similarity).
+- **Workflow:** Browse similar → review the set → click "Stack similar" → burst collapses behind the hero shot in browse.
+- Assets keep their individual ratings, tags, descriptions. The pick is the stack representative.
+- If the user later rates another member higher, they can change the pick.
+
+## Phase 3: Auto-Stack by Similarity (Catalog-wide)
+
+**Goal:** Discover natural visual clusters across the entire catalog and propose stacks.
+
+- `maki auto-stack --threshold 85` — scan all embedded assets, find clusters where pairwise similarity exceeds threshold, propose as stacks.
+- Pick selection: highest-rated asset in each cluster, or first imported if no ratings.
+- `--dry-run` for review before applying (show proposed stacks with member counts and similarity ranges).
+- `--apply` to create the stacks.
+- Clustering algorithm: greedy connected-components or single-linkage clustering over the embedding similarity matrix. Similar to face clustering but over whole-image embeddings.
+- Computationally O(n²) pairwise, but can be optimized:
+  - Batch dot products over the contiguous embedding buffer (already in `EmbeddingIndex`)
+  - Skip pairs below a cheap early-exit threshold
+  - For very large catalogs, approximate nearest neighbors (e.g. IVF or random projection)
 
 ## Overlap with Default Filter / Culling
 
 This feature complements the `[browse] default_filter` and `rest` tag workflow:
 
-1. Browse similar → select the burst shots you don't need
-2. Tag them as `rest` (they disappear from default browsing)
-3. Or group them under the hero shot (they collapse in browse via stack collapsing)
+1. Browse similar → review the burst
+2. Stack them (they collapse in browse via stack collapsing, hero shot visible)
+3. Optionally tag the non-picks as `rest` for additional filtering
+4. Or just rely on stack collapse — expanding shows all members when needed
 
-Grouping + stack collapse is arguably cleaner than tagging for bursts, because the images stay associated with their best variant and can be expanded when needed.
+Stacking is cleaner than tagging for bursts because the images stay visually associated with their best shot and can be expanded/collapsed on demand.
 
 ## Implementation Notes
 
-- Similarity scores come from `EmbeddingStore::find_similar()` which returns `Vec<(String, f32)>` (asset_id, cosine similarity).
-- The `similar:` filter is already parsed in `query.rs` behind `#[cfg(feature = "ai")]`.
-- Current flow: `similar:` → resolved in `catalog.rs` `search_assets()` via `EmbeddingStore` → returns asset IDs → filtered as IN clause. The similarity score is discarded at this point — Phase 1 needs to preserve it through to the template.
-- Browse cards are rendered from `AssetCard` in `templates.rs` — add an optional `similarity: Option<f32>` field.
+- Similarity scores come from `EmbeddingIndex::search()` which returns `Vec<(String, f32)>` (asset_id, cosine similarity).
+- The `similar:` filter is parsed in `query.rs` behind `#[cfg(feature = "ai")]`.
+- Phase 1 flow: `similar:` → resolved in browse routes via `resolve_similar_filter()` → returns IDs + scores → scores populated on `AssetCard.similarity` → displayed as badge, used for sorting.
+- Stacking infrastructure already exists: `StackStore` in `catalog.rs`, `maki stack` CLI command, stack collapse in browse grid, stack pick selection.
+- Phase 2 needs: embedding lookup + threshold filter + call to `StackStore::create_stack()` with the matching asset IDs.
+- Phase 3 needs: iterate all embeddings, compute pairwise similarities, cluster, propose stacks.
