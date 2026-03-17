@@ -2,6 +2,22 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.0.2 (2026-03-18)
+
+### New Features
+- **Similarity browse** — "Browse similar" button on the detail page navigates to the browse grid with `similar:<id>` query. Cards show similarity percentage badges. `min_sim:` filter accepts 0-100 percentage threshold (e.g. `min_sim:90`). Auto-sorts by similarity. Source asset included at 100%.
+- **Stack by similarity** — "Stack similar" button on the detail page finds visually similar assets via embedding index and creates a stack with the current asset as pick. Configurable threshold (default 85%).
+- **Stack management in browse toolbar** — context-sensitive buttons appear based on selection: "+ Stack" (add unstacked assets to an existing stack), "− Stack" (remove from stack), "Set pick" (set stack representative).
+- **Stack management on detail page** — "Remove from stack" button for stacked assets.
+
+### Enhancements
+- **Filter bar layout** — reorganized into two rows: tag filter and path prefix side-by-side on top, rating stars, color dots, and dropdown selectors on the bottom row. Dropdowns reordered: collections, people, types, formats, volumes.
+- **Sort by similarity** — new "Similarity" sort button in browse toolbar when viewing similar results.
+
+### Bug Fixes
+- **`--mode tags` used wrong prompt** — tags mode was using the config's describe prompt instead of the JSON tags prompt.
+- **Prose VLM responses no longer fail** — saved as description with a helpful note instead of erroring.
+
 ## v4.0.1 (2026-03-17)
 
 ### New Features
