@@ -733,6 +733,23 @@ maki search -q "similar:72a0bb4b"                       # just IDs, for scriptin
 
 ---
 
+## min_sim (AI feature)
+
+**Syntax:** `min_sim:<percent>`
+
+**Description:** Sets a minimum similarity threshold (0--100) when used with `similar:`. Only assets with similarity at or above this percentage are included. Without `min_sim:`, all results from the similarity search are returned.
+
+**Examples:**
+
+```
+maki search "similar:72a0bb4b min_sim:90"          # only >= 90% similar
+maki search "similar:72a0bb4b min_sim:80 type:image"  # >= 80% AND images only
+```
+
+**Behavior:** The percentage is converted to a 0.0--1.0 cosine similarity threshold internally. Values are clamped to the 0--100 range. Most useful for finding near-duplicates (min_sim:95) or visually very close images (min_sim:85).
+
+---
+
 ## embed (AI feature)
 
 **Syntax:** `embed:any` | `embed:true` | `embed:none` | `embed:false`

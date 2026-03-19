@@ -91,7 +91,12 @@ All filters can be combined in a single query. Remaining tokens become free-text
 | Date (prefix match) | `date:<prefix>` | `date:2026-02-25`, `date:2026-02`, `date:2026` |
 | Date (from) | `dateFrom:<date>` | `dateFrom:2026-01-01` |
 | Date (until) | `dateUntil:<date>` | `dateUntil:2026-12-31` |
-| Volume | `volume:none` | `volume:none` |
+| Volume | `volume:<label>`, `volume:none` | `volume:Archive`, `volume:none` |
+| Asset ID | `id:<prefix>` | `id:72a0bb4b` |
+| Copies | `copies:<N>`, `copies:<N>+` | `copies:1`, `copies:2+` |
+| Variants | `variants:<N>`, `variants:<N>+` | `variants:2+` |
+| Scattered | `scattered:<N>+` | `scattered:2+` |
+| GPS | `geo:<south>,<west>,<north>,<east>` | `geo:47.5,11.0,48.5,13.0` |
 | Orphan assets | `orphan:true` | `orphan:true` |
 | Missing files | `missing:true` | `missing:true` |
 | Stale verification | `stale:<days>` | `stale:30` |
@@ -99,6 +104,8 @@ All filters can be combined in a single query. Remaining tokens become free-text
 | Face count | `faces:any`, `faces:none`, `faces:N`, `faces:N+` | `faces:2+` |
 | Person | `person:<name>` | `person:Alice`, `person:"John Smith"` |
 | Visual similarity (ai) | `similar:<id>` or `similar:<id>:<limit>` | `similar:72a0bb4b`, `similar:72a0bb4b:50` |
+| Similarity threshold (ai) | `min_sim:<percent>` | `min_sim:90` |
+| Text search (ai) | `text:<query>` | `text:sunset beach` |
 | Embedding status (ai) | `embed:any`, `embed:none` | `embed:none type:image` |
 
 **Hierarchical tag matching**: The `tag:` filter matches hierarchically. Searching for `tag:animals` finds assets tagged `animals`, `animals/birds`, `animals/birds/eagles`, and any other descendant of `animals`. To match only the exact tag, use the full path (e.g., `tag:animals/birds/eagles`).
