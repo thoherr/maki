@@ -16,6 +16,7 @@ flowchart LR
     V --> S
     S --> SM --> C
     S --> R --> W --> C
+    S --> W --> R --> C
     C --> V
 ```
 
