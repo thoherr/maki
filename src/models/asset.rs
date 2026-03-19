@@ -74,6 +74,17 @@ impl Asset {
     /// Accepts case-insensitive color names from the CaptureOne superset:
     /// Red, Orange, Yellow, Green, Blue, Pink, Purple.
     /// Returns the canonical title-case name, or an error for unknown colors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use maki::models::Asset;
+    ///
+    /// assert_eq!(Asset::validate_color_label("red").unwrap(), Some("Red".to_string()));
+    /// assert_eq!(Asset::validate_color_label("BLUE").unwrap(), Some("Blue".to_string()));
+    /// assert_eq!(Asset::validate_color_label("").unwrap(), None);
+    /// assert!(Asset::validate_color_label("magenta").is_err());
+    /// ```
     pub fn validate_color_label(s: &str) -> Result<Option<String>, String> {
         let s = s.trim();
         if s.is_empty() {

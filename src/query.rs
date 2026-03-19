@@ -20,6 +20,23 @@ use crate::xmp_reader;
 /// - `YYYY-MM` → 1st of that month, midnight UTC
 /// - `YYYY-MM-DD` → midnight UTC on that date
 /// - Full ISO 8601 / RFC 3339 (e.g. `2024-06-15T12:30:00Z`) — parsed as-is
+///
+/// # Examples
+///
+/// ```
+/// use maki::query::parse_date_input;
+///
+/// let dt = parse_date_input("2026").unwrap();
+/// assert_eq!(dt.to_rfc3339(), "2026-01-01T00:00:00+00:00");
+///
+/// let dt = parse_date_input("2026-03").unwrap();
+/// assert_eq!(dt.to_rfc3339(), "2026-03-01T00:00:00+00:00");
+///
+/// let dt = parse_date_input("2026-03-15").unwrap();
+/// assert_eq!(dt.to_rfc3339(), "2026-03-15T00:00:00+00:00");
+///
+/// assert!(parse_date_input("not-a-date").is_err());
+/// ```
 pub fn parse_date_input(s: &str) -> Result<DateTime<Utc>> {
     let s = s.trim();
 
@@ -318,6 +335,30 @@ fn tokenize_query(query: &str) -> Vec<String> {
 /// `f:2.8`, `f:1.4-2.8`, `width:4000+`, `height:2000+`, `meta:key=value`.
 /// Values with spaces can be quoted: `tag:"Fools Theater"`, `camera:"Canon EOS R5"`.
 /// Remaining tokens are joined as free-text search.
+///
+/// # Examples
+///
+/// ```
+/// use maki::query::parse_search_query;
+///
+/// let p = parse_search_query("tag:sunset type:image rating:3+");
+/// assert_eq!(p.tags, vec!["sunset"]);
+/// assert_eq!(p.asset_types, vec!["image"]);
+/// assert_eq!(p.rating_min, Some(3));
+///
+/// // Negation with - prefix
+/// let p = parse_search_query("-tag:rejected");
+/// assert_eq!(p.tags_exclude, vec!["rejected"]);
+///
+/// // Quoted values with spaces
+/// let p = parse_search_query("tag:\"Fools Theater\" camera:\"Canon EOS R5\"");
+/// assert_eq!(p.tags, vec!["Fools Theater"]);
+/// assert_eq!(p.cameras, vec!["Canon EOS R5"]);
+///
+/// // Free text (unrecognized tokens)
+/// let p = parse_search_query("sunset beach");
+/// assert_eq!(p.text, Some("sunset beach".to_string()));
+/// ```
 pub fn parse_search_query(query: &str) -> ParsedSearch {
     let mut parsed = ParsedSearch::default();
     let mut text_parts = Vec::new();

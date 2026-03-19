@@ -4993,6 +4993,71 @@ mod tests {
         assert!(results.is_empty(), "tag:animals should not match other-animals");
     }
 
+    /// Helper: create a catalog with a single asset that has the given tags.
+    fn catalog_with_tags(tags: Vec<String>, hash_suffix: &str) -> Catalog {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, &format!("sha256:{hash_suffix}"));
+        asset.tags = tags;
+        let variant = crate::models::Variant {
+            content_hash: format!("sha256:{hash_suffix}"),
+            asset_id: asset.id.clone(),
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 1000,
+            original_filename: format!("{hash_suffix}.jpg"),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        asset.variants.push(variant.clone());
+        catalog.insert_asset(&asset).unwrap();
+        catalog.insert_variant(&variant).unwrap();
+        catalog
+    }
+
+    #[test]
+    fn search_tag_with_double_quotes_unescaped() {
+        // Tags stored as raw JSON (unescaped quotes): ["\"Sir\" Oliver Mally"]
+        // This is how serde_json serializes tags with quotes
+        let catalog = catalog_with_tags(
+            vec!["\"Sir\" Oliver Mally".to_string()],
+            "quotes1",
+        );
+        let results = catalog.search_assets(None, None, Some("\"Sir\" Oliver Mally"), None, None, None).unwrap();
+        assert_eq!(results.len(), 1, "Should find tag with double quotes");
+    }
+
+    #[test]
+    fn search_tag_with_double_quotes_no_false_positive() {
+        let catalog = catalog_with_tags(
+            vec!["Sir Oliver Mally".to_string()],
+            "quotes2",
+        );
+        // Searching for the quoted version should NOT match the unquoted tag
+        let results = catalog.search_assets(None, None, Some("\"Sir\" Oliver Mally"), None, None, None).unwrap();
+        assert!(results.is_empty(), "Quoted search should not match unquoted tag");
+    }
+
+    #[test]
+    fn search_tag_with_apostrophe() {
+        let catalog = catalog_with_tags(
+            vec!["it's a test".to_string()],
+            "apos1",
+        );
+        let results = catalog.search_assets(None, None, Some("it's a test"), None, None, None).unwrap();
+        assert_eq!(results.len(), 1, "Should find tag with apostrophe");
+    }
+
+    #[test]
+    fn search_tag_with_ampersand() {
+        let catalog = catalog_with_tags(
+            vec!["rock & roll".to_string()],
+            "amp1",
+        );
+        let results = catalog.search_assets(None, None, Some("rock & roll"), None, None, None).unwrap();
+        assert_eq!(results.len(), 1, "Should find tag with ampersand");
+    }
+
     #[test]
     fn search_by_format() {
         let catalog = setup_search_catalog();

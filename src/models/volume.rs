@@ -97,6 +97,21 @@ fn serialize_path_forward_slash<S: serde::Serializer>(path: &PathBuf, s: S) -> R
 
 impl FileLocation {
     /// Return the relative path as a string with forward slashes (cross-platform).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::PathBuf;
+    /// use maki::models::FileLocation;
+    /// use uuid::Uuid;
+    ///
+    /// let loc = FileLocation {
+    ///     volume_id: Uuid::nil(),
+    ///     relative_path: PathBuf::from("photos/2026/sunset.jpg"),
+    ///     verified_at: None,
+    /// };
+    /// assert_eq!(loc.relative_path_str(), "photos/2026/sunset.jpg");
+    /// ```
     pub fn relative_path_str(&self) -> String {
         self.relative_path.to_string_lossy().replace('\\', "/")
     }

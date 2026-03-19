@@ -16,6 +16,18 @@ pub enum OutputFormat {
 }
 
 /// Parse a `--format` argument string into an `OutputFormat`.
+///
+/// # Examples
+///
+/// ```
+/// use maki::format::parse_format;
+///
+/// assert!(parse_format("ids").is_ok());
+/// assert!(parse_format("short").is_ok());
+/// assert!(parse_format("json").is_ok());
+/// assert!(parse_format("{id}\t{name}").is_ok());  // custom template
+/// assert!(parse_format("unknown").is_err());
+/// ```
 pub fn parse_format(s: &str) -> Result<OutputFormat, String> {
     match s {
         "ids" => Ok(OutputFormat::Ids),
@@ -39,6 +51,20 @@ pub fn parse_format(s: &str) -> Result<OutputFormat, String> {
 ///
 /// Supports escape sequences: `\t` → tab, `\n` → newline.
 /// Unknown placeholders are left as-is.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use maki::format::render_template;
+///
+/// let mut values = HashMap::new();
+/// values.insert("id", "abc123".to_string());
+/// values.insert("name", "sunset.jpg".to_string());
+///
+/// assert_eq!(render_template("{id}\t{name}", &values), "abc123\tsunset.jpg");
+/// assert_eq!(render_template("{unknown}", &values), "{unknown}");
+/// ```
 pub fn render_template(template: &str, values: &HashMap<&str, String>) -> String {
     let mut result = String::with_capacity(template.len());
     let mut chars = template.chars().peekable();

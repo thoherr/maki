@@ -12,6 +12,16 @@
 ///
 /// - `\/` (escaped slash) becomes literal `/` in storage
 /// - Unescaped `/` becomes `|` (hierarchy separator)
+///
+/// # Examples
+///
+/// ```
+/// use maki::tag_util::tag_input_to_storage;
+///
+/// assert_eq!(tag_input_to_storage("animals/birds"), "animals|birds");
+/// assert_eq!(tag_input_to_storage("f\\/1.4"), "f/1.4");
+/// assert_eq!(tag_input_to_storage("plain tag"), "plain tag");
+/// ```
 pub fn tag_input_to_storage(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
@@ -32,6 +42,16 @@ pub fn tag_input_to_storage(input: &str) -> String {
 ///
 /// - `|` becomes `/` (hierarchy separator shown as slash)
 /// - Literal `/` becomes `\/` (escaped for round-trip clarity)
+///
+/// # Examples
+///
+/// ```
+/// use maki::tag_util::tag_storage_to_display;
+///
+/// assert_eq!(tag_storage_to_display("animals|birds"), "animals/birds");
+/// assert_eq!(tag_storage_to_display("f/1.4"), "f\\/1.4");
+/// assert_eq!(tag_storage_to_display("plain tag"), "plain tag");
+/// ```
 pub fn tag_storage_to_display(stored: &str) -> String {
     let mut result = String::with_capacity(stored.len() + 4);
     for c in stored.chars() {
@@ -48,11 +68,29 @@ pub fn tag_storage_to_display(stored: &str) -> String {
 }
 
 /// Check if a stored tag is hierarchical (contains `|`).
+///
+/// # Examples
+///
+/// ```
+/// use maki::tag_util::is_hierarchical;
+///
+/// assert!(is_hierarchical("animals|birds"));
+/// assert!(!is_hierarchical("landscape"));
+/// ```
 pub fn is_hierarchical(tag: &str) -> bool {
     tag.contains('|')
 }
 
 /// Split a stored tag into hierarchy segments on `|`.
+///
+/// # Examples
+///
+/// ```
+/// use maki::tag_util::split_hierarchy;
+///
+/// assert_eq!(split_hierarchy("animals|birds|eagles"), vec!["animals", "birds", "eagles"]);
+/// assert_eq!(split_hierarchy("landscape"), vec!["landscape"]);
+/// ```
 pub fn split_hierarchy(tag: &str) -> Vec<&str> {
     tag.split('|').collect()
 }
