@@ -2,20 +2,24 @@
 
 Over time, files move, drives get swapped, external tools edit recipes, and storage devices accumulate stale references. This chapter covers the commands that keep your catalog accurate and your files healthy.
 
-The six core maintenance commands form a cycle:
+The core maintenance commands form a cycle:
 
 ```mermaid
 flowchart LR
     V["maki verify<br/>(detect corruption)"]
     S["maki sync<br/>(reconcile moved/<br/>modified files)"]
-    SM["maki sync-metadata<br/>(bidirectional<br/>XMP sync)"]
-    R["maki refresh<br/>(re-read changed<br/>recipes)"]
-    C["maki cleanup<br/>(remove stale<br/>records)"]
+    SM["maki sync-metadata<br/>(bidirectional XMP sync<br/>with conflict detection)"]
+    R["maki refresh<br/>(re-read changed recipes)"]
+    W["maki writeback<br/>(write edits to XMP)"]
+    C["maki cleanup<br/>(remove stale records)"]
 
-    V --> S --> SM --> R --> C --> V
+    V --> S
+    S --> SM --> C
+    S --> R --> W --> C
+    C --> V
 ```
 
-`maki sync-metadata` replaces the separate `writeback` + `refresh` steps for most workflows — it handles both directions in a single command and detects conflicts.
+After `sync`, there are two paths: `sync-metadata` handles both directions (reading recipe changes and writing back edits) in a single command with conflict detection. Alternatively, `refresh` and `writeback` can be run separately for finer control.
 
 Each command is safe by default -- destructive operations require an explicit `--apply` flag, and most commands support `--dry-run` or report-only mode.
 
