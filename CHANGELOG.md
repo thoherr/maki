@@ -2,6 +2,26 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.0.5 (2026-03-20)
+
+### New Features
+- **Unified numeric filter syntax** — all numeric search filters (rating, iso, focal, f, width, height, copies, variants, scattered, faces, stale) now support the same consistent syntax: `x` (exact), `x+` (minimum), `x-y` (range), `x,y` (OR values), `x,y+` (combined). For example, `iso:100,400`, `width:1920-3840`, `rating:2,4+` all work.
+- **`orphan:false` filter** — new filter for assets with at least one file location (inverse of `orphan:true`).
+- **Rating ranges** — `rating:3-5` matches 3, 4, or 5 stars.
+
+### Bug Fixes
+- **`*` query matched only ~37 assets** — `*` was treated as free-text search, not a wildcard. Empty string `""` is now used for "all assets" in code, error messages, and documentation.
+- **`scattered:2+` silently ignored** — the `+` suffix wasn't stripped. Now works like other numeric filters.
+- **`--query` in error messages** — auto-tag, embed, and describe error messages showed `--query` syntax but query is a positional argument.
+
+### Enhancements
+- **Unified `NumericFilter` enum** — replaced 20 separate fields with 11 `Option<NumericFilter>`, removing ~100 lines of duplicate parsing and SQL code. One parser (`parse_numeric_filter`), one SQL builder (`numeric_clause`).
+- **Complete search filter documentation** — all 34 filters now consistently documented in the quick reference, command reference, and full filter reference.
+- **Maintenance cycle diagram** — fixed to show the fork between `sync-metadata` (combined) and separate `refresh` → `writeback` paths.
+- **Metadata precedence** — corrected documentation to match implementation (first-set-wins on import, sidecar-overwrites on update).
+- **`--log` flag description** — updated to list all 15+ supported commands, not just three.
+- **Mermaid diagram line breaks** — `\n` → `<br/>` for correct PDF rendering.
+
 ## v4.0.4 (2026-03-19)
 
 ### Bug Fixes
