@@ -482,8 +482,15 @@ fn extract_pooled_embedding(
 
 /// Preprocess an image for SigLIP: resize to NxN, normalize to [-1, 1].
 fn preprocess_image(path: &Path, image_size: usize) -> Result<Array4<f32>> {
-    let img = image::open(path)
+    // Use a generous memory limit (512 MB) to handle large TIFFs from medium format cameras.
+    // The image is resized to a small square immediately after loading, so peak memory is brief.
+    let mut reader = image::ImageReader::open(path)
         .with_context(|| format!("Failed to open image: {}", path.display()))?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(512 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader.decode()
+        .with_context(|| format!("Failed to decode image: {}", path.display()))?;
 
     let resized = img.resize_exact(
         image_size as u32,
