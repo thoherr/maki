@@ -54,10 +54,13 @@ impl SavedSearch {
         }
 
         // Rating: reconstruct the filter string
-        if let Some(min) = parsed.rating_min {
-            params.push(format!("rating={}%2B", min)); // N+
-        } else if let Some(exact) = parsed.rating_exact {
-            params.push(format!("rating={}", exact));
+        if let Some(ref f) = parsed.rating {
+            match f {
+                crate::query::NumericFilter::Min(v) => params.push(format!("rating={}%2B", *v as u8)),
+                crate::query::NumericFilter::Exact(v) => params.push(format!("rating={}", *v as u8)),
+                crate::query::NumericFilter::Range(lo, hi) => params.push(format!("rating={}-{}", *lo as u8, *hi as u8)),
+                _ => {}
+            }
         }
 
         // Sort

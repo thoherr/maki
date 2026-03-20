@@ -95,31 +95,24 @@ pub struct ParsedSearch {
     pub collections_exclude: Vec<String>,
     pub path_prefixes: Vec<String>,
     pub path_prefixes_exclude: Vec<String>,
-    pub rating_min: Option<u8>,
-    pub rating_max: Option<u8>,
-    pub rating_exact: Option<u8>,
-    pub rating_values: Vec<u8>,
-    pub iso_min: Option<i64>,
-    pub iso_max: Option<i64>,
-    pub focal_min: Option<f64>,
-    pub focal_max: Option<f64>,
-    pub f_min: Option<f64>,
-    pub f_max: Option<f64>,
-    pub width_min: Option<i64>,
-    pub height_min: Option<i64>,
+    pub rating: Option<NumericFilter>,
+    pub iso: Option<NumericFilter>,
+    pub focal: Option<NumericFilter>,
+    pub aperture: Option<NumericFilter>,
+    pub width: Option<NumericFilter>,
+    pub height: Option<NumericFilter>,
+    pub copies: Option<NumericFilter>,
+    pub variant_count: Option<NumericFilter>,
+    pub scattered: Option<NumericFilter>,
+    pub face_count: Option<NumericFilter>,
+    pub stale_days: Option<NumericFilter>,
     pub meta_filters: Vec<(String, String)>,
     pub orphan: bool,
     pub orphan_false: bool,
-    pub stale_days: Option<u64>,
     pub missing: bool,
     pub volumes: Vec<String>,
     pub volumes_exclude: Vec<String>,
     pub volume_none: bool,
-    pub copies_exact: Option<u64>,
-    pub copies_min: Option<u64>,
-    pub variant_count_exact: Option<u64>,
-    pub variant_count_min: Option<u64>,
-    pub scattered_min: Option<u64>,
     pub date_prefix: Option<String>,
     pub date_from: Option<String>,
     pub date_until: Option<String>,
@@ -127,8 +120,6 @@ pub struct ParsedSearch {
     pub geo_bbox: Option<(f64, f64, f64, f64)>,  // (south, west, north, east)
     pub has_gps: Option<bool>,
     pub has_faces: Option<bool>,
-    pub face_count_min: Option<u32>,
-    pub face_count_exact: Option<u32>,
     pub persons: Vec<String>,
     pub persons_exclude: Vec<String>,
     pub asset_ids: Vec<String>,
@@ -179,24 +170,17 @@ impl ParsedSearch {
 
         // Option fields: prefer self, fall back to other
         if self.text.is_none() { self.text = other.text.clone(); }
-        if self.rating_min.is_none() { self.rating_min = other.rating_min; }
-        if self.rating_max.is_none() { self.rating_max = other.rating_max; }
-        if self.rating_exact.is_none() { self.rating_exact = other.rating_exact; }
-        self.rating_values.extend(other.rating_values.iter());
-        if self.iso_min.is_none() { self.iso_min = other.iso_min; }
-        if self.iso_max.is_none() { self.iso_max = other.iso_max; }
-        if self.focal_min.is_none() { self.focal_min = other.focal_min; }
-        if self.focal_max.is_none() { self.focal_max = other.focal_max; }
-        if self.f_min.is_none() { self.f_min = other.f_min; }
-        if self.f_max.is_none() { self.f_max = other.f_max; }
-        if self.width_min.is_none() { self.width_min = other.width_min; }
-        if self.height_min.is_none() { self.height_min = other.height_min; }
-        if self.stale_days.is_none() { self.stale_days = other.stale_days; }
-        if self.copies_exact.is_none() { self.copies_exact = other.copies_exact; }
-        if self.copies_min.is_none() { self.copies_min = other.copies_min; }
-        if self.variant_count_exact.is_none() { self.variant_count_exact = other.variant_count_exact; }
-        if self.variant_count_min.is_none() { self.variant_count_min = other.variant_count_min; }
-        if self.scattered_min.is_none() { self.scattered_min = other.scattered_min; }
+        self.rating = NumericFilter::or(&self.rating, &other.rating);
+        self.iso = NumericFilter::or(&self.iso, &other.iso);
+        self.focal = NumericFilter::or(&self.focal, &other.focal);
+        self.aperture = NumericFilter::or(&self.aperture, &other.aperture);
+        self.width = NumericFilter::or(&self.width, &other.width);
+        self.height = NumericFilter::or(&self.height, &other.height);
+        self.copies = NumericFilter::or(&self.copies, &other.copies);
+        self.variant_count = NumericFilter::or(&self.variant_count, &other.variant_count);
+        self.scattered = NumericFilter::or(&self.scattered, &other.scattered);
+        self.face_count = NumericFilter::or(&self.face_count, &other.face_count);
+        self.stale_days = NumericFilter::or(&self.stale_days, &other.stale_days);
         if self.date_prefix.is_none() { self.date_prefix = other.date_prefix.clone(); }
         if self.date_from.is_none() { self.date_from = other.date_from.clone(); }
         if self.date_until.is_none() { self.date_until = other.date_until.clone(); }
@@ -204,8 +188,6 @@ impl ParsedSearch {
         if self.geo_bbox.is_none() { self.geo_bbox = other.geo_bbox; }
         if self.has_gps.is_none() { self.has_gps = other.has_gps; }
         if self.has_faces.is_none() { self.has_faces = other.has_faces; }
-        if self.face_count_min.is_none() { self.face_count_min = other.face_count_min; }
-        if self.face_count_exact.is_none() { self.face_count_exact = other.face_count_exact; }
         if self.has_embed.is_none() { self.has_embed = other.has_embed; }
         #[cfg(feature = "ai")]
         {
@@ -245,18 +227,17 @@ impl ParsedSearch {
             collections_exclude: &self.collections_exclude,
             path_prefixes: &self.path_prefixes,
             path_prefixes_exclude: &self.path_prefixes_exclude,
-            rating_min: self.rating_min,
-            rating_max: self.rating_max,
-            rating_exact: self.rating_exact,
-            rating_values: &self.rating_values,
-            iso_min: self.iso_min,
-            iso_max: self.iso_max,
-            focal_min: self.focal_min,
-            focal_max: self.focal_max,
-            f_min: self.f_min,
-            f_max: self.f_max,
-            width_min: self.width_min,
-            height_min: self.height_min,
+            rating: self.rating.clone(),
+            iso: self.iso.clone(),
+            focal: self.focal.clone(),
+            aperture: self.aperture.clone(),
+            width: self.width.clone(),
+            height: self.height.clone(),
+            copies: self.copies.clone(),
+            variant_count: self.variant_count.clone(),
+            scattered: self.scattered.clone(),
+            face_count: self.face_count.clone(),
+            stale_days: self.stale_days.clone(),
             meta_filters: self
                 .meta_filters
                 .iter()
@@ -264,12 +245,6 @@ impl ParsedSearch {
                 .collect(),
             orphan: self.orphan,
             orphan_false: self.orphan_false,
-            stale_days: self.stale_days,
-            copies_exact: self.copies_exact,
-            copies_min: self.copies_min,
-            variant_count_exact: self.variant_count_exact,
-            variant_count_min: self.variant_count_min,
-            scattered_min: self.scattered_min,
             date_prefix: self.date_prefix.as_deref(),
             date_from: self.date_from.as_deref(),
             date_until: self.date_until.as_deref(),
@@ -278,8 +253,6 @@ impl ParsedSearch {
             has_gps: self.has_gps,
             has_faces: self.has_faces,
             has_embed: self.has_embed,
-            face_count_min: self.face_count_min,
-            face_count_exact: self.face_count_exact,
             ..Default::default()
         }
     }
@@ -348,12 +321,12 @@ fn tokenize_query(query: &str) -> Vec<String> {
 /// # Examples
 ///
 /// ```
-/// use maki::query::parse_search_query;
+/// use maki::query::{parse_search_query, NumericFilter};
 ///
 /// let p = parse_search_query("tag:sunset type:image rating:3+");
 /// assert_eq!(p.tags, vec!["sunset"]);
 /// assert_eq!(p.asset_types, vec!["image"]);
-/// assert_eq!(p.rating_min, Some(3));
+/// assert_eq!(p.rating, Some(NumericFilter::Min(3.0)));
 ///
 /// // Negation with - prefix
 /// let p = parse_search_query("-tag:rejected");
@@ -366,8 +339,7 @@ fn tokenize_query(query: &str) -> Vec<String> {
 ///
 /// // Rating range
 /// let p = parse_search_query("rating:3-5");
-/// assert_eq!(p.rating_min, Some(3));
-/// assert_eq!(p.rating_max, Some(5));
+/// assert_eq!(p.rating, Some(NumericFilter::Range(3.0, 5.0)));
 ///
 /// // Free text (unrecognized tokens)
 /// let p = parse_search_query("sunset beach");
@@ -406,39 +378,7 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
                 parsed.formats.push(value.to_string());
             }
         } else if let Some(value) = token_body.strip_prefix("rating:") {
-            // Syntax: 3 (exact), 3+ (min), 3-5 (range), 2,4 (OR), 2,4+ (OR with min)
-            if value.contains(',') {
-                for part in value.split(',') {
-                    let part = part.trim();
-                    if let Some(num_str) = part.strip_suffix('+') {
-                        if let Ok(n) = num_str.parse::<u8>() {
-                            parsed.rating_min = Some(n);
-                        }
-                    } else if part.contains('-') {
-                        if let Some((lo, hi)) = part.split_once('-') {
-                            if let (Ok(a), Ok(b)) = (lo.parse::<u8>(), hi.parse::<u8>()) {
-                                parsed.rating_min = Some(a);
-                                parsed.rating_max = Some(b);
-                            }
-                        }
-                    } else if let Ok(n) = part.parse::<u8>() {
-                        parsed.rating_values.push(n);
-                    }
-                }
-            } else if let Some(num_str) = value.strip_suffix('+') {
-                if let Ok(n) = num_str.parse::<u8>() {
-                    parsed.rating_min = Some(n);
-                }
-            } else if value.contains('-') {
-                if let Some((lo, hi)) = value.split_once('-') {
-                    if let (Ok(a), Ok(b)) = (lo.parse::<u8>(), hi.parse::<u8>()) {
-                        parsed.rating_min = Some(a);
-                        parsed.rating_max = Some(b);
-                    }
-                }
-            } else if let Ok(n) = value.parse::<u8>() {
-                parsed.rating_exact = Some(n);
-            }
+            parsed.rating = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("camera:") {
             if negated {
                 parsed.cameras_exclude.push(value.to_string());
@@ -452,27 +392,15 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
                 parsed.lenses.push(value.to_string());
             }
         } else if let Some(value) = token_body.strip_prefix("iso:") {
-            parse_int_range(value, &mut parsed.iso_min, &mut parsed.iso_max);
+            parsed.iso = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("focal:") {
-            parse_float_range(value, &mut parsed.focal_min, &mut parsed.focal_max);
+            parsed.focal = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("f:") {
-            parse_float_range(value, &mut parsed.f_min, &mut parsed.f_max);
+            parsed.aperture = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("width:") {
-            if let Some(num_str) = value.strip_suffix('+') {
-                if let Ok(n) = num_str.parse::<i64>() {
-                    parsed.width_min = Some(n);
-                }
-            } else if let Ok(n) = value.parse::<i64>() {
-                parsed.width_min = Some(n);
-            }
+            parsed.width = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("height:") {
-            if let Some(num_str) = value.strip_suffix('+') {
-                if let Ok(n) = num_str.parse::<i64>() {
-                    parsed.height_min = Some(n);
-                }
-            } else if let Ok(n) = value.parse::<i64>() {
-                parsed.height_min = Some(n);
-            }
+            parsed.height = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("meta:") {
             if let Some((key, val)) = value.split_once('=') {
                 parsed.meta_filters.push((key.to_string(), val.to_string()));
@@ -484,9 +412,7 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
         } else if token_body == "missing:true" {
             parsed.missing = true;
         } else if let Some(value) = token_body.strip_prefix("stale:") {
-            if let Ok(days) = value.parse::<u64>() {
-                parsed.stale_days = Some(days);
-            }
+            parsed.stale_days = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("volume:") {
             if value == "none" {
                 parsed.volume_none = true;
@@ -514,20 +440,11 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
                 parsed.path_prefixes.push(value.to_string());
             }
         } else if let Some(value) = token_body.strip_prefix("copies:") {
-            if let Some(num_str) = value.strip_suffix('+') {
-                parsed.copies_min = num_str.parse().ok();
-            } else {
-                parsed.copies_exact = value.parse().ok();
-            }
+            parsed.copies = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("variants:") {
-            if let Some(num_str) = value.strip_suffix('+') {
-                parsed.variant_count_min = num_str.parse().ok();
-            } else {
-                parsed.variant_count_exact = value.parse().ok();
-            }
+            parsed.variant_count = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("scattered:") {
-            let value = value.strip_suffix('+').unwrap_or(value);
-            parsed.scattered_min = value.parse().ok();
+            parsed.scattered = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("date:") {
             parsed.date_prefix = Some(value.to_string());
         } else if let Some(value) = token_body.strip_prefix("dateFrom:") {
@@ -564,12 +481,8 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
                 parsed.has_faces = Some(true);
             } else if value == "none" {
                 parsed.has_faces = Some(false);
-            } else if let Some(num_str) = value.strip_suffix('+') {
-                if let Ok(n) = num_str.parse::<u32>() {
-                    parsed.face_count_min = Some(n);
-                }
-            } else if let Ok(n) = value.parse::<u32>() {
-                parsed.face_count_exact = Some(n);
+            } else {
+                parsed.face_count = parse_numeric_filter(value);
             }
         } else if let Some(value) = token_body.strip_prefix("embed:") {
             if value == "any" || value == "true" {
@@ -645,36 +558,87 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
 }
 
 /// Parse an integer range value: "3200" (exact), "3200+" (min), "100-800" (range).
-fn parse_int_range(value: &str, min: &mut Option<i64>, max: &mut Option<i64>) {
-    if let Some(num_str) = value.strip_suffix('+') {
-        if let Ok(n) = num_str.parse::<i64>() {
-            *min = Some(n);
-        }
-    } else if let Some((lo, hi)) = value.split_once('-') {
-        if let (Ok(lo_n), Ok(hi_n)) = (lo.parse::<i64>(), hi.parse::<i64>()) {
-            *min = Some(lo_n);
-            *max = Some(hi_n);
-        }
-    } else if let Ok(n) = value.parse::<i64>() {
-        *min = Some(n);
-        *max = Some(n);
+/// Unified numeric filter supporting exact, minimum, range, and OR values.
+///
+/// All numeric search filters (rating, iso, focal, f, width, height, copies,
+/// variants, scattered, face_count) use this type for consistent syntax:
+/// `x` (exact), `x+` (minimum), `x-y` (range), `x,y` (OR), `x,y+` (combined).
+#[derive(Debug, Clone, PartialEq)]
+pub enum NumericFilter {
+    /// Exactly this value
+    Exact(f64),
+    /// This value or more
+    Min(f64),
+    /// Between min and max (inclusive)
+    Range(f64, f64),
+    /// Any of these exact values
+    Values(Vec<f64>),
+    /// Any of these exact values OR >= min
+    ValuesOrMin { values: Vec<f64>, min: f64 },
+}
+
+impl NumericFilter {
+    /// Merge another filter (from default_filter) if self is None.
+    pub fn or(a: &Option<Self>, b: &Option<Self>) -> Option<Self> {
+        a.clone().or_else(|| b.clone())
     }
 }
 
-/// Parse a float range value: "2.8" (exact), "2.8+" (min), "1.4-2.8" (range).
-fn parse_float_range(value: &str, min: &mut Option<f64>, max: &mut Option<f64>) {
-    if let Some(num_str) = value.strip_suffix('+') {
-        if let Ok(n) = num_str.parse::<f64>() {
-            *min = Some(n);
+/// Parse a numeric filter value string into a NumericFilter.
+///
+/// # Examples
+///
+/// ```
+/// use maki::query::parse_numeric_filter;
+///
+/// assert_eq!(parse_numeric_filter("3"), Some(maki::query::NumericFilter::Exact(3.0)));
+/// assert_eq!(parse_numeric_filter("3+"), Some(maki::query::NumericFilter::Min(3.0)));
+/// assert_eq!(parse_numeric_filter("3-5"), Some(maki::query::NumericFilter::Range(3.0, 5.0)));
+/// assert_eq!(parse_numeric_filter("2,4"), Some(maki::query::NumericFilter::Values(vec![2.0, 4.0])));
+/// ```
+pub fn parse_numeric_filter(value: &str) -> Option<NumericFilter> {
+    if value.contains(',') {
+        let mut values = Vec::new();
+        let mut min = None;
+        for part in value.split(',') {
+            let part = part.trim();
+            if let Some(num_str) = part.strip_suffix('+') {
+                if let Ok(n) = num_str.parse::<f64>() {
+                    min = Some(n);
+                }
+            } else if part.contains('-') {
+                if let Some((lo, hi)) = part.split_once('-') {
+                    if let (Ok(a), Ok(b)) = (lo.parse::<f64>(), hi.parse::<f64>()) {
+                        // Range inside comma list: return as range
+                        return Some(NumericFilter::Range(a, b));
+                    }
+                }
+            } else if let Ok(n) = part.parse::<f64>() {
+                values.push(n);
+            }
         }
-    } else if let Some((lo, hi)) = value.split_once('-') {
-        if let (Ok(lo_n), Ok(hi_n)) = (lo.parse::<f64>(), hi.parse::<f64>()) {
-            *min = Some(lo_n);
-            *max = Some(hi_n);
+        if let Some(m) = min {
+            if values.is_empty() {
+                Some(NumericFilter::Min(m))
+            } else {
+                Some(NumericFilter::ValuesOrMin { values, min: m })
+            }
+        } else if values.len() == 1 {
+            Some(NumericFilter::Exact(values[0]))
+        } else if !values.is_empty() {
+            Some(NumericFilter::Values(values))
+        } else {
+            None
         }
-    } else if let Ok(n) = value.parse::<f64>() {
-        *min = Some(n);
-        *max = Some(n);
+    } else if let Some(num_str) = value.strip_suffix('+') {
+        num_str.parse::<f64>().ok().map(NumericFilter::Min)
+    } else if value.contains('-') {
+        let (lo, hi) = value.split_once('-')?;
+        let a = lo.parse::<f64>().ok()?;
+        let b = hi.parse::<f64>().ok()?;
+        Some(NumericFilter::Range(a, b))
+    } else {
+        value.parse::<f64>().ok().map(NumericFilter::Exact)
     }
 }
 
@@ -3296,69 +3260,61 @@ mod tests {
     #[test]
     fn parse_iso_exact() {
         let p = parse_search_query("iso:3200");
-        assert_eq!(p.iso_min, Some(3200));
-        assert_eq!(p.iso_max, Some(3200));
+        assert_eq!(p.iso, Some(NumericFilter::Exact(3200.0)));
     }
 
     #[test]
     fn parse_iso_min() {
         let p = parse_search_query("iso:3200+");
-        assert_eq!(p.iso_min, Some(3200));
-        assert!(p.iso_max.is_none());
+        assert_eq!(p.iso, Some(NumericFilter::Min(3200.0)));
     }
 
     #[test]
     fn parse_iso_range() {
         let p = parse_search_query("iso:100-800");
-        assert_eq!(p.iso_min, Some(100));
-        assert_eq!(p.iso_max, Some(800));
+        assert_eq!(p.iso, Some(NumericFilter::Range(100.0, 800.0)));
     }
 
     #[test]
     fn parse_focal_exact() {
         let p = parse_search_query("focal:50");
-        assert!((p.focal_min.unwrap() - 50.0).abs() < 0.01);
-        assert!((p.focal_max.unwrap() - 50.0).abs() < 0.01);
+        assert_eq!(p.focal, Some(NumericFilter::Exact(50.0)));
     }
 
     #[test]
     fn parse_focal_range() {
         let p = parse_search_query("focal:35-70");
-        assert!((p.focal_min.unwrap() - 35.0).abs() < 0.01);
-        assert!((p.focal_max.unwrap() - 70.0).abs() < 0.01);
+        assert_eq!(p.focal, Some(NumericFilter::Range(35.0, 70.0)));
     }
 
     #[test]
     fn parse_f_exact() {
         let p = parse_search_query("f:2.8");
-        assert!((p.f_min.unwrap() - 2.8).abs() < 0.01);
-        assert!((p.f_max.unwrap() - 2.8).abs() < 0.01);
+        assert_eq!(p.aperture, Some(NumericFilter::Exact(2.8)));
     }
 
     #[test]
     fn parse_f_min() {
         let p = parse_search_query("f:2.8+");
-        assert!((p.f_min.unwrap() - 2.8).abs() < 0.01);
-        assert!(p.f_max.is_none());
+        assert_eq!(p.aperture, Some(NumericFilter::Min(2.8)));
     }
 
     #[test]
     fn parse_f_range() {
         let p = parse_search_query("f:1.4-2.8");
-        assert!((p.f_min.unwrap() - 1.4).abs() < 0.01);
-        assert!((p.f_max.unwrap() - 2.8).abs() < 0.01);
+        assert_eq!(p.aperture, Some(NumericFilter::Range(1.4, 2.8)));
     }
 
     #[test]
     fn parse_width_min() {
         let p = parse_search_query("width:4000+");
-        assert_eq!(p.width_min, Some(4000));
+        assert_eq!(p.width, Some(NumericFilter::Min(4000.0)));
     }
 
     #[test]
     fn parse_height_min() {
         let p = parse_search_query("height:2000+");
-        assert_eq!(p.height_min, Some(2000));
+        assert_eq!(p.height, Some(NumericFilter::Min(2000.0)));
     }
 
     #[test]
@@ -3373,8 +3329,7 @@ mod tests {
     fn parse_mixed_filters_with_text() {
         let p = parse_search_query("camera:fuji sunset iso:400 landscape");
         assert_eq!(p.cameras, vec!["fuji"]);
-        assert_eq!(p.iso_min, Some(400));
-        assert_eq!(p.iso_max, Some(400));
+        assert_eq!(p.iso, Some(NumericFilter::Exact(400.0)));
         assert_eq!(p.text.as_deref(), Some("sunset landscape"));
     }
 
@@ -3384,15 +3339,14 @@ mod tests {
         assert_eq!(p.asset_types, vec!["image"]);
         assert_eq!(p.tags, vec!["nature"]);
         assert_eq!(p.formats, vec!["jpg"]);
-        assert_eq!(p.rating_min, Some(3));
-        assert!(p.rating_exact.is_none());
+        assert_eq!(p.rating, Some(NumericFilter::Min(3.0)));
     }
 
     #[test]
     fn parse_quoted_tag_with_spaces() {
         let p = parse_search_query(r#"tag:"Fools Theater" rating:4+"#);
         assert_eq!(p.tags, vec!["Fools Theater"]);
-        assert_eq!(p.rating_min, Some(4));
+        assert_eq!(p.rating, Some(NumericFilter::Min(4.0)));
         assert!(p.text.is_none());
     }
 
@@ -3420,7 +3374,7 @@ mod tests {
     fn parse_mixed_quoted_and_unquoted() {
         let p = parse_search_query(r#"sunset tag:"Fools Theater" rating:5"#);
         assert_eq!(p.tags, vec!["Fools Theater"]);
-        assert_eq!(p.rating_exact, Some(5));
+        assert_eq!(p.rating, Some(NumericFilter::Exact(5.0)));
         assert_eq!(p.text.as_deref(), Some("sunset"));
     }
 
@@ -3464,14 +3418,14 @@ mod tests {
     #[test]
     fn parse_stale_filter() {
         let p = parse_search_query("stale:30");
-        assert_eq!(p.stale_days, Some(30));
+        assert_eq!(p.stale_days, Some(NumericFilter::Exact(30.0)));
         assert!(p.text.is_none());
     }
 
     #[test]
     fn parse_stale_filter_zero() {
         let p = parse_search_query("stale:0");
-        assert_eq!(p.stale_days, Some(0));
+        assert_eq!(p.stale_days, Some(NumericFilter::Exact(0.0)));
     }
 
     #[test]
@@ -3508,7 +3462,7 @@ mod tests {
         let p = parse_search_query("volume:Working type:image rating:3+");
         assert_eq!(p.volumes, vec!["Working"]);
         assert_eq!(p.asset_types, vec!["image"]);
-        assert_eq!(p.rating_min, Some(3));
+        assert_eq!(p.rating, Some(NumericFilter::Min(3.0)));
     }
 
     #[test]
@@ -3522,7 +3476,7 @@ mod tests {
     fn parse_location_health_combined() {
         let p = parse_search_query("orphan:true stale:7 tag:landscape");
         assert!(p.orphan);
-        assert_eq!(p.stale_days, Some(7));
+        assert_eq!(p.stale_days, Some(NumericFilter::Exact(7.0)));
         assert_eq!(p.tags, vec!["landscape"]);
         assert!(!p.missing);
         assert!(!p.volume_none);
@@ -3560,7 +3514,7 @@ mod tests {
     fn parse_path_with_other_filters() {
         let p = parse_search_query("path:Capture/2026 rating:3+ tag:landscape");
         assert_eq!(p.path_prefixes, vec!["Capture/2026"]);
-        assert_eq!(p.rating_min, Some(3));
+        assert_eq!(p.rating, Some(NumericFilter::Min(3.0)));
         assert_eq!(p.tags, vec!["landscape"]);
         assert!(p.text.is_none());
     }
@@ -3570,24 +3524,22 @@ mod tests {
     #[test]
     fn parse_copies_exact() {
         let p = parse_search_query("copies:2");
-        assert_eq!(p.copies_exact, Some(2));
-        assert!(p.copies_min.is_none());
+        assert_eq!(p.copies, Some(NumericFilter::Exact(2.0)));
         assert!(p.text.is_none());
     }
 
     #[test]
     fn parse_copies_min() {
         let p = parse_search_query("copies:2+");
-        assert_eq!(p.copies_min, Some(2));
-        assert!(p.copies_exact.is_none());
+        assert_eq!(p.copies, Some(NumericFilter::Min(2.0)));
         assert!(p.text.is_none());
     }
 
     #[test]
     fn parse_copies_with_other_filters() {
         let p = parse_search_query("copies:3+ rating:4+ tag:landscape");
-        assert_eq!(p.copies_min, Some(3));
-        assert_eq!(p.rating_min, Some(4));
+        assert_eq!(p.copies, Some(NumericFilter::Min(3.0)));
+        assert_eq!(p.rating, Some(NumericFilter::Min(4.0)));
         assert_eq!(p.tags, vec!["landscape"]);
     }
 
@@ -3596,21 +3548,19 @@ mod tests {
     #[test]
     fn parse_variants_exact() {
         let p = parse_search_query("variants:3");
-        assert_eq!(p.variant_count_exact, Some(3));
-        assert!(p.variant_count_min.is_none());
+        assert_eq!(p.variant_count, Some(NumericFilter::Exact(3.0)));
     }
 
     #[test]
     fn parse_variants_min() {
         let p = parse_search_query("variants:3+");
-        assert_eq!(p.variant_count_min, Some(3));
-        assert!(p.variant_count_exact.is_none());
+        assert_eq!(p.variant_count, Some(NumericFilter::Min(3.0)));
     }
 
     #[test]
     fn parse_variants_with_other_filters() {
         let p = parse_search_query("variants:5+ tag:landscape");
-        assert_eq!(p.variant_count_min, Some(5));
+        assert_eq!(p.variant_count, Some(NumericFilter::Min(5.0)));
         assert_eq!(p.tags, vec!["landscape"]);
     }
 
@@ -3619,59 +3569,52 @@ mod tests {
     #[test]
     fn parse_scattered() {
         let p = parse_search_query("scattered:2");
-        assert_eq!(p.scattered_min, Some(2));
+        assert_eq!(p.scattered, Some(NumericFilter::Exact(2.0)));
     }
 
     #[test]
     fn parse_scattered_with_variants() {
         let p = parse_search_query("scattered:2 variants:3+");
-        assert_eq!(p.scattered_min, Some(2));
-        assert_eq!(p.variant_count_min, Some(3));
+        assert_eq!(p.scattered, Some(NumericFilter::Exact(2.0)));
+        assert_eq!(p.variant_count, Some(NumericFilter::Min(3.0)));
     }
 
     #[test]
     fn parse_scattered_with_plus_suffix() {
         let p = parse_search_query("scattered:2+");
-        assert_eq!(p.scattered_min, Some(2));
+        assert_eq!(p.scattered, Some(NumericFilter::Min(2.0)));
     }
 
     #[test]
     fn parse_rating_comma_separated() {
         // rating:4,5 → exact values 4 and 5
         let p = parse_search_query("rating:4,5");
-        assert_eq!(p.rating_values, vec![4, 5]);
-        assert!(p.rating_min.is_none());
-        assert!(p.rating_exact.is_none());
+        assert_eq!(p.rating, Some(NumericFilter::Values(vec![4.0, 5.0])));
     }
 
     #[test]
     fn parse_rating_comma_with_min() {
         // rating:2,4+ → exact 2 OR minimum 4
         let p = parse_search_query("rating:2,4+");
-        assert_eq!(p.rating_values, vec![2]);
-        assert_eq!(p.rating_min, Some(4));
+        assert_eq!(p.rating, Some(NumericFilter::ValuesOrMin { values: vec![2.0], min: 4.0 }));
     }
 
     #[test]
     fn parse_rating_comma_multiple() {
         let p = parse_search_query("rating:1,3,5");
-        assert_eq!(p.rating_values, vec![1, 3, 5]);
+        assert_eq!(p.rating, Some(NumericFilter::Values(vec![1.0, 3.0, 5.0])));
     }
 
     #[test]
     fn parse_rating_range() {
         let p = parse_search_query("rating:3-5");
-        assert_eq!(p.rating_min, Some(3));
-        assert_eq!(p.rating_max, Some(5));
-        assert!(p.rating_exact.is_none());
+        assert_eq!(p.rating, Some(NumericFilter::Range(3.0, 5.0)));
     }
 
     #[test]
     fn parse_rating_range_low() {
         let p = parse_search_query("rating:1-2");
-        assert_eq!(p.rating_min, Some(1));
-        assert_eq!(p.rating_max, Some(2));
-        assert!(p.rating_exact.is_none());
+        assert_eq!(p.rating, Some(NumericFilter::Range(1.0, 2.0)));
     }
 
     // ── date filter parse tests ─────────────────────────────────────
@@ -3885,7 +3828,7 @@ mod tests {
     fn parse_negation_does_not_affect_rating() {
         // Rating doesn't support negation — the `-` is ignored
         let p = parse_search_query("-rating:3+");
-        assert_eq!(p.rating_min, Some(3));
+        assert_eq!(p.rating, Some(NumericFilter::Min(3.0)));
         assert!(p.text.is_none());
     }
 
@@ -3930,7 +3873,7 @@ mod tests {
     fn parse_similar_with_other_filters() {
         let p = parse_search_query("similar:abc12345 rating:3+ tag:landscape");
         assert_eq!(p.similar.as_deref(), Some("abc12345"));
-        assert_eq!(p.rating_min, Some(3));
+        assert_eq!(p.rating, Some(NumericFilter::Min(3.0)));
         assert_eq!(p.tags, vec!["landscape"]);
     }
 
@@ -3985,7 +3928,7 @@ mod tests {
     fn parse_text_query_with_other_filters() {
         let p = parse_search_query("text:\"colorful flowers\" rating:3+ type:image");
         assert_eq!(p.text_query.as_deref(), Some("colorful flowers"));
-        assert_eq!(p.rating_min, Some(3));
+        assert_eq!(p.rating, Some(NumericFilter::Min(3.0)));
         assert_eq!(p.asset_types, vec!["image".to_string()]);
     }
 
@@ -4577,7 +4520,7 @@ mod tests {
         base.merge_from(&default);
         assert_eq!(base.tags, vec!["sunset".to_string()]);
         assert_eq!(base.tags_exclude, vec!["rest".to_string()]);
-        assert_eq!(base.rating_min, Some(1));
+        assert_eq!(base.rating, Some(NumericFilter::Min(1.0)));
     }
 
     #[test]
@@ -4586,7 +4529,7 @@ mod tests {
         let default = parse_search_query("rating:1+");
         base.merge_from(&default);
         // Self's rating takes priority
-        assert_eq!(base.rating_min, Some(3));
+        assert_eq!(base.rating, Some(NumericFilter::Min(3.0)));
     }
 
     #[test]

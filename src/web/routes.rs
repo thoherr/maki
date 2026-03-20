@@ -1423,15 +1423,7 @@ fn merge_search_params(
         parsed.formats.push(format.to_string());
     }
     if !rating_str.is_empty() {
-        let (rating_min, rating_exact) = parse_rating_filter(rating_str);
-        if rating_min.is_some() {
-            parsed.rating_min = rating_min;
-            parsed.rating_exact = None;
-        }
-        if rating_exact.is_some() {
-            parsed.rating_exact = rating_exact;
-            parsed.rating_min = None;
-        }
+        parsed.rating = crate::query::parse_numeric_filter(rating_str);
     }
     if !label.is_empty() {
         parsed.color_labels.push(label.to_string());
@@ -1451,23 +1443,6 @@ fn apply_default_filter(parsed: &mut ParsedSearch, default_filter: &Option<Strin
             parsed.merge_from(&default_parsed);
         }
     }
-}
-
-/// Parse a rating filter string into (rating_min, rating_exact).
-/// "3+" → (Some(3), None), "5" → (None, Some(5)), "" → (None, None)
-fn parse_rating_filter(s: &str) -> (Option<u8>, Option<u8>) {
-    if s.is_empty() {
-        return (None, None);
-    }
-    if let Some(num_str) = s.strip_suffix('+') {
-        if let Ok(n) = num_str.parse::<u8>() {
-            return (Some(n), None);
-        }
-    }
-    if let Ok(n) = s.parse::<u8>() {
-        return (None, Some(n));
-    }
-    (None, None)
 }
 
 #[derive(Debug, serde::Deserialize)]

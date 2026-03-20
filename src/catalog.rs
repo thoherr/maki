@@ -4,6 +4,8 @@ use std::path::Path;
 use anyhow::Result;
 use rusqlite::Connection;
 
+use crate::query::NumericFilter;
+
 use crate::models::{Asset, FileLocation, Recipe, Variant};
 
 /// Map marker data for the web UI map view.
@@ -431,31 +433,24 @@ pub struct SearchOptions<'a> {
     pub volume: Option<&'a str>,
     pub volume_ids: &'a [String],
     pub volume_ids_exclude: &'a [String],
-    pub rating_min: Option<u8>,
-    pub rating_max: Option<u8>,
-    pub rating_exact: Option<u8>,
-    pub rating_values: &'a [u8],
-    pub iso_min: Option<i64>,
-    pub iso_max: Option<i64>,
-    pub focal_min: Option<f64>,
-    pub focal_max: Option<f64>,
-    pub f_min: Option<f64>,
-    pub f_max: Option<f64>,
-    pub width_min: Option<i64>,
-    pub height_min: Option<i64>,
+    pub rating: Option<NumericFilter>,
+    pub iso: Option<NumericFilter>,
+    pub focal: Option<NumericFilter>,
+    pub aperture: Option<NumericFilter>,
+    pub width: Option<NumericFilter>,
+    pub height: Option<NumericFilter>,
+    pub copies: Option<NumericFilter>,
+    pub variant_count: Option<NumericFilter>,
+    pub scattered: Option<NumericFilter>,
+    pub face_count: Option<NumericFilter>,
+    pub stale_days: Option<NumericFilter>,
     pub meta_filters: Vec<(&'a str, &'a str)>,
     pub orphan: bool,
     pub orphan_false: bool,
-    pub stale_days: Option<u64>,
     pub missing_asset_ids: Option<&'a [String]>,
     pub no_online_locations: Option<&'a [String]>,
     pub collection_asset_ids: Option<&'a [String]>,
     pub collection_exclude_ids: Option<&'a [String]>,
-    pub copies_exact: Option<u64>,
-    pub copies_min: Option<u64>,
-    pub variant_count_exact: Option<u64>,
-    pub variant_count_min: Option<u64>,
-    pub scattered_min: Option<u64>,
     pub date_prefix: Option<&'a str>,
     pub date_from: Option<&'a str>,
     pub date_until: Option<&'a str>,
@@ -465,8 +460,6 @@ pub struct SearchOptions<'a> {
     pub has_gps: Option<bool>,
     pub has_faces: Option<bool>,
     pub has_embed: Option<bool>,
-    pub face_count_min: Option<u32>,
-    pub face_count_exact: Option<u32>,
     pub person_asset_ids: Option<&'a [String]>,
     pub person_exclude_ids: Option<&'a [String]>,
     pub similar_asset_ids: Option<&'a [String]>,
@@ -501,31 +494,24 @@ impl<'a> Default for SearchOptions<'a> {
             volume: None,
             volume_ids: &[],
             volume_ids_exclude: &[],
-            rating_min: None,
-            rating_max: None,
-            rating_exact: None,
-            rating_values: &[],
-            iso_min: None,
-            iso_max: None,
-            focal_min: None,
-            focal_max: None,
-            f_min: None,
-            f_max: None,
-            width_min: None,
-            height_min: None,
+            rating: None,
+            iso: None,
+            focal: None,
+            aperture: None,
+            width: None,
+            height: None,
+            copies: None,
+            variant_count: None,
+            scattered: None,
+            face_count: None,
+            stale_days: None,
             meta_filters: Vec::new(),
             orphan: false,
             orphan_false: false,
-            stale_days: None,
             missing_asset_ids: None,
             no_online_locations: None,
             collection_asset_ids: None,
             collection_exclude_ids: None,
-            copies_exact: None,
-            copies_min: None,
-            variant_count_exact: None,
-            variant_count_min: None,
-            scattered_min: None,
             date_prefix: None,
             date_from: None,
             date_until: None,
@@ -535,8 +521,6 @@ impl<'a> Default for SearchOptions<'a> {
             has_gps: None,
             has_faces: None,
             has_embed: None,
-            face_count_min: None,
-            face_count_exact: None,
             person_asset_ids: None,
             person_exclude_ids: None,
             similar_asset_ids: None,
@@ -1302,8 +1286,13 @@ impl Catalog {
             } else {
                 &[]
             },
-            rating_min,
-            rating_exact,
+            rating: if let Some(min) = rating_min {
+                Some(NumericFilter::Min(min as f64))
+            } else if let Some(exact) = rating_exact {
+                Some(NumericFilter::Exact(exact as f64))
+            } else {
+                None
+            },
             per_page: u32::MAX,
             ..Default::default()
         };
@@ -2455,6 +2444,90 @@ impl Catalog {
     /// Returns (where_clause, params, needs_fl_join, needs_v_join).
     /// `needs_v_join`: true when any filter references the `v` (variants) table directly.
     /// `needs_fl_join`: true when any filter references `fl` (file_locations); implies `needs_v_join`.
+    /// Generate SQL WHERE clause for a NumericFilter on a given column.
+    fn numeric_clause(
+        filter: &NumericFilter,
+        column: &str,
+        clauses: &mut Vec<String>,
+        params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    ) {
+        match filter {
+            NumericFilter::Exact(v) => {
+                clauses.push(format!("{column} = ?"));
+                params.push(Box::new(*v));
+            }
+            NumericFilter::Min(v) => {
+                clauses.push(format!("{column} >= ?"));
+                params.push(Box::new(*v));
+            }
+            NumericFilter::Range(lo, hi) => {
+                clauses.push(format!("({column} >= ? AND {column} <= ?)"));
+                params.push(Box::new(*lo));
+                params.push(Box::new(*hi));
+            }
+            NumericFilter::Values(vals) => {
+                let placeholders: Vec<&str> = vals.iter().map(|_| "?").collect();
+                clauses.push(format!("{column} IN ({})", placeholders.join(",")));
+                for v in vals {
+                    params.push(Box::new(*v));
+                }
+            }
+            NumericFilter::ValuesOrMin { values, min } => {
+                let placeholders: Vec<&str> = values.iter().map(|_| "?").collect();
+                clauses.push(format!(
+                    "({column} IN ({}) OR {column} >= ?)",
+                    placeholders.join(",")
+                ));
+                for v in values {
+                    params.push(Box::new(*v));
+                }
+                params.push(Box::new(*min));
+            }
+        }
+    }
+
+    /// Generate SQL WHERE clause for a NumericFilter using a subquery expression.
+    fn numeric_clause_expr(
+        filter: &NumericFilter,
+        expr: &str,
+        clauses: &mut Vec<String>,
+        params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    ) {
+        match filter {
+            NumericFilter::Exact(v) => {
+                clauses.push(format!("{expr} = ?"));
+                params.push(Box::new(*v));
+            }
+            NumericFilter::Min(v) => {
+                clauses.push(format!("{expr} >= ?"));
+                params.push(Box::new(*v));
+            }
+            NumericFilter::Range(lo, hi) => {
+                clauses.push(format!("({expr} >= ? AND {expr} <= ?)"));
+                params.push(Box::new(*lo));
+                params.push(Box::new(*hi));
+            }
+            NumericFilter::Values(vals) => {
+                let mut parts = Vec::new();
+                for v in vals {
+                    parts.push(format!("{expr} = ?"));
+                    params.push(Box::new(*v));
+                }
+                clauses.push(format!("({})", parts.join(" OR ")));
+            }
+            NumericFilter::ValuesOrMin { values, min } => {
+                let mut parts = Vec::new();
+                for v in values {
+                    parts.push(format!("{expr} = ?"));
+                    params.push(Box::new(*v));
+                }
+                parts.push(format!("{expr} >= ?"));
+                params.push(Box::new(*min));
+                clauses.push(format!("({})", parts.join(" OR ")));
+            }
+        }
+    }
+
     fn build_search_where(opts: &SearchOptions) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>, bool, bool) {
         let mut clauses = Vec::new();
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -2594,42 +2667,8 @@ impl Catalog {
             }
         }
 
-        // --- Rating ---
-        // Supports: exact (3), minimum (3+), range (3-5), OR values (2,4), combined (2,4+)
-        {
-            let mut parts: Vec<String> = Vec::new();
-            // Exact values from comma syntax: rating:2,4
-            if !opts.rating_values.is_empty() {
-                let placeholders: Vec<&str> = opts.rating_values.iter().map(|_| "?").collect();
-                parts.push(format!("a.rating IN ({})", placeholders.join(",")));
-                for v in opts.rating_values {
-                    params.push(Box::new(*v as i64));
-                }
-            }
-            // Range or minimum: rating:3+ or rating:3-5
-            if let Some(min) = opts.rating_min {
-                if let Some(max) = opts.rating_max {
-                    parts.push("(a.rating >= ? AND a.rating <= ?)".to_string());
-                    params.push(Box::new(min as i64));
-                    params.push(Box::new(max as i64));
-                } else {
-                    parts.push("a.rating >= ?".to_string());
-                    params.push(Box::new(min as i64));
-                }
-            }
-            // Single exact value: rating:3
-            if let Some(exact) = opts.rating_exact {
-                parts.push("a.rating = ?".to_string());
-                params.push(Box::new(exact as i64));
-            }
-            if !parts.is_empty() {
-                if parts.len() == 1 {
-                    clauses.push(parts.into_iter().next().unwrap());
-                } else {
-                    clauses.push(format!("({})", parts.join(" OR ")));
-                }
-            }
-        }
+        // --- Numeric filters (all use unified NumericFilter type) ---
+        if let Some(ref f) = opts.rating { Self::numeric_clause(f, "a.rating", &mut clauses, &mut params); }
 
         // --- Color label (equality on a.color_label) ---
         Self::add_equality_filter(&mut clauses, &mut params, opts.color_labels, opts.color_labels_exclude, "a.color_label", &mut false, false);
@@ -2671,46 +2710,11 @@ impl Catalog {
         Self::add_like_filter(&mut clauses, &mut params, opts.lenses, opts.lenses_exclude, "v.lens_model", &mut needs_v_join);
 
         // --- Numeric variant filters ---
-        if let Some(min) = opts.iso_min {
-            clauses.push("v.iso >= ?".to_string());
-            params.push(Box::new(min));
-            needs_v_join = true;
-        }
-        if let Some(max) = opts.iso_max {
-            clauses.push("v.iso <= ?".to_string());
-            params.push(Box::new(max));
-            needs_v_join = true;
-        }
-        if let Some(min) = opts.focal_min {
-            clauses.push("v.focal_length_mm >= ?".to_string());
-            params.push(Box::new(min));
-            needs_v_join = true;
-        }
-        if let Some(max) = opts.focal_max {
-            clauses.push("v.focal_length_mm <= ?".to_string());
-            params.push(Box::new(max));
-            needs_v_join = true;
-        }
-        if let Some(min) = opts.f_min {
-            clauses.push("v.f_number >= ?".to_string());
-            params.push(Box::new(min));
-            needs_v_join = true;
-        }
-        if let Some(max) = opts.f_max {
-            clauses.push("v.f_number <= ?".to_string());
-            params.push(Box::new(max));
-            needs_v_join = true;
-        }
-        if let Some(min) = opts.width_min {
-            clauses.push("v.image_width >= ?".to_string());
-            params.push(Box::new(min));
-            needs_v_join = true;
-        }
-        if let Some(min) = opts.height_min {
-            clauses.push("v.image_height >= ?".to_string());
-            params.push(Box::new(min));
-            needs_v_join = true;
-        }
+        if let Some(ref f) = opts.iso { Self::numeric_clause(f, "v.iso", &mut clauses, &mut params); needs_v_join = true; }
+        if let Some(ref f) = opts.focal { Self::numeric_clause(f, "v.focal_length_mm", &mut clauses, &mut params); needs_v_join = true; }
+        if let Some(ref f) = opts.aperture { Self::numeric_clause(f, "v.f_number", &mut clauses, &mut params); needs_v_join = true; }
+        if let Some(ref f) = opts.width { Self::numeric_clause(f, "v.image_width", &mut clauses, &mut params); needs_v_join = true; }
+        if let Some(ref f) = opts.height { Self::numeric_clause(f, "v.image_height", &mut clauses, &mut params); needs_v_join = true; }
 
         // JSON fallback filters (meta:key=value)
         for (key, value) in &opts.meta_filters {
@@ -2732,7 +2736,14 @@ impl Catalog {
                     .to_string(),
             );
         }
-        if let Some(days) = opts.stale_days {
+        if let Some(ref f) = opts.stale_days {
+            // stale: uses exact value as number of days (only Exact/Min make sense)
+            let days = match f {
+                NumericFilter::Exact(v) | NumericFilter::Min(v) => *v as u64,
+                NumericFilter::Range(v, _) => *v as u64,
+                NumericFilter::Values(v) => v.first().copied().unwrap_or(30.0) as u64,
+                NumericFilter::ValuesOrMin { min, .. } => *min as u64,
+            };
             clauses.push(format!(
                 "EXISTS (SELECT 1 FROM file_locations fl2 \
                  JOIN variants v2 ON fl2.content_hash = v2.content_hash \
@@ -2791,51 +2802,27 @@ impl Catalog {
             }
         }
 
-        // Copies filter
-        if let Some(n) = opts.copies_exact {
-            clauses.push(format!(
-                "(SELECT COUNT(*) FROM file_locations fl2 \
+        // Copies filter (subquery)
+        if let Some(ref f) = opts.copies {
+            let expr = "(SELECT COUNT(*) FROM file_locations fl2 \
                  JOIN variants v2 ON fl2.content_hash = v2.content_hash \
-                 WHERE v2.asset_id = a.id) = {}",
-                n
-            ));
-        }
-        if let Some(n) = opts.copies_min {
-            clauses.push(format!(
-                "(SELECT COUNT(*) FROM file_locations fl2 \
-                 JOIN variants v2 ON fl2.content_hash = v2.content_hash \
-                 WHERE v2.asset_id = a.id) >= {}",
-                n
-            ));
+                 WHERE v2.asset_id = a.id)";
+            Self::numeric_clause_expr(f, expr, &mut clauses, &mut params);
         }
 
-        // Variant count filters (use denormalized variant_count column)
-        if let Some(n) = opts.variant_count_exact {
-            clauses.push("a.variant_count = ?".to_string());
-            params.push(Box::new(n as i64));
-        }
-        if let Some(n) = opts.variant_count_min {
-            clauses.push("a.variant_count >= ?".to_string());
-            params.push(Box::new(n as i64));
-        }
+        // Variant count (denormalized column)
+        if let Some(ref f) = opts.variant_count { Self::numeric_clause(f, "a.variant_count", &mut clauses, &mut params); }
 
-        // Scattered filter: variants whose file locations span N+ distinct directories
-        // Counts distinct volume + parent-directory combinations across all variants.
-        // Parent directory = path with trailing filename removed (everything up to last '/').
-        // In SQLite: use instr on the reversed string to find the last '/' position — but
-        // SQLite lacks reverse(), so we approximate with the first two path components
-        // (volume_id + top-level dir), which is sufficient for detecting mis-grouped variants.
-        if let Some(n) = opts.scattered_min {
-            clauses.push(format!(
-                "(SELECT COUNT(DISTINCT fl2.volume_id || ':' || \
+        // Scattered filter (subquery)
+        if let Some(ref f) = opts.scattered {
+            let expr = "(SELECT COUNT(DISTINCT fl2.volume_id || ':' || \
                     CASE WHEN INSTR(fl2.relative_path, '/') > 0 \
                     THEN SUBSTR(fl2.relative_path, 1, INSTR(fl2.relative_path, '/') - 1) \
                     ELSE '' END \
                  ) FROM file_locations fl2 \
                  JOIN variants v2 ON fl2.content_hash = v2.content_hash \
-                 WHERE v2.asset_id = a.id) >= {}",
-                n
-            ));
+                 WHERE v2.asset_id = a.id)";
+            Self::numeric_clause_expr(f, expr, &mut clauses, &mut params);
         }
 
         // Date filters
@@ -2899,14 +2886,7 @@ impl Catalog {
                 clauses.push("a.face_count = 0".to_string());
             }
         }
-        if let Some(min) = opts.face_count_min {
-            clauses.push("a.face_count >= ?".to_string());
-            params.push(Box::new(min as i64));
-        }
-        if let Some(exact) = opts.face_count_exact {
-            clauses.push("a.face_count = ?".to_string());
-            params.push(Box::new(exact as i64));
-        }
+        if let Some(ref f) = opts.face_count { Self::numeric_clause(f, "a.face_count", &mut clauses, &mut params); }
 
         // Embedding presence filter
         if let Some(has_embed) = opts.has_embed {
@@ -6669,8 +6649,7 @@ mod tests {
 
         // Exact ISO
         let opts = SearchOptions {
-            iso_min: Some(400),
-            iso_max: Some(400),
+            iso: Some(NumericFilter::Exact(400.0)),
             per_page: u32::MAX,
             ..Default::default()
         };
@@ -6680,8 +6659,7 @@ mod tests {
 
         // ISO range 100-800: should match Fuji (400) only
         let opts = SearchOptions {
-            iso_min: Some(100),
-            iso_max: Some(800),
+            iso: Some(NumericFilter::Range(100.0, 800.0)),
             per_page: u32::MAX,
             ..Default::default()
         };
@@ -6691,7 +6669,7 @@ mod tests {
 
         // ISO min 1000+: should match Nikon (3200) only
         let opts = SearchOptions {
-            iso_min: Some(1000),
+            iso: Some(NumericFilter::Min(1000.0)),
             per_page: u32::MAX,
             ..Default::default()
         };
@@ -6706,8 +6684,7 @@ mod tests {
 
         // focal 50-56: should match both
         let opts = SearchOptions {
-            focal_min: Some(50.0),
-            focal_max: Some(56.0),
+            focal: Some(NumericFilter::Range(50.0, 56.0)),
             per_page: u32::MAX,
             ..Default::default()
         };
@@ -6716,8 +6693,7 @@ mod tests {
 
         // focal 55-60: should match Fuji (56mm) only
         let opts = SearchOptions {
-            focal_min: Some(55.0),
-            focal_max: Some(60.0),
+            focal: Some(NumericFilter::Range(55.0, 60.0)),
             per_page: u32::MAX,
             ..Default::default()
         };
@@ -6856,7 +6832,7 @@ mod tests {
 
         // copies:2 → only the 2-location asset
         let results = catalog.search_paginated(&SearchOptions {
-            copies_exact: Some(2),
+            copies: Some(NumericFilter::Exact(2.0)),
             per_page: u32::MAX,
             ..Default::default()
         }).unwrap();
@@ -6865,7 +6841,7 @@ mod tests {
 
         // copies:1 → only the 1-location asset
         let results = catalog.search_paginated(&SearchOptions {
-            copies_exact: Some(1),
+            copies: Some(NumericFilter::Exact(1.0)),
             per_page: u32::MAX,
             ..Default::default()
         }).unwrap();
@@ -6971,7 +6947,7 @@ mod tests {
 
         // copies:2+ → assets with 2 or 3 locations
         let results = catalog.search_paginated(&SearchOptions {
-            copies_min: Some(2),
+            copies: Some(NumericFilter::Min(2.0)),
             per_page: u32::MAX,
             ..Default::default()
         }).unwrap();
@@ -6982,7 +6958,7 @@ mod tests {
 
         // copies:3+ → only the 3-location asset
         let results = catalog.search_paginated(&SearchOptions {
-            copies_min: Some(3),
+            copies: Some(NumericFilter::Min(3.0)),
             per_page: u32::MAX,
             ..Default::default()
         }).unwrap();
@@ -7575,7 +7551,7 @@ mod tests {
         let ids: Vec<String> = all.iter().map(|r| r.asset_id.clone()).collect();
         let opts = SearchOptions {
             text_search_ids: Some(&ids),
-            rating_min: Some(5), // Only the 5-star asset
+            rating: Some(NumericFilter::Min(5.0)), // Only the 5-star asset
             per_page: u32::MAX,
             ..Default::default()
         };
