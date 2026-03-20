@@ -901,6 +901,9 @@ Previews are stored in `previews/<hash-prefix>/<hash>.jpg`. Preview settings (ma
 **--upgrade**
 : Regenerate previews for assets where a better variant (export or processed) exists than what the current preview was generated from. Skips assets where the best variant is already the source of the preview.
 
+**--smart**
+: Also generate smart previews (high-resolution, 2560px) alongside regular thumbnails. Smart previews enable zoom and pan in the web UI lightbox. Dimensions controlled by `[preview] smart_max_edge` in `maki.toml`. Combines with `--force` to regenerate both preview types.
+
 `--json` outputs a result with generated/skipped/failed counts.
 
 `--log` prints per-file generation status to stderr.
@@ -919,6 +922,12 @@ Regenerate all previews (force):
 
 ```bash
 maki generate-previews --force --log --time
+```
+
+Regenerate all previews including smart previews:
+
+```bash
+maki generate-previews --smart --force --log --time
 ```
 
 Upgrade previews to use better variants (e.g., after grouping exports with originals):
