@@ -6,7 +6,7 @@ This chapter introduces the data model, architecture, and workflow of **maki** -
 
 maki organizes your files around these core concepts.
 
-```mermaid {width=80%}
+```mermaid
 flowchart LR
     Collection -->|contains| Asset
     Asset -->|has| Variant
@@ -14,6 +14,7 @@ flowchart LR
     Variant -->|stored on| Volume
     Variant -->|has| Recipe
     Recipe -->|stored on| Volume
+    style Asset fill:#e8634a,stroke:#c04a30,color:#fff,font-weight:bold
 ```
 
 ### Asset
