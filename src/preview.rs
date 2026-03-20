@@ -272,8 +272,11 @@ impl PreviewGenerator {
 
     /// Generate preview from a standard image format using the `image` crate.
     fn generate_image(&self, dest: &Path, source: &Path, max_edge: u32, quality: u8, manual_rotation: Option<u16>) -> Result<()> {
-        let img = image::open(source)
+        let mut reader = image::ImageReader::open(source)
             .with_context(|| format!("Failed to open image {}", source.display()))?;
+        reader.no_limits();
+        let img = reader.decode()
+            .with_context(|| format!("Failed to decode image {}", source.display()))?;
 
         // Apply EXIF orientation from the source file
         let exif_data = crate::exif_reader::extract(source);
