@@ -2,6 +2,18 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.0.7 (2026-03-20)
+
+### Bug Fixes
+- **`--smart` generated only smart previews** — `generate-previews --smart` now generates both regular thumbnails and smart previews, matching `import --smart` behavior.
+
+### Enhancements
+- **Complete CLI documentation audit** — 8 discrepancies fixed: `stack from-tag` and `faces status` subcommands documented, missing options added (`--min-confidence`, `--force`, `--favorite`), command count corrected to 41, `--verbose` added to custom help.
+- **Overview chapter restructured** — "Core Concepts" section with horizontal flowchart diagram (Asset highlighted in brand color), FileLocation folded into Variant, Collection and Saved Search added as user-facing entities.
+- **PDF manual quality** — zero Unicode warnings (fallback fonts for ⊞ ↗ ℹ ✓), page break before Developer Guide, ER diagram moved to avoid whitespace, mermaid width hints supported in build script.
+- **Filter availability table** corrected — all filters work in web UI search box.
+- **Button name** — "Generate smart preview" → "Regenerate previews" in docs.
+
 ## v4.0.6 (2026-03-20)
 
 ### Bug Fixes
