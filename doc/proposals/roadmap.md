@@ -2,7 +2,7 @@
 
 Living document tracking planned enhancements. Previous proposals (all implemented or deferred) are in `archive/`. Active proposals are in `doc/proposals/`.
 
-Current version: **v4.0.3** (2026-03-18)
+Current version: **v4.0.7** (2026-03-20)
 
 ---
 
@@ -152,3 +152,7 @@ Design documents for completed features are in `doc/proposals/archive/`. Key mil
 - **v4.0.1**: Default browse filter (`[browse] default_filter`), VLM tags mode fix, organizing/culling manual chapter
 - **v4.0.2**: Similarity browse (scores on cards, `min_sim:` filter, sort by similarity), stack-by-similarity from detail page, stack management toolbar (add/remove/set-pick), filter bar two-row layout
 - **v4.0.3**: Windows support (cross-platform path normalization, `\\?\` prefix handling, 8MB stack, tool detection), GitHub Actions CI (macOS/Linux/Windows × standard/AI), missing tool warnings, README branding
+- **v4.0.4**: Tag quote fix (`"Sir" Oliver Mally`), doc tests (11), tag matching tests for special characters, updated branding assets
+- **v4.0.5**: Unified `NumericFilter` enum (all numeric filters support x, x+, x-y, x,y syntax), `orphan:false` filter, rating ranges, complete search filter documentation consistency, `*` not a wildcard fix
+- **v4.0.6**: Large TIFF preview/embedding fix (`no_limits()`), `--query` → positional in docs/error messages, filter availability table corrected
+- **v4.0.7**: `--smart` preview fix (generates both), CLI doc audit (8 discrepancies), overview chapter restructured (Core Concepts), PDF quality (zero Unicode warnings, fallback fonts, diagram improvements)
