@@ -2769,7 +2769,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                 anyhow::bail!(
                     "No scope specified. Use a query, --asset, or --volume to select assets.\n  \
                      Examples:\n    \
-                     maki describe '*'                  # all assets\n    \
+                     maki describe ''                    # all assets\n    \
                      maki describe --asset <id>          # single asset\n    \
                      maki describe 'rating:4+' --apply   # apply to rated assets"
                 );
@@ -3094,7 +3094,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                 anyhow::bail!(
                     "No scope specified. Provide a query, --asset, or --volume to select assets.\n  \
                      Examples:\n    \
-                     maki auto-tag '*'                   # all assets\n    \
+                     maki auto-tag ''                    # all assets\n    \
                      maki auto-tag --asset <id>          # single asset\n    \
                      maki auto-tag --volume <label>      # one volume\n    \
                      maki auto-tag 'tag:landscape' --apply"
@@ -3242,7 +3242,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                 anyhow::bail!(
                     "No scope specified. Provide a query, --asset, or --volume to select assets.\n  \
                      Examples:\n    \
-                     maki embed '*'                   # all assets\n    \
+                     maki embed ''                    # all assets\n    \
                      maki embed --asset <id>          # single asset\n    \
                      maki embed --volume <label>      # one volume"
                 );
@@ -3289,7 +3289,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                 } else if let Some(ref v) = volume {
                     format!("volume:{v}")
                 } else {
-                    "*".to_string()
+                    String::new()
                 };
                 let results = engine.search(&q)?;
                 results.into_iter().map(|r| r.asset_id).collect()
@@ -3458,7 +3458,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                         anyhow::bail!(
                             "No scope specified. Use --query, --asset, or --volume to select assets.\n  \
                              Examples:\n    \
-                             maki faces detect --query '*' --apply    # all assets\n    \
+                             maki faces detect --query '' --apply     # all assets\n    \
                              maki faces detect --asset <id> --apply   # single asset\n    \
                              maki faces detect --volume <label> --apply"
                         );

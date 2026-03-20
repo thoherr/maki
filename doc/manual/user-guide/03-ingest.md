@@ -439,7 +439,7 @@ maki auto-tag "type:image" --model siglip-vit-l16-256 --apply
 You can provide a custom label vocabulary:
 
 ```
-maki auto-tag --labels my-labels.txt "*" --apply
+maki auto-tag --labels my-labels.txt "" --apply
 ```
 
 Image embeddings are stored per model in the catalog, enabling visual similarity search:
@@ -463,7 +463,7 @@ Or enable it permanently in `maki.toml`:
 embeddings = true
 ```
 
-This runs embedding generation as a post-import phase using the preview image for each imported asset. If the AI model is not downloaded, the embedding phase is silently skipped. You can also batch-generate embeddings for existing assets with `maki embed "*"`.
+This runs embedding generation as a post-import phase using the preview image for each imported asset. If the AI model is not downloaded, the embedding phase is silently skipped. You can also batch-generate embeddings for existing assets with `maki embed ""`.
 
 See the [auto-tag reference](../reference/02-ingest-commands.md#maki-auto-tag) for all options and the [configuration reference](../reference/08-configuration.md#ai-section) for `[ai]` settings in `maki.toml`.
 
