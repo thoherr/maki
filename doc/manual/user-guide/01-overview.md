@@ -6,14 +6,14 @@ This chapter introduces the data model, architecture, and workflow of **maki** -
 
 maki organizes your files around these core concepts.
 
-```mermaid {width=50%}
-erDiagram
-    Asset ||--o{ Variant : "has variants"
-    Variant ||--o{ Recipe : "has recipes"
-    Variant }o--|| Volume : "stored on"
-    Recipe }o--|| Volume : "stored on"
-    Asset }o--o| Stack : "member of"
-    Collection }o--o{ Asset : "contains"
+```mermaid {width=80%}
+flowchart LR
+    Collection -->|contains| Asset
+    Asset -->|has| Variant
+    Asset -->|member of| Stack
+    Variant -->|stored on| Volume
+    Variant -->|has| Recipe
+    Recipe -->|stored on| Volume
 ```
 
 ### Asset
