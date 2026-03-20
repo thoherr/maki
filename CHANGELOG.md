@@ -2,6 +2,17 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.0.6 (2026-03-20)
+
+### Bug Fixes
+- **Large TIFF preview/embedding failure** — 16-bit medium format TIFFs (e.g. 8256×6192 from Fujifilm GFX) exceeded the image crate's default memory limit, causing both preview generation and AI embedding to fail. Removed the limit since files are trusted local content and the decoded image is resized immediately.
+- **`--query` in error messages** — auto-tag and embed error messages showed `--query` syntax but query is a positional argument.
+- **`*` not a wildcard** — `*` was treated as free-text search matching filenames. Empty string `""` is now used for "all assets" in code and documentation.
+
+### Enhancements
+- **Filter availability table** — corrected to show that all filters work in the web UI search box, with dedicated controls highlighted separately.
+- **`--query` → positional in docs** — ~30 examples across 3 documentation files updated for auto-tag, embed, describe.
+
 ## v4.0.5 (2026-03-20)
 
 ### New Features
