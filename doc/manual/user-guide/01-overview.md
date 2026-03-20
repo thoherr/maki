@@ -4,72 +4,21 @@ This chapter introduces the data model, architecture, and workflow of **maki** -
 
 ## Data Model
 
-maki organizes your files into six core entities.
-
-### Entity Relationships
+maki organizes your files around these core concepts.
 
 ```mermaid
 erDiagram
     Asset ||--o{ Variant : "has variants"
-    Asset ||--o{ Recipe : "has recipes"
+    Variant ||--o{ Recipe : "has recipes"
+    Variant }o--|| Volume : "stored on"
+    Recipe }o--|| Volume : "stored on"
     Asset }o--o| Stack : "member of"
-    Variant ||--o{ FileLocation : "stored at"
-    Recipe ||--|| FileLocation : "located at"
-    Recipe }o--|| Variant : "attached to"
-    Volume ||--o{ FileLocation : "contains"
-
-    Asset {
-        UUID id PK "deterministic (UUID v5 from hash)"
-        string name "optional display name"
-        string description "optional text"
-        string[] tags "keyword list"
-        u8 rating "1-5, optional"
-        string color_label "7 colors, optional"
-        string asset_type "Image, Video, Audio, Document, Other"
-        datetime created_at
-    }
-
-    Variant {
-        string content_hash PK "SHA-256"
-        UUID asset_id FK
-        string role "Original, Processed, Export, Sidecar"
-        string format "file extension (NEF, jpg, tif, ...)"
-        u64 file_size "bytes"
-        string original_filename
-        map source_metadata "EXIF and XMP key-value pairs"
-    }
-
-    FileLocation {
-        UUID volume_id FK
-        string relative_path "volume-relative"
-        datetime verified_at "last integrity check"
-    }
-
-    Recipe {
-        UUID id PK
-        string variant_hash FK
-        string software "XMP, CaptureOne, RawTherapee, ..."
-        string recipe_type "Sidecar or EmbeddedExport"
-        string content_hash "SHA-256 of recipe file"
-    }
-
-    Volume {
-        UUID id PK
-        string label "user-friendly name"
-        string mount_point "filesystem path"
-        string volume_type "Local, External, Network"
-        bool is_online "auto-detected at runtime"
-    }
-
-    Stack {
-        UUID id PK
-        int position "0 = pick"
-    }
+    Collection }o--o{ Asset : "contains"
 ```
 
 ### Asset
 
-The top-level entity. An Asset represents a single logical image or media item -- "photo of sunset at the beach" -- regardless of how many files exist for it. An Asset has a deterministic UUID derived from the content hash of its first variant, plus optional metadata: name, description, tags (keywords), rating (1--5 stars), and color label (Red, Orange, Yellow, Green, Blue, Pink, Purple -- a superset of Lightroom's palette that matches CaptureOne). Tags support hierarchy using `/` as a separator (e.g., `animals/birds/eagles`); searching for a parent tag matches all descendants.
+The central entity. An Asset represents a single logical image or media item -- "photo of sunset at the beach" -- regardless of how many files exist for it. An Asset has a deterministic UUID derived from the content hash of its first variant, plus optional metadata: name, description, tags (keywords), rating (1--5 stars), and color label (Red, Orange, Yellow, Green, Blue, Pink, Purple -- a superset of Lightroom's palette that matches CaptureOne). Tags support hierarchy using `/` as a separator (e.g., `animals/birds/eagles`); searching for a parent tag matches all descendants.
 
 ### Variant
 
@@ -84,13 +33,13 @@ Variants carry a **role** that describes their purpose:
 | **Export** | Final deliverable (resized JPEG, web TIFF) |
 | **Sidecar** | Accompanying non-media file |
 
-### FileLocation
-
-A pointer to where a Variant physically lives on disk: a `volume_id` plus a `relative_path` within that volume. A single Variant can have multiple FileLocations -- copies on different drives, backups on a NAS -- and maki tracks them all. Each location also stores a `verified_at` timestamp from the last integrity check.
+Each Variant tracks one or more **file locations** -- a volume plus a relative path. A single Variant can exist on multiple drives (copies, backups on a NAS), and maki tracks them all. Each location stores a `verified_at` timestamp from the last integrity check.
 
 ### Recipe
 
-A processing sidecar file (`.xmp`, `.cos`, `.cot`, `.cop`, `.pp3`, `.dop`, `.on1`) attached to a Variant. Unlike Variants, Recipes are identified by **location** (volume + path) rather than content hash, because external tools like CaptureOne routinely modify them in place. This means re-importing after an external edit updates the existing Recipe rather than creating a duplicate.
+A processing sidecar file (`.xmp`, `.cos`, `.cot`, `.cop`, `.pp3`, `.dop`, `.on1`) attached to a Variant. Recipes store edits from tools like CaptureOne, Lightroom, RawTherapee, DxO, and ON1. Unlike Variants, Recipes are identified by **location** (volume + path) rather than content hash, because external tools routinely modify them in place. This means re-importing after an external edit updates the existing Recipe rather than creating a duplicate.
+
+maki reads metadata from Recipes during import (rating, tags, description, color label) and can write changes back to XMP files via `maki writeback` or `maki sync-metadata`.
 
 ### Volume
 
@@ -98,7 +47,15 @@ A registered storage device: local disk, external drive, or network share. Each 
 
 ### Stack
 
-A lightweight anonymous group of assets -- burst shots, exposure brackets, or similar scenes that you want to collapse into a single entry in the browse grid. Each asset can belong to at most one stack. Members are position-ordered; position 0 is the **pick** (the representative image shown when the stack is collapsed). Stacks auto-dissolve when they have one or fewer members. Persisted in `stacks.yaml` at the catalog root for resilience across catalog rebuilds.
+A group of related but independent assets -- burst shots, exposure brackets, or similar scenes that you want to collapse into a single entry in the browse grid. Each asset can belong to at most one stack. Members are position-ordered; position 0 is the **pick** (the representative image shown when the stack is collapsed). Unlike variants (which merge files into one asset), stacked assets keep their own ratings, tags, and descriptions.
+
+### Collection
+
+A manual album -- a named list of assets you curate by hand. Collections are static: adding or removing assets requires an explicit action. Use collections for portfolios, client deliveries, print selections, or any grouping that doesn't follow a search pattern.
+
+### Saved Search
+
+A smart album -- a named search query that dynamically matches assets. Saved searches appear as quick-access chips in the browse toolbar. When your catalog changes (new imports, rating changes, tag edits), the results update automatically because the query is re-evaluated each time.
 
 ## Content-Addressable Storage
 
