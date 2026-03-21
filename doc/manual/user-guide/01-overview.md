@@ -151,9 +151,9 @@ sequenceDiagram
     DAM ->> DAM: Update Asset fields + catalog
 ```
 
-**DAM to disk**: When you change a rating, tag, description, or color label via the CLI (`maki edit`, `maki tag`) or the web UI, maki writes the change back to any associated `.xmp` files on disk, then re-hashes them and updates the stored recipe hash.
+**Catalog to disk**: When you change a rating, tag, description, or color label via the CLI (`maki edit`, `maki tag`) or the web UI, maki writes the change back to any associated `.xmp` files on disk, then re-hashes them and updates the stored recipe hash.
 
-**Disk to DAM**: When CaptureOne or another tool modifies an `.xmp` file, running `maki refresh` or `maki sync` detects the changed hash, re-extracts the XMP metadata, and updates the Asset in both the catalog and sidecar YAML.
+**Disk to catalog**: When CaptureOne or another tool modifies an `.xmp` file, running `maki refresh` or `maki sync` detects the changed hash, re-extracts the XMP metadata, and updates the Asset in both the catalog and sidecar YAML.
 
 Tags added independently in CaptureOne are preserved during write-back -- maki uses operation-level deltas (add/remove specific tags) rather than overwriting the entire tag list.
 
