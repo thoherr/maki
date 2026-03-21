@@ -150,30 +150,23 @@ See [Ingesting Assets](03-ingest.md) for XMP extraction during import and [Maint
 maki is structured in three layers.
 
 ```mermaid
-flowchart TD
+flowchart LR
     subgraph Interface["Interface Layer"]
-        direction LR
         CLI["CLI (clap)"]
         WebUI["Web UI (axum + htmx + askama)"]
     end
 
     subgraph Core["Core Library"]
-        direction LR
-        AS["Asset Service"]
-        CS["Content Store"]
-        MS["Metadata Store"]
-        DR["Device Registry"]
-        QE["Query Engine"]
-        PG["Preview Generator"]
+        AS["Asset Service"] ~~~ CS["Content Store"] ~~~ MS["Metadata Store"]
+        DR["Device Registry"] ~~~ QE["Query Engine"] ~~~ PG["Preview Generator"]
     end
 
     subgraph Storage["Storage Layer"]
-        direction LR
         Catalog["Local Catalog<br/>(SQLite + YAML + previews)"]
         Volumes["Media Volumes<br/>(external drives, NAS)"]
     end
 
-    Interface --> Core --> Storage
+    Interface ---> Core ---> Storage
 
     style Interface fill:#4a90d9,color:#fff
     style Core fill:#7ab648,color:#fff
