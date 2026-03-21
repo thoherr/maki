@@ -4,25 +4,29 @@ Importing is how files enter the maki catalog. Unlike traditional asset managers
 
 ## Import Pipeline
 
-The following diagram shows the stages a file passes through during import:
+The following diagrams show the stages a file passes through during import:
 
 ```mermaid
 flowchart TD
     A[Scan files & directories] --> B[Filter by type group]
     B --> C[Hash file contents — SHA-256]
     C --> D{Duplicate check}
-    D -->|New content hash| E[Extract EXIF metadata]
+    D -->|New content hash| E[Import Asset]
     D -->|Known hash, new location| K[Add location to existing Variant]
     D -->|Same hash + same location| L[Skip entirely]
-    E --> F[Extract XMP metadata]
-    F --> F1[Sidecar .xmp file]
-    F --> F2[Embedded XMP — JPEG/TIFF]
-    F1 --> G[Auto-group by filename stem]
-    F2 --> G
-    G --> H[Create Asset + Variant records]
-    H --> I[Attach Recipes]
-    I --> J[Generate previews]
-    J --> M[Write sidecar YAML + update catalog]
+    style E fill:#e8634a,stroke:#c04a30,color:#fff,font-weight:bold
+```
+
+For each new file, the import asset pipeline runs:
+
+```mermaid
+flowchart LR
+    E[Extract EXIF] --> F[Extract XMP]
+    F --> G[Auto-group<br/>by filename]
+    G --> H[Create Asset +<br/>Variant records]
+    H --> I[Attach<br/>Recipes]
+    I --> J[Generate<br/>previews]
+    J --> M[Write sidecar<br/>YAML + catalog]
 ```
 
 **Metadata precedence**: On initial import, fields are set by the first source that provides them: EXIF data is extracted first, then embedded XMP fills any remaining empty fields, then sidecar XMP fills what is still unset. Tags (keywords) are merged from all sources as a union. On subsequent recipe updates (e.g. after editing in Capture One or Lightroom), sidecar XMP takes highest precedence and overwrites rating, description, and color label. The `created_at` date is always derived from EXIF and never overwritten by XMP.
