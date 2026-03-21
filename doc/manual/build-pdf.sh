@@ -240,6 +240,9 @@ cat > "$TMPDIR/header.tex" << 'LATEX'
 \usepackage{graphicx}
 \usepackage{xcolor}
 
+% Add vertical spacing between table rows
+\renewcommand{\arraystretch}{1.4}
+
 % Unicode symbol fallback — Latin Modern lacks ⊞ ↗ ℹ ✓ etc.
 \usepackage{newunicodechar}
 \newfontfamily{\symbolfont}{Apple Symbols}[Scale=MatchLowercase]

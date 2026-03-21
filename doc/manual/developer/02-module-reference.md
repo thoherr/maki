@@ -5,52 +5,30 @@ This document describes the modules that make up the `maki` crate. All source co
 ## Module Dependency Graph
 
 ```mermaid
-graph TD
-    subgraph Entry["Entry Points"]
-        direction LR
-        main["main.rs<br/>(CLI)"]
-        web["web/<br/>(Axum)"]
-    end
+flowchart TD
+    main["main.rs (CLI)"] --> asset_service & query & web
+    web["web/ (Axum)"] --> asset_service & query
 
-    subgraph Services["Service Layer"]
-        direction LR
-        asset_service["asset_service"]
-        query["query"]
-        collection["collection"]
-        saved_search["saved_search"]
-        stack["stack"]
-    end
+    asset_service --> catalog & metadata_store & content_store & preview
+    asset_service --> exif_reader & xmp_reader & device_registry
 
-    subgraph Core["Core Layer"]
-        direction LR
-        catalog["catalog<br/>(SQLite)"]
-        metadata_store["metadata_store<br/>(YAML)"]
-        content_store["content_store<br/>(SHA-256)"]
-        device_registry["device_registry"]
-        preview["preview"]
-        config["config"]
-    end
+    query --> catalog & metadata_store & device_registry
 
-    subgraph IO["I/O Layer"]
-        direction LR
-        exif_reader["exif_reader"]
-        xmp_reader["xmp_reader"]
-        embedded_xmp["embedded_xmp"]
-        models["models/"]
-        format["format"]
-    end
-
-    main --> asset_service & query & collection & saved_search & stack & web
-    web --> asset_service & query & collection & saved_search & stack
-    asset_service --> catalog & metadata_store & content_store & preview & device_registry
-    asset_service --> exif_reader & xmp_reader & embedded_xmp
-    query --> catalog & metadata_store & device_registry & collection
+    catalog["catalog (SQLite)"]
+    metadata_store["metadata_store (YAML)"]
+    content_store["content_store (SHA-256)"]
+    device_registry["device_registry"]
+    preview["preview"]
+    exif_reader["exif_reader"]
+    xmp_reader["xmp_reader"]
 ```
+
+Additional modules not shown: `config`, `models/`, `format`, `collection`, `saved_search`, `stack`, `embedded_xmp`, `tag_util`, `shell` — used across layers.
 
 ## Module Table
 
 | Module | File(s) | Purpose |
-|----------|-----------------|--------------------------------------------------------------|
+|--------|---------|---------|
 | `ai` | `src/ai.rs` | *Feature-gated (`ai`)*. Multi-model SigLIP wrapper with `ModelSpec` registry. Supports ViT-B/16-256 (768-dim) and ViT-L/16-256 (1024-dim). ONNX session management for vision and text encoders, image preprocessing (256×256 squash resize, normalize to [-1,1] CHW tensor), SentencePiece tokenization (pad to 64 tokens), sigmoid scoring (`logit_scale * dot + logit_bias`), and ~100 default photography labels. Provides `ModelSpec`, `get_model_spec()`, `SigLipModel` with `encode_image()`, `encode_texts()`, and `classify()`. |
 | `asset_service` | `src/asset_service.rs` | Orchestrates import, export, grouping, auto-grouping, auto-tagging, relocate, delete, and preview generation. Coordinates between content store, metadata store, catalog, EXIF/XMP readers, and preview generator. Entry point for all write operations that involve multiple subsystems. |
 | `catalog` | `src/catalog.rs` | SQLite database operations: schema creation, migrations, CRUD for assets/variants/recipes/locations, search queries with pagination and filtering, statistics, and tag management. Provides `Catalog::open()` (with migrations) and `Catalog::open_fast()` (skip migrations, for per-request use in the web server). |
