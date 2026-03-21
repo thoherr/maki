@@ -1459,6 +1459,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
             // Create directories
             std::fs::create_dir_all(catalog_root.join("metadata"))?;
             std::fs::create_dir_all(catalog_root.join("previews"))?;
+            std::fs::create_dir_all(catalog_root.join("smart_previews"))?;
 
             // Write config
             CatalogConfig::default().save(&catalog_root)?;

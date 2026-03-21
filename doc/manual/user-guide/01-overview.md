@@ -74,7 +74,7 @@ Originals (RAW files, camera JPEGs) are immutable -- their content never changes
 
 maki uses a dual-storage architecture. Neither tier alone is sufficient; together they provide both robustness and performance.
 
-**YAML sidecar files** (source of truth): One `.yml` file per Asset, stored in the catalog's `assets/` directory. Contains the complete Asset record: metadata, all Variants, all Recipes, all FileLocations. Human-readable, diffable, and version-control friendly. If the SQLite database is ever lost or corrupted, running `rebuild-catalog` reconstructs it entirely from these files.
+**YAML sidecar files** (source of truth): One `.yml` file per Asset, stored in the catalog's `metadata/` directory. Contains the complete Asset record: metadata, all Variants, all Recipes, all FileLocations. Human-readable, diffable, and version-control friendly. If the SQLite database is ever lost or corrupted, running `rebuild-catalog` reconstructs it entirely from these files.
 
 **SQLite catalog** (derived cache): A single `catalog.db` file providing fast indexed queries. Contains denormalized columns for efficient browse-grid rendering (best variant hash, primary format, variant count). The catalog is always rebuildable from sidecars -- it is a performance optimization, not a source of truth.
 
@@ -197,8 +197,9 @@ Additional modules handle EXIF extraction, XMP reading/writing, configuration pa
 **Local Catalog** (always available on local disk):
 
 - `catalog.db` -- SQLite database (derived index, rebuildable)
-- `assets/` -- YAML sidecar files (source of truth)
-- `previews/` -- JPEG thumbnails for offline browsing
+- `metadata/` -- YAML sidecar files (source of truth)
+- `previews/` -- JPEG thumbnails for offline browsing (800px)
+- `smart_previews/` -- high-resolution previews for zoom/pan (2560px)
 - `volumes.yaml` -- registered volume definitions
 - `searches.toml` -- saved searches
 - `collections.yaml` -- static album definitions

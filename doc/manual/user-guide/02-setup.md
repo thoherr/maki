@@ -70,7 +70,8 @@ This creates the following structure:
   catalog.db        # SQLite database (cache/index)
   volumes.yaml      # Registered storage volumes
   metadata/         # YAML sidecar files (source of truth)
-  previews/         # Generated preview images
+  previews/         # Preview thumbnails (800px)
+  smart_previews/   # High-resolution previews for zoom/pan (2560px)
 ```
 
 ### How catalog detection works
@@ -96,7 +97,7 @@ Error: No maki catalog found. Run `maki init` to create one.
 
 ### Reinitializing
 
-`maki init` refuses to overwrite an existing catalog. If you need to start fresh, delete the catalog files first (`maki.toml`, `catalog.db`, `metadata/`, `previews/`, `volumes.yaml`) and run `maki init` again.
+`maki init` refuses to overwrite an existing catalog. If you need to start fresh, delete the catalog files first (`maki.toml`, `catalog.db`, `metadata/`, `previews/`, `smart_previews/`, `volumes.yaml`) and run `maki init` again.
 
 
 ## Registering Volumes
