@@ -236,20 +236,21 @@ maki auto-group "path:Capture/2024" --apply
 Auto-group uses fuzzy prefix matching with separator-boundary detection:
 
 ```mermaid
-flowchart TD
-    A[Collect filename stems from assets] --> B[Sort stems by length, shortest first]
-    B --> C[For each stem, find shortest existing root<br/>that is a prefix match]
-    C --> D{Shorter stem is prefix<br/>of longer stem?}
-    D -- No --> E[Register as new root]
-    D -- Yes --> F{Next character in<br/>longer string?}
-    F -- "Non-alphanumeric<br/>(separator: - _ space ( )" --> G[Match: assign to root's group]
-    F -- "Alphanumeric<br/>(continuation)" --> E
-    E --> H[Group assets by resolved root stem]
-    G --> H
-    H --> I[Filter to groups with 2+ assets]
-    I --> J[Select target per group:<br/>1. Prefer asset with RAW variant<br/>2. Oldest by created_at]
-    J --> K[Merge donor variants into target<br/>re-role Original to Alternate]
+flowchart LR
+    A[Collect stems<br/>& sort by length] --> B{Prefix match<br/>with separator?}
+    B -- Yes --> C[Assign to<br/>root's group]
+    B -- No --> D[New root]
+    C --> E[Filter groups<br/>with 2+ assets]
+    D --> E
+    E --> F[Select target:<br/>prefer RAW,<br/>oldest date]
+    F --> G[Merge variants<br/>re-role to<br/>Alternate]
 ```
+
+**Steps in detail:**
+
+1. Collect the filename stem (without extension) of each asset and sort by length (shortest first).
+2. For each stem, check if any existing shorter stem is a prefix match with a separator boundary — the character after the prefix must be non-alphanumeric (`-`, `_`, space, `(`). If so, assign to that group. Otherwise, register as a new root.
+3. Filter to groups with 2+ assets. Select a target per group (prefer assets with a RAW variant, then oldest by `created_at`). Merge donor variants into the target and re-role Original to Alternate.
 
 **Matching examples:**
 
