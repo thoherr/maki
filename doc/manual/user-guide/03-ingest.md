@@ -6,7 +6,7 @@ Importing is how files enter the maki catalog. Unlike traditional asset managers
 
 The following diagrams show the stages a file passes through during import:
 
-```mermaid
+```mermaid {width=75%}
 flowchart TD
     A[Scan files & directories] --> B[Filter by type group]
     B --> C[Hash file contents — SHA-256]
@@ -21,8 +21,7 @@ For each new file, the import asset pipeline runs:
 
 ```mermaid
 flowchart LR
-    E[Extract EXIF] --> F[Extract XMP]
-    F --> G[Auto-group<br/>by filename]
+    E[Extract<br/>Metadata] --> G[Auto-group<br/>by filename]
     G --> H[Create Asset +<br/>Variant records]
     H --> I[Attach<br/>Recipes]
     I --> J[Generate<br/>previews]
