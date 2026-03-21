@@ -6,77 +6,51 @@ This document describes the modules that make up the `maki` crate. All source co
 
 ```mermaid
 graph TD
-    main["main.rs<br/>(CLI entry point)"]
-    web["web/<br/>(Axum server)"]
-    asset_service["asset_service"]
-    query["query<br/>(QueryEngine)"]
-    catalog["catalog<br/>(SQLite)"]
-    models["models/<br/>(data types)"]
-    content_store["content_store<br/>(SHA-256)"]
-    metadata_store["metadata_store<br/>(YAML sidecars)"]
-    device_registry["device_registry<br/>(volumes)"]
-    preview["preview<br/>(thumbnails)"]
-    exif_reader["exif_reader"]
-    xmp_reader["xmp_reader"]
-    embedded_xmp["embedded_xmp"]
-    config["config<br/>(maki.toml)"]
-    collection["collection"]
-    saved_search["saved_search"]
-    stack["stack"]
-    format["format<br/>(output templates)"]
+    subgraph Entry["Entry Points"]
+        direction LR
+        main["main.rs<br/>(CLI)"]
+        web["web/<br/>(Axum)"]
+    end
 
-    main --> query
-    main --> asset_service
-    main --> catalog
-    main --> config
-    main --> device_registry
-    main --> collection
-    main --> saved_search
-    main --> stack
-    main --> format
-    main --> web
-    main --> models
-    main --> content_store
-    main --> metadata_store
-    main --> preview
+    subgraph Services["Service Layer"]
+        direction LR
+        asset_service["asset_service"]
+        query["query"]
+        collection["collection"]
+        saved_search["saved_search"]
+        stack["stack"]
+    end
 
-    web --> catalog
-    web --> query
-    web --> models
-    web --> config
-    web --> device_registry
-    web --> collection
-    web --> saved_search
-    web --> stack
-    web --> asset_service
-    web --> content_store
-    web --> metadata_store
-    web --> preview
+    subgraph Core["Core Layer"]
+        direction LR
+        catalog["catalog<br/>(SQLite)"]
+        metadata_store["metadata_store<br/>(YAML)"]
+        content_store["content_store<br/>(SHA-256)"]
+        device_registry["device_registry"]
+        preview["preview"]
+        config["config"]
+    end
 
-    query --> catalog
-    query --> models
-    query --> metadata_store
-    query --> device_registry
-    query --> collection
-    query --> xmp_reader
-    query --> content_store
+    subgraph IO["I/O Layer"]
+        direction LR
+        exif_reader["exif_reader"]
+        xmp_reader["xmp_reader"]
+        embedded_xmp["embedded_xmp"]
+        models["models/"]
+        format["format"]
+    end
 
-    asset_service --> content_store
-    asset_service --> metadata_store
-    asset_service --> catalog
-    asset_service --> exif_reader
-    asset_service --> xmp_reader
-    asset_service --> embedded_xmp
-    asset_service --> preview
-    asset_service --> device_registry
-    asset_service --> models
-    asset_service --> config
+    main --> asset_service & query & collection & saved_search & stack & web
+    web --> asset_service & query & collection & saved_search & stack
+    asset_service --> catalog & metadata_store & content_store & preview & device_registry
+    asset_service --> exif_reader & xmp_reader & embedded_xmp
+    query --> catalog & metadata_store & device_registry & collection
 ```
 
 ## Module Table
 
 | Module | File(s) | Purpose |
-|--------|---------|---------|
+|----------|-----------------|--------------------------------------------------------------|
 | `ai` | `src/ai.rs` | *Feature-gated (`ai`)*. Multi-model SigLIP wrapper with `ModelSpec` registry. Supports ViT-B/16-256 (768-dim) and ViT-L/16-256 (1024-dim). ONNX session management for vision and text encoders, image preprocessing (256×256 squash resize, normalize to [-1,1] CHW tensor), SentencePiece tokenization (pad to 64 tokens), sigmoid scoring (`logit_scale * dot + logit_bias`), and ~100 default photography labels. Provides `ModelSpec`, `get_model_spec()`, `SigLipModel` with `encode_image()`, `encode_texts()`, and `classify()`. |
 | `asset_service` | `src/asset_service.rs` | Orchestrates import, export, grouping, auto-grouping, auto-tagging, relocate, delete, and preview generation. Coordinates between content store, metadata store, catalog, EXIF/XMP readers, and preview generator. Entry point for all write operations that involve multiple subsystems. |
 | `catalog` | `src/catalog.rs` | SQLite database operations: schema creation, migrations, CRUD for assets/variants/recipes/locations, search queries with pagination and filtering, statistics, and tag management. Provides `Catalog::open()` (with migrations) and `Catalog::open_fast()` (skip migrations, for per-request use in the web server). |
