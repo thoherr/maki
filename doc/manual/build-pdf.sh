@@ -96,8 +96,8 @@ for f in "${FILES[@]}"; do
     first=false
     section="$cur_section"
 
-    # Append file, rewriting ../screenshots/ to screenshots/ for pandoc
-    sed 's|\.\./screenshots/|screenshots/|g' "$filepath" >> "$TMPFILE"
+    # Append file, rewriting relative image paths for pandoc resource resolution
+    sed 's|\.\./screenshots/|screenshots/|g; s|\.\./maki-|maki-|g' "$filepath" >> "$TMPFILE"
 done
 
 # --- Rewrite cross-document .md links to internal anchors ---

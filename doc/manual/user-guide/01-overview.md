@@ -1,6 +1,20 @@
 # Overview & Concepts
 
-This chapter introduces the data model, architecture, and workflow of **maki** -- a CLI digital asset manager designed for photographers and media professionals managing large collections (terabytes of images, videos, and processing files) across multiple storage devices.
+## Overview
+
+![](../maki-overview.png)
+
+**maki** is a digital asset manager built in Rust for photographers and media professionals who manage large collections — terabytes of images, videos, and processing files — across multiple storage devices.
+
+At its core, maki maintains a **local catalog** on your machine that tracks every file across all your volumes: memory cards, portable SSDs, RAID arrays, and network storage. Files are identified by their SHA-256 content hash, enabling deduplication and integrity verification regardless of where copies are stored. Even when drives are offline, you can browse, search, and organize your assets using cached metadata and preview thumbnails.
+
+You interact with maki through two interfaces: a **command-line interface** (CLI) for scripting, batch operations, and automation, and a **web UI** served locally for visual browsing, lightbox viewing, strolling through similar images, and interactive editing. Both interfaces work against the same catalog.
+
+Metadata is stored as human-readable **YAML sidecar files** — the source of truth that survives database rebuilds and is friendly to version control. A SQLite database serves as a fast query index that can be fully reconstructed from the sidecars at any time.
+
+With the optional AI feature, maki provides **auto-tagging**, **face detection and recognition**, **visual similarity search**, and **VLM-powered image descriptions** — all running locally with no cloud dependency.
+
+maki runs on **macOS**, **Linux**, and **Windows**.
 
 ## Core Concepts
 
