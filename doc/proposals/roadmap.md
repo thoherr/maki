@@ -2,7 +2,7 @@
 
 Living document tracking planned enhancements. Previous proposals (all implemented or deferred) are in `archive/`. Active proposals are in `doc/proposals/`.
 
-Current version: **v4.0.7** (2026-03-20)
+Current version: **v4.0.8** (2026-03-21)
 
 ---
 
@@ -156,3 +156,4 @@ Design documents for completed features are in `doc/proposals/archive/`. Key mil
 - **v4.0.5**: Unified `NumericFilter` enum (all numeric filters support x, x+, x-y, x,y syntax), `orphan:false` filter, rating ranges, complete search filter documentation consistency, `*` not a wildcard fix
 - **v4.0.6**: Large TIFF preview/embedding fix (`no_limits()`), `--query` → positional in docs/error messages, filter availability table corrected
 - **v4.0.7**: `--smart` preview fix (generates both), CLI doc audit (8 discrepancies), overview chapter restructured (Core Concepts), PDF quality (zero Unicode warnings, fallback fonts, diagram improvements)
+- **v4.0.8**: `maki init` creates `smart_previews/`, `assets/` → `metadata/` doc fix, smart preview documentation throughout manual, layout improvements (compact diagrams, centered scaling, table row spacing, module dependency graph), Windows VLM setup
