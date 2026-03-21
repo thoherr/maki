@@ -499,6 +499,9 @@ brew install ollama
 
 # Linux
 curl -fsSL https://ollama.com/install.sh | sh
+
+# Windows (also available as installer from ollama.com)
+winget install Ollama.Ollama
 ```
 
 **2. Start the server:**
@@ -507,7 +510,7 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama serve
 ```
 
-Ollama runs in the background on `http://localhost:11434`. On macOS, the Ollama desktop app starts the server automatically.
+Ollama runs in the background on `http://localhost:11434`. On macOS and Windows, the Ollama desktop app starts the server automatically.
 
 **3. Pull a vision model:**
 
@@ -539,7 +542,7 @@ maki describe --check
 | **Qwen2.5-VL 7B** | 4.7 GB | ~6 GB | ~20--36s | Best quality, key assets |
 | **SmolVLM 2.2B** | 1.5 GB | ~2 GB | ~4--8s | Minimal resources |
 
-All models use GPU automatically on macOS (Metal) and Linux (CUDA) when run through Ollama.
+All models use GPU automatically on macOS (Metal), Linux (CUDA), and Windows (CUDA/DirectML) when run through Ollama.
 
 ### Alternative Local Servers
 
