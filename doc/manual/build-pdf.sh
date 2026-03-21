@@ -203,7 +203,17 @@ awk -v tmpdir="$TMPDIR" '
         if ((getline line < png) > 0) {
             close(png)
             if (width != "100%") {
-                print "\\begin{center}\n![](mermaid-" block ".png){width=" width "}\n\\end{center}\n"
+                print ""
+                print "```{=latex}"
+                print "\\begin{center}"
+                print "```"
+                print ""
+                print "![](mermaid-" block ".png){width=" width "}"
+                print ""
+                print "```{=latex}"
+                print "\\end{center}"
+                print "```"
+                print ""
             } else {
                 print "![](mermaid-" block ".png){width=" width "}\n"
             }
