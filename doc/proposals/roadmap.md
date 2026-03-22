@@ -2,7 +2,7 @@
 
 Living document tracking planned enhancements. Previous proposals (all implemented or deferred) are in `archive/`. Active proposals are in `doc/proposals/`.
 
-Current version: **v4.0.9** (2026-03-22)
+Current version: **v4.0.10** (2026-03-22)
 
 ---
 
@@ -158,3 +158,4 @@ Design documents for completed features are in `doc/proposals/archive/`. Key mil
 - **v4.0.7**: `--smart` preview fix (generates both), CLI doc audit (8 discrepancies), overview chapter restructured (Core Concepts), PDF quality (zero Unicode warnings, fallback fonts, diagram improvements)
 - **v4.0.8**: `maki init` creates `smart_previews/`, `assets/` → `metadata/` doc fix, smart preview documentation throughout manual, layout improvements (compact diagrams, centered scaling, table row spacing, module dependency graph), Windows VLM setup
 - **v4.0.9**: Cheat sheet (2-page landscape A4), group metadata merge (highest rating, first label/description), consistent MAKI/maki naming (~81 fixes), product overview illustration, DAM → MAKI in all remaining references
+- **v4.0.10**: XMP writeback safeguard (`[writeback] enabled = false` by default), documented across manual with warnings and recommended settings
