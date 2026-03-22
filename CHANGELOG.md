@@ -2,6 +2,22 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.0.9 (2026-03-22)
+
+### New Features
+- **Cheat sheet** — 2-page landscape A4 reference card with all 41 commands, search filter syntax, key workflows, and configuration reference. PDF at `doc/manual/cheat-sheet.pdf`.
+
+### Bug Fixes
+- **Group metadata merge** — grouping now keeps the highest rating, first non-None color label and description from donors instead of silently discarding them.
+- **`maki init`** — now creates `smart_previews/` directory.
+
+### Enhancements
+- **Consistent MAKI/maki naming** — ~81 fixes across 15 manual files: MAKI (uppercase) for the product, maki (lowercase) for the CLI command, DAM → MAKI everywhere.
+- **Product overview illustration** — high-res marketing graphic on the manual's first content page.
+- **Manual layout** — architecture diagram horizontal items, import pipeline split, auto-group algorithm compact, module dependency graph simplified.
+- **Smart preview documentation** — added throughout the manual (overview, ingest, setup, module reference).
+- **Windows VLM setup** — Ollama install instructions for Windows.
+
 ## v4.0.8 (2026-03-21)
 
 ### Bug Fixes
