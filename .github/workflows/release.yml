@@ -119,40 +119,10 @@ jobs:
           name: ${{ matrix.platform }}-ai
           path: ${{ env.AI_ARCHIVE }}
 
-  # --- Build PDF manual (macOS only, needs pandoc + xelatex + mmdc) ---
-
-  build-docs:
-    runs-on: macos-latest
-    name: Build documentation
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install doc tools
-        run: |
-          brew install pandoc mactex-no-gui mermaid-cli
-          eval "$(/usr/libexec/path_helper)"
-
-      - name: Build PDF manual
-        run: bash doc/manual/build-pdf.sh
-
-      - name: Build cheat sheet
-        run: |
-          cd doc/manual
-          xelatex cheat-sheet.tex
-          xelatex cheat-sheet.tex
-
-      - name: Upload manual
-        uses: actions/upload-artifact@v4
-        with:
-          name: docs
-          path: |
-            doc/manual/maki-manual.pdf
-            doc/manual/cheat-sheet.pdf
-
   # --- Create GitHub release with all artifacts ---
 
   release:
-    needs: [build, build-docs]
+    needs: [build]
     runs-on: ubuntu-latest
     name: Create release
     permissions:
@@ -190,4 +160,5 @@ jobs:
             artifacts/linux-x86_64-ai/*
             artifacts/windows-x86_64/*
             artifacts/windows-x86_64-ai/*
-            artifacts/docs/*
+            doc/manual/maki-manual.pdf
+            doc/manual/cheat-sheet.pdf
