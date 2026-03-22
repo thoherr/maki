@@ -2,6 +2,11 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.0.10 (2026-03-22)
+
+### New Features
+- **XMP writeback safeguard** — writeback is now disabled by default. Edits to rating, tags, description, and color label are stored safely in the catalog but NOT written to XMP files on disk until `[writeback] enabled = true` is set in `maki.toml`. Prevents accidental modification of Lightroom/CaptureOne XMP files. `maki writeback --dry-run` still works for previewing. Edits are never lost — enable writeback later and run `maki writeback --all` to push all accumulated changes.
+
 ## v4.0.9 (2026-03-22)
 
 ### New Features
