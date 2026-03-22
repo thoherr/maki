@@ -305,6 +305,17 @@ auto_tags = [         # Tags automatically applied to every new asset
 
 **`[import]`** -- `exclude` patterns are matched against filenames (not full paths) using glob syntax. Common choices: OS junk files, editor temp files, thumbnail caches. `auto_tags` are merged with any tags extracted from XMP metadata during import; useful for tagging everything in a session as "unreviewed" for later triage.
 
+### Recommended settings
+
+If you use Lightroom, CaptureOne, or another tool that reads `.xmp` sidecar files, enable XMP writeback so your edits in MAKI are visible to those tools:
+
+```toml
+[writeback]
+enabled = true
+```
+
+> **Warning:** Enabling writeback causes MAKI to modify `.xmp` files on your storage volumes whenever you change ratings, tags, labels, or descriptions. If you prefer MAKI to keep its edits strictly in its own catalog (YAML sidecars + SQLite), leave writeback disabled (the default). You can always enable it later and run `maki writeback --all` to push all edits at once.
+
 For a complete reference of every option and its behavior, see the [Configuration Reference](../reference/08-configuration.md).
 
 ---

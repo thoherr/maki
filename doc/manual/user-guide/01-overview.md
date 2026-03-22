@@ -151,7 +151,12 @@ sequenceDiagram
     M ->> M: Update Asset fields + catalog
 ```
 
-**Catalog to disk**: When you change a rating, tag, description, or color label via the CLI (`maki edit`, `maki tag`) or the web UI, MAKI writes the change back to any associated `.xmp` files on disk, then re-hashes them and updates the stored recipe hash.
+**Catalog to disk**: When you change a rating, tag, description, or color label via the CLI (`maki edit`, `maki tag`) or the web UI, MAKI can write the change back to any associated `.xmp` files on disk, then re-hash them and update the stored recipe hash. Writeback must be explicitly enabled in `maki.toml` -- by default, edits are stored only in the catalog and YAML sidecars:
+
+```toml
+[writeback]
+enabled = true
+```
 
 **Disk to catalog**: When CaptureOne or another tool modifies an `.xmp` file, running `maki refresh` or `maki sync` detects the changed hash, re-extracts the XMP metadata, and updates the Asset in both the catalog and sidecar YAML.
 

@@ -646,6 +646,28 @@ default_filter = "type:image"
 
 ---
 
+## [writeback] Section
+
+Controls whether metadata edits are written back to XMP recipe files on your storage volumes.
+
+### enabled
+
+- **Type:** boolean
+- **Default:** `false`
+
+When `false` (the default), edits to rating, tags, description, and color label are stored in the YAML sidecar files and SQLite catalog only. The `.xmp` files on your volumes are **not** modified. This is a safety measure -- XMP writeback modifies files on your storage volumes, and you must opt in explicitly.
+
+When `true`, edits are written back to associated `.xmp` recipe files on disk immediately (for online volumes) or queued as `pending_writeback` (for offline volumes). This enables interoperability with Lightroom, CaptureOne, and other tools that read XMP sidecars.
+
+> **Note:** Even with writeback disabled, your edits are never lost. They are always persisted in the YAML sidecar (source of truth) and SQLite catalog. You can enable writeback later and run `maki writeback --all` to push all accumulated edits to XMP files at once.
+
+```toml
+[writeback]
+enabled = true
+```
+
+---
+
 ## Full Example
 
 A complete `maki.toml` with all options set and annotated:
@@ -734,6 +756,11 @@ model_dir = "~/.maki/models"
 prompt = "a photograph of {}"
 # GPU acceleration (requires --features ai-gpu).
 # execution_provider = "auto"
+
+# XMP writeback: disabled by default for safety.
+# Enable to write rating/tags/label/description back to .xmp files on disk.
+[writeback]
+enabled = false
 
 # VLM image description settings (works with any build).
 [vlm]
@@ -845,6 +872,7 @@ When a field is absent from `maki.toml`, these defaults apply:
 | `vlm.top_p` | `0.0` (server default) |
 | `vlm.top_k` | `0` (server default) |
 | `vlm.repeat_penalty` | `0.0` (server default) |
+| `writeback.enabled` | `false` |
 | `browse.default_filter` | none |
 
 ---
