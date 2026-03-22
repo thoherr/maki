@@ -1,2 +1,7 @@
 /target
 doc/manual/dam-manual.pdf
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
