@@ -24,7 +24,7 @@ MAKI is available in two editions:
 
 Both editions also support **VLM-powered image descriptions** via a local vision-language model server (Ollama, LM Studio, vLLM) — no special edition required.
 
-Pre-built binaries for both editions are available on the [GitHub releases page](https://github.com/thoherr/maki/releases). The Pro edition includes ONNX Runtime for on-device AI inference, with optional GPU acceleration on macOS (CoreML/Neural Engine).
+Pre-built binaries for both editions are available on the [GitHub releases page](https://github.com/thoherr/maki/releases). The Pro edition includes ONNX Runtime for on-device AI inference. On macOS, GPU acceleration via CoreML (Neural Engine on Apple Silicon, Metal on Intel) is included automatically.
 
 ## Core Concepts
 

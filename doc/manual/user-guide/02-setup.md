@@ -38,7 +38,7 @@ git clone https://github.com/thoherr/maki.git
 cd maki
 cargo build --release                    # standard edition
 cargo build --release --features pro     # Pro edition
-cargo build --release --features pro,ai-gpu  # Pro edition with GPU acceleration (macOS)
+cargo build --release --features pro,ai-gpu  # Pro with GPU acceleration (macOS only)
 ```
 
 The binary is at `target/release/maki`. Copy or symlink it to a directory on your `PATH`.

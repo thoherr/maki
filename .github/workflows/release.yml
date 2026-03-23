@@ -17,14 +17,17 @@ jobs:
             target: aarch64-apple-darwin
             platform: macos-arm64
             ext: tar.gz
+            pro_features: pro,ai-gpu
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             platform: linux-x86_64
             ext: tar.gz
+            pro_features: pro
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             platform: windows-x86_64
             ext: zip
+            pro_features: pro
 
     runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.platform }}
@@ -78,7 +81,7 @@ jobs:
       # --- Pro build (AI features) ---
 
       - name: Build release binary (Pro)
-        run: cargo build --release --target ${{ matrix.target }} --features pro
+        run: cargo build --release --target ${{ matrix.target }} --features ${{ matrix.pro_features }}
 
       - name: Package Pro binary (Unix)
         if: runner.os != 'Windows'
