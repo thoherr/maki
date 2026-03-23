@@ -2,6 +2,18 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.1.0 (2026-03-24)
+
+### New Features
+- **MAKI Pro edition** — AI builds are now branded as "MAKI Pro". Version string shows `maki 4.1.0 Pro`, web UI footer shows `v4.1.0 Pro`. New `--features pro` build flag serves as product tier above the technical `ai` flag, enabling future non-AI pro features.
+- **Search Filter Reference card** — 2-page A4 portrait reference card with all 34 search filters, combining syntax, sort options, output formats, and common recipes. Matches cheat sheet branding. PDF at `doc/manual/search-filters.pdf`.
+
+### Enhancements
+- **Release artifacts renamed** — AI binaries renamed from `-ai` to `-pro` suffix (e.g. `maki-4.1.0-macos-arm64-pro.tar.gz`).
+- **GPU acceleration automatic on macOS** — macOS Pro builds now include CoreML support automatically. Users no longer need to know about the `ai-gpu` feature flag.
+- **Manual updated for MAKI Pro branding** — all references to `--features ai` in user-facing documentation replaced with "MAKI Pro". New Editions section in the overview chapter. Installation instructions cover pre-built binaries.
+- **Cheat sheet updated** — `[AI]` badges replaced with `[Pro]`, "AI Filters" section renamed to "Pro Filters".
+
 ## v4.0.12 (2026-03-23)
 
 ### Enhancements
