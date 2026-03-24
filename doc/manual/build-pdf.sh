@@ -12,6 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MANUAL_DIR="$SCRIPT_DIR"
 REPO_ROOT="$MANUAL_DIR/../.."
+IMAGES_DIR="$REPO_ROOT/doc/images"
 OUTPUT="$MANUAL_DIR/maki-manual.pdf"
 
 # Extract version from Cargo.toml
@@ -260,7 +261,7 @@ cat > "$TMPDIR/header.tex" << 'LATEX'
 % Header/footer styling
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\raisebox{-2pt}{\includegraphics[height=10pt]{__MANUAL_DIR__/maki-icon-header.png}}\;\small\textit{\textcolor{maki-stone}{MAKI User Manual}}}
+\fancyhead[L]{\raisebox{-2pt}{\includegraphics[height=10pt]{__IMAGES_DIR__/maki-icon-header.png}}\;\small\textit{\textcolor{maki-stone}{MAKI User Manual}}}
 \fancyhead[R]{\small\textit{\textcolor{maki-stone}{v__VERSION__}}}
 \fancyfoot[C]{\small\thepage}
 \fancyfoot[L]{\small\textcolor{maki-stone}{MAKI v__VERSION__}}
@@ -271,7 +272,7 @@ cat > "$TMPDIR/header.tex" << 'LATEX'
 % Apply to chapter opening pages (plain style)
 \fancypagestyle{plain}{
   \fancyhf{}
-  \fancyhead[L]{\raisebox{-2pt}{\includegraphics[height=10pt]{__MANUAL_DIR__/maki-icon-header.png}}\;\small\textit{\textcolor{maki-stone}{MAKI User Manual}}}
+  \fancyhead[L]{\raisebox{-2pt}{\includegraphics[height=10pt]{__IMAGES_DIR__/maki-icon-header.png}}\;\small\textit{\textcolor{maki-stone}{MAKI User Manual}}}
   \fancyhead[R]{\small\textit{\textcolor{maki-stone}{v__VERSION__}}}
   \fancyfoot[C]{\small\thepage}
   \fancyfoot[L]{\small\textcolor{maki-stone}{MAKI v__VERSION__}}
@@ -287,7 +288,7 @@ cat > "$TMPDIR/header.tex" << 'LATEX'
     \vspace*{2cm}
 
     % Logo
-    \makebox[\textwidth]{\includegraphics[height=5cm]{__MANUAL_DIR__/maki-wordmark-tagline.png}}
+    \makebox[\textwidth]{\includegraphics[height=5cm]{__IMAGES_DIR__/maki-wordmark-tagline.png}}
 
     \vspace{2cm}
 
@@ -315,7 +316,8 @@ LATEX
 
 # Substitute version and date into the header
 MANUAL_DIR_ESCAPED=$(echo "$MANUAL_DIR" | sed 's/\//\\\//g')
-sed -i '' "s/__VERSION__/$VERSION/g; s/__DATE__/$DATE/g; s/__MANUAL_DIR__/$MANUAL_DIR_ESCAPED/g" "$TMPDIR/header.tex"
+IMAGES_DIR_ESCAPED=$(echo "$IMAGES_DIR" | sed 's/\//\\\//g')
+sed -i '' "s/__VERSION__/$VERSION/g; s/__DATE__/$DATE/g; s/__MANUAL_DIR__/$MANUAL_DIR_ESCAPED/g; s/__IMAGES_DIR__/$IMAGES_DIR_ESCAPED/g" "$TMPDIR/header.tex"
 
 # --- Generate PDF ---
 
