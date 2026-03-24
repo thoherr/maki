@@ -2,17 +2,27 @@
 
 Living document tracking planned enhancements. Previous proposals (all implemented or deferred) are in `archive/`. Active proposals are in `doc/proposals/`.
 
-Current version: **v4.0.12** (2026-03-23)
+Current version: **v4.1.2** (2026-03-24)
 
 ---
 
 ## Active Proposals
 
-### Similarity Stacking (Phase 3)
+### Manual Translation (i18n)
 
-Auto-discover visual clusters across the catalog and propose stacks. See `doc/proposals/similarity-browse-and-grouping.md`.
+Produce the MAKI user manual in English and German from a single source using inline language markers. See `doc/proposals/manual-i18n.md`.
 
-**Status:** Phase 1 (similarity browse) and Phase 2 (stack-by-similarity from detail page) implemented in v4.0.2. Phase 3 (catalog-wide auto-stack) pending.
+**Status:** Proposal written, not started.
+
+**Complexity:** Low (tooling), Medium (translation effort).
+
+---
+
+## Tier 1 — High Value
+
+### Auto-Stack by Similarity (Catalog-wide)
+
+Discover natural visual clusters across the catalog and propose stacks. Phase 3 of the similarity browse proposal (Phases 1–2 implemented in v4.0.2). See `archive/proposal-similarity-browse-and-grouping.md`.
 
 **Scope:**
 - `maki auto-stack --threshold 85` — scan all embedded assets, cluster by similarity, propose stacks
@@ -21,10 +31,6 @@ Auto-discover visual clusters across the catalog and propose stacks. See `doc/pr
 - Clustering algorithm: greedy connected-components over embedding similarity matrix
 
 **Complexity:** Medium. Embedding infrastructure and stacking exist; needs clustering algorithm and CLI command.
-
----
-
-## Tier 1 — High Value
 
 ### Watch Mode
 
@@ -43,15 +49,14 @@ Auto-import and sync on filesystem changes. After a CaptureOne session, new file
 
 SigLIP embedding generation on CPU is slow for large catalogs. GPU backends make batch embedding practical at scale.
 
-**Status:** CoreML (macOS) implemented in v2.4.1 via `--features ai-gpu`. Linux/Windows pending.
+**Status:** CoreML (macOS) included automatically in Pro builds since v4.1.0. Linux/Windows pending.
 
 **Open:**
 - CUDA execution provider for Linux (requires `ort/cuda` feature, CUDA Toolkit + cuDNN)
 - DirectML execution provider for Windows (requires `ort/directml` feature)
-- Testing on Linux and Windows platforms
-- Batch processing with GPU-optimal batch sizes
+- Testing and packaging across platforms
 
-**Complexity:** Low for adding providers (code pattern exists), high for testing/packaging across platforms.
+**Complexity:** Low for adding providers (code pattern exists), high for testing/packaging.
 
 ### IPTC/EXIF Write-Back
 
@@ -67,6 +72,19 @@ Write metadata changes back into JPEG/TIFF files directly, not just XMP sidecars
 
 ---
 
+## Tier 2 — Workflow Convenience
+
+### Advanced Contact Sheet Templates *(Pro)*
+
+Professional-grade contact sheet layouts beyond the current defaults. Templates for client proofing, portfolio review, and print production.
+
+**Scope:**
+- Additional layout presets (grid with metadata overlay, filmstrip, portfolio pages)
+- Custom template system (user-defined layouts via config)
+- Gated behind `pro` feature flag
+
+**Complexity:** Medium.
+
 ### Web UI Export Progress
 
 The ZIP export modal shows "Preparing..." with no progress feedback.
@@ -77,10 +95,6 @@ The ZIP export modal shows "Preparing..." with no progress feedback.
 - Warn before very large downloads (> 1 GB)
 
 **Complexity:** Low-Medium.
-
----
-
-## Tier 2 — Workflow Convenience
 
 ### Import Profiles
 
@@ -149,15 +163,5 @@ Design documents for completed features are in `doc/proposals/archive/`. Key mil
 - **v3.1**: Preview command, consistent positional query and shell variable expansion
 - **v3.2**: Web UI export ZIP, batch delete, shell export, per-model VLM config, verbose threading, documentation consolidation
 - **v4.0**: MAKI rebrand (binary `dam` → `maki`, config `dam.toml` → `maki.toml`, full visual rebrand), branded PDF manual
-- **v4.0.1**: Default browse filter (`[browse] default_filter`), VLM tags mode fix, organizing/culling manual chapter
-- **v4.0.2**: Similarity browse (scores on cards, `min_sim:` filter, sort by similarity), stack-by-similarity from detail page, stack management toolbar (add/remove/set-pick), filter bar two-row layout
-- **v4.0.3**: Windows support (cross-platform path normalization, `\\?\` prefix handling, 8MB stack, tool detection), GitHub Actions CI (macOS/Linux/Windows × standard/AI), missing tool warnings, README branding
-- **v4.0.4**: Tag quote fix (`"Sir" Oliver Mally`), doc tests (11), tag matching tests for special characters, updated branding assets
-- **v4.0.5**: Unified `NumericFilter` enum (all numeric filters support x, x+, x-y, x,y syntax), `orphan:false` filter, rating ranges, complete search filter documentation consistency, `*` not a wildcard fix
-- **v4.0.6**: Large TIFF preview/embedding fix (`no_limits()`), `--query` → positional in docs/error messages, filter availability table corrected
-- **v4.0.7**: `--smart` preview fix (generates both), CLI doc audit (8 discrepancies), overview chapter restructured (Core Concepts), PDF quality (zero Unicode warnings, fallback fonts, diagram improvements)
-- **v4.0.8**: `maki init` creates `smart_previews/`, `assets/` → `metadata/` doc fix, smart preview documentation throughout manual, layout improvements (compact diagrams, centered scaling, table row spacing, module dependency graph), Windows VLM setup
-- **v4.0.9**: Cheat sheet (2-page landscape A4), group metadata merge (highest rating, first label/description), consistent MAKI/maki naming (~81 fixes), product overview illustration, DAM → MAKI in all remaining references
-- **v4.0.10**: XMP writeback safeguard (`[writeback] enabled = false` by default), documented across manual with warnings and recommended settings
-- **v4.0.11**: Automated binary release workflow (6 binaries: macOS ARM, Linux x86_64, Windows x86_64 × standard/AI), ubuntu-24.04 for Linux AI (glibc 2.38+)
-- **v4.0.12**: 13 branded screenshots (7 new views: lightbox, stroll, map, calendar, analytics, similarity browse, compare), repo renamed to `thoherr/maki`
+- **v4.0.1–v4.0.12**: Default browse filter, similarity browse, Windows support, CI/CD, unified numeric filters, XMP writeback safeguard, cheat sheet, automated releases, branded screenshots
+- **v4.1.x**: MAKI Pro edition branding (`pro` feature flag, release artifacts renamed to `-pro`), search filter reference card, star rating filter UX improvement, website link in `--help`, repo structure cleanup (`doc/images/`, `doc/quickref/`)
