@@ -2,7 +2,7 @@
 
 ## Overview
 
-![](../maki-overview.png){width=100%}
+![](../../images/maki-overview.png){width=100%}
 
 **MAKI** is a digital asset manager built in Rust for photographers and media professionals who manage large collections — terabytes of images, videos, and processing files — across multiple storage devices.
 

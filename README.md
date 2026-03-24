@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="doc/manual/maki-wordmark-tagline.png" alt="MAKI — Media Asset Keeper & Indexer" width="400">
+  <img src="doc/images/maki-wordmark-tagline.png" alt="MAKI — Media Asset Keeper & Indexer" width="400">
 </p>
 
 A command-line digital asset manager built in Rust, designed for large collections of images, videos, and other media spread across multiple storage devices.

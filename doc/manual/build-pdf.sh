@@ -97,7 +97,7 @@ for f in "${FILES[@]}"; do
     section="$cur_section"
 
     # Append file, rewriting relative image paths for pandoc resource resolution
-    sed 's|\.\./screenshots/|screenshots/|g; s|\.\./maki-|maki-|g' "$filepath" >> "$TMPFILE"
+    sed 's|\.\./screenshots/|screenshots/|g; s|\.\./\.\.\/images/maki-|maki-|g; s|\.\./maki-|maki-|g' "$filepath" >> "$TMPFILE"
 done
 
 # --- Rewrite cross-document .md links to internal anchors ---
@@ -336,7 +336,7 @@ pandoc "$TMPDIR/manual-final.md" \
     -V monofont="Menlo" \
     --syntax-highlighting=tango \
     --include-in-header="$TMPDIR/header.tex" \
-    --resource-path="$MANUAL_DIR:$TMPDIR" \
+    --resource-path="$MANUAL_DIR:$MANUAL_DIR/../images:$TMPDIR" \
     -o "$OUTPUT"
 
 echo "PDF generated: $OUTPUT"
