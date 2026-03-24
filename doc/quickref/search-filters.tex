@@ -1,0 +1,217 @@
+\documentclass[a4paper,10pt]{extarticle}
+\usepackage[left=1.6cm,right=1.6cm,top=1.6cm,bottom=1.2cm]{geometry}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{enumitem}
+\usepackage{tabularx}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+% Brand colors (identical to cheat sheet)
+\definecolor{maki-salmon}{HTML}{e8634a}
+\definecolor{maki-nori}{HTML}{1a2332}
+\definecolor{maki-teal}{HTML}{2ea8a0}
+\definecolor{maki-stone}{HTML}{6b7b8d}
+\definecolor{maki-cream}{HTML}{f0ebe3}
+\definecolor{maki-blue}{HTML}{3868c8}
+
+% Formatting
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{3pt}
+\raggedright
+\usepackage{ragged2e}
+\AtBeginDocument{\RaggedRight}
+
+% Header/footer — same style as cheat sheet (logo, no rules)
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+\fancyhead[L]{\raisebox{-2pt}{\includegraphics[height=8pt]{maki-icon-header.png}}\;\scriptsize\color{maki-stone} MAKI v4.1.0}
+\fancyhead[R]{\scriptsize\color{maki-stone} maki-dam.com}
+
+% Section styling — prominent salmon headers with generous spacing
+\titleformat{\section}{\Large\bfseries\color{maki-salmon}}{}{0em}{}[\vspace{-2pt}{\color{maki-salmon!40}\hrule height 0.3pt}\vspace{3pt}]
+\titlespacing{\section}{0pt}{24pt}{6pt}
+
+% Command formatting
+\newcommand{\cmd}[1]{\texttt{#1}}
+\newcommand{\pro}{\textcolor{maki-teal}{\scriptsize\sffamily [Pro]}}
+
+% Recipe: command on one line, description below it in gray, tight together
+\newcommand{\recipe}[2]{%
+  \par\noindent\cmd{#1}\par\nopagebreak\noindent{\color{maki-stone}\small #2}\par\vspace{6pt}%
+}
+
+\begin{document}
+
+% ============================================================
+% PAGE 1 — Filter Table
+% ============================================================
+
+\begin{center}
+{\Large\bfseries\color{maki-salmon} MAKI Search Filter Reference}
+\end{center}
+\vspace{2pt}
+
+{\color{maki-stone}\small \pro{} = MAKI Pro edition}
+
+\vspace{4pt}
+
+All filters work in \cmd{maki search}, the web UI search box, and saved searches.
+Filters combine with \textbf{AND}. Free-text tokens search names, filenames, descriptions, and metadata.
+
+\vspace{8pt}
+
+\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\textwidth}{@{}l l X@{}}
+\textbf{Filter} & \textbf{Syntax} & \textbf{Example} \\[3pt]
+\hline\\[-6pt]
+Asset type          & \cmd{type:<type>}                     & \cmd{type:image}, \cmd{type:video} \\
+Tag                 & \cmd{tag:<name>}                      & \cmd{tag:landscape}, \cmd{tag:"Fools Theater"} \\
+Exclude tag         & \cmd{-tag:<name>}                     & \cmd{-tag:rejected} \\
+Format              & \cmd{format:<ext>}                    & \cmd{format:nef}, \cmd{format:jpg} \\
+Rating              & \cmd{rating:<N>}, \cmd{<N>+}, \cmd{<N>-<M>}, \cmd{<N>,<M>} & \cmd{rating:4+}, \cmd{rating:3-5}, \cmd{rating:2,4} \\
+Color label         & \cmd{label:<color>}                   & \cmd{label:Red}, \cmd{label:Blue} \\
+Camera              & \cmd{camera:<text>}                   & \cmd{camera:fuji}, \cmd{camera:"Canon EOS R5"} \\
+Lens                & \cmd{lens:<text>}                     & \cmd{lens:56mm}, \cmd{lens:"RF 50mm"} \\
+ISO                 & \cmd{iso:<N>}, \cmd{iso:<min>-<max>}  & \cmd{iso:100}, \cmd{iso:100-800} \\
+Focal length        & \cmd{focal:<N>}, \cmd{focal:<min>-<max>} & \cmd{focal:50}, \cmd{focal:35-70} \\
+Aperture            & \cmd{f:<N>}, \cmd{f:<min>-<max>}      & \cmd{f:2.8}, \cmd{f:1.4-2.8} \\
+Width / Height      & \cmd{width:<N>+}, \cmd{height:<N>+}   & \cmd{width:4000+}, \cmd{height:2000+} \\
+Source metadata     & \cmd{meta:<key>=<value>}              & \cmd{meta:software=CaptureOne} \\
+Path prefix         & \cmd{path:<prefix>}                   & \cmd{path:Capture/2026-02-22} \\
+Collection          & \cmd{collection:<name>}               & \cmd{collection:Favorites} \\
+Date                & \cmd{date:<prefix>}                   & \cmd{date:2026}, \cmd{date:2026-02} \\
+Date from / until   & \cmd{dateFrom:<date>}, \cmd{dateUntil:<date>} & \cmd{dateFrom:2026-01-01} \\
+Volume              & \cmd{volume:<label>}                  & \cmd{volume:Archive}, \cmd{volume:none} \\
+Asset ID            & \cmd{id:<prefix>}                     & \cmd{id:72a0bb4b} \\
+Copies              & \cmd{copies:<N>}, \cmd{copies:<N>+}   & \cmd{copies:1}, \cmd{copies:2+} \\
+Variants            & \cmd{variants:<N>+}                   & \cmd{variants:2+} \\
+Scattered           & \cmd{scattered:<N>+}                  & \cmd{scattered:2+} \\
+GPS location        & \cmd{geo:<S>,<W>,<N>,<E>}             & \cmd{geo:47.5,11.0,48.5,13.0} \\
+GPS any/none        & \cmd{geo:any}, \cmd{geo:none}         & \cmd{geo:any} \\
+Orphan              & \cmd{orphan:true}                     & \cmd{orphan:true} \\
+Missing files       & \cmd{missing:true}                    & \cmd{missing:true} \\
+Stale verification  & \cmd{stale:<days>}                    & \cmd{stale:30} \\
+Stacked             & \cmd{stacked:true}, \cmd{stacked:false} & \cmd{stacked:true} \\
+Face count          & \cmd{faces:any}, \cmd{faces:none}, \cmd{faces:<N>+} & \cmd{faces:2+} \\
+Person              & \cmd{person:<name>}                   & \cmd{person:Alice} \\[6pt]
+Visual similarity \pro  & \cmd{similar:<id>}, \cmd{similar:<id>:<limit>} & \cmd{similar:72a0bb4b:50} \\
+Similarity threshold \pro & \cmd{min\_sim:<percent>}           & \cmd{min\_sim:90} \\
+Text search \pro    & \cmd{text:<query>}                    & \cmd{text:"sunset beach"} \\
+Embedding status \pro & \cmd{embed:any}, \cmd{embed:none}   & \cmd{embed:none type:image} \\
+\end{tabularx}
+
+\vspace{10pt}
+All numeric filters support: exact (\cmd{3}), minimum (\cmd{3+}), range (\cmd{3-5}), OR (\cmd{2,4}).
+
+\vfill
+
+\begin{center}
+\includegraphics[height=1.2cm]{maki-wordmark-tagline.png}\\[4pt]
+{\small\color{maki-stone} \texttt{https://maki-dam.com/}}
+\end{center}
+
+\newpage
+
+% ============================================================
+% PAGE 2 — Combining, Recipes, Formats
+% ============================================================
+
+\begin{center}
+{\Large\bfseries\color{maki-salmon} MAKI Search Filter Reference}
+\end{center}
+\vspace{4pt}
+
+\begin{minipage}[t]{0.47\textwidth}
+
+\vspace{0pt}% anchor minipage tops
+\section{Combining Filters}
+
+\renewcommand{\arraystretch}{1.4}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\textbf{AND} & Repeat a filter to require all values \\
+             & \cmd{tag:landscape tag:sunset} \\[6pt]
+\textbf{OR}  & Comma within a single filter \\
+             & \cmd{tag:alice,bob} \quad \cmd{format:nef,cr3} \\[6pt]
+\textbf{NOT} & Dash prefix excludes matches \\
+             & \cmd{-tag:rejected} \quad \cmd{-format:xmp} \\[6pt]
+\textbf{Combined} & \cmd{type:image,video -tag:rejected rating:3+} \\
+\end{tabularx}
+
+\vspace{4pt}
+Hierarchical tags: \cmd{tag:animals} also matches \cmd{animals/birds} and all descendants.
+
+\vspace{18pt}
+\section{Sort Options}
+
+\renewcommand{\arraystretch}{1.35}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\cmd{date\_desc}  & Newest first \textit{(default)} \\
+\cmd{date\_asc}   & Oldest first \\
+\cmd{name\_asc}   & Name A\textrightarrow Z \\
+\cmd{name\_desc}  & Name Z\textrightarrow A \\
+\cmd{size\_desc}  & Largest first \\
+\cmd{size\_asc}   & Smallest first \\
+\cmd{similarity\_desc} & Most similar first \pro \\
+\cmd{similarity\_asc}  & Least similar first \pro \\
+\end{tabularx}
+
+\vspace{4pt}
+Usage: \cmd{maki search "rating:4+" --sort name\_asc}
+
+\vspace{18pt}
+\section{Output Formats}
+
+\renewcommand{\arraystretch}{1.35}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\textit{(default)}       & ID, filename, type, format, date \\
+\cmd{--format ids} / \cmd{-q} & One UUID per line (scripting) \\
+\cmd{--format full}      & Default + tags, description \\
+\cmd{--format json}      & JSON array \\
+\cmd{--format '\{..\}'}  & Custom template \\
+\end{tabularx}
+
+\vspace{4pt}
+{\small Placeholders: \cmd{\{id\}}, \cmd{\{name\}}, \cmd{\{filename\}}, \cmd{\{type\}}, \cmd{\{format\}}, \cmd{\{tags\}}, \cmd{\{description\}}, \cmd{\{rating\}}, \cmd{\{label\}}, \cmd{\{date\}}, \cmd{\{size\}}}
+
+\end{minipage}%
+\hfill
+\begin{minipage}[t]{0.47\textwidth}
+
+\vspace{0pt}% anchor minipage tops
+\section{Path Normalization}
+
+The \cmd{path:} filter auto-normalizes in the CLI:
+
+\renewcommand{\arraystretch}{1.35}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\cmd{\textasciitilde}  & Expands to home directory \\
+\cmd{./} \cmd{../}     & Resolves relative to cwd \\
+\cmd{/Volumes/...}     & Strips volume mount, applies \cmd{volume:} \\
+\end{tabularx}
+
+\vspace{18pt}
+\section{Common Recipes}
+
+\recipe{rating:4+ type:image}{Best images}
+\recipe{date:2026-03 tag:landscape}{March landscapes}
+\recipe{format:nef -tag:processed}{Unprocessed RAWs}
+\recipe{copies:1 volume:Photos}{Single-copy files (backup candidates)}
+\recipe{stale:90}{Not verified in 90 days}
+\recipe{orphan:true}{Assets with no file locations}
+\recipe{faces:any person:Alice rating:4+}{Alice's best shots}
+\recipe{similar:72a0bb4b rating:3+ min\_sim:80 \pro{}}{Visually similar, curated}
+\recipe{text:"sunset on the beach" min\_sim:70 \pro{}}{Semantic image search}
+
+\end{minipage}
+
+\vfill
+
+\begin{center}
+\includegraphics[height=1.2cm]{maki-wordmark-tagline.png}\\[4pt]
+{\small\color{maki-stone} \texttt{https://maki-dam.com/}}
+\end{center}
+
+\end{document}

@@ -6,7 +6,7 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ### New Features
 - **MAKI Pro edition** — AI builds are now branded as "MAKI Pro". Version string shows `maki 4.1.0 Pro`, web UI footer shows `v4.1.0 Pro`. New `--features pro` build flag serves as product tier above the technical `ai` flag, enabling future non-AI pro features.
-- **Search Filter Reference card** — 2-page A4 portrait reference card with all 34 search filters, combining syntax, sort options, output formats, and common recipes. Matches cheat sheet branding. PDF at `doc/manual/search-filters.pdf`.
+- **Search Filter Reference card** — 2-page A4 portrait reference card with all 34 search filters, combining syntax, sort options, output formats, and common recipes. Matches cheat sheet branding. PDF at `doc/quickref/search-filters.pdf`.
 
 ### Enhancements
 - **Release artifacts renamed** — AI binaries renamed from `-ai` to `-pro` suffix (e.g. `maki-4.1.0-macos-arm64-pro.tar.gz`).
@@ -33,7 +33,7 @@ All notable changes to the Digital Asset Manager are documented here.
 ## v4.0.9 (2026-03-22)
 
 ### New Features
-- **Cheat sheet** — 2-page landscape A4 reference card with all 41 commands, search filter syntax, key workflows, and configuration reference. PDF at `doc/manual/cheat-sheet.pdf`.
+- **Cheat sheet** — 2-page landscape A4 reference card with all 41 commands, search filter syntax, key workflows, and configuration reference. PDF at `doc/quickref/cheat-sheet.pdf`.
 
 ### Bug Fixes
 - **Group metadata merge** — grouping now keeps the highest rating, first non-None color label and description from donors instead of silently discarding them.

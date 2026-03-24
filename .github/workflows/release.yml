@@ -164,5 +164,5 @@ jobs:
             artifacts/windows-x86_64/*
             artifacts/windows-x86_64-pro/*
             doc/manual/maki-manual.pdf
-            doc/manual/cheat-sheet.pdf
-            doc/manual/search-filters.pdf
+            doc/quickref/cheat-sheet.pdf
+            doc/quickref/search-filters.pdf
