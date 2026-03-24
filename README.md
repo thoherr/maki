@@ -120,9 +120,9 @@ maki faces name <person-id> "Alice"                    # name a person
 
 **Search filters**: `faces:any` / `faces:none` / `faces:N` / `faces:N+` (face count), `person:<name>` (assigned person). **Config**: `[ai] face_cluster_threshold` (default 0.5), `[ai] face_min_confidence` (default 0.5).
 
-## VLM Image Descriptions
+## VLM Image Descriptions (MAKI Pro)
 
-Generate natural language descriptions and AI-suggested tags using a local vision-language model. Works with any OpenAI-compatible API server (Ollama, LM Studio, vLLM) — no special build features required.
+Download the MAKI Pro binary or build with `cargo build --features pro` to enable VLM-powered image descriptions. Works with any OpenAI-compatible API server (Ollama, LM Studio, vLLM).
 
 ```
 ollama pull qwen2.5vl:3b                              # download a VLM

@@ -488,11 +488,11 @@ This runs embedding generation as a post-import phase using the preview image fo
 
 See the [auto-tag reference](../reference/02-ingest-commands.md#maki-auto-tag) for all options and the [configuration reference](../reference/08-configuration.md#ai-section) for `[ai]` settings in `maki.toml`.
 
-## VLM Image Descriptions
+## VLM Image Descriptions *(MAKI Pro)*
+
+> Requires MAKI Pro. See [Editions](01-overview.md#editions).
 
 While SigLIP auto-tagging classifies images against a fixed vocabulary (~100 labels), vision-language models (VLMs) generate free-form text descriptions that capture scene context, spatial relationships, lighting, and mood. The `maki describe` command sends preview images to a VLM server and stores the generated text as the asset's description.
-
-Unlike auto-tagging, this feature requires **no special build flags** -- it works with any `maki` binary because it communicates with an external server via HTTP.
 
 ### Setting Up a Local VLM Server
 
@@ -665,7 +665,7 @@ A dropdown appears next to the Describe button when two or more models are confi
 | **Output** | Tags from fixed vocabulary | Free-form text, tags, or both |
 | **Speed** | ~50--150 ms/image | ~3--36s/image |
 | **Best for** | Categorical filtering, similarity | Documentation, open-ended tagging |
-| **Requires** | MAKI Pro, ONNX models | `curl`, running VLM server |
+| **Requires** | MAKI Pro, ONNX models | MAKI Pro, running VLM server |
 | **GPU** | Included on macOS (CoreML) | Automatic via Ollama |
 
 The two approaches are complementary. Use SigLIP for fast categorical tagging across large batches, and VLM for rich descriptions when quality matters more than speed.

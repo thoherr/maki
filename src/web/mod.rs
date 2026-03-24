@@ -253,7 +253,7 @@ impl AppState {
     pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, ai_config: AiConfig, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Self {
         let preview_ext = preview_config.format.extension().to_string();
         let smart_on_demand = preview_config.generate_on_demand;
-        let vlm_enabled = check_vlm_at_startup(&vlm_config);
+        let vlm_enabled = cfg!(feature = "pro") && check_vlm_at_startup(&vlm_config);
         let catalog_pool = Arc::new(CatalogPool::new(&catalog_root, 4).expect("Failed to open catalog pool"));
         Self {
             catalog_root,
@@ -287,7 +287,7 @@ impl AppState {
     pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Self {
         let preview_ext = preview_config.format.extension().to_string();
         let smart_on_demand = preview_config.generate_on_demand;
-        let vlm_enabled = check_vlm_at_startup(&vlm_config);
+        let vlm_enabled = cfg!(feature = "pro") && check_vlm_at_startup(&vlm_config);
         let catalog_pool = Arc::new(CatalogPool::new(&catalog_root, 4).expect("Failed to open catalog pool"));
         Self {
             catalog_root,

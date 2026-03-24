@@ -59,7 +59,7 @@ The volume is auto-detected from the first path by matching against registered v
 **--embed** *(MAKI Pro)*
 : Generate SigLIP image embeddings for visual similarity search during import. Embeddings enable `maki auto-tag --similar` and the web UI "Find similar" button. Runs as a post-import phase using preview images (smart preview preferred, then regular preview). Silently skips if the AI model is not downloaded -- run `maki auto-tag --download` first. Can be enabled permanently via `[import] embeddings = true` in `maki.toml`. Non-image assets are skipped. Uses the model configured in `[ai] model`.
 
-**--describe**
+**--describe** *(MAKI Pro)*
 : Generate VLM descriptions for newly imported assets as a post-import phase. Requires a running Ollama instance (or compatible VLM endpoint configured in `[vlm]`). Runs after the embed phase if both are enabled. Uses the VLM model, prompt, and parameters from `[vlm]` config (including per-model overrides). Concurrency is controlled by `[vlm] concurrency`. Can be enabled permanently via `[import] descriptions = true` in `maki.toml`. Non-image assets are skipped.
 
 **--dry-run**
@@ -941,6 +941,8 @@ maki embed --export
 ---
 
 ## maki describe
+
+> **MAKI Pro** — not available in the standard edition.
 
 ### NAME
 

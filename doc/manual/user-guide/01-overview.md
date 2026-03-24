@@ -21,9 +21,7 @@ MAKI is available in two editions:
 | Edition      | Features                                                            |
 |--------------|---------------------------------------------------------------------|
 | **MAKI**     | The full digital asset manager: import, organize, browse, search, export, contact sheets, stacks, collections, web UI, and all maintenance commands. |
-| **MAKI Pro** | Everything in MAKI, plus AI-powered features: **auto-tagging**, **face detection and recognition**, **visual similarity search** (including Stroll), and **text-to-image search** — all running locally with no cloud dependency. |
-
-Both editions also support **VLM-powered image descriptions** via a local vision-language model server (Ollama, LM Studio, vLLM) — no special edition required.
+| **MAKI Pro** | Everything in MAKI, plus AI-powered features: **auto-tagging**, **face detection and recognition**, **visual similarity search** (including Stroll), **text-to-image search**, and **VLM-powered image descriptions** — all running locally with no cloud dependency. |
 
 Pre-built binaries for both editions are available on the [GitHub releases page](https://github.com/thoherr/maki/releases). The Pro edition includes ONNX Runtime for on-device AI inference. On macOS, GPU acceleration via CoreML (Neural Engine on Apple Silicon, Metal on Intel) is included automatically.
 

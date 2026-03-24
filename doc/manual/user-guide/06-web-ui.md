@@ -402,7 +402,7 @@ The right side contains the asset's metadata, all editable inline:
 
 **Name** -- displayed as a heading. Click the pencil icon to switch to an inline text input with Save and Cancel buttons. Saving an empty name clears it, and the display falls back to the original filename in muted italic. The name is stored on the asset.
 
-**Description** -- click the pencil icon to switch to a textarea with Save and Cancel buttons. Saving an empty description clears it. Changes are written back to XMP recipe files on disk. When a VLM server is available, a "Describe" button appears next to the heading. Click it to generate a description using the configured vision-language model — the button shows "Generating..." while waiting for the VLM response, then updates the description in-place. When multiple VLM models are configured via `[vlm] models` in `maki.toml`, a model selector dropdown appears next to the Describe button, letting you choose which model to use per request (e.g., a fast model like Moondream for routine descriptions and a larger model like Qwen3-VL for difficult images).
+**Description** -- click the pencil icon to switch to a textarea with Save and Cancel buttons. Saving an empty description clears it. Changes are written back to XMP recipe files on disk. In MAKI Pro, when a VLM server is available, a "Describe" button appears next to the heading. Click it to generate a description using the configured vision-language model — the button shows "Generating..." while waiting for the VLM response, then updates the description in-place. When multiple VLM models are configured via `[vlm] models` in `maki.toml`, a model selector dropdown appears next to the Describe button, letting you choose which model to use per request (e.g., a fast model like Moondream for routine descriptions and a larger model like Qwen3-VL for difficult images).
 
 **Rating** -- five clickable stars. Click a star to set that rating. Click the same star again to clear the rating. Changes are written back to XMP recipe files on disk.
 
@@ -485,7 +485,7 @@ A fixed toolbar appears at the bottom of the screen whenever one or more assets 
 
 **Compare**: opens a side-by-side compare view with the selected assets (2–4). See [Compare View](#compare-view) below.
 
-**Describe** (requires VLM server): sends each selected asset's preview image to the configured VLM server and generates a natural language description. Assets that already have a description are skipped. A confirmation dialog shows the count and warns about per-asset timing. After processing, a summary reports how many descriptions were set. This button only appears when a VLM server is reachable at startup (see [VLM Setup](03-ingest.md#vlm-image-descriptions)).
+**Describe** *(MAKI Pro)*: sends each selected asset's preview image to the configured VLM server and generates a natural language description. Assets that already have a description are skipped. A confirmation dialog shows the count and warns about per-asset timing. After processing, a summary reports how many descriptions were set. This button only appears in MAKI Pro when a VLM server is reachable at startup (see [VLM Setup](03-ingest.md#vlm-image-descriptions)).
 
 **Auto-tag** *(MAKI Pro)*: analyzes each selected asset with the SigLIP vision model and applies suggested tags above the configured confidence threshold. A confirmation dialog shows the count of selected assets. After processing, a summary reports how many tags were applied. This button only appears in MAKI Pro.
 

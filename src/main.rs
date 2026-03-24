@@ -96,6 +96,7 @@ enum Commands {
         embed: bool,
 
         /// Generate VLM descriptions for imported assets (requires running Ollama)
+        #[cfg(feature = "pro")]
         #[arg(long, display_order = 24)]
         describe: bool,
     },
@@ -304,6 +305,7 @@ enum Commands {
     Faces(FacesCommands),
 
     /// Generate image descriptions using a vision-language model (VLM)
+    #[cfg(feature = "pro")]
     #[command(display_order = 16)]
     Describe {
         /// Search query to scope assets (same syntax as `maki search`)
@@ -1287,7 +1289,7 @@ enum FacesCommands {
 fn print_custom_help() {
     let version = env!("CARGO_PKG_VERSION");
     let edition = if cfg!(feature = "pro") { " Pro" } else { "" };
-    let ai_note = if cfg!(feature = "ai") { "" } else { "  (download MAKI Pro for: auto-tag, embed, faces, stroll)" };
+    let ai_note = if cfg!(feature = "pro") { "" } else { "  (download MAKI Pro for: describe, auto-tag, embed, faces, stroll)" };
 
     let help = format!("\
 maki{edition} {version} — Media Asset Keeper & Indexer{ai_note}
@@ -1306,7 +1308,7 @@ Ingest & Edit:
   group              Group variants into one asset
   split              Split variants out of an asset into new standalone assets
   auto-group         Auto-group assets by filename stem
-  describe           Generate image descriptions using a VLM{auto_tag}{embed}{faces}
+{describe}{auto_tag}{embed}{faces}
 
 Organize:
   collection         Manage collections (static albums)  [alias: col]
@@ -1355,6 +1357,7 @@ Options:
 
   https://maki-dam.com — docs, downloads, and support
 ",
+        describe = if cfg!(feature = "pro") { "\n  describe           Generate image descriptions using a VLM" } else { "" },
         auto_tag = if cfg!(feature = "ai") { "\n  auto-tag           Auto-tag assets using AI vision model" } else { "" },
         embed = if cfg!(feature = "ai") { "\n  embed              Generate embeddings for visual similarity search" } else { "" },
         faces = if cfg!(feature = "ai") { "\n  faces              Face detection and recognition" } else { "" },
@@ -1727,6 +1730,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
             smart,
             #[cfg(feature = "ai")]
             embed,
+            #[cfg(feature = "pro")]
             describe,
         } => {
             use maki::asset_service::FileTypeFilter;
@@ -1971,6 +1975,9 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
             };
 
             // Post-import VLM describe phase
+            #[cfg(not(feature = "pro"))]
+            let describe_result: Option<maki::vlm::DescribeResult> = None;
+            #[cfg(feature = "pro")]
             let describe_result = if !dry_run
                 && (describe || config.import.descriptions)
                 && !result.new_asset_ids.is_empty()
@@ -2041,6 +2048,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                     json_val["embeddings_generated"] = serde_json::json!(embedded);
                     json_val["embeddings_skipped"] = serde_json::json!(skipped_embed);
                 }
+                #[cfg(feature = "pro")]
                 if let Some(ref dr) = describe_result {
                     json_val["descriptions_generated"] = serde_json::json!(dr.described);
                     json_val["descriptions_skipped"] = serde_json::json!(dr.skipped);
@@ -2078,6 +2086,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                         parts.push(format!("{} embedding(s) generated", embedded));
                     }
                 }
+                #[cfg(feature = "pro")]
                 if let Some(ref dr) = describe_result {
                     if dr.described > 0 {
                         parts.push(format!("{} described", dr.described));
@@ -2680,6 +2689,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
             }
             Ok(())
         }
+        #[cfg(feature = "pro")]
         Commands::Describe {
             query,
             asset,

@@ -426,7 +426,7 @@ text_limit = 50
 
 ## [vlm] Section
 
-Controls the VLM (vision-language model) integration for `maki describe`. Unlike the `[ai]` section, this requires no special build features -- it works with any maki binary because it uses HTTP calls to an external server.
+Controls the VLM (vision-language model) integration for `maki describe`. Requires MAKI Pro.
 
 ### endpoint
 
@@ -762,7 +762,7 @@ prompt = "a photograph of {}"
 [writeback]
 enabled = false
 
-# VLM image description settings (works with any build).
+# VLM image description settings (MAKI Pro).
 [vlm]
 endpoint = "http://localhost:11434"
 model = "qwen2.5vl:3b"
