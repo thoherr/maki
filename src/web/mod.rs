@@ -592,6 +592,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/static/images/layers-2x.png", axum::routing::get(static_assets::layers_2x))
         .nest_service("/preview", ServeDir::new(preview_dir))
         .route("/smart-preview/{prefix}/{file}", axum::routing::get(routes::serve_smart_preview))
+        .route("/video/{hash}", axum::routing::get(routes::serve_video))
         .layer(axum::middleware::from_fn_with_state(state.clone(), log_request))
         .with_state(state)
 }

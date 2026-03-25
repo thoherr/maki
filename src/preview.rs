@@ -849,6 +849,68 @@ fn tool_available(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Extract video metadata (duration, codec, resolution, framerate) using ffprobe.
+/// Returns an empty map if ffprobe is not available or the file is not a video.
+pub fn extract_video_metadata(path: &Path) -> std::collections::HashMap<String, String> {
+    let mut meta = std::collections::HashMap::new();
+
+    if !tool_available("ffprobe") {
+        return meta;
+    }
+
+    let output = Command::new("ffprobe")
+        .args(["-v", "quiet", "-print_format", "json", "-show_format", "-show_streams"])
+        .arg(path)
+        .output();
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return meta,
+    };
+
+    let json: serde_json::Value = match serde_json::from_slice(&output.stdout) {
+        Ok(v) => v,
+        Err(_) => return meta,
+    };
+
+    // Extract duration from format section
+    if let Some(dur) = json["format"]["duration"].as_str() {
+        if let Ok(secs) = dur.parse::<f64>() {
+            meta.insert("video_duration".to_string(), format!("{:.1}", secs));
+        }
+    }
+
+    // Find the first video stream for codec and resolution
+    if let Some(streams) = json["streams"].as_array() {
+        for stream in streams {
+            if stream["codec_type"].as_str() == Some("video") {
+                if let Some(codec) = stream["codec_name"].as_str() {
+                    meta.insert("video_codec".to_string(), codec.to_string());
+                }
+                if let Some(w) = stream["width"].as_u64() {
+                    meta.insert("video_width".to_string(), w.to_string());
+                }
+                if let Some(h) = stream["height"].as_u64() {
+                    meta.insert("video_height".to_string(), h.to_string());
+                }
+                // Framerate: r_frame_rate is "30000/1001" format
+                if let Some(fps) = stream["r_frame_rate"].as_str() {
+                    if let Some((num, den)) = fps.split_once('/') {
+                        if let (Ok(n), Ok(d)) = (num.parse::<f64>(), den.parse::<f64>()) {
+                            if d > 0.0 {
+                                meta.insert("video_framerate".to_string(), format!("{:.2}", n / d));
+                            }
+                        }
+                    }
+                }
+                break; // first video stream only
+            }
+        }
+    }
+
+    meta
+}
+
 /// Display a preview image inline in the terminal using viuer.
 /// Returns Ok(true) if displayed, Ok(false) if no preview exists.
 pub fn display_in_terminal(path: &Path, max_width: Option<u32>, max_height: Option<u32>) -> Result<bool> {

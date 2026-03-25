@@ -441,6 +441,19 @@ select.badge {
     color: #fff;
     font-variant-numeric: tabular-nums;
 }
+.duration-badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: rgba(0,0,0,0.75);
+    color: #fff;
+    font-size: 0.7rem;
+    padding: 1px 5px;
+    border-radius: 2px;
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+    z-index: 1;
+}
 .badge-stack {
     background: var(--primary);
     color: #fff;
@@ -694,6 +707,13 @@ select.badge {
 }
 .asset-preview #preview img {
     cursor: pointer;
+}
+.asset-preview #preview video {
+    max-width: 100%;
+    max-height: 80vh;
+    display: block;
+    margin: 0 auto;
+    border-radius: 4px;
 }
 .asset-preview .no-preview {
     width: 100%;
@@ -2236,14 +2256,14 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     min-height: 0;
     position: relative;
 }
-.lightbox-img {
+.lightbox-img, .lightbox-video {
     max-width: 100%;
     max-height: calc(100vh - 60px);
     object-fit: contain;
     user-select: none;
-    cursor: pointer;
 }
-.lightbox.info-open .lightbox-img {
+.lightbox-img { cursor: pointer; }
+.lightbox.info-open .lightbox-img, .lightbox.info-open .lightbox-video {
     max-width: calc(100% - 100px);
 }
 

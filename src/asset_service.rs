@@ -844,7 +844,11 @@ impl AssetService {
                 if group_asset.is_none() {
                     // First new media file creates the asset
                     let asset_type = determine_asset_type(ext);
-                    let exif_data = crate::exif_reader::extract(file_path);
+                    let mut exif_data = crate::exif_reader::extract(file_path);
+                    if asset_type == AssetType::Video {
+                        let video_meta = crate::preview::extract_video_metadata(file_path);
+                        exif_data.source_metadata.extend(video_meta);
+                    }
 
                     let mut asset = Asset::new(asset_type, &content_hash);
                     // Date fallback chain: EXIF DateTimeOriginal → file mtime → Utc::now()
@@ -914,7 +918,11 @@ impl AssetService {
                 } else {
                     // Additional media file → add variant to existing group asset
                     let asset = group_asset.as_mut().unwrap();
-                    let exif_data = crate::exif_reader::extract(file_path);
+                    let mut exif_data = crate::exif_reader::extract(file_path);
+                    if determine_asset_type(ext) == AssetType::Video {
+                        let video_meta = crate::preview::extract_video_metadata(file_path);
+                        exif_data.source_metadata.extend(video_meta);
+                    }
 
                     // If this variant has an older date, update the asset's created_at
                     let variant_date = exif_data.date_taken.or_else(|| file_mtime(file_path));

@@ -16,6 +16,25 @@ pub fn smart_preview_url(content_hash: &str, ext: &str) -> String {
     format!("/smart-preview/{prefix}/{hex}.{ext}")
 }
 
+/// Compute video URL from a content hash.
+pub fn video_url(content_hash: &str) -> String {
+    let hex = content_hash.strip_prefix("sha256:").unwrap_or(content_hash);
+    format!("/video/{hex}")
+}
+
+/// Format video duration as "M:SS" or "H:MM:SS".
+pub fn format_video_duration(seconds: f64) -> String {
+    let total = seconds as u64;
+    let h = total / 3600;
+    let m = (total % 3600) / 60;
+    let s = total % 60;
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
 /// Format a byte count for display.
 pub fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -56,6 +75,8 @@ pub struct AssetCard {
     pub preview_rotation: Option<u16>,
     pub face_count: u32,
     pub similarity: Option<f32>,
+    pub video_url: Option<String>,
+    pub duration_display: Option<String>,
 }
 
 impl AssetCard {
@@ -83,6 +104,12 @@ impl AssetCard {
             preview_rotation: row.preview_rotation,
             face_count: row.face_count,
             similarity: None,
+            video_url: if row.asset_type == "video" {
+                Some(video_url(&row.content_hash))
+            } else {
+                None
+            },
+            duration_display: row.video_duration.map(format_video_duration),
         }
     }
 
@@ -315,6 +342,8 @@ pub struct AssetPage {
     pub vlm_models: Vec<String>,
     pub faces: Vec<FaceRow>,
     pub all_people: Vec<PersonOption>,
+    pub is_video: bool,
+    pub video_url: Option<String>,
 }
 
 /// A detected face on the asset detail page.
@@ -441,6 +470,13 @@ impl AssetPage {
             })
             .collect();
 
+        let is_video = details.asset_type == "video";
+        let video_url_val = if is_video {
+            Some(video_url(&best_variant_hash))
+        } else {
+            None
+        };
+
         // Check if the best variant has any online file location
         let best_idx = crate::models::variant::best_preview_index_details(&details.variants);
         let has_online_source = best_idx.map_or(false, |idx| {
@@ -484,6 +520,8 @@ impl AssetPage {
             vlm_models: Vec::new(),
             faces: Vec::new(),
             all_people: Vec::new(),
+            is_video,
+            video_url: video_url_val,
         }
     }
 }
@@ -547,6 +585,8 @@ pub struct PreviewFragment {
     pub has_smart_preview: bool,
     pub has_online_source: bool,
     pub error: Option<String>,
+    pub is_video: bool,
+    pub video_url: Option<String>,
 }
 
 #[derive(Template)]

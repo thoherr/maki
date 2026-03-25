@@ -219,6 +219,9 @@
         document.body.style.overflow = '';
         document.getElementById('lb-prev').style.display = '';
         document.getElementById('lb-next').style.display = '';
+        // Pause any playing video
+        var video = document.getElementById('lb-video');
+        if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
         if (_onClose) _onClose();
     }
 
@@ -235,22 +238,37 @@
         var hdBadge = document.getElementById('lb-smart-loading');
         hdBadge.style.display = 'none';
         hdBadge.className = 'smart-loading';
-        img.src = item.preview;
-        img.alt = item.name;
 
-        // Smart preview loading
-        var smartSrc = item.preview.replace('/preview/', '/smart-preview/');
-        if (smartSrc !== item.preview) {
-            hdBadge.style.display = 'block';
-            hdBadge.className = 'smart-loading loading';
-            var bg = new Image();
-            bg.onload = function() {
-                img.src = smartSrc;
-                hdBadge.className = 'smart-loading done';
-                setTimeout(function() { hdBadge.style.display = 'none'; }, 1500);
-            };
-            bg.onerror = function() { hdBadge.style.display = 'none'; };
-            bg.src = smartSrc;
+        var video = document.getElementById('lb-video');
+        // Handle video items
+        if (item.type === 'video' && item.videoUrl) {
+            img.style.display = 'none';
+            video.style.display = '';
+            video.poster = item.preview;
+            video.src = item.videoUrl;
+        } else {
+            video.style.display = 'none';
+            video.pause();
+            video.removeAttribute('src');
+            video.load();
+            img.style.display = '';
+            img.src = item.preview;
+            img.alt = item.name;
+
+            // Smart preview loading
+            var smartSrc = item.preview.replace('/preview/', '/smart-preview/');
+            if (smartSrc !== item.preview) {
+                hdBadge.style.display = 'block';
+                hdBadge.className = 'smart-loading loading';
+                var bg = new Image();
+                bg.onload = function() {
+                    img.src = smartSrc;
+                    hdBadge.className = 'smart-loading done';
+                    setTimeout(function() { hdBadge.style.display = 'none'; }, 1500);
+                };
+                bg.onerror = function() { hdBadge.style.display = 'none'; };
+                bg.src = smartSrc;
+            }
         }
 
         counter.textContent = items.length > 1 ? (currentIndex + 1) + ' / ' + items.length : '';

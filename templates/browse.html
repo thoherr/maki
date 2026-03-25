@@ -245,7 +245,8 @@ window.triggerSearch = onFilterChange;
                         date: c.getAttribute('data-date'),
                         rating: parseInt(c.getAttribute('data-rating') || '0'),
                         label: c.getAttribute('data-label') || '',
-                        variants: c.getAttribute('data-variants') || ''
+                        variants: c.getAttribute('data-variants') || '',
+                        videoUrl: c.getAttribute('data-video-url') || ''
                     };
                 });
                 damLightbox.setItems(pgItems);
@@ -1436,7 +1437,7 @@ window.triggerSearch = onFilterChange;
         } else if (m.label) {
             ratingHtml = '<div class="card-stars"><span class="card-label-dot" style="background:' + (labelColors[m.label] || '#999') + ';"></span></div>';
         }
-        return '<div class="asset-card stacked stack-expanded-member" data-asset-id="' + m.asset_id + '" data-preview="' + m.preview_url + '" data-name="' + esc(m.name) + '" data-type="' + m.asset_type + '" data-format="' + m.format + '" data-date="' + m.date + '" data-rating="' + m.rating + '" data-label="' + (m.label || '') + '" data-variants="' + m.variant_count + '" data-rotation="' + m.preview_rotation + '" data-stack="' + (m.stack_id || '') + '" data-prev="" data-next="" style="' + stackStyle + '">' +
+        return '<div class="asset-card stacked stack-expanded-member" data-asset-id="' + m.asset_id + '" data-preview="' + m.preview_url + '" data-name="' + esc(m.name) + '" data-type="' + m.asset_type + '" data-format="' + m.format + '" data-date="' + m.date + '" data-rating="' + m.rating + '" data-label="' + (m.label || '') + '" data-variants="' + m.variant_count + '" data-rotation="' + m.preview_rotation + '" data-stack="' + (m.stack_id || '') + '" data-prev="" data-next="" data-video-url="" style="' + stackStyle + '">' +
             '<label class="select-checkbox" onclick="event.stopPropagation()">' +
                 '<input type="checkbox" class="asset-select-cb" value="' + m.asset_id + '">' +
                 '<span class="checkmark"></span>' +
@@ -1729,7 +1730,8 @@ window.triggerSearch = onFilterChange;
                 date: c.getAttribute('data-date'),
                 rating: parseInt(c.getAttribute('data-rating') || '0'),
                 label: c.getAttribute('data-label') || '',
-                variants: c.getAttribute('data-variants') || ''
+                variants: c.getAttribute('data-variants') || '',
+                videoUrl: c.getAttribute('data-video-url') || ''
             };
         });
         damLightbox.setItems(newItems);
@@ -2765,7 +2767,8 @@ window.damFacets = (function() {
                         date: c.getAttribute('data-date'),
                         rating: parseInt(c.getAttribute('data-rating') || '0'),
                         label: c.getAttribute('data-label') || '',
-                        variants: c.getAttribute('data-variants') || ''
+                        variants: c.getAttribute('data-variants') || '',
+                        videoUrl: c.getAttribute('data-video-url') || ''
                     };
                 });
                 damLightbox.setItems(newItems);

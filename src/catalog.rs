@@ -59,6 +59,8 @@ pub struct SearchRow {
     pub preview_rotation: Option<u16>,
     /// Number of detected faces in this asset.
     pub face_count: u32,
+    /// Video duration in seconds (None for non-video assets).
+    pub video_duration: Option<f64>,
 }
 
 impl SearchRow {
@@ -585,7 +587,7 @@ fn next_date_bound(s: &str) -> String {
 }
 
 /// Current schema version. Bump this whenever `run_migrations()` changes.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// SQLite-backed local catalog for fast queries. This is a derived cache,
 /// not the source of truth (sidecar files are).
@@ -829,6 +831,20 @@ impl Catalog {
             let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN preview_variant TEXT");
         }
 
+        // ── v3 → v4: video duration denormalized column ──
+        if current < 4 {
+            let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN video_duration REAL");
+            // Backfill from variant source_metadata JSON
+            let _ = self.conn.execute_batch(
+                "UPDATE assets SET video_duration = ( \
+                    SELECT CAST(json_extract(v.source_metadata, '$.video_duration') AS REAL) \
+                    FROM variants v WHERE v.asset_id = assets.id \
+                    AND json_extract(v.source_metadata, '$.video_duration') IS NOT NULL \
+                    LIMIT 1 \
+                 ) WHERE video_duration IS NULL",
+            );
+        }
+
         // Stamp the new schema version
         let _ = self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -908,12 +924,15 @@ impl Catalog {
         let primary_format = crate::models::variant::compute_primary_format(&asset.variants);
         let variant_count = asset.variants.len() as i64;
         let (latitude, longitude) = crate::models::variant::compute_gps_from_variants(&asset.variants);
+        // Compute video duration from first variant that has it
+        let video_duration: Option<f64> = asset.variants.iter()
+            .find_map(|v| v.source_metadata.get("video_duration")?.parse::<f64>().ok());
         // Use ON CONFLICT UPDATE instead of INSERT OR REPLACE to avoid
         // intermediate DELETE that triggers FK constraint violations on
         // variants/faces/collection_assets referencing this asset.
         self.conn.execute(
-            "INSERT INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count, latitude, longitude, preview_rotation, preview_variant) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15) \
+            "INSERT INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count, latitude, longitude, preview_rotation, preview_variant, video_duration) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
              ON CONFLICT(id) DO UPDATE SET \
                name = excluded.name, \
                created_at = excluded.created_at, \
@@ -928,7 +947,8 @@ impl Catalog {
                latitude = excluded.latitude, \
                longitude = excluded.longitude, \
                preview_rotation = excluded.preview_rotation, \
-               preview_variant = excluded.preview_variant",
+               preview_variant = excluded.preview_variant, \
+               video_duration = excluded.video_duration",
             rusqlite::params![
                 asset.id.to_string(),
                 asset.name,
@@ -945,6 +965,7 @@ impl Catalog {
                 longitude,
                 asset.preview_rotation.map(|r| r as i64),
                 asset.preview_variant,
+                video_duration,
             ],
         )?;
         Ok(())
@@ -3259,7 +3280,7 @@ impl Catalog {
                 inner.push_str(") SELECT a.id, a.name, a.asset_type, a.created_at, bv.original_filename, bv.format, \
                      a.tags, a.description, bv.content_hash, a.rating, a.color_label, \
                      a.primary_variant_format, a.variant_count, a.stack_id, s.member_count, \
-                     a.preview_rotation, a.face_count \
+                     a.preview_rotation, a.face_count, a.video_duration \
                      FROM matched m \
                      JOIN assets a ON a.id = m.id \
                      JOIN variants bv ON bv.content_hash = a.best_variant_hash \
@@ -3274,7 +3295,7 @@ impl Catalog {
                     "SELECT a.id, a.name, a.asset_type, a.created_at, bv.original_filename, bv.format, \
                      a.tags, a.description, bv.content_hash, a.rating, a.color_label, \
                      a.primary_variant_format, a.variant_count, a.stack_id, s.member_count, \
-                     a.preview_rotation, a.face_count \
+                     a.preview_rotation, a.face_count, a.video_duration \
                      FROM assets a \
                      JOIN variants bv ON bv.content_hash = a.best_variant_hash \
                      LEFT JOIN stacks s ON s.id = a.stack_id",
@@ -3300,6 +3321,7 @@ impl Catalog {
             let stack_member_count: Option<i64> = row.get(14)?;
             let rotation_val: Option<i64> = row.get(15)?;
             let face_count_val: i64 = row.get::<_, Option<i64>>(16)?.unwrap_or(0);
+            let video_duration: Option<f64> = row.get(17)?;
             Ok(SearchRow {
                 asset_id: row.get(0)?,
                 name: row.get(1)?,
@@ -3318,6 +3340,7 @@ impl Catalog {
                 stack_count: stack_member_count.map(|n| n as u32),
                 preview_rotation: rotation_val.map(|r| r as u16),
                 face_count: face_count_val as u32,
+                video_duration,
             })
         })?;
 
@@ -3339,7 +3362,7 @@ impl Catalog {
         let sql = "SELECT a.id, a.name, a.asset_type, a.created_at, bv.original_filename, bv.format, \
                    a.tags, a.description, bv.content_hash, a.rating, a.color_label, \
                    a.primary_variant_format, a.variant_count, a.stack_id, s.member_count, \
-                   a.preview_rotation, a.face_count \
+                   a.preview_rotation, a.face_count, a.video_duration \
                    FROM assets a \
                    JOIN variants bv ON bv.content_hash = a.best_variant_hash \
                    LEFT JOIN stacks s ON s.id = a.stack_id \
@@ -3352,6 +3375,7 @@ impl Catalog {
             let stack_member_count: Option<i64> = row.get(14)?;
             let rotation_val: Option<i64> = row.get(15)?;
             let face_count_val: i64 = row.get::<_, Option<i64>>(16)?.unwrap_or(0);
+            let video_duration: Option<f64> = row.get(17)?;
             Ok(SearchRow {
                 asset_id: row.get(0)?,
                 name: row.get(1)?,
@@ -3370,6 +3394,7 @@ impl Catalog {
                 stack_count: stack_member_count.map(|n| n as u32),
                 preview_rotation: rotation_val.map(|r| r as u16),
                 face_count: face_count_val as u32,
+                video_duration,
             })
         });
         match result {

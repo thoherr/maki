@@ -1775,6 +1775,8 @@ pub async fn generate_preview(
                     has_smart_preview: has_existing_smart,
                     has_online_source: false,
                     error: Some("Source files are offline — cannot regenerate previews.".to_string()),
+                    is_video: false,
+                    video_url: None,
                 };
                 return Ok::<_, anyhow::Error>(tmpl.render()?);
             }
@@ -1811,6 +1813,8 @@ pub async fn generate_preview(
             has_smart_preview: has_smart,
             has_online_source: true,
             error: None,
+            is_video: false,
+            video_url: None,
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
@@ -1902,6 +1906,8 @@ pub async fn set_rotation(
                     has_smart_preview: has_existing_smart,
                     has_online_source: false,
                     error: Some("Source files are offline — cannot rotate.".to_string()),
+                    is_video: false,
+                    video_url: None,
                 };
                 return Ok::<_, anyhow::Error>(tmpl.render()?);
             }
@@ -1941,6 +1947,8 @@ pub async fn set_rotation(
             has_smart_preview: has_smart,
             has_online_source: true,
             error: None,
+            is_video: false,
+            video_url: None,
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
@@ -3810,6 +3818,131 @@ pub async fn serve_smart_preview(
         }
         _ => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// GET /video/{hash} — serve a video file with range request support for seeking.
+pub async fn serve_video(
+    State(state): State<Arc<AppState>>,
+    Path(hash): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let content_hash = format!("sha256:{hash}");
+
+    // Resolve to a file path via catalog + volume registry
+    let state2 = state.clone();
+    let resolved = tokio::task::spawn_blocking(move || {
+        let catalog = state2.catalog()?;
+        let locations = catalog.get_variant_file_locations(&content_hash)?;
+        let format = catalog.get_variant_format(&content_hash)?;
+        let registry = crate::device_registry::DeviceRegistry::new(&state2.catalog_root);
+        let volumes = registry.list()?;
+
+        let source_path = locations
+            .iter()
+            .find_map(|(vol_id, rel_path)| {
+                let vol = volumes.iter().find(|v| v.id.to_string() == *vol_id)?;
+                if !vol.is_online { return None; }
+                let path = vol.mount_point.join(rel_path);
+                if path.exists() { Some(path) } else { None }
+            });
+
+        Ok::<_, anyhow::Error>((source_path, format))
+    })
+    .await;
+
+    let (source_path, format) = match resolved {
+        Ok(Ok((Some(path), format))) => (path, format),
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    // Determine content type
+    let content_type = match format.as_deref().unwrap_or("mp4") {
+        "mp4" | "m4v" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "mkv" => "video/x-matroska",
+        "avi" => "video/x-msvideo",
+        "mts" | "m2ts" => "video/mp2t",
+        "3gp" => "video/3gpp",
+        _ => "video/mp4",
+    };
+
+    // Open the file and get its size
+    let file = match tokio::fs::File::open(&source_path).await {
+        Ok(f) => f,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let metadata = match file.metadata().await {
+        Ok(m) => m,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let total_size = metadata.len();
+
+    // Parse Range header for seeking support
+    if let Some(range_header) = headers.get(axum::http::header::RANGE) {
+        if let Ok(range_str) = range_header.to_str() {
+            if let Some(range) = range_str.strip_prefix("bytes=") {
+                let parts: Vec<&str> = range.splitn(2, '-').collect();
+                let start: u64 = parts[0].parse().unwrap_or(0);
+                let end: u64 = if parts.len() > 1 && !parts[1].is_empty() {
+                    parts[1].parse().unwrap_or(total_size - 1)
+                } else {
+                    total_size - 1
+                };
+
+                if start >= total_size {
+                    return StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+                }
+                let end = end.min(total_size - 1);
+                let chunk_size = end - start + 1;
+
+                // Read the requested range
+                use tokio::io::{AsyncReadExt, AsyncSeekExt};
+                let mut file = file;
+                if file.seek(std::io::SeekFrom::Start(start)).await.is_err() {
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+                let mut buf = vec![0u8; chunk_size as usize];
+                if file.read_exact(&mut buf).await.is_err() {
+                    // May be near end of file — read what we can
+                    let mut file = match tokio::fs::File::open(&source_path).await {
+                        Ok(f) => f,
+                        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+                    };
+                    let _ = file.seek(std::io::SeekFrom::Start(start)).await;
+                    buf.clear();
+                    buf.resize(chunk_size as usize, 0);
+                    let n = file.read(&mut buf).await.unwrap_or(0);
+                    buf.truncate(n);
+                }
+
+                return Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header("Content-Type", content_type)
+                    .header("Content-Length", buf.len().to_string())
+                    .header("Content-Range", format!("bytes {start}-{end}/{total_size}"))
+                    .header("Accept-Ranges", "bytes")
+                    .body(axum::body::Body::from(buf))
+                    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+            }
+        }
+    }
+
+    // No range requested — serve full file
+    use tokio::io::AsyncReadExt;
+    let mut file = file;
+    let mut buf = Vec::with_capacity(total_size as usize);
+    if file.read_to_end(&mut buf).await.is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", content_type)
+        .header("Content-Length", total_size.to_string())
+        .header("Accept-Ranges", "bytes")
+        .body(axum::body::Body::from(buf))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]

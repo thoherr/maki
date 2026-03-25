@@ -1,3 +1,19 @@
+{% if is_video %}
+{% if let Some(vurl) = video_url %}
+<video controls preload="metadata" id="detail-video"
+       {% match primary_preview_url %}{% when Some with (url) %} poster="{{ url }}"{% when None %}{% endmatch %}>
+    <source src="{{ vurl }}">
+    Your browser does not support the video tag.
+</video>
+{% else %}
+{% match primary_preview_url %}
+{% when Some with (url) %}
+<img src="{{ url }}" alt="Preview">
+{% when None %}
+<div class="no-preview">Video source offline</div>
+{% endmatch %}
+{% endif %}
+{% else %}
 {% match smart_preview_url %}
 {% when Some with (smart_url) %}
 {% match primary_preview_url %}
@@ -14,6 +30,7 @@
 <div class="no-preview">No preview available</div>
 {% endmatch %}
 {% endmatch %}
+{% endif %}
 <span class="smart-loading" id="detail-smart-loading" style="display:none;">HD</span>
 {% if let Some(err) = error %}
 <div class="preview-error">{{ err }}</div>
@@ -27,6 +44,7 @@
     {% match primary_preview_url %}
     {% when Some with (_url) %}Regenerate previews{% when None %}Generate previews{% endmatch %}
 </button>
+{% if !is_video %}
 <button class="preview-generate-btn"
         hx-post="/api/asset/{{ asset_id }}/rotate"
         hx-target="#preview"
@@ -35,6 +53,7 @@
         title="Rotate 90° clockwise">
     &#x21BB; Rotate
 </button>
+{% endif %}
 <span id="preview-spinner" class="htmx-indicator">Generating...</span>
 {% else %}
 <span class="preview-offline-hint">Source files offline — cannot regenerate previews</span>
