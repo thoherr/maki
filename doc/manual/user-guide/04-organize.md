@@ -306,6 +306,21 @@ In the web UI, the asset detail page shows checkboxes next to each variant. Sele
 
 **Constraints:** At least one variant must remain in the source asset.
 
+### Cleaning up after a mis-group
+
+When assets are accidentally grouped, their tags get merged. After splitting them apart, the new assets inherit the merged tags. To clean up:
+
+```
+# Split the mis-grouped variant out
+maki split abc12345 --variant def456...
+
+# Clear the inherited merged tags from the new asset
+maki edit <new-asset-id> --clear-tags
+
+# Re-read the original tags from the XMP sidecar
+maki refresh --asset <new-asset-id>
+```
+
 ---
 
 ## Collections (Static Albums)

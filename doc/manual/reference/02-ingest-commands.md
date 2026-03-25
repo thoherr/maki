@@ -384,6 +384,9 @@ Asset IDs support unique prefix matching (see [CLI Conventions](00-cli-conventio
 **--clear-label**
 : Remove the asset's color label.
 
+**--clear-tags**
+: Remove all tags from the asset. Useful for cleaning up merged tags after splitting mis-grouped assets.
+
 **--date \<YYYY-MM-DD\>**
 : Set the asset's creation date (accepts ISO date or datetime strings).
 
@@ -435,6 +438,12 @@ Clear the description (two equivalent forms):
 ```bash
 maki edit a1b2c3d4 --clear-description
 maki edit a1b2c3d4 --description ""
+```
+
+Remove all tags (e.g. after splitting a mis-grouped asset):
+
+```bash
+maki edit a1b2c3d4 --clear-tags
 ```
 
 Change a variant's role from alternate to export:
