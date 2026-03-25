@@ -2,6 +2,20 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.1.3 (2026-03-25)
+
+### New Features
+- **`maki volume split`** — split a subdirectory from an existing volume into a new volume. Inverse of `volume combine`: moves matching file locations and recipes with path prefix stripped, source volume preserved. Dry-run by default.
+- **`maki volume rename`** — rename a volume label in both `volumes.yaml` and SQLite catalog.
+- **`--clear-tags` on `maki edit`** — removes all tags from an asset. Useful for cleaning up merged tags after splitting mis-grouped assets.
+- **Improved `scattered:` filter** — now counts distinct directory paths ignoring volume (backup copies in the same relative path no longer count as scattered). New `/N` depth syntax: `scattered:2+/1` compares only the first N path segments, so `2026-03-10/Selects/` and `2026-03-10/Output/` are the same at depth 1.
+
+### Enhancements
+- **VLM describe gated behind Pro** — `maki describe`, `import --describe`, and web UI describe buttons now require MAKI Pro.
+- **Writeback and sync-metadata gated behind Pro** — `maki writeback` and `maki sync-metadata` now require MAKI Pro. `maki refresh` (read-only) stays in the standard edition.
+- **Consistent Pro markers** — all Pro features use subtle *(Pro)* labels in section headers and table entries throughout the manual, cheat sheet, and search filter reference.
+- **Doc fixes** — JSON field name `file_locations` → `locations` in docs, missing Pro markers on faces commands and web UI pages.
+
 ## v4.1.2 (2026-03-24)
 
 ### Enhancements
