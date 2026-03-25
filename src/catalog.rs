@@ -442,6 +442,7 @@ pub struct SearchOptions<'a> {
     pub copies: Option<NumericFilter>,
     pub variant_count: Option<NumericFilter>,
     pub scattered: Option<NumericFilter>,
+    pub scattered_depth: Option<u32>,
     pub face_count: Option<NumericFilter>,
     pub stale_days: Option<NumericFilter>,
     pub meta_filters: Vec<(&'a str, &'a str)>,
@@ -503,6 +504,7 @@ impl<'a> Default for SearchOptions<'a> {
             copies: None,
             variant_count: None,
             scattered: None,
+            scattered_depth: None,
             face_count: None,
             stale_days: None,
             meta_filters: Vec::new(),
@@ -602,6 +604,41 @@ impl Catalog {
              PRAGMA mmap_size = 268435456;
              PRAGMA temp_store = MEMORY;",
         )?;
+
+        // Register path_dir(path, depth) — extracts the directory prefix from a path.
+        // depth=0 (or NULL): returns the parent directory (everything before last '/').
+        // depth=N: returns the first N path segments.
+        // Examples:
+        //   path_dir('2026/Selects/img.nef', 0)  → '2026/Selects'
+        //   path_dir('2026/Selects/img.nef', 1)  → '2026'
+        //   path_dir('2026/Selects/img.nef', 2)  → '2026/Selects'
+        //   path_dir('img.nef', 0)                → ''
+        conn.create_scalar_function("path_dir", 2, rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC | rusqlite::functions::FunctionFlags::SQLITE_UTF8, |ctx| {
+            let path: String = ctx.get(0)?;
+            let depth: i64 = ctx.get(1)?;
+
+            if depth <= 0 {
+                // Parent directory: everything before the last '/'
+                Ok(path.rfind('/').map_or(String::new(), |pos| path[..pos].to_string()))
+            } else {
+                // First N segments: find the Nth '/'
+                let mut pos = 0;
+                let mut count = 0;
+                for (i, ch) in path.char_indices() {
+                    if ch == '/' {
+                        count += 1;
+                        if count == depth as usize {
+                            return Ok(path[..i].to_string());
+                        }
+                    }
+                    pos = i;
+                }
+                // Fewer than N slashes — return the whole path minus the last segment
+                let _ = pos;
+                Ok(path.rfind('/').map_or(path.clone(), |p| path[..p].to_string()))
+            }
+        })?;
+
         Ok(Self { conn })
     }
 
@@ -2813,16 +2850,20 @@ impl Catalog {
         // Variant count (denormalized column)
         if let Some(ref f) = opts.variant_count { Self::numeric_clause(f, "a.variant_count", &mut clauses, &mut params); }
 
-        // Scattered filter (subquery)
+        // Scattered filter — count distinct directory paths (ignoring volume)
+        // Default: count distinct parent directories (full path minus filename)
+        // With depth /N: count distinct paths truncated to first N segments
+        // Uses the custom path_dir(path, depth) SQL function registered at open()
         if let Some(ref f) = opts.scattered {
-            let expr = "(SELECT COUNT(DISTINCT fl2.volume_id || ':' || \
-                    CASE WHEN INSTR(fl2.relative_path, '/') > 0 \
-                    THEN SUBSTR(fl2.relative_path, 1, INSTR(fl2.relative_path, '/') - 1) \
-                    ELSE '' END \
-                 ) FROM file_locations fl2 \
+
+            let depth = opts.scattered_depth.unwrap_or(0);
+            let expr = format!(
+                "(SELECT COUNT(DISTINCT path_dir(fl2.relative_path, {depth})) \
+                 FROM file_locations fl2 \
                  JOIN variants v2 ON fl2.content_hash = v2.content_hash \
-                 WHERE v2.asset_id = a.id)";
-            Self::numeric_clause_expr(f, expr, &mut clauses, &mut params);
+                 WHERE v2.asset_id = a.id)"
+            );
+            Self::numeric_clause_expr(f, &expr, &mut clauses, &mut params);
         }
 
         // Date filters

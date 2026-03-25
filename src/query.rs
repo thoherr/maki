@@ -104,6 +104,7 @@ pub struct ParsedSearch {
     pub copies: Option<NumericFilter>,
     pub variant_count: Option<NumericFilter>,
     pub scattered: Option<NumericFilter>,
+    pub scattered_depth: Option<u32>,
     pub face_count: Option<NumericFilter>,
     pub stale_days: Option<NumericFilter>,
     pub meta_filters: Vec<(String, String)>,
@@ -236,6 +237,7 @@ impl ParsedSearch {
             copies: self.copies.clone(),
             variant_count: self.variant_count.clone(),
             scattered: self.scattered.clone(),
+            scattered_depth: self.scattered_depth,
             face_count: self.face_count.clone(),
             stale_days: self.stale_days.clone(),
             meta_filters: self
@@ -444,7 +446,13 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
         } else if let Some(value) = token_body.strip_prefix("variants:") {
             parsed.variant_count = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("scattered:") {
-            parsed.scattered = parse_numeric_filter(value);
+            // Support scattered:N+/D syntax where /D is the path depth
+            if let Some((num_part, depth_part)) = value.rsplit_once('/') {
+                parsed.scattered = parse_numeric_filter(num_part);
+                parsed.scattered_depth = depth_part.parse::<u32>().ok();
+            } else {
+                parsed.scattered = parse_numeric_filter(value);
+            }
         } else if let Some(value) = token_body.strip_prefix("date:") {
             parsed.date_prefix = Some(value.to_string());
         } else if let Some(value) = token_body.strip_prefix("dateFrom:") {
@@ -3755,6 +3763,21 @@ mod tests {
     fn parse_scattered_with_plus_suffix() {
         let p = parse_search_query("scattered:2+");
         assert_eq!(p.scattered, Some(NumericFilter::Min(2.0)));
+        assert_eq!(p.scattered_depth, None);
+    }
+
+    #[test]
+    fn parse_scattered_with_depth() {
+        let p = parse_search_query("scattered:2+/3");
+        assert_eq!(p.scattered, Some(NumericFilter::Min(2.0)));
+        assert_eq!(p.scattered_depth, Some(3));
+    }
+
+    #[test]
+    fn parse_scattered_exact_with_depth() {
+        let p = parse_search_query("scattered:2/1");
+        assert_eq!(p.scattered, Some(NumericFilter::Exact(2.0)));
+        assert_eq!(p.scattered_depth, Some(1));
     }
 
     #[test]
