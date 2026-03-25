@@ -2,7 +2,7 @@
 
 Living document tracking planned enhancements. Previous proposals (all implemented or deferred) are in `archive/`. Active proposals are in `doc/proposals/`.
 
-Current version: **v4.1.2** (2026-03-24)
+Current version: **v4.1.3** (2026-03-25)
 
 ---
 
@@ -20,7 +20,7 @@ Produce the MAKI user manual in English and German from a single source using in
 
 ## Tier 1 — High Value
 
-### Auto-Stack by Similarity (Catalog-wide)
+### Auto-Stack by Similarity (Catalog-wide) *(Pro)*
 
 Discover natural visual clusters across the catalog and propose stacks. Phase 3 of the similarity browse proposal (Phases 1–2 implemented in v4.0.2). See `archive/proposal-similarity-browse-and-grouping.md`.
 
@@ -45,7 +45,7 @@ Auto-import and sync on filesystem changes. After a CaptureOne session, new file
 
 **Complexity:** Medium. Core import/refresh logic exists; needs a polling loop and file-change detection.
 
-### GPU-Accelerated Embeddings (Linux/Windows)
+### GPU-Accelerated Embeddings (Linux/Windows) *(Pro)*
 
 SigLIP embedding generation on CPU is slow for large catalogs. GPU backends make batch embedding practical at scale.
 
@@ -58,7 +58,7 @@ SigLIP embedding generation on CPU is slow for large catalogs. GPU backends make
 
 **Complexity:** Low for adding providers (code pattern exists), high for testing/packaging.
 
-### IPTC/EXIF Write-Back
+### IPTC/EXIF Write-Back *(Pro)*
 
 Write metadata changes back into JPEG/TIFF files directly, not just XMP sidecars. Some workflows and stock photo submissions require embedded metadata.
 
@@ -164,4 +164,4 @@ Design documents for completed features are in `doc/proposals/archive/`. Key mil
 - **v3.2**: Web UI export ZIP, batch delete, shell export, per-model VLM config, verbose threading, documentation consolidation
 - **v4.0**: MAKI rebrand (binary `dam` → `maki`, config `dam.toml` → `maki.toml`, full visual rebrand), branded PDF manual
 - **v4.0.1–v4.0.12**: Default browse filter, similarity browse, Windows support, CI/CD, unified numeric filters, XMP writeback safeguard, cheat sheet, automated releases, branded screenshots
-- **v4.1.x**: MAKI Pro edition branding (`pro` feature flag, release artifacts renamed to `-pro`), search filter reference card, star rating filter UX improvement, website link in `--help`, repo structure cleanup (`doc/images/`, `doc/quickref/`)
+- **v4.1.x**: MAKI Pro edition (`pro` feature flag, `-pro` release artifacts), VLM/writeback/sync-metadata gated behind Pro, search filter reference card, `volume split`/`rename`, `edit --clear-tags`, improved `scattered:` filter with `/N` depth, star rating filter UX, consistent *(Pro)* markers in manual, repo cleanup (`doc/images/`, `doc/quickref/`)
