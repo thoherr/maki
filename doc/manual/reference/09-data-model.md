@@ -155,9 +155,7 @@ A named query (smart album) stored in `searches.toml`. Re-evaluated every time i
 | `query` | String | Search filter string in the same syntax as `maki search` (e.g. `type:image tag:landscape rating:4+`). |
 | `sort` | Option\<String\> | Sort order (e.g. `date_desc`, `name_asc`). Omitted means default (`date_desc`). |
 
-### Embedding
-
-*(Pro)*
+### Embedding *(Pro)*
 
 A stored image embedding vector for an asset, used by `maki auto-tag` for classification, `--similar` for visual similarity search, and `maki embed` for batch generation.
 
@@ -173,9 +171,7 @@ Storage overhead: ~3 KB per asset. For 100,000 assets: ~300 MB in SQLite.
 
 **Opportunistic storage**: Embeddings are stored not only by `maki auto-tag` and `maki embed`, but also opportunistically by the web UI "Suggest tags" and batch "Auto-tag" endpoints. This means using AI features in the web UI gradually builds up the similarity search index.
 
-### Face
-
-*(Pro)*
+### Face *(Pro)*
 
 A detected face within an asset image, with bounding box, confidence, recognition embedding, and optional person assignment.
 
@@ -195,9 +191,7 @@ A detected face within an asset image, with bounding box, confidence, recognitio
 
 Storage overhead: ~2 KB per face (embedding + metadata). Face crops: ~5–15 KB each as JPEG.
 
-### Person
-
-*(Pro)*
+### Person *(Pro)*
 
 A named or unnamed person group linking detected faces across assets.
 
