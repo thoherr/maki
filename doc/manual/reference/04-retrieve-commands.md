@@ -225,7 +225,7 @@ maki show a1b2c --json | jq '.variants[].original_filename'
 Show as JSON and list file locations:
 
 ```bash
-maki show a1b2c --json | jq '.variants[].file_locations[]'
+maki show a1b2c --json | jq '.variants[].locations[]'
 ```
 
 ### SEE ALSO
