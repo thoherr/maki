@@ -130,9 +130,33 @@ Surface drive health and verification staleness proactively.
 
 **Complexity:** Low.
 
+### Video Proxy Generation
+
+Transcode non-browser-playable video formats (ProRes, AVCHD, MTS) to MP4 for web playback. Currently these formats show a thumbnail but can't play in the browser.
+
+**Scope:**
+- `maki generate-previews --video-proxy` generates MP4 proxies for non-playable formats
+- Stored alongside smart previews (e.g. `video_proxies/<hash>.mp4`)
+- Web UI `/video/{hash}` route serves the proxy when the original isn't browser-playable
+- ffmpeg-based transcoding with sensible defaults (H.264, AAC, reasonable bitrate)
+
+**Complexity:** Medium. ffmpeg transcoding is well-understood; storage and routing logic already exists.
+
 ---
 
 ## Tier 3 — Polish & Future
+
+### Hover-to-Play on Browse Grid
+
+Preview video playback on hover in the browse grid. Short video clips play silently when the cursor hovers over a video thumbnail.
+
+**Scope:**
+- On mouse enter: load the first few seconds of the video and play muted
+- On mouse leave: pause and show the static thumbnail
+- Only for online volumes with browser-playable formats
+- Opt-in via config or grid density setting (disabled on compact grid)
+
+**Complexity:** Low-Medium. HTML5 video with `preload="none"` and JS hover handlers.
 
 ### Undo / Edit History
 
