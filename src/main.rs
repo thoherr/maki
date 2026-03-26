@@ -429,6 +429,10 @@ enum Commands {
     Show {
         /// Asset ID
         asset_id: String,
+
+        /// Show only file locations (one per line: volume:path)
+        #[arg(long)]
+        locations: bool,
     },
 
     /// Display asset preview in the terminal
@@ -2343,11 +2347,54 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
             }
             Ok(())
         }
-        Commands::Show { asset_id } => {
+        Commands::Show { asset_id, locations } => {
             let catalog_root = maki::config::find_catalog_root()?;
             let config = CatalogConfig::load(&catalog_root)?;
             let engine = QueryEngine::new(&catalog_root);
             let details = engine.show(&asset_id)?;
+
+            if locations {
+                if cli.json {
+                    let locs: Vec<serde_json::Value> = details.variants.iter()
+                        .flat_map(|v| v.locations.iter().map(move |loc| {
+                            serde_json::json!({
+                                "volume": loc.volume_label,
+                                "path": loc.relative_path,
+                                "variant": v.original_filename,
+                                "format": v.format,
+                                "role": v.role,
+                            })
+                        }))
+                        .collect();
+                    let recipe_locs: Vec<serde_json::Value> = details.recipes.iter()
+                        .filter_map(|r| {
+                            let label = r.volume_label.as_deref()?;
+                            let path = r.relative_path.as_deref()?;
+                            Some(serde_json::json!({
+                                "volume": label,
+                                "path": path,
+                                "variant": r.software,
+                                "format": r.recipe_type,
+                                "role": "recipe",
+                            }))
+                        })
+                        .collect();
+                    let all: Vec<serde_json::Value> = locs.into_iter().chain(recipe_locs).collect();
+                    println!("{}", serde_json::to_string_pretty(&all)?);
+                } else {
+                    for v in &details.variants {
+                        for loc in &v.locations {
+                            println!("{}:{}", loc.volume_label, loc.relative_path);
+                        }
+                    }
+                    for r in &details.recipes {
+                        if let (Some(label), Some(path)) = (&r.volume_label, &r.relative_path) {
+                            println!("{label}:{path}");
+                        }
+                    }
+                }
+                return Ok(());
+            }
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&details)?);
