@@ -10,7 +10,7 @@ The system is organized in four layers, from top to bottom:
 - **Web UI** — browser-based interface via `maki serve`. Uses axum (HTTP), askama (templates), htmx (interactivity). Opens fresh SQLite connections per request via `spawn_blocking`. Serves preview images from the catalog's `previews/` directory. Integrates with the local OS for file management (reveal in Finder, open terminal).
 
 ### 2. Core Library
-- **Asset Service** — orchestrates import, deletion, grouping, relocation, verification, deduplication, role fixing. Main business logic.
+- **Asset Service** — orchestrates import, deletion, grouping, relocation, verification, deduplication, role fixing, face detection, auto-tagging, VLM description, and video metadata extraction. Main business logic layer shared by both CLI and web UI to ensure identical behavior.
 - **Content Store** — SHA-256 hashing, deduplication, mapping hash → physical location(s). A file *is* its hash.
 - **Metadata Store** — text-based sidecar files (YAML). Stores tags, descriptions, variant groupings, processing recipes. Human-readable and diffable.
 - **Device Registry** — tracks volumes, mount points, online/offline status. Allows referencing files on unmounted media.

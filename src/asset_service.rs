@@ -5832,10 +5832,11 @@ impl AssetService {
                 }
             };
 
-            // Store embedding
+            // Store embedding (SQLite + binary file)
             if let Err(e) = emb_store.store(aid, &image_emb, model_id) {
                 eprintln!("Warning: failed to store embedding for {}: {e}", &aid[..8.min(aid.len())]);
             }
+            let _ = crate::embedding_store::write_embedding_binary(&self.catalog_root, model_id, aid, &image_emb);
 
             // Classify
             let suggestions = if self.verbosity.debug {
