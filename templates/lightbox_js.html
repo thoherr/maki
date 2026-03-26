@@ -245,6 +245,13 @@
             img.style.display = 'none';
             video.style.display = '';
             video.poster = item.preview;
+            video.onerror = function() {
+                // Source offline or format unsupported — fall back to poster image
+                video.style.display = 'none';
+                img.style.display = '';
+                img.src = item.preview;
+                img.alt = item.name + ' (video source offline)';
+            };
             video.src = item.videoUrl;
         } else {
             video.style.display = 'none';

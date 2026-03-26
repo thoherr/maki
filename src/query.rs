@@ -106,6 +106,7 @@ pub struct ParsedSearch {
     pub scattered: Option<NumericFilter>,
     pub scattered_depth: Option<u32>,
     pub face_count: Option<NumericFilter>,
+    pub duration: Option<NumericFilter>,
     pub stale_days: Option<NumericFilter>,
     pub meta_filters: Vec<(String, String)>,
     pub orphan: bool,
@@ -239,6 +240,7 @@ impl ParsedSearch {
             scattered: self.scattered.clone(),
             scattered_depth: self.scattered_depth,
             face_count: self.face_count.clone(),
+            duration: self.duration.clone(),
             stale_days: self.stale_days.clone(),
             meta_filters: self
                 .meta_filters
@@ -484,6 +486,8 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
                     parsed.geo_bbox = Some((parts[0], parts[1], parts[2], parts[3]));
                 }
             }
+        } else if let Some(value) = token_body.strip_prefix("duration:") {
+            parsed.duration = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("faces:") {
             if value == "any" {
                 parsed.has_faces = Some(true);
@@ -3778,6 +3782,33 @@ mod tests {
         let p = parse_search_query("scattered:2/1");
         assert_eq!(p.scattered, Some(NumericFilter::Exact(2.0)));
         assert_eq!(p.scattered_depth, Some(1));
+    }
+
+    // ── duration filter parse tests ──────────────────────────────────
+
+    #[test]
+    fn parse_duration_exact() {
+        let p = parse_search_query("duration:60");
+        assert_eq!(p.duration, Some(NumericFilter::Exact(60.0)));
+    }
+
+    #[test]
+    fn parse_duration_min() {
+        let p = parse_search_query("duration:30+");
+        assert_eq!(p.duration, Some(NumericFilter::Min(30.0)));
+    }
+
+    #[test]
+    fn parse_duration_range() {
+        let p = parse_search_query("duration:10-120");
+        assert_eq!(p.duration, Some(NumericFilter::Range(10.0, 120.0)));
+    }
+
+    #[test]
+    fn parse_duration_with_type() {
+        let p = parse_search_query("duration:60+ type:video");
+        assert_eq!(p.duration, Some(NumericFilter::Min(60.0)));
+        assert_eq!(p.asset_types, vec!["video"]);
     }
 
     #[test]

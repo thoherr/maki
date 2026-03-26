@@ -446,6 +446,7 @@ pub struct SearchOptions<'a> {
     pub scattered: Option<NumericFilter>,
     pub scattered_depth: Option<u32>,
     pub face_count: Option<NumericFilter>,
+    pub duration: Option<NumericFilter>,
     pub stale_days: Option<NumericFilter>,
     pub meta_filters: Vec<(&'a str, &'a str)>,
     pub orphan: bool,
@@ -508,6 +509,7 @@ impl<'a> Default for SearchOptions<'a> {
             scattered: None,
             scattered_depth: None,
             face_count: None,
+            duration: None,
             stale_days: None,
             meta_filters: Vec::new(),
             orphan: false,
@@ -3012,6 +3014,7 @@ impl Catalog {
             }
         }
         if let Some(ref f) = opts.face_count { Self::numeric_clause(f, "a.face_count", &mut clauses, &mut params); }
+        if let Some(ref f) = opts.duration { Self::numeric_clause(f, "a.video_duration", &mut clauses, &mut params); }
 
         // Embedding presence filter
         if let Some(has_embed) = opts.has_embed {

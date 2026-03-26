@@ -1,16 +1,19 @@
 {% if is_video %}
+{% if has_online_source %}
 {% if let Some(vurl) = video_url %}
 <video controls preload="metadata" id="detail-video"
        {% match primary_preview_url %}{% when Some with (url) %} poster="{{ url }}"{% when None %}{% endmatch %}>
     <source src="{{ vurl }}">
     Your browser does not support the video tag.
 </video>
+{% endif %}
 {% else %}
 {% match primary_preview_url %}
 {% when Some with (url) %}
 <img src="{{ url }}" alt="Preview">
+<div class="preview-offline-hint">Video source offline — playback unavailable</div>
 {% when None %}
-<div class="no-preview">Video source offline</div>
+<div class="no-preview">Video source offline — playback unavailable</div>
 {% endmatch %}
 {% endif %}
 {% else %}
