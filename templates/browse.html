@@ -213,12 +213,13 @@ window.triggerSearch = onFilterChange;
     // Handle bfcache restoration (back from detail/compare).
     // Only handle lightbox auto-open and focus sync.
     window.addEventListener('pageshow', function(event) {
+        // Always bust changed previews (cache-busting for regenerated thumbnails)
+        bustChangedPreviews();
         // Always clear dirty flag (fresh loads already have correct data)
         if (!event.persisted) {
             sessionStorage.removeItem('maki-browse-dirty');
         }
         if (event.persisted) {
-            bustChangedPreviews();
             // Clear saved selection — JS Set is already intact via bfcache
             sessionStorage.removeItem('maki-browse-selection');
 
@@ -456,6 +457,7 @@ window.triggerSearch = onFilterChange;
     document.body.addEventListener('htmx:afterSwap', function(e) {
         if (e.detail.target && e.detail.target.id === 'results') {
             syncCheckboxes();
+            bustChangedPreviews();
         }
     });
 
