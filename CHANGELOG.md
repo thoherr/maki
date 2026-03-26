@@ -2,6 +2,17 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.2.0 (2026-03-26)
+
+### New Features
+- **Video playback** — HTML5 video player on the asset detail page and in the lightbox. Duration badges (e.g. "1:23") on browse grid thumbnails. Video metadata (duration, codec, resolution, framerate) extracted via `ffprobe` at import time and shown on the detail page.
+- **Video metadata backfill** — `maki generate-previews` and the web UI "Regenerate previews" button now run `ffprobe` on existing video assets to backfill metadata that was missing before this feature.
+- **Video serving with seeking** — `/video/{hash}` route serves original video files with HTTP range request support for browser seeking.
+
+### Enhancements
+- **Preview cache-busting fix** — browse page now busts changed preview thumbnails on all page loads and htmx swaps (not just bfcache restoration).
+- **Schema v4** — denormalized `video_duration` column on the assets table for efficient browse card rendering.
+
 ## v4.1.3 (2026-03-25)
 
 ### New Features

@@ -58,19 +58,6 @@ SigLIP embedding generation on CPU is slow for large catalogs. GPU backends make
 
 **Complexity:** Low for adding providers (code pattern exists), high for testing/packaging.
 
-### Video Playback & Metadata
-
-MAKI imports videos and generates thumbnails, but the web UI has no playback, and there are no video-specific search filters. For a media asset manager this is a notable gap.
-
-**Scope:**
-- Web UI video player on detail page (HTML5 `<video>` for MP4/WebM, transcoded proxy for others)
-- Video duration, codec, resolution, framerate extracted at import and stored as source metadata
-- Search filters: `duration:`, `codec:`, `resolution:` (e.g. `resolution:4k+`)
-- Browse card badge showing duration (e.g. "1:23")
-- Lightbox video playback
-
-**Complexity:** Medium. HTML5 video is straightforward for common formats; transcoding proxies and codec extraction via ffprobe add complexity.
-
 ### IPTC/EXIF Write-Back *(Pro)*
 
 Write metadata changes back into JPEG/TIFF files directly, not just XMP sidecars. Some workflows and stock photo submissions require embedded metadata.
@@ -200,4 +187,5 @@ Design documents for completed features are in `doc/proposals/archive/`. Key mil
 - **v3.2**: Web UI export ZIP, batch delete, shell export, per-model VLM config, verbose threading, documentation consolidation
 - **v4.0**: MAKI rebrand (binary `dam` → `maki`, config `dam.toml` → `maki.toml`, full visual rebrand), branded PDF manual
 - **v4.0.1–v4.0.12**: Default browse filter, similarity browse, Windows support, CI/CD, unified numeric filters, XMP writeback safeguard, cheat sheet, automated releases, branded screenshots
+- **v4.1.x (Video Playback Phase 1)**: HTML5 video player on detail page and lightbox, duration badges on browse cards, video metadata extraction via ffprobe (duration, codec, resolution, framerate) at import time, `generate-previews --force` backfills video metadata for existing assets. Phase 2 (search filters: `duration:`, `codec:`, `resolution:`) pending.
 - **v4.1.x**: MAKI Pro edition (`pro` feature flag, `-pro` release artifacts), VLM/writeback/sync-metadata gated behind Pro, search filter reference card, `volume split`/`rename`, `edit --clear-tags`, improved `scattered:` filter with `/N` depth, star rating filter UX, consistent *(Pro)* markers in manual, repo cleanup (`doc/images/`, `doc/quickref/`)

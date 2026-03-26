@@ -896,7 +896,7 @@ Previews are stored in `previews/<hash-prefix>/<hash>.jpg`. Preview settings (ma
 : Skip file type groups. Can be specified multiple times.
 
 **--force**
-: Regenerate previews even if they already exist.
+: Regenerate previews even if they already exist. For video assets, also backfills video metadata (duration, codec, resolution, framerate via `ffprobe`) when it is missing — useful for assets imported before video metadata extraction was available.
 
 **--upgrade**
 : Regenerate previews for assets where a better variant (export or processed) exists than what the current preview was generated from. Skips assets where the best variant is already the source of the preview.

@@ -248,6 +248,10 @@ When an `.xmp` file is attached as a recipe, its contents are parsed and merged 
 | `dc:creator` | Source metadata | Stored as `creator` |
 | `dc:rights` | Source metadata | Stored as `rights` |
 
+### Video Metadata
+
+When `ffprobe` is available (included with the ffmpeg package), MAKI automatically extracts video-specific metadata at import time: duration, codec, resolution, and framerate. This information is stored in the variant's `source_metadata` and used for duration badges in the web UI browse grid. If `ffprobe` is not installed, video files are still imported successfully but without video metadata.
+
 ### Embedded XMP
 
 JPEG and TIFF files can contain XMP metadata embedded in their binary structure (APP1 marker for JPEG, IFD tag 700 for TIFF). MAKI extracts the same fields as from sidecar XMP. This captures keywords, ratings, and labels from tools like CaptureOne and Lightroom that embed XMP directly in exported files.

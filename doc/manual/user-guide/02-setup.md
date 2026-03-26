@@ -17,7 +17,7 @@ Download a pre-built binary from the [GitHub releases page](https://github.com/t
 Extract the archive and copy the `maki` binary to a directory on your `PATH`:
 
 ```bash
-tar xzf maki-4.1.3-macos-arm64-pro.tar.gz
+tar xzf maki-4.2.0-macos-arm64-pro.tar.gz
 cp maki /usr/local/bin/
 ```
 
@@ -25,8 +25,8 @@ Verify the installation:
 
 ```bash
 maki --version
-# MAKI:     maki 4.1.3
-# MAKI Pro: maki 4.1.3 Pro
+# MAKI:     maki 4.2.0
+# MAKI Pro: maki 4.2.0 Pro
 ```
 
 ### Building from source
@@ -54,7 +54,7 @@ MAKI handles standard image formats (JPEG, PNG, TIFF, WebP) natively. The follow
 | Tool | Purpose | Install |
 |------|---------|---------|
 | **dcraw** or **dcraw_emu** (LibRaw) | RAW file previews (NEF, ARW, CR2, CR3, etc.) | `brew install dcraw` or `brew install libraw` on macOS; your package manager on Linux; `winget install LibRaw.LibRaw` or `scoop install libraw` on Windows |
-| **ffmpeg** | Video thumbnail extraction | `brew install ffmpeg` on macOS; your package manager on Linux; `winget install Gyan.FFmpeg` or `scoop install ffmpeg` on Windows |
+| **ffmpeg** / **ffprobe** | Video thumbnail extraction and video metadata (duration, codec, resolution, framerate). `ffprobe` is included with the ffmpeg package. | `brew install ffmpeg` on macOS; your package manager on Linux; `winget install Gyan.FFmpeg` or `scoop install ffmpeg` on Windows |
 | **curl** | AI model download and VLM image descriptions | Pre-installed on macOS and most Linux distributions; `winget install cURL.cURL` or `scoop install curl` on Windows |
 
 When an external tool is missing, MAKI prints a warning on first use explaining what is needed and why. It still imports RAW and video files, but generates an info card (a placeholder JPEG showing file metadata) instead of a rendered preview. You can install the tools later and run `maki generate-previews --force` to regenerate real previews.

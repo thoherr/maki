@@ -101,6 +101,7 @@ Below the search bar, results appear as a grid of thumbnail cards. Each card sho
 - A preview thumbnail (lazy-loaded for performance)
 - The asset name (or filename as fallback)
 - Badges for type and primary format (e.g., "image" and "NEF")
+- A duration badge on video assets showing the video length (e.g., "1:23")
 - A variant count badge when the asset has multiple variants (e.g., "3v")
 - A stack badge when the asset is in a stack (e.g., a small grid icon with the member count)
 - Star rating (filled stars)
@@ -350,6 +351,8 @@ All browse keyboard shortcuts for rating and label work inside the lightbox:
 | + | Zoom in |
 | - | Zoom out |
 
+**Video playback**: Video assets display inline in the lightbox. Click the video to play or pause it. Use the "Detail" button or press `d` to navigate to the detail page for full playback controls.
+
 When the lightbox is open, browse keyboard navigation (arrow keys for card focus, Enter, Space) is suppressed.
 
 
@@ -392,7 +395,7 @@ Rating, label, and zoom keyboard shortcuts also work on the detail page:
 
 ### Preview
 
-The left side shows a large preview image. This is the best available preview for the asset, preferring export variants over processed variants over originals, and standard image formats over RAW.
+The left side shows a large preview image (or, for video assets, an HTML5 video player with native browser controls for play, pause, seek, and volume). This is the best available preview for the asset, preferring export variants over processed variants over originals, and standard image formats over RAW.
 
 When a smart preview is available, it loads in the background with a pulsing "HD" badge. Once loaded, the image supports zoom and pan via mouse wheel, drag, and keyboard shortcuts (`,` `.` `+` `-`). Clicking the preview image opens the asset in the lightbox for full-screen viewing. Buttons below the preview let you regenerate the regular preview, generate/regenerate the smart preview, or rotate the image 90° clockwise. Rotation cycles through 0° → 90° → 180° → 270° → 0° and is persisted per asset. Previews are automatically oriented using EXIF tags during generation; manual rotation is applied on top.
 
