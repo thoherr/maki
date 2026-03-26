@@ -2,6 +2,17 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.2.1 (2026-03-26)
+
+### New Features
+- **`maki show --locations`** — lists all file locations (variant + recipe) as `volume:path`, one per line. With `--json`, includes variant filename, format, and role.
+
+### Enhancements
+- **Compact detail page Type row** — type, format, codec, resolution, framerate, and duration shown as badges in one row. Works for both images (resolution from EXIF) and videos (all fields from ffprobe). Replaces the 3 separate video-only rows.
+- **Shared service layer for face detection** — `AssetService::detect_faces()` eliminates CLI/web code duplication and fixes inconsistent force/clear behavior. Web batch detect now uses the same code path as CLI `maki faces detect`.
+- **Shared video metadata backfill** — `AssetService::backfill_video_metadata()` replaces identical inline code in CLI and web.
+- **Zero compiler warnings** — fixed unused variable and dead code warnings in standard (non-Pro) builds.
+
 ## v4.2.0 (2026-03-26)
 
 ### New Features
