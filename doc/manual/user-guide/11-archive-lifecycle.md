@@ -8,7 +8,7 @@ Most photography tools focus on individual tasks — importing, tagging, exporti
 
 Files in a well-managed library flow through a predictable lifecycle. Each stage has a different purpose, and MAKI provides tools for every transition:
 
-```mermaid {width=80%}
+```mermaid {width=52%}
 flowchart TD
     IM["Import<br/><i>maki import</i>"]
     WK["Working Drive<br/>(fast SSD)"]
