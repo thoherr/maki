@@ -618,6 +618,87 @@ For an interactive visual exploration experience, the web UI offers a **Stroll p
 
 ---
 
+## Contact Sheets
+
+The `maki contact-sheet` command generates a PDF with thumbnail grids of your assets — useful for client proofing, archival reference, portfolio review, or simply getting an overview of a shoot on paper.
+
+### Basic usage
+
+Generate a contact sheet from any search query:
+
+```bash
+maki contact-sheet "tag:wedding date:2026-03" wedding-proofs.pdf
+```
+
+This produces an A4 PDF with the standard layout (4 columns, 6 rows per page) using smart previews when available.
+
+### Client proofing
+
+When preparing proofs for a client, add a title, copyright notice, and metadata fields below each thumbnail:
+
+```bash
+maki contact-sheet "tag:wedding rating:3+" proofs.pdf \
+  --title "Johnson Wedding — March 2026" \
+  --copyright "Jane Doe Photography" \
+  --fields "filename,rating"
+```
+
+The `--fields` option accepts a comma-separated list: `filename`, `date`, `rating`, `label`, `format`, `size`, `dimensions`.
+
+### Shoot overview
+
+For a quick visual overview of a multi-day shoot, group by date and use the dense layout:
+
+```bash
+maki contact-sheet "path:Capture/2026-03" march-overview.pdf \
+  --group-by date --landscape --layout dense
+```
+
+Grouping options: `date` (by shooting day), `volume`, `collection`, `label` (by color label). Each group gets a section header in the PDF.
+
+### Layout presets and paper sizes
+
+Three built-in layout presets control thumbnail density:
+
+| Preset | Columns | Rows | Best for |
+|--------|---------|------|----------|
+| `dense` | 6 | 8 | Index prints, archival reference |
+| `standard` | 4 | 6 | Client proofing (default) |
+| `large` | 3 | 4 | Portfolio review, detail inspection |
+
+Override columns and rows individually with `--columns` and `--rows`. Paper sizes: `a4` (default), `letter`, `a3`.
+
+```bash
+# Large thumbnails on A3 landscape for portfolio review
+maki contact-sheet "rating:5" portfolio.pdf \
+  --layout large --paper a3 --landscape
+
+# Dense index of an entire archive volume
+maki contact-sheet "volume:Archive" archive-index.pdf \
+  --layout dense --fields "filename,date,format" --group-by date
+```
+
+### Color labels and sorting
+
+The `--label-style` option controls how color labels appear: `border` (colored border around thumbnail), `dot` (small colored circle), or `none`. Sort with `--sort`: `date`, `name`, `rating`, `filename`.
+
+```bash
+maki contact-sheet "label:Green,Blue" selects.pdf \
+  --sort rating --label-style border
+```
+
+### Dry run
+
+Preview page count and asset count before generating:
+
+```bash
+maki contact-sheet "tag:landscape" test.pdf --dry-run
+```
+
+For the full command reference, see [contact-sheet](../reference/04-retrieve-commands.md#maki-contact-sheet).
+
+---
+
 ## Related Topics
 
 - [Organizing Assets](04-organize.md) -- tags, editing, collections, and saved searches

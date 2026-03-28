@@ -682,6 +682,70 @@ face_min_confidence = 0.5       # minimum detection confidence
 
 ---
 
+## Deleting Assets
+
+Tagging images as `rest` or leaving them unrated hides them from browsing (see [Organizing & Culling](10-organizing-and-culling.md)), but the files and catalog records remain. When you want to permanently remove assets — confirmed rejects, test shots, accidental imports — use `maki delete`.
+
+### When to delete vs. cull
+
+For most images, culling (tagging as `rest` or leaving unrated) is the better choice. Deletion is permanent and cannot be undone. Consider deleting only when:
+
+- The files genuinely have no value (accidental shutter fires, blank frames, duplicates you've already deduplicated)
+- You need to reclaim disk space and are certain you have backups
+- You imported files by mistake (wrong folder, wrong file types)
+
+### Report-only default
+
+Without `--apply`, the command shows what would happen without changing anything:
+
+```bash
+maki delete a1b2c3d4
+```
+
+```
+Would delete: DSC_0042 (2 variants, 3 locations, 1 recipe)
+  Dry run — no changes made. Run with --apply to delete.
+```
+
+### Catalog-only deletion
+
+With `--apply` but without `--remove-files`, MAKI removes the asset from the catalog and sidecar files but leaves the physical files untouched on disk:
+
+```bash
+maki delete a1b2c3d4 --apply
+```
+
+This is useful when you want to stop tracking a file in MAKI but don't want to touch the originals. You can re-import the files later if needed.
+
+### Physical file deletion
+
+With `--remove-files`, the physical files are also deleted from all online volumes:
+
+```bash
+maki delete a1b2c3d4 --apply --remove-files
+```
+
+Files on offline volumes are not deleted — they remain on disk until you reconnect the volume and run `maki cleanup`.
+
+### Batch deletion
+
+Combine search with delete for bulk cleanup:
+
+```bash
+# Preview: which assets would be deleted?
+maki search "tag:reject" --format short
+
+# Delete all rejected assets (catalog only)
+maki search -q "tag:reject" | maki delete --apply --log
+
+# Delete rejected assets AND their physical files
+maki search -q "tag:reject" | maki delete --apply --remove-files --log
+```
+
+For the full command reference, see [delete](../reference/02-ingest-commands.md#maki-delete).
+
+---
+
 ## Putting It All Together
 
 A typical organizing workflow after import might look like this:

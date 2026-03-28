@@ -215,5 +215,7 @@ maki ss save "Needs keywords" "-tag:rest rating:1+ tag:untagged" --sort date_des
 
 ---
 
+Next: [The Archive Lifecycle](11-archive-lifecycle.md) -- storage strategy, backup workflows, and long-term library management.
+
 Previous: [Interactive Shell](09-shell.md) |
 [Back to Manual](../index.md)

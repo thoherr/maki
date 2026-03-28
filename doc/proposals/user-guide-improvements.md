@@ -4,6 +4,8 @@ Audit of the MAKI user manual (user guide chapters 01–10) against the full CLI
 
 **Date:** 2026-03-28
 
+**Status:** Pass 1 implemented (2026-03-28). Pass 2 and 3 pending.
+
 ---
 
 ## A. Commands and Features Missing from the User Guide
@@ -395,14 +397,14 @@ Explain when to use `sync-metadata` (the combined command) vs. the separate `ref
 
 ## Priority and Sequencing
 
-### Pass 1 — High impact, fills critical gaps
+### Pass 1 — High impact, fills critical gaps (DONE 2026-03-28)
 
-| # | Topic | Type | Effort | Chapter |
-|---|-------|------|--------|---------|
-| 1 | Contact Sheets | Missing command | Medium | 05 |
-| 2 | Deleting Assets | Missing command | Low–Med | 04 |
-| 13 | Archive Lifecycle | Workflow | Medium | 02 |
-| 15 | Drive Failure Recovery | Workflow | Medium | 07 |
+| # | Topic | Type | Effort | Chapter | Status |
+|---|-------|------|--------|---------|--------|
+| 1 | Contact Sheets | Missing command | Medium | 05 | Done |
+| 2 | Deleting Assets | Missing command | Low–Med | 04 | Done |
+| 13 | Archive Lifecycle | Workflow | Medium | New ch. 11 | Done |
+| 15 | Drive Failure Recovery | Workflow | Medium | 07 | Done |
 
 ### Pass 2 — Practical workflow improvements
 

@@ -832,6 +832,94 @@ maki stats --volumes
 
 ---
 
+## Recovering from a Drive Failure
+
+When a storage device fails, MAKI's multi-volume architecture and content-addressable design help you assess the damage and recover. Here is a step-by-step playbook.
+
+### 1. Assess the damage
+
+Check which volume is affected and how many assets were on it:
+
+```bash
+# Which volumes are online/offline?
+maki volume list
+
+# How many assets had files on the failed drive?
+maki search "volume:FailedDrive" --format ids | wc -l
+```
+
+### 2. Check what's backed up
+
+Assets with copies on other volumes are safe. The key question is: which assets were *only* on the failed drive?
+
+```bash
+# Assets that exist ONLY on the failed drive (single-copy, at risk)
+maki search "volume:FailedDrive copies:1"
+
+# Assets that have copies elsewhere (safe)
+maki search "volume:FailedDrive copies:2+"
+```
+
+For a broader view, use `backup-status`:
+
+```bash
+maki backup-status --at-risk
+```
+
+### 3. Recover what you can
+
+If you have partial data recovery from the failed drive, import the recovered files. MAKI matches by content hash, so recovered files are automatically linked to existing assets:
+
+```bash
+maki import /path/to/recovered-files/ --log
+```
+
+### 4. Clean up stale records
+
+Once you've recovered everything possible, remove the references to the dead drive:
+
+```bash
+# Preview what would be cleaned up
+maki cleanup --volume "FailedDrive"
+
+# Apply cleanup
+maki cleanup --volume "FailedDrive" --apply --log
+```
+
+This removes file location records pointing to the failed volume. Assets that still have locations on other volumes are preserved. Assets with no remaining locations become orphaned and are removed in the cleanup pass.
+
+### 5. Rebuild backup coverage
+
+After cleanup, check what gaps remain and fill them:
+
+```bash
+# Which assets now have only one copy?
+maki backup-status --at-risk --min-copies 2
+
+# Copy at-risk assets to a new backup drive
+maki backup-status --at-risk -q | maki relocate --target "New Backup" --log
+```
+
+### 6. If the catalog itself is lost
+
+If the drive that held your MAKI catalog (the `.maki/` directory) fails, but your media volumes are intact, you can rebuild from scratch. The YAML sidecar files next to your media files are the source of truth — the SQLite database is just a derived cache:
+
+```bash
+# In a new directory
+maki init
+
+# Re-register your surviving volumes
+maki volume add "Photos" /Volumes/PhotosDrive
+maki volume add "Backup" /Volumes/BackupDrive
+
+# Rebuild the catalog from sidecar files
+maki rebuild-catalog
+```
+
+This restores all assets, variants, recipes, metadata, tags, ratings, and descriptions — everything that was stored in the YAML sidecars. Collections, stacks, and saved searches are also restored (they're stored as YAML in the catalog directory). Only preview thumbnails and AI embeddings need to be regenerated.
+
+---
+
 Next: [Scripting](08-scripting.md) -- shell and Python scripting patterns for workflow automation.
 
 For complete flag and option details on every maintenance command, see the [Maintain Commands Reference](../reference/05-maintain-commands.md).

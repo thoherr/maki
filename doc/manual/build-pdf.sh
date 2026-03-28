@@ -48,6 +48,7 @@ FILES=(
     user-guide/08-scripting.md
     user-guide/09-shell.md
     user-guide/10-organizing-and-culling.md
+    user-guide/11-archive-lifecycle.md
 
     # Reference Guide
     reference/00-cli-conventions.md
@@ -135,6 +136,7 @@ perl -i -pe '
         "08-scripting.md"           => "scripting",
         "09-shell.md"               => "interactive-shell",
         "10-organizing-and-culling.md" => "organizing-and-culling",
+        "11-archive-lifecycle.md"      => "archive-lifecycle",
     );
 
     # Pattern 1: links with #anchor — strip path, keep anchor
