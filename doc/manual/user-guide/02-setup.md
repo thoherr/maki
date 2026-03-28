@@ -277,6 +277,36 @@ The source volume's mount point must be a subdirectory of the target's. All file
 
 See the [volume combine reference](../reference/01-setup-commands.md#maki-volume-combine) for details.
 
+### Splitting a volume
+
+The inverse of combine: split a subdirectory off into its own volume. This is useful when you physically move a folder to a new drive:
+
+```bash
+# Preview what splitting would do
+maki volume split "Photos" "Archive 2024" --path "Archive/2024"
+
+# Execute the split
+maki volume split "Photos" "Archive 2024" --path "Archive/2024" --apply
+```
+
+All file locations under the specified path are reassigned to the new volume, with path prefixes rewritten accordingly. You can optionally assign a purpose to the new volume:
+
+```bash
+maki volume split "Photos" "Archive 2024" --path "Archive/2024" --purpose archive --apply
+```
+
+See the [volume split reference](../reference/01-setup-commands.md#maki-volume-split) for details.
+
+### Renaming a volume
+
+If a drive label changes or you want a clearer name:
+
+```bash
+maki volume rename "Old Label" "New Label"
+```
+
+This updates the volume label everywhere (catalog, sidecar YAML files, volume registry). No files are moved or modified on disk.
+
 
 ## Configuration (maki.toml)
 

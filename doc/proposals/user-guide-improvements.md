@@ -4,7 +4,7 @@ Audit of the MAKI user manual (user guide chapters 01–10) against the full CLI
 
 **Date:** 2026-03-28
 
-**Status:** Pass 1 and 2 implemented (2026-03-28). Pass 3 pending.
+**Status:** All three passes implemented (2026-03-28). Proposal complete.
 
 ---
 
@@ -417,14 +417,14 @@ Explain when to use `sync-metadata` (the combined command) vs. the separate `ref
 | 16 | Multi-tool Round-trips | Workflow | Medium | 07 | Done |
 | 8 | Verify incremental | Expand | Low | 07 | Done (bonus) |
 
-### Pass 3 — Completeness and polish
+### Pass 3 — Completeness and polish (DONE 2026-03-28)
 
-| # | Topic | Type | Effort | Chapter |
-|---|-------|------|--------|---------|
-| 4 | Volume Split/Rename | Missing command | Low | 02 |
-| 5 | Fix Recipes | Missing command | Low | 07 |
-| 10 | Saved Search --favorite | Expand | Low | 04 |
-| 11 | Stack from-tag | Expand | Low | 04 |
-| 12 | Show --locations | Expand | Low | 05 |
-| 14 | Working with Video | Workflow | Low–Med | 03/05 |
-| 17 | Import Strategies | Workflow | Medium | 03 |
+| # | Topic | Type | Effort | Chapter | Status |
+|---|-------|------|--------|---------|--------|
+| 4 | Volume Split/Rename | Missing command | Low | 02 | Done |
+| 5 | Fix Recipes | Missing command | Low | 07 | Done |
+| 10 | Saved Search --favorite | Expand | Low | 04 | Done |
+| 11 | Stack from-tag | Expand | Low | 04 | Done |
+| 12 | Show --locations | Expand | Low | 05 | Done |
+| 14 | Working with Video | Workflow | Low–Med | 03 | Done |
+| 17 | Import Strategies | Workflow | Medium | 03 | Done |

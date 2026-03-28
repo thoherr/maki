@@ -680,4 +680,142 @@ See the [describe reference](../reference/02-ingest-commands.md#maki-describe) f
 
 ---
 
+## Working with Video
+
+MAKI handles video files alongside images — they flow through the same import pipeline, appear in the same browse grid, and support the same metadata operations (tags, ratings, labels, descriptions, collections, stacks).
+
+### What MAKI extracts from video
+
+When `ffprobe` is available (installed with ffmpeg), MAKI extracts:
+
+- **Duration** in seconds
+- **Codec** (e.g., h264, hevc, prores)
+- **Resolution** (width and height in pixels)
+- **Frame rate**
+
+This metadata is stored in the catalog and available as search filters.
+
+### Video previews
+
+During import, MAKI uses `ffmpeg` to extract a representative frame as the preview thumbnail. If ffmpeg is not installed, the video gets an info card instead. You can install ffmpeg later and regenerate previews:
+
+```bash
+maki generate-previews --include video --force --log
+```
+
+In the web UI, video assets show a play icon overlay. Hovering plays a short proxy clip (generated automatically when ffmpeg is available).
+
+### Searching for video
+
+Use the video-specific search filters to work with footage:
+
+```bash
+# All video assets
+maki search "type:video"
+
+# Short clips under 30 seconds
+maki search "type:video duration:1-30"
+
+# Long-form footage over 5 minutes
+maki search "type:video duration:300+"
+
+# H.264 footage
+maki search "type:video codec:h264"
+
+# HEVC/H.265 footage
+maki search "type:video codec:hevc"
+```
+
+### Mixed photo and video shoots
+
+Modern cameras produce both photos and videos in the same shoot. MAKI handles this naturally — `--auto-group` groups by filename stem regardless of file type, and you can filter by type when needed:
+
+```bash
+# Import a mixed shoot
+maki import /Volumes/Card/DCIM --auto-group --log
+
+# Browse only the photos
+maki search "path:DCIM type:image"
+
+# Browse only the videos
+maki search "path:DCIM type:video"
+
+# Rate and tag both together in the web UI
+maki serve
+```
+
+---
+
+## Common Import Scenarios
+
+The way you import differs depending on the source. Here are patterns for common situations.
+
+### Card reader / memory card
+
+The most common import: plug in a card, import everything, tag the session:
+
+```bash
+maki import /Volumes/CARD/DCIM \
+  --add-tag "shoot:johnson-wedding" \
+  --auto-group --smart --log
+```
+
+The `--add-tag` flag stamps every imported asset with a session tag for easy retrieval later. `--auto-group` pairs RAW+JPEG files automatically.
+
+### Tethered shooting
+
+When tethering to a capture folder, MAKI handles incremental imports naturally — files already in the catalog are skipped by content hash:
+
+```bash
+# First import
+maki import /Volumes/Work/Capture/2026-03-28/ --auto-group --log
+
+# Later, after more shots are captured
+maki import /Volumes/Work/Capture/2026-03-28/ --auto-group --log
+# Only new files are imported; existing ones are skipped
+```
+
+### Migrating from another DAM
+
+When importing a folder structure managed by CaptureOne, Lightroom, or another tool, include the tool's recipe files to preserve your processing work:
+
+```bash
+# Import with CaptureOne sidecars
+maki import /Volumes/Media/CaptureOne --include captureone --auto-group --log
+
+# Import with RawTherapee sidecars
+maki import /Volumes/Media/RawTherapee --include rawtherapee --auto-group --log
+```
+
+After importing, run `maki refresh` to read metadata from the XMP sidecar files (ratings, keywords, labels, descriptions):
+
+```bash
+maki refresh --log
+```
+
+### Cloud-synced folders
+
+Register cloud-synced directories (Dropbox, iCloud, Google Drive) as volumes with the `cloud` purpose:
+
+```bash
+maki volume add "Dropbox" ~/Dropbox/Photos --purpose cloud
+maki import ~/Dropbox/Photos/ --log
+```
+
+Be aware that partially-synced files (placeholders) may fail to import. Import again after sync completes to pick up the remaining files.
+
+### Importing selectively
+
+Skip file types you don't need, or include types that are off by default:
+
+```bash
+# Photos only — skip video and audio
+maki import /Volumes/Card/DCIM --skip video --skip audio --log
+
+# Include documents alongside media
+maki import /Volumes/Projects/ --include documents --log
+```
+
+---
+
 Next: [Organizing Assets](04-organize.md) -- tags, ratings, labels, grouping, collections, and saved searches.

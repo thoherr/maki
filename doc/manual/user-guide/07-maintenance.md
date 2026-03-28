@@ -778,6 +778,29 @@ maki fix-roles --asset a1b2c3d4 --apply
 ```
 
 
+## Fix Recipes
+
+`maki fix-recipes` repairs a specific situation: recipe files (`.xmp`, `.cos`, `.pp3`, etc.) that were imported as standalone assets instead of being attached to their media files. This happens when recipe and media files are imported in separate passes, or when recipe files live in a different directory from their media.
+
+The result is phantom assets in your catalog — assets whose only variant is a recipe file, when they should have been attached to the corresponding media asset.
+
+```bash
+# Preview what would be fixed
+maki fix-recipes
+
+# Apply fixes
+maki fix-recipes --apply --log
+
+# Scope to a specific volume or asset
+maki fix-recipes --volume "Work SSD" --apply
+maki fix-recipes --asset a1b2c3d4 --apply
+```
+
+The command matches recipe files to media files by filename stem (e.g., `DSC_001.xmp` attaches to the asset containing `DSC_001.nef`). When a match is found, the recipe is moved from its standalone asset to the correct media asset, and the now-empty standalone asset is removed.
+
+For the full command reference, see [fix-recipes](../reference/05-maintain-commands.md#maki-fix-recipes).
+
+
 ## Preview Management
 
 During import, MAKI generates preview thumbnails (800px by default) for every media file. Over time, previews can become stale or insufficient — after processing in external tools, after changing preview settings, or when you need offline zoom capabilities. The `maki generate-previews` command lets you regenerate and upgrade previews.

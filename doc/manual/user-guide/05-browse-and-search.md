@@ -350,6 +350,18 @@ maki show a1b2c3d4 --json
 
 This returns a full `AssetDetails` JSON object with all variants, locations, recipes, and source metadata.
 
+### Quick location check
+
+Use `--locations` to see just where an asset's files live, without the full detail output:
+
+```
+$ maki show a1b2c3d4 --locations
+Photos:Capture/2026-01-15/DSC_1234.NEF
+Backup:Capture/2026-01-15/DSC_1234.NEF
+```
+
+This is handy before relocating or deleting an asset, to confirm which volumes hold copies.
+
 ---
 
 ## Finding Duplicates

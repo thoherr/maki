@@ -488,6 +488,30 @@ maki search "stacked:true"      # assets that are in a stack
 maki search "stacked:false"     # standalone assets
 ```
 
+### Converting tags to stacks
+
+Some tools (notably CaptureOne) represent auto-stacking as tags rather than a native stacking structure. The `from-tag` subcommand converts these tags into proper MAKI stacks:
+
+```bash
+# Preview: find assets with CaptureOne auto-stack tags
+maki stack from-tag "Aperture Stack {}"
+
+# Apply and remove the tags afterwards
+maki stack from-tag "Aperture Stack {}" --remove-tags --apply
+```
+
+The `{}` wildcard matches a group identifier — assets sharing the same matched value are grouped into a stack. For example, if you have assets tagged `Aperture Stack 1` and `Aperture Stack 2`, this creates two stacks.
+
+This works with any tag pattern, not just CaptureOne:
+
+```bash
+# Convert Lightroom-style stack tags
+maki stack from-tag "Stack {}"
+
+# Convert bracketing tags
+maki stack from-tag "Bracket {}"
+```
+
 ### Structured output
 
 All stack commands support `--json`:
@@ -539,6 +563,18 @@ maki saved-search run "Landscapes" --format json
 ```
 maki saved-search delete "Landscapes"
 ```
+
+### Favorites
+
+Mark a saved search as a **favorite** to pin it as a quick-access chip on the web UI browse toolbar:
+
+```
+maki ss save "Five Stars" "rating:5" --favorite
+maki ss save "Unrated"    "rating:0 type:image" --favorite
+maki ss save "At Risk"    "copies:1" --favorite
+```
+
+Favorite searches appear as clickable chips above the browse grid — one click to filter, another to clear. This is the fastest way to access your most-used views.
 
 ### Practical examples
 
