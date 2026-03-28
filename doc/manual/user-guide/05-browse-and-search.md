@@ -354,31 +354,73 @@ This returns a full `AssetDetails` JSON object with all variants, locations, rec
 
 ## Finding Duplicates
 
-The `maki duplicates` command identifies files with identical content hashes that exist in multiple locations.
+Files with identical content can exist in multiple locations for very different reasons. A file copied twice into different folders on the same drive is probably an accident. The same file on your working drive *and* your backup drive is exactly what you want. The `maki duplicates` command helps you distinguish between these two situations.
 
-```
-$ maki duplicates
-DSC_1234.NEF (NEF, 48.2 MB)
+### Same-volume duplicates: finding unwanted copies
+
+Files that appear more than once on the **same** volume are almost always accidental -- imported twice from different paths, copied into a staging folder and forgotten, or left behind after a reorganization:
+
+```bash
+$ maki duplicates --same-volume
+DSC_0042.NEF (NEF, 48.2 MB)
   Hash: abc123def456...
-    Photos → Capture/2026-01-15/DSC_1234.NEF
-    Backup → Capture/2026-01-15/DSC_1234.NEF
+    Photos[working] → Capture/2026-01-15/DSC_0042.NEF  [SAME VOLUME]
+    Photos[working] → Import/Unsorted/DSC_0042.NEF      [SAME VOLUME]
 
-1 file(s) with duplicate locations
+1 file(s) with same-volume duplicate locations
 ```
 
-This is useful for identifying files that have been copied to multiple volumes (e.g., when migrating data or creating backups).
+These are candidates for cleanup with `maki dedup` (see [Maintenance](07-maintenance.md#storage-hygiene)).
 
-### Duplicate Output Formats
+### Cross-volume copies: verifying backups
 
-The `--format` flag supports the same presets as search, plus an additional `{locations}` placeholder for templates:
+Files that exist on **different** volumes represent your backup strategy at work. Use `--cross-volume` to verify that important files actually have copies on your archive or backup drives:
 
+```bash
+$ maki duplicates --cross-volume
+DSC_0042.NEF (NEF, 48.2 MB)
+  Hash: abc123def456...
+    Photos[working] → Capture/2026-01-15/DSC_0042.NEF
+    Backup[backup]  → Capture/2026-01-15/DSC_0042.NEF
+
+1 file(s) with cross-volume locations
 ```
+
+Cross-volume copies are healthy -- they mean your backups are working. If you see *fewer* cross-volume copies than expected, that is a signal to check backup coverage with `maki backup-status`.
+
+### All duplicates (default)
+
+Without flags, the command shows all files with 2+ locations regardless of volume layout:
+
+```bash
+$ maki duplicates
+```
+
+This gives the full picture but mixes wanted backups with unwanted copies, so the filtered modes are usually more actionable.
+
+### Related tools
+
+- **`copies:` search filter**: Find assets by their total copy count. `maki search "copies:1"` shows single-copy assets at risk of data loss.
+- **`maki backup-status`**: Reports which assets lack copies on archive or backup volumes. Works best when volumes have a [purpose](02-setup.md#volume-purposes) assigned.
+- **`maki dedup`**: Removes same-volume duplicates automatically. See [Storage Hygiene](07-maintenance.md#storage-hygiene).
+
+### Duplicate output formats
+
+The `--format` flag supports the same presets as search, plus `{locations}` and `{volumes}` placeholders for templates:
+
+```bash
 maki duplicates --format ids
+maki duplicates --format full
 maki duplicates --format json
-maki duplicates --format '{filename}\t{format}\t{locations}'
+maki duplicates --format '{filename}\t{format}\t{volumes} volumes\t{locations}'
 ```
 
-The `{locations}` placeholder expands to a comma-separated list of all locations where the duplicate file exists.
+Additional filtering narrows results to a specific volume, format, or path:
+
+```bash
+maki duplicates --same-volume --volume "Photos" --filter-format nef
+maki duplicates --cross-volume --path "Capture/2026"
+```
 
 ---
 

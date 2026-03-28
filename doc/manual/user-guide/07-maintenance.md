@@ -12,15 +12,16 @@ flowchart LR
     R["maki refresh<br/>(re-read changed recipes)"]
     W["maki writeback<br/>(write edits to XMP)"]
     C["maki cleanup<br/>(remove stale records)"]
+    D["maki duplicates<br/>maki dedup<br/>(storage hygiene)"]
 
     V --> S
     S --> SM --> C
     S --> R --> W --> C
     S --> W --> R --> C
-    C --> V
+    C --> D --> V
 ```
 
-After `sync`, there are two paths: `sync-metadata` handles both directions (reading recipe changes and writing back edits) in a single command with conflict detection. Alternatively, `refresh` and `writeback` can be run separately for finer control.
+After `sync`, there are two paths: `sync-metadata` handles both directions (reading recipe changes and writing back edits) in a single command with conflict detection. Alternatively, `refresh` and `writeback` can be run separately for finer control. After `cleanup`, the storage hygiene commands check for unwanted duplicates and verify backup coverage.
 
 Each command is safe by default -- destructive operations require an explicit `--apply` flag, and most commands support `--dry-run` or report-only mode.
 
@@ -652,6 +653,71 @@ maki fix-roles --asset a1b2c3d4 --apply
 ```
 
 
+## Storage Hygiene
+
+Over time, a multi-volume library accumulates duplicate files and uneven backup coverage. MAKI provides three commands that work together to answer the key storage questions: *Do I have unwanted copies wasting space?* and *Are my important files safely backed up?*
+
+### Finding and understanding duplicates
+
+The first step is understanding what duplicates you have and *why* they exist. Same-volume and cross-volume duplicates answer fundamentally different questions:
+
+| Mode | Question it answers | Typical action |
+|------|-------|--------|
+| `--same-volume` | Do I have accidental copies on the same drive? | Clean up with `maki dedup` |
+| `--cross-volume` | Are my files backed up across drives? | Verify coverage is sufficient |
+
+```bash
+# Accidental duplicates — candidates for cleanup
+maki duplicates --same-volume
+
+# Backup verification — these copies are wanted
+maki duplicates --cross-volume
+```
+
+See [Finding Duplicates](05-browse-and-search.md#finding-duplicates) for detailed examples and output formats.
+
+### Removing unwanted duplicates
+
+`maki dedup` removes same-volume duplicates automatically. It only targets files that appear more than once on the **same** drive — cross-volume copies (your backups) are never touched.
+
+```bash
+# Preview what would be removed
+maki dedup
+
+# Apply, preferring files under "Selects/" when choosing which copy to keep
+maki dedup --prefer "Selects" --apply --log
+```
+
+The resolution heuristic decides which copy to keep: prefer paths matching `--prefer`, then most recently verified, then shortest path. Use `--min-copies` to ensure a minimum number of total copies survive across all volumes:
+
+```bash
+# Never reduce a file to fewer than 2 copies total
+maki dedup --min-copies 2 --apply
+```
+
+See the [Dedup Command Reference](../reference/05-maintain-commands.md#maki-dedup) for all options.
+
+### Checking backup coverage
+
+`maki backup-status` reports which assets lack copies on archive or backup volumes. This works best when your volumes have a [purpose](02-setup.md#volume-purposes) assigned:
+
+```bash
+maki backup-status
+```
+
+For a quick check from search, the `copies:` filter finds under-backed-up assets directly:
+
+```bash
+# Single-copy assets — at risk if the drive fails
+maki search "copies:1"
+
+# Assets with 3+ copies — potential over-redundancy
+maki search "copies:3+"
+```
+
+The [web UI backup page](06-web-ui.md#backup-status-page) provides a visual dashboard with volume distribution charts and gap analysis.
+
+
 ## Recommended Maintenance Workflow
 
 A practical schedule for keeping your catalog healthy:
@@ -700,7 +766,7 @@ If new files appeared (e.g., CaptureOne exported new TIFFs), import them:
 maki import /Volumes/PhotosDrive/Photos/Exports/
 ```
 
-### 4. Periodic cleanup
+### 4. Periodic cleanup and storage hygiene
 
 Run `maki cleanup` periodically to remove stale records for files that no longer exist:
 
@@ -711,6 +777,18 @@ maki cleanup --list
 # Apply
 maki cleanup --apply
 ```
+
+After cleanup, check for accidental duplicates and verify backup coverage:
+
+```bash
+# Any unwanted same-volume duplicates?
+maki duplicates --same-volume
+
+# Are backups in good shape?
+maki backup-status
+```
+
+See [Storage Hygiene](#storage-hygiene) above for the full workflow.
 
 ### 5. Nuclear option: rebuild
 
@@ -742,7 +820,13 @@ maki sync /Volumes/Archive2025/ --apply
 # 5. Clean up any stale records
 maki cleanup --volume "Archive 2025" --apply
 
-# 6. Confirm everything looks good
+# 6. Check for accidental duplicates on this volume
+maki duplicates --same-volume --volume "Archive 2025"
+
+# 7. Verify backup coverage across all volumes
+maki backup-status
+
+# 8. Confirm everything looks good
 maki stats --volumes
 ```
 

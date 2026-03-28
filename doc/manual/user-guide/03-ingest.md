@@ -420,19 +420,25 @@ The second import adds backup locations to the existing variants. Each variant n
 
 ### Finding Duplicates
 
-Use `maki duplicates` to find files with identical content across locations:
+After importing from multiple volumes, the same file will appear at multiple locations -- this is expected and healthy. Use `maki duplicates --cross-volume` to confirm that your backup copies were recognized:
 
-```
-maki duplicates
+```bash
+maki duplicates --cross-volume
 ```
 
 ```
 abc3f7c9...  DSC_0042.nef
-  /Volumes/Photos/Shoot-2026-02-20/DSC_0042.nef
-  /Volumes/Backup/Shoot-2026-02-20/DSC_0042.nef
+  Photos[working] → Shoot-2026-02-20/DSC_0042.nef
+  Backup[backup]  → Shoot-2026-02-20/DSC_0042.nef
 ```
 
-This is useful for identifying redundant copies, verifying backups, or cleaning up after file reorganization. See the [maintenance chapter](07-maintenance.md) for more on managing file locations.
+If you suspect accidental duplicates *within* a single volume (e.g., files imported twice from different paths), use `--same-volume` instead:
+
+```bash
+maki duplicates --same-volume
+```
+
+See [Finding Duplicates](05-browse-and-search.md#finding-duplicates) for the full workflow and [Maintenance](07-maintenance.md#storage-hygiene) for cleaning up unwanted copies.
 
 ## AI Auto-Tagging *(Pro)*
 
