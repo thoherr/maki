@@ -16,6 +16,14 @@ Produce the MAKI user manual in English and German from a single source using in
 
 **Complexity:** Low (tooling), Medium (translation effort).
 
+### User Guide Improvements
+
+Audit of user guide chapters against the full CLI feature set. Adds coverage for missing commands (contact sheets, delete, preview management, volume split/rename, fix-recipes), expands workflow context for existing commands (backup-status, export, verify, relocate batch mode, saved-search favorites, stack from-tag), and introduces best-practice topics (archive lifecycle, drive failure recovery, multi-tool round-trips, video workflows, import strategies). See `doc/proposals/user-guide-improvements.md`.
+
+**Status:** Proposal written, not started. Three implementation passes by priority.
+
+**Complexity:** Medium (17 items across 3 passes, mostly documentation).
+
 ---
 
 ## Tier 1 — High Value
