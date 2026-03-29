@@ -1,6 +1,25 @@
 # Maintain Commands
 
-Commands for integrity checks, disk reconciliation, file relocation, preview generation, and catalog housekeeping.
+Commands for integrity checks, disk reconciliation, metadata sync, file relocation, preview generation, and catalog housekeeping. Most commands default to report-only mode; add `--apply` to execute changes.
+
+| Command | Description |
+|---------|-------------|
+| [verify](#maki-verify) | Check file integrity via SHA-256 |
+| [sync](#maki-sync) | Reconcile catalog with moved/modified/missing files |
+| [refresh](#maki-refresh) | Re-read metadata from changed recipe files |
+| [sync-metadata](#maki-sync-metadata) | Bidirectional XMP sync with conflict detection *(Pro)* |
+| [writeback](#maki-writeback) | Write pending metadata to XMP files *(Pro)* |
+| [cleanup](#maki-cleanup) | Remove stale records and orphaned files |
+| [dedup](#maki-dedup) | Remove same-volume duplicate file locations |
+| [relocate](#maki-relocate) | Copy or move files between volumes |
+| [update-location](#maki-update-location) | Fix catalog path after manual file move |
+| [generate-previews](#maki-generate-previews) | Generate or regenerate preview thumbnails |
+| [fix-roles](#maki-fix-roles) | Correct variant roles (RAW=Original, non-RAW=Export) |
+| [fix-dates](#maki-fix-dates) | Fix asset dates from EXIF metadata |
+| [fix-recipes](#maki-fix-recipes) | Re-attach recipe files imported as standalone assets |
+| [create-sidecars](#maki-create-sidecars) | Create XMP sidecars for assets without recipes |
+| [rebuild-catalog](#maki-rebuild-catalog) | Rebuild SQLite from YAML sidecars |
+| [migrate](#maki-migrate) | Run database schema migrations |
 
 ---
 

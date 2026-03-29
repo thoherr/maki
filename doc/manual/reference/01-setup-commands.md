@@ -1,6 +1,17 @@
 # Setup Commands
 
-Commands for initializing a catalog and registering storage volumes.
+Commands for initializing a catalog and registering storage volumes. A catalog is a directory containing the SQLite database, YAML sidecars, previews, and configuration. Volumes are the storage locations (drives, directories, network mounts) where your media files live.
+
+| Command | Description |
+|---------|-------------|
+| [init](#maki-init) | Create a new catalog in the current directory |
+| [volume add](#maki-volume-add) | Register a storage volume |
+| [volume list](#maki-volume-list) | List volumes and their online/offline status |
+| [volume set-purpose](#maki-volume-set-purpose) | Change a volume's logical role |
+| [volume remove](#maki-volume-remove) | Unregister a volume and clean up its records |
+| [volume combine](#maki-volume-combine) | Merge a child volume into its parent |
+| [volume split](#maki-volume-split) | Split a subdirectory into a new volume |
+| [volume rename](#maki-volume-rename) | Change a volume's label |
 
 ---
 

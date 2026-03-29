@@ -1,6 +1,19 @@
 # Ingest Commands
 
-Commands for importing files, applying metadata, and merging asset variants.
+Commands for importing files, applying metadata, and merging asset variants. Import brings files into the catalog without copying them. Metadata commands (tag, edit, describe) modify asset properties. Grouping commands (group, split, auto-group) manage variant relationships.
+
+| Command | Description |
+|---------|-------------|
+| [import](#maki-import) | Import files into the catalog |
+| [delete](#maki-delete) | Remove assets from the catalog |
+| [tag](#maki-tag) | Add or remove tags |
+| [edit](#maki-edit) | Edit metadata (name, rating, label, description, date) |
+| [group](#maki-group) | Merge variants into one asset |
+| [split](#maki-split) | Extract variants into standalone assets |
+| [auto-group](#maki-auto-group) | Auto-group by filename stem |
+| [auto-tag](#maki-auto-tag) | AI-powered tag suggestions *(Pro)* |
+| [embed](#maki-embed) | Generate image embeddings *(Pro)* |
+| [describe](#maki-describe) | Generate VLM descriptions *(Pro)* |
 
 ---
 

@@ -1,6 +1,13 @@
 # Organize Commands
 
-Commands for curating static collections, managing saved searches (smart albums), and grouping assets into stacks.
+Commands for curating static collections, managing saved searches (smart albums), grouping assets into stacks, and managing face recognition. Collections are manual albums; saved searches are dynamic queries that always reflect the current catalog state. Stacks collapse related assets in the browse grid.
+
+| Command group | Subcommands |
+|---------|-------------|
+| [collection](#maki-collection-create) | create, list, show, add, remove, delete |
+| [saved-search](#maki-saved-search-save) | save, list, run, delete |
+| [stack](#maki-stack-create) | create, add, remove, pick, dissolve, list, show, from-tag |
+| [faces](#maki-faces-detect) *(Pro)* | detect, cluster, people, name, merge, delete-person, unassign, export, download, status |
 
 ---
 

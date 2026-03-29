@@ -1,6 +1,19 @@
 # Retrieve Commands
 
-Commands for finding assets, inspecting details, and browsing the catalog.
+Commands for finding assets, inspecting details, exporting files, and browsing the catalog. Search is the primary discovery mechanism; all other retrieval commands build on it.
+
+| Command | Description |
+|---------|-------------|
+| [search](#maki-search) | Find assets by text, filters, and metadata |
+| [show](#maki-show) | Display full asset details |
+| [preview](#maki-preview) | Show asset preview in terminal or OS viewer |
+| [export](#maki-export) | Copy matching files to a directory or ZIP |
+| [contact-sheet](#maki-contact-sheet) | Generate PDF contact sheets |
+| [duplicates](#maki-duplicates) | Find files with multiple locations |
+| [stats](#maki-stats) | Catalog statistics and health overview |
+| [backup-status](#maki-backup-status) | Check backup coverage and find at-risk assets |
+| [serve](#maki-serve) | Start the web UI |
+| [shell](#maki-shell) | Interactive command shell |
 
 ---
 
