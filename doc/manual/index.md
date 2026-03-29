@@ -29,7 +29,7 @@ Man-page style documentation for every command, filter, and configuration option
 - [Ingest Commands](reference/02-ingest-commands.md) — `import`, `delete`, `tag`, `edit`, `group`, `split`, `auto-group`, `auto-tag`, `embed`, `describe`
 - [Organize Commands](reference/03-organize-commands.md) — `collection`, `saved-search`, `stack`, `faces`
 - [Retrieve Commands](reference/04-retrieve-commands.md) — `search`, `show`, `preview`, `export`, `contact-sheet`, `duplicates`, `stats`, `backup-status`, `serve`, `shell`
-- [Maintain Commands](reference/05-maintain-commands.md) — `verify`, `sync`, `refresh`, `sync-metadata`, `writeback`, `cleanup`, `dedup`, `relocate`, `update-location`, `generate-previews`, `fix-roles`, `fix-dates`, `fix-recipes`, `rebuild-catalog`, `migrate`
+- [Maintain Commands](reference/05-maintain-commands.md) — `verify`, `sync`, `refresh`, `sync-metadata`, `writeback`, `cleanup`, `dedup`, `relocate`, `update-location`, `generate-previews`, `fix-roles`, `fix-dates`, `fix-recipes`, `create-sidecars`, `rebuild-catalog`, `migrate`
 - [Search Filters](reference/06-search-filters.md) — Complete filter syntax reference
 - [Format Templates](reference/07-format-templates.md) — Output format presets, custom templates, placeholders
 - [Configuration](reference/08-configuration.md) — `maki.toml` reference

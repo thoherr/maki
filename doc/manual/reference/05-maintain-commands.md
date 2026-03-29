@@ -1213,6 +1213,71 @@ maki fix-recipes --volume "Photos" --apply --log --time
 
 ---
 
+## maki create-sidecars
+
+### NAME
+
+maki-create-sidecars -- create XMP sidecar files for assets with metadata but no existing recipe
+
+### SYNOPSIS
+
+    maki [GLOBAL FLAGS] create-sidecars [QUERY] [--volume <LABEL>] [--asset <ID>] [--apply]
+
+### DESCRIPTION
+
+Scans assets for variants that have metadata (ratings, tags, labels, descriptions) but no XMP sidecar recipe, and creates `.xmp` files alongside the variant files on disk. Each generated sidecar includes `dc:subject` (flat tags), `lr:hierarchicalSubject` (hierarchical tags), `xmp:Rating`, `xmp:Label`, and `dc:description`.
+
+This enables CaptureOne, Lightroom, and other XMP-aware tools to pick up MAKI metadata for files that were imported without XMP sidecars. Unlike `maki writeback` (which updates *existing* XMP files), this command *creates new* XMP files where none exist.
+
+Without `--apply`, runs in report-only mode showing what would be created.
+
+### OPTIONS
+
+**QUERY** (optional)
+: Search query to select assets. Same syntax as `maki search`.
+
+**--volume \<LABEL\>**
+: Only create sidecars for variant locations on this volume.
+
+**--asset \<ID\>**
+: Only create sidecars for a specific asset.
+
+**--apply**
+: Create XMP files on disk and register them as recipes. Without this flag, only reports what would be created.
+
+### EXAMPLES
+
+Preview what sidecars would be created:
+
+```bash
+maki create-sidecars
+```
+
+Create sidecars for all assets on the working drive:
+
+```bash
+maki create-sidecars --volume "Work SSD" --apply --log
+```
+
+Create sidecars for rated images only:
+
+```bash
+maki create-sidecars "rating:1+" --apply --log
+```
+
+Create sidecars for a specific asset:
+
+```bash
+maki create-sidecars --asset a1b2c3d4 --apply
+```
+
+### SEE ALSO
+
+[relocate](#maki-relocate) -- `--create-sidecars` flag creates sidecars as part of a relocate operation.
+[writeback](05-maintain-commands.md#maki-writeback) -- updates *existing* XMP files with MAKI metadata (does not create new ones).
+
+---
+
 ## maki rebuild-catalog
 
 ### NAME

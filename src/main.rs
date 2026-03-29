@@ -982,6 +982,30 @@ enum Commands {
         asset_ids: Vec<String>,
     },
 
+    /// Create XMP sidecar files for assets with metadata but no existing recipe
+    #[command(name = "create-sidecars", display_order = 50)]
+    CreateSidecars {
+        /// Search query to select assets (same syntax as `maki search`)
+        #[arg(display_order = 1)]
+        query: Option<String>,
+
+        /// Limit to a specific volume
+        #[arg(long, display_order = 10)]
+        volume: Option<String>,
+
+        /// Create sidecars only for a specific asset
+        #[arg(long, display_order = 11)]
+        asset: Option<String>,
+
+        /// Apply changes (default: report-only dry run)
+        #[arg(long, display_order = 20)]
+        apply: bool,
+
+        /// Asset IDs (for shell variable expansion)
+        #[arg(hide = true, trailing_var_arg = true)]
+        asset_ids: Vec<String>,
+    },
+
     /// Rebuild SQLite catalog from sidecar files
     #[command(display_order = 51)]
     RebuildCatalog,
@@ -5569,6 +5593,157 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
 
                 if !apply && result.reattached > 0 {
                     println!("  Run with --apply to make changes.");
+                }
+            }
+
+            Ok(())
+        }
+        Commands::CreateSidecars { query, volume, asset, apply, asset_ids } => {
+            let catalog_root = maki::config::find_catalog_root()?;
+            let catalog = Catalog::open(&catalog_root)?;
+            let metadata_store = MetadataStore::new(&catalog_root);
+            let content_store = maki::content_store::ContentStore::new(&catalog_root);
+            let registry = DeviceRegistry::new(&catalog_root);
+            let engine = maki::query::QueryEngine::new(&catalog_root);
+            let volumes = registry.list()?;
+
+            // Resolve target volume filter
+            let volume_filter = if let Some(ref vol_label) = volume {
+                Some(registry.resolve_volume(vol_label)?)
+            } else {
+                None
+            };
+
+            // Resolve asset scope
+            let scope = engine.resolve_scope(query.as_deref(), asset.as_deref(), &asset_ids)?;
+            let summaries = metadata_store.list()?;
+            let ids: Vec<uuid::Uuid> = match scope {
+                Some(set) => set.iter().filter_map(|id| id.parse().ok()).collect(),
+                None => summaries.iter().map(|s| s.id).collect(),
+            };
+
+            let mut created = 0usize;
+            let mut skipped = 0usize;
+            let mut checked = 0usize;
+
+            for asset_id in &ids {
+                let mut asset = match metadata_store.load(*asset_id) {
+                    Ok(a) => a,
+                    Err(_) => continue,
+                };
+
+                let has_metadata = !asset.tags.is_empty()
+                    || asset.rating.is_some()
+                    || asset.color_label.is_some()
+                    || asset.description.is_some();
+
+                if !has_metadata {
+                    skipped += 1;
+                    continue;
+                }
+
+                checked += 1;
+                let mut asset_changed = false;
+
+                for variant in &asset.variants {
+                    for loc in &variant.locations {
+                        // Filter by volume if specified
+                        if let Some(ref vf) = volume_filter {
+                            if loc.volume_id != vf.id {
+                                continue;
+                            }
+                        }
+
+                        // Check if volume is online
+                        let vol = match volumes.iter().find(|v| v.id == loc.volume_id) {
+                            Some(v) if v.mount_point.exists() => v,
+                            _ => continue,
+                        };
+
+                        // Check if this variant already has an XMP recipe on this volume
+                        let has_xmp = asset.recipes.iter().any(|r| {
+                            r.variant_hash == variant.content_hash
+                                && r.location.volume_id == loc.volume_id
+                                && r.recipe_type == maki::models::recipe::RecipeType::Sidecar
+                        });
+                        if has_xmp {
+                            continue;
+                        }
+
+                        // Build XMP sidecar path
+                        let xmp_relative = loc.relative_path.with_extension(
+                            format!("{}.xmp", loc.relative_path.extension().unwrap_or_default().to_string_lossy())
+                        );
+                        let xmp_path = vol.mount_point.join(&xmp_relative);
+
+                        if cli.log {
+                            let name = xmp_relative.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("?");
+                            if apply {
+                                eprintln!("  {} — created", name);
+                            } else {
+                                eprintln!("  {} — would create", name);
+                            }
+                        }
+
+                        if apply {
+                            if let Some(parent) = xmp_path.parent() {
+                                std::fs::create_dir_all(parent)?;
+                            }
+
+                            let xmp_content = maki::xmp_reader::create_xmp(
+                                &asset.tags,
+                                asset.rating,
+                                asset.color_label.as_deref(),
+                                asset.description.as_deref(),
+                            );
+
+                            std::fs::write(&xmp_path, &xmp_content)?;
+                            let xmp_hash = content_store.hash_file(&xmp_path)?;
+
+                            let recipe = maki::models::recipe::Recipe {
+                                id: uuid::Uuid::new_v4(),
+                                variant_hash: variant.content_hash.clone(),
+                                software: "MAKI".to_string(),
+                                recipe_type: maki::models::recipe::RecipeType::Sidecar,
+                                content_hash: xmp_hash,
+                                location: maki::models::FileLocation {
+                                    volume_id: loc.volume_id,
+                                    relative_path: xmp_relative,
+                                    verified_at: None,
+                                },
+                                pending_writeback: false,
+                            };
+                            catalog.insert_recipe(&recipe)?;
+                            asset.recipes.push(recipe);
+                            asset_changed = true;
+                        }
+
+                        created += 1;
+                    }
+                }
+
+                if asset_changed {
+                    metadata_store.save(&asset)?;
+                }
+            }
+
+            if cli.json {
+                let result = serde_json::json!({
+                    "dry_run": !apply,
+                    "checked": checked,
+                    "created": created,
+                    "skipped_no_metadata": skipped,
+                });
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                if !apply && created > 0 {
+                    eprint!("Dry run — ");
+                }
+                println!("Create-sidecars: {} checked, {} created, {} skipped (no metadata)", checked, created, skipped);
+                if !apply && created > 0 {
+                    println!("  Run with --apply to create XMP files.");
                 }
             }
 
