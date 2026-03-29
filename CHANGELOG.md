@@ -12,8 +12,15 @@ All notable changes to the Digital Asset Manager are documented here.
 - **Auto-label on `volume add`** — label is now optional. When only a path is given, the label is auto-derived from the last path component (e.g., `/Volumes/EOS_DIGITAL` becomes `"EOS_DIGITAL"`).
 - **`volume list` filters** — new `--purpose`, `--offline`, `--online` flags for filtering volumes by role and availability. Useful for finding stale card volumes.
 
+### Bug Fixes
+- **Variant roles in mixed RAW+non-RAW assets** — `group`, `auto-group`, and `fix-roles` now assign non-RAW variants the `Export` role (was `Alternate`). This gives processed JPEGs/TIFFs priority for preview generation (Export scores 300 vs Alternate 50). `import --auto-group` automatically upgrades previews from export variants after grouping.
+- **`fix-roles` scope** — now also corrects `Alternate` non-RAW variants in mixed assets, not just `Original` ones.
+- **`dam` → `maki` in scripts** — fixed leftover `dam` references in `scripts/fix-orphaned-xmp.py` from the v4.0.0 binary rename.
+
 ### Documentation
 - **Card-first workflow** documented in the Archive Lifecycle chapter and import strategies: import from card, cull on smart previews, copy only keepers with XMP sidecars.
+- **Command overview tables** on each reference chapter title page (Setup, Ingest, Organize, Retrieve, Maintain).
+- **Python scripts** extracted from the manual into `scripts/`: `maki_helpers.py`, `tag-analysis.py`, `backup-audit.py`, `batch-rate-from-csv.py`.
 - Comprehensive user guide improvements (see v4.2.2 for the full list).
 
 ## v4.2.2 (2026-03-28)
