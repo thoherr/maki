@@ -2,6 +2,20 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.3.0 (2026-03-29)
+
+### New Features
+- **`media` volume purpose** — new purpose for transient source devices (memory cards, card readers). Media volumes are excluded from `backup-status` coverage calculations. Purpose values now follow workflow order: media, working, archive, backup, cloud.
+- **Import profiles** — named preset configurations in `[import.profiles.<name>]` sections of `maki.toml`. Profiles override the base `[import]` config; CLI flags override both. Supports all import fields plus `include`/`skip` file type groups. Selected via `maki import --profile <name>`.
+- **`maki create-sidecars`** — new standalone command that creates XMP sidecar files for assets with metadata (ratings, tags, labels, descriptions) but no existing XMP recipe. Enables CaptureOne/Lightroom to pick up MAKI metadata. Supports query scoping, volume filter, and report-only dry run.
+- **`--create-sidecars` on relocate** — generates XMP sidecars at the destination when copying files to a new volume. Includes `dc:subject`, `lr:hierarchicalSubject`, `xmp:Rating`, `xmp:Label`, and `dc:description`.
+- **Auto-label on `volume add`** — label is now optional. When only a path is given, the label is auto-derived from the last path component (e.g., `/Volumes/EOS_DIGITAL` becomes `"EOS_DIGITAL"`).
+- **`volume list` filters** — new `--purpose`, `--offline`, `--online` flags for filtering volumes by role and availability. Useful for finding stale card volumes.
+
+### Documentation
+- **Card-first workflow** documented in the Archive Lifecycle chapter and import strategies: import from card, cull on smart previews, copy only keepers with XMP sidecars.
+- Comprehensive user guide improvements (see v4.2.2 for the full list).
+
 ## v4.2.2 (2026-03-28)
 
 ### New Features
