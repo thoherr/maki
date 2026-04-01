@@ -215,7 +215,7 @@ maki ss save "Needs keywords" "-tag:rest rating:1+ tag:untagged" --sort date_des
 
 ---
 
-Next: [The Archive Lifecycle](11-archive-lifecycle.md) -- storage strategy, backup workflows, and long-term library management.
+Next: [Tagging Guide](11-tagging-guide.md) -- tagging principles, vocabulary structure, and practical techniques.
 
 Previous: [Interactive Shell](09-shell.md) |
 [Back to Manual](../index.md)

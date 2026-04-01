@@ -18,7 +18,8 @@ Workflow-oriented guides that walk you through common tasks.
 8. [Scripting](user-guide/08-scripting.md) — Shell and Python scripting patterns, workflow automation
 9. [Interactive Shell](user-guide/09-shell.md) — Variables, tab completion, script files, and session management
 10. [Organizing & Culling](user-guide/10-organizing-and-culling.md) — Rating vs. curation, default filters, and workflow patterns
-11. [The Archive Lifecycle](user-guide/11-archive-lifecycle.md) — Storage strategy, backup workflows, and long-term library management
+11. [Tagging Guide](user-guide/11-tagging-guide.md) — Tagging principles, vocabulary structure, and practical techniques
+12. [The Archive Lifecycle](user-guide/12-archive-lifecycle.md) — Storage strategy, backup workflows, and long-term library management
 
 ## Reference Guide
 
