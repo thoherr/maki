@@ -2720,9 +2720,16 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                     let new_storage = maki::tag_util::tag_input_to_storage(&new_tag);
                     let show_log = cli.log;
 
-                    let result = engine.tag_rename(&old_storage, &new_storage, apply, |name, _changed| {
+                    use maki::query::TagRenameAction;
+                    let result = engine.tag_rename(&old_storage, &new_storage, apply, |name, action| {
                         if show_log {
-                            let verb = if apply { "renamed" } else { "would rename" };
+                            let verb = match (action, apply) {
+                                (TagRenameAction::Renamed, true) => "renamed",
+                                (TagRenameAction::Renamed, false) => "would rename",
+                                (TagRenameAction::Removed, true) => "removed (already had target)",
+                                (TagRenameAction::Removed, false) => "would remove (already has target)",
+                                (TagRenameAction::Skipped, _) => "skipped (already correct)",
+                            };
                             eprintln!("  {} — {}", name, verb);
                         }
                     })?;
@@ -2735,16 +2742,24 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
                         if result.matched == 0 {
                             println!("No assets found with tag \"{}\".", old_display);
                         } else {
-                            if !apply {
+                            if !apply && (result.renamed > 0 || result.removed > 0) {
                                 eprint!("Dry run — ");
                             }
+                            let mut parts = Vec::new();
+                            if result.renamed > 0 {
+                                parts.push(format!("{} renamed", result.renamed));
+                            }
+                            if result.removed > 0 {
+                                parts.push(format!("{} removed (merged)", result.removed));
+                            }
+                            if result.skipped > 0 {
+                                parts.push(format!("{} skipped", result.skipped));
+                            }
                             println!(
-                                "Tag rename: \"{}\" → \"{}\": {} asset(s) {}",
-                                old_display, new_display,
-                                result.renamed,
-                                if apply { "renamed" } else { "would rename" },
+                                "Tag rename: \"{}\" → \"{}\": {}",
+                                old_display, new_display, parts.join(", "),
                             );
-                            if !apply && result.renamed > 0 {
+                            if !apply && (result.renamed > 0 || result.removed > 0) {
                                 println!("  Run with --apply to rename tags.");
                             }
                         }

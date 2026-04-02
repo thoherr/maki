@@ -776,12 +776,24 @@ pub struct TagResult {
     pub current_tags: Vec<String>,
 }
 
+/// Action taken for a single asset during tag rename.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagRenameAction {
+    /// Old tag replaced with new tag
+    Renamed,
+    /// Asset already had target tag; old tag removed (merge)
+    Removed,
+    /// Asset already has the exact target tag; no change needed
+    Skipped,
+}
+
 /// Result of a `maki tag-rename` operation.
 #[derive(Debug, Default, serde::Serialize)]
 pub struct TagRenameResult {
     pub dry_run: bool,
     pub matched: usize,
     pub renamed: usize,
+    pub removed: usize,
     pub skipped: usize,
 }
 
@@ -1883,7 +1895,7 @@ impl QueryEngine {
         old_tag: &str,
         new_tag: &str,
         apply: bool,
-        mut on_asset: impl FnMut(&str, bool),
+        mut on_asset: impl FnMut(&str, TagRenameAction),
     ) -> Result<TagRenameResult> {
         let catalog = Catalog::open(&self.catalog_root)?;
         let store = MetadataStore::new(&self.catalog_root);
@@ -1891,8 +1903,7 @@ impl QueryEngine {
         let content_store = ContentStore::new(&self.catalog_root);
 
         let matches = catalog.assets_with_exact_tag(old_tag)?;
-        let mut renamed = 0usize;
-        let mut skipped = 0usize;
+        let mut result = TagRenameResult { dry_run: !apply, matched: matches.len(), ..Default::default() };
 
         for (asset_id, _stack_id) in &matches {
             let uuid: uuid::Uuid = asset_id.parse()?;
@@ -1902,14 +1913,37 @@ impl QueryEngine {
             let old_lower = old_tag.to_lowercase();
             let had_old = asset.tags.iter().any(|t| t.to_lowercase() == old_lower);
             let new_lower = new_tag.to_lowercase();
-            let has_new = asset.tags.iter().any(|t| t.to_lowercase() == new_lower);
+            // Check for exact match (same string) vs case-insensitive match
+            let has_exact_new = asset.tags.contains(&new_tag.to_string());
+            let has_new_ci = asset.tags.iter().any(|t| t.to_lowercase() == new_lower);
             if !had_old {
-                skipped += 1;
+                result.skipped += 1;
+                on_asset(&asset_id[..8.min(asset_id.len())], TagRenameAction::Skipped);
                 continue;
             }
 
+            // Determine action:
+            // - If the old tag IS the new tag (exact match) → skip (already correct)
+            // - If asset already has target tag (case-insensitive) → remove old (merge)
+            // - Otherwise → rename
+            let actual_old = asset.tags.iter().find(|t| t.to_lowercase() == old_lower).cloned();
+            let action = if actual_old.as_deref() == Some(new_tag) {
+                // Already has the exact target — no-op
+                TagRenameAction::Skipped
+            } else if has_exact_new || has_new_ci {
+                // Has target (possibly different case) — just remove old
+                TagRenameAction::Removed
+            } else {
+                TagRenameAction::Renamed
+            };
+
             let name = asset.name.clone().unwrap_or_else(|| asset_id[..8.min(asset_id.len())].to_string());
-            on_asset(&name, true);
+            on_asset(&name, action);
+
+            if action == TagRenameAction::Skipped {
+                result.skipped += 1;
+                continue;
+            }
 
             if apply {
                 // Collect ancestor components of the new tag that are now redundant.
@@ -1943,7 +1977,7 @@ impl QueryEngine {
                     .collect();
 
                 asset.tags.retain(|t| !redundant_lower.contains(&t.to_lowercase()));
-                if !has_new {
+                if action == TagRenameAction::Renamed {
                     asset.tags.push(new_tag.to_string());
                 }
                 store.save(&asset)?;
@@ -1951,22 +1985,25 @@ impl QueryEngine {
 
                 // Writeback: remove old + redundant tags, add new tag in XMP
                 if self.is_writeback_enabled() {
-                    let to_add = if has_new { vec![] } else { vec![new_tag.to_string()] };
+                    let to_add = if action == TagRenameAction::Renamed {
+                        vec![new_tag.to_string()]
+                    } else {
+                        vec![]
+                    };
                     self.write_back_tags_to_xmp_inner(
                         &mut asset, &to_add, &redundant,
                         &catalog, &store, &online, &content_store,
                     );
                 }
             }
-            renamed += 1;
+            match action {
+                TagRenameAction::Renamed => result.renamed += 1,
+                TagRenameAction::Removed => result.removed += 1,
+                TagRenameAction::Skipped => result.skipped += 1,
+            }
         }
 
-        Ok(TagRenameResult {
-            dry_run: !apply,
-            matched: matches.len(),
-            renamed,
-            skipped,
-        })
+        Ok(result)
     }
 
     /// Clear asset-level metadata and re-extract from variant source files (XMP recipes + embedded XMP).
