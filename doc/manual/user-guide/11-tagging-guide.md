@@ -26,7 +26,7 @@ Primary tags should describe the visible content of the image: *sunset*, *concer
 
 ### Be specific and general at the same time
 
-Hierarchical tags handle this naturally. Tagging an image `Subject/Animal/Bird/Heron` means it will match searches for `tag:Subject/Animal`, `tag:Subject/Animal/Bird`, and `tag:Subject/Animal/Bird/Heron`. You don't need to manually add parent tags -- MAKI's search engine matches ancestors automatically.
+Hierarchical tags handle this naturally. Tagging an image `subject/animal/bird/heron` means it will match searches for `tag:subject/animal`, `tag:subject/animal/bird`, and `tag:subject/animal/bird/heron`. You don't need to manually add parent tags -- MAKI's search engine matches ancestors automatically.
 
 ### Use one language consistently
 
@@ -134,11 +134,13 @@ leaf nodes as your collection demands them.
 
 ```
 location/
-└── Country/
-    └── Region/
-        └── City/
-            └── Venue/   (optional, for recurring locations)
+└── country/
+    └── region/
+        └── city/
+            └── venue/   (optional, for recurring locations)
 ```
+
+The structural levels are generic terms and lowercase. The actual values are proper nouns and capitalized:
 
 Example: `location/Germany/Bavaria/Gelting/Kulturbühne Hinterhalt`
 
@@ -260,7 +262,7 @@ A higher threshold (0.3-0.5) produces fewer but more confident suggestions. A lo
 ### Label design tips
 
 - Use **short, concrete phrases**: `mountain` works better than `mountainous terrain`
-- Match the prompt template: with the default `"a photograph of {}"`, labels should read naturally after "a photograph of" -- "a photograph of a sunset" (good), "a photograph of a Subject/Nature/Sky/sunset" (bad)
+- Match the prompt template: with the default `"a photograph of {}"`, labels should read naturally after "a photograph of" -- "a photograph of a sunset" (good), "a photograph of a subject/nature/sky/sunset" (bad)
 - **Don't use hierarchy in labels** -- the model sees text, not structure. Use flat terms
 - Include **genre labels** that vision models handle well: `concert`, `portrait`, `landscape`, `macro`, `street photography`, `architecture`
 - Include **compositional labels**: `silhouette`, `reflection`, `bokeh`, `long exposure`
