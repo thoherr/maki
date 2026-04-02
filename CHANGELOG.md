@@ -2,10 +2,16 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.3.2 (2026-04-02)
+
+### Enhancements
+- **Tag rename: hierarchy-aware ancestor cleanup** — when renaming a flat tag to a hierarchical one (e.g., "Munich" to "location/Germany/Bavaria/Munich"), standalone tags that are now ancestors of the new tag are automatically removed. Prevents redundancy since hierarchical search matches ancestors.
+- **Tag rename: case-insensitive matching** — consistent with tag search. `maki tag rename "Concert" "concert"` finds and normalizes all case variants. Ancestor cleanup is also case-insensitive.
+
 ## v4.3.1 (2026-04-02)
 
 ### New Features
-- **`maki tag rename`** — rename a tag across all assets in a single pass. Updates catalog, YAML sidecars, and XMP recipe files atomically. Useful for reorganizing flat tags into hierarchies, fixing typos, or consolidating synonyms. When renaming to a hierarchical tag, standalone ancestor tags are automatically removed (e.g., renaming "Munich" to "location/Germany/Bavaria/Munich" also removes standalone "Bavaria" and "Germany" tags since they're now matched by hierarchy).
+- **`maki tag rename`** — rename a tag across all assets in a single pass. Updates catalog, YAML sidecars, and XMP recipe files atomically. Useful for reorganizing flat tags into hierarchies, fixing typos, or consolidating synonyms.
 
 ### Enhancements
 - **Sync dry-run feedback** — `maki sync` without `--apply` now shows "Dry run —" prefix and hints for `--apply` and `--remove-stale` when changes or missing files are detected.
