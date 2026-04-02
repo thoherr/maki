@@ -5533,7 +5533,7 @@ mod tests {
             format: "jpg".to_string(),
             file_size: 100,
             original_filename: "test.jpg".to_string(),
-            source_metadata: std::collections::HashMap::new(),
+            source_metadata: Default::default(),
             locations: vec![],
         };
         let v2 = crate::models::Variant {
@@ -5543,7 +5543,7 @@ mod tests {
             format: "tif".to_string(),
             file_size: 200,
             original_filename: "test.tif".to_string(),
-            source_metadata: std::collections::HashMap::new(),
+            source_metadata: Default::default(),
             locations: vec![],
         };
         asset.variants = vec![v1.clone(), v2.clone()];
@@ -6616,7 +6616,7 @@ mod tests {
         // Asset 1: Fuji camera
         let mut asset1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:meta1");
 
-        let mut meta1 = HashMap::new();
+        let mut meta1 = std::collections::BTreeMap::new();
         meta1.insert("camera_model".to_string(), "X-T5".to_string());
         meta1.insert("lens_model".to_string(), "XF56mmF1.2 R".to_string());
         meta1.insert("focal_length".to_string(), "56 mm".to_string());
@@ -6643,7 +6643,7 @@ mod tests {
         // Asset 2: Nikon camera
         let mut asset2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:meta2");
 
-        let mut meta2 = HashMap::new();
+        let mut meta2 = std::collections::BTreeMap::new();
         meta2.insert("camera_model".to_string(), "Z 6II".to_string());
         meta2.insert("lens_model".to_string(), "NIKKOR Z 24-70mm f/4 S".to_string());
         meta2.insert("focal_length".to_string(), "50 mm".to_string());

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -26,8 +26,8 @@ pub struct Variant {
     pub format: String,
     pub file_size: u64,
     pub original_filename: String,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub source_metadata: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_metadata: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub locations: Vec<FileLocation>,
 }
@@ -178,7 +178,7 @@ mod tests {
             format: format.to_string(),
             file_size,
             original_filename: format!("test.{format}"),
-            source_metadata: HashMap::new(),
+            source_metadata: BTreeMap::new(),
             locations: vec![],
         }
     }
@@ -190,7 +190,7 @@ mod tests {
             format: format.to_string(),
             file_size,
             original_filename: format!("test.{format}"),
-            source_metadata: HashMap::new(),
+            source_metadata: std::collections::HashMap::new(),
             locations: vec![],
         }
     }

@@ -883,7 +883,7 @@ impl AssetService {
                         format: ext.to_lowercase(),
                         file_size,
                         original_filename: filename,
-                        source_metadata: exif_data.source_metadata,
+                        source_metadata: exif_data.source_metadata.into_iter().collect(),
                         locations: vec![location.clone()],
                     };
 
@@ -959,7 +959,7 @@ impl AssetService {
                         format: ext.to_lowercase(),
                         file_size,
                         original_filename: filename,
-                        source_metadata: exif_data.source_metadata,
+                        source_metadata: exif_data.source_metadata.into_iter().collect(),
                         locations: vec![location.clone()],
                     };
 
@@ -7058,7 +7058,7 @@ mod tests {
             file_size: 100,
             original_filename: "test.nef".to_string(),
             source_metadata: {
-                let mut m = std::collections::HashMap::new();
+                let mut m = std::collections::BTreeMap::new();
                 m.insert("rating".to_string(), "3".to_string());
                 m.insert("exif_key".to_string(), "exif_value".to_string());
                 m
