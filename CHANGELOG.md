@@ -2,6 +2,20 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.3.3 (2026-04-03)
+
+### Bug Fixes
+- **Tag rename case-only bug** — `maki tag rename "Livestream" "livestream"` no longer deletes the tag. The case-insensitive check was matching the old tag as "already having the target", causing deletion instead of rename.
+
+### Enhancements
+- **Tag rename feedback** — reports three distinct actions: renamed (replaced), removed (merged with existing target), skipped (already correct). Per-asset detail with `--log`.
+- **Deterministic YAML output** — `source_metadata` in sidecar files now uses `BTreeMap` (sorted keys) instead of `HashMap` (random order). Eliminates noisy git diffs from key reordering.
+- **Git-based catalog backup** — `maki init` creates a `.gitignore` excluding derived files (SQLite, previews, embeddings). New `scripts/backup-catalog.sh` for snapshotting before bulk operations.
+- **Bulk ID processing** — new scripting chapter section covering xargs, shell loops, `maki shell` scripts, and stdin-reading commands for operating on lists of asset IDs.
+
+### Documentation
+- **Tagging Guide** — refined place name convention (English for countries, local names from regions down), fixed case inconsistencies in hierarchy examples, added note on region language choice.
+
 ## v4.3.2 (2026-04-02)
 
 ### Enhancements
