@@ -30,7 +30,9 @@ Hierarchical tags handle this naturally. Tagging an image `subject/animal/bird/h
 
 ### Use one language consistently
 
-Mixed-language tags (Konzert *and* concert, München *and* Munich) double your vocabulary without adding information. Pick one language for your tag vocabulary and stick with it. English is the practical default for interoperability -- IPTC keywords, stock agencies, and most tools expect English. Keep location names and event names in their original language where that's the common usage (it's "München" on road signs, but your tag vocabulary should pick one form).
+Mixed-language tags (Konzert *and* concert, München *and* Munich) double your vocabulary without adding information. Pick one language for your tag vocabulary and stick with it. English is the practical default for descriptive terms -- IPTC keywords, stock agencies, and most tools expect English.
+
+The exception is **place names**: use the **local name** consistently. `München` not `Munich`, `Köln` not `Cologne`, `Holzkirchen` stays `Holzkirchen`. This avoids the constant judgment call of whether a place "has" an English name (famous cities do, small towns don't) and matches what you see on signs, maps, and receipts. The same applies to venue names and event names in their original language.
 
 ### Use singular, lowercase forms -- except proper nouns
 
@@ -42,7 +44,7 @@ Pick a convention and stay consistent:
 
 The one exception is **proper nouns**: place names, person names, venue names, and project names keep their natural capitalization. This follows normal language rules that everyone already knows -- no ambiguity about what gets capitalized:
 
-- `location/Germany/Bavaria/Gelting` -- proper nouns capitalized
+- `location/Deutschland/Bayern/Gelting` -- proper nouns capitalized, local names
 - `subject/nature/landscape/mountain` -- generic terms lowercase
 - `person/artist/Peter Schneider` -- person name capitalized
 - `project/Focus on Music` -- project name capitalized
@@ -142,9 +144,9 @@ location/
 
 The structural levels are generic terms and lowercase. The actual values are proper nouns and capitalized:
 
-Example: `location/Germany/Bavaria/Gelting/Kulturbühne Hinterhalt`
+Example: `location/Deutschland/Bayern/Gelting/Kulturbühne Hinterhalt`
 
-Note how `location` (generic category) is lowercase, while `Germany`, `Bavaria`, `Gelting`, and `Kulturbühne Hinterhalt` (proper nouns) keep their natural capitalization.
+Note how `location` (generic category) is lowercase, while `Deutschland`, `Bayern`, `Gelting`, and `Kulturbühne Hinterhalt` (proper nouns in their local form) keep their natural capitalization.
 
 Keep location tags for *significant* or *recurring* places. Don't tag every street corner -- GPS data and folder paths handle that. Location tags are most useful for:
 
@@ -201,7 +203,7 @@ Aim for **5-15 tags per image**:
 - 1-2 technique tags (how, if noteworthy)
 - 0-1 project/event tag
 
-Example: a concert photo might carry `subject/performing arts/concert`, `subject/performing arts/concert/guitarist`, `location/Germany/Bavaria/Gelting/Kulturbühne Hinterhalt`, `technique/lighting/stage lighting` -- four tags, good discoverability.
+Example: a concert photo might carry `subject/performing arts/concert`, `subject/performing arts/concert/guitarist`, `location/Deutschland/Bayern/Gelting/Kulturbühne Hinterhalt`, `technique/lighting/stage lighting` -- four tags, good discoverability.
 
 Fewer than 5 means poor discoverability. More than 20 per image usually means you're tagging noise or duplicating information that belongs elsewhere.
 
@@ -333,7 +335,7 @@ Fix the mechanical issues first -- these can be done in bulk:
 # Rename a tag across the entire catalog (case-insensitive matching)
 maki tag rename "Concert" "concert"
 maki tag rename "Konzert" "concert"
-maki tag rename "München" "Munich"
+maki tag rename "Munich" "München"
 ```
 
 All matching is case-insensitive — `maki tag rename "Concert" "concert"` catches "Concert", "CONCERT", and "concert".
@@ -346,10 +348,10 @@ Once the duplicates are resolved, introduce hierarchy:
 # Move flat tags into hierarchy (redundant ancestors are auto-removed)
 maki tag rename "concert" "subject/performing arts/concert"
 maki tag rename "landscape" "subject/nature/landscape"
-maki tag rename "Munich" "location/Germany/Bavaria/Munich"
+maki tag rename "München" "location/Deutschland/Bayern/München"
 ```
 
-When renaming to a hierarchical tag, standalone tags that match ancestor components are removed automatically. For example, the last command also removes standalone "Germany" and "Bavaria" tags since they're now matched by the hierarchy.
+When renaming to a hierarchical tag, standalone tags that match ancestor components are removed automatically. For example, the last command also removes standalone "Deutschland" and "Bayern" tags since they're now matched by the hierarchy.
 
 Do this for your most-used tags first (the top 50-100 tags cover most of your catalog). The long tail can be restructured gradually.
 
