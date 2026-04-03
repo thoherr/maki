@@ -575,7 +575,7 @@ window.triggerSearch = onFilterChange;
                 div.setAttribute('data-tag', t);
                 var parts = t.split('|');
                 if (parts.length > 1) {
-                    var prefix = parts.slice(0, -1).join('/') + '/';
+                    var prefix = parts.slice(0, -1).join('|') + '|';
                     div.innerHTML = '<span class="tag-path-prefix">' +
                         prefix.replace(/&/g,'&amp;').replace(/</g,'&lt;') +
                         '</span>' + parts[parts.length - 1].replace(/&/g,'&amp;').replace(/</g,'&lt;');
