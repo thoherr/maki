@@ -649,17 +649,23 @@ pub fn create_xmp(
     }
     parts.push(">".to_string());
     if !keywords.is_empty() {
+        // dc:subject: flat individual component names (CaptureOne convention)
+        let dc_components: Vec<String> = keywords.iter()
+            .flat_map(|t| t.split('|').map(|s| s.to_string()))
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
         parts.push("   <dc:subject>\n    <rdf:Bag>".to_string());
-        for kw in keywords {
+        for kw in &dc_components {
             parts.push(format!("     <rdf:li>{}</rdf:li>", xml_escape(kw)));
         }
         parts.push("    </rdf:Bag>\n   </dc:subject>".to_string());
-        // Also write lr:hierarchicalSubject for tags with hierarchy
-        let hier_tags: Vec<&String> = keywords.iter().filter(|t| t.contains('/')).collect();
+        // lr:hierarchicalSubject: all ancestor paths (CaptureOne convention)
+        let hier_tags: Vec<String> = crate::tag_util::expand_all_ancestors(keywords);
         if !hier_tags.is_empty() {
             parts.push("   <lr:hierarchicalSubject>\n    <rdf:Bag>".to_string());
             for kw in &hier_tags {
-                parts.push(format!("     <rdf:li>{}</rdf:li>", xml_escape(&kw.replace('/', "|"))));
+                parts.push(format!("     <rdf:li>{}</rdf:li>", xml_escape(kw)));
             }
             parts.push("    </rdf:Bag>\n   </lr:hierarchicalSubject>".to_string());
         }

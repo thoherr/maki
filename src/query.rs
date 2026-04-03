@@ -2429,9 +2429,18 @@ impl QueryEngine {
                 continue;
             }
 
-            let dc_add: Vec<String> = tags_to_add.iter().map(|t| t.replace('|', "/")).collect();
-            let dc_remove: Vec<String> =
-                tags_to_remove.iter().map(|t| t.replace('|', "/")).collect();
+            // dc:subject: flat individual component names (CaptureOne convention).
+            // For "person|artist|musician", write "person", "artist", "musician" as separate entries.
+            let dc_add: Vec<String> = tags_to_add.iter()
+                .flat_map(|t| t.split('|').map(|s| s.to_string()))
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            let dc_remove: Vec<String> = tags_to_remove.iter()
+                .flat_map(|t| t.split('|').map(|s| s.to_string()))
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
             let changed_dc = match xmp_reader::update_tags(&full_path, &dc_add, &dc_remove)
             {
                 Ok(c) => c,
@@ -2443,8 +2452,12 @@ impl QueryEngine {
                     false
                 }
             };
+            // lr:hierarchicalSubject: all ancestor paths (CaptureOne convention).
+            // For "person|artist|musician", write "person", "person|artist", "person|artist|musician".
+            let lr_add = crate::tag_util::expand_all_ancestors(tags_to_add);
+            let lr_remove = crate::tag_util::expand_all_ancestors(tags_to_remove);
             let changed_lr =
-                match xmp_reader::update_hierarchical_subjects(&full_path, tags_to_add, tags_to_remove)
+                match xmp_reader::update_hierarchical_subjects(&full_path, &lr_add, &lr_remove)
                 {
                     Ok(c) => c,
                     Err(e) => {
@@ -3070,13 +3083,18 @@ impl QueryEngine {
                 ) {
                     file_changed = true;
                 }
-                // Tags: write the full current tag set as additions (no removals)
-                let dc_tags: Vec<String> = asset.tags.iter().map(|t: &String| t.replace('|', "/")).collect();
+                // Tags: write flat components to dc:subject, ancestor paths to lr:hierarchicalSubject
+                let dc_tags: Vec<String> = asset.tags.iter()
+                    .flat_map(|t| t.split('|').map(|s| s.to_string()))
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                let lr_tags = crate::tag_util::expand_all_ancestors(&asset.tags);
                 if !dc_tags.is_empty() {
                     if let Ok(true) = xmp_reader::update_tags(&full_path, &dc_tags, &[]) {
                         file_changed = true;
                     }
-                    let _ = xmp_reader::update_hierarchical_subjects(&full_path, &asset.tags, &[]);
+                    let _ = xmp_reader::update_hierarchical_subjects(&full_path, &lr_tags, &[]);
                 }
 
                 if file_changed {
