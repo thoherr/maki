@@ -2,6 +2,19 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.3.4 (2026-04-03)
+
+### New Features
+- **Tag hierarchy separator aligned with Lightroom/CaptureOne** — `|` (pipe) is now the hierarchy separator everywhere (CLI, web UI, search, display). `>` accepted as alternative input. `/` is now a literal character — no more escaping. Aligned with `lr:hierarchicalSubject` standard.
+- **`maki tag clear`** — new subcommand to remove all tags from an asset in one operation.
+- **Tag rename cascades to descendants** — renaming a parent tag also renames all descendant tags (e.g., `maki tag rename "localtion" "location"` also renames `localtion|Germany|Bayern` to `location|Germany|Bayern`). Similar prefixes without `|` are not affected.
+
+### Bug Fixes
+- **Web UI tag display** — tag chips, autocomplete suggestions, tag page, and stats no longer convert `|` to `/` for display.
+
+### Documentation
+- **Quoting guide** in search filter reference — new sections covering spaces, dashes (negation trap), and hierarchy separators in filter values, with quick-reference table.
+
 ## v4.3.3 (2026-04-03)
 
 ### Bug Fixes
