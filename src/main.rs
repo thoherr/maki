@@ -1559,8 +1559,20 @@ fn main() {
         std::process::exit(0);
     }
 
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
     let start = std::time::Instant::now();
+
+    // Merge [cli] defaults from maki.toml (if inside a catalog)
+    if let Ok(catalog_root) = maki::config::find_catalog_root() {
+        if let Ok(config) = CatalogConfig::load(&catalog_root) {
+            cli.log = cli.log || config.cli.log;
+            cli.timing = cli.timing || config.cli.time;
+            cli.verbose = cli.verbose || config.cli.verbose;
+            if config.cli.verbose {
+                cli.debug = cli.debug; // don't auto-enable debug from verbose config
+            }
+        }
+    }
 
     // Handle shell command specially — it has its own loop
     if let Commands::Shell { script, command_str, strict } = &cli.command {

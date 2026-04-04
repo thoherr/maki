@@ -541,6 +541,25 @@ fn is_default_writeback(w: &WritebackConfig) -> bool {
     *w == WritebackConfig::default()
 }
 
+/// Default CLI flags. These are OR'd with command-line flags —
+/// setting `log = true` here is like always passing `--log`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CliDefaults {
+    /// Enable --log by default
+    #[serde(default)]
+    pub log: bool,
+    /// Enable --time by default
+    #[serde(default)]
+    pub time: bool,
+    /// Enable --verbose by default
+    #[serde(default)]
+    pub verbose: bool,
+}
+
+fn is_default_cli(c: &CliDefaults) -> bool {
+    *c == CliDefaults::default()
+}
+
 /// Browse behavior configuration.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct BrowseConfig {
@@ -579,6 +598,8 @@ pub struct CatalogConfig {
     pub browse: BrowseConfig,
     #[serde(default, skip_serializing_if = "is_default_writeback")]
     pub writeback: WritebackConfig,
+    #[serde(default, skip_serializing_if = "is_default_cli")]
+    pub cli: CliDefaults,
 }
 
 impl Default for CatalogConfig {
@@ -595,6 +616,7 @@ impl Default for CatalogConfig {
             vlm: VlmConfig::default(),
             browse: BrowseConfig::default(),
             writeback: WritebackConfig::default(),
+            cli: CliDefaults::default(),
         }
     }
 }
@@ -822,6 +844,7 @@ max_edge = 1000
             vlm: VlmConfig::default(),
             browse: BrowseConfig::default(),
             writeback: WritebackConfig::default(),
+            cli: CliDefaults::default(),
         };
         let toml_str = toml::to_string_pretty(&original).unwrap();
         let parsed: CatalogConfig = toml::from_str(&toml_str).unwrap();
@@ -972,6 +995,7 @@ max_edge = 1000
             vlm: VlmConfig::default(),
             browse: BrowseConfig::default(),
             writeback: WritebackConfig::default(),
+            cli: CliDefaults::default(),
         };
         original.save(dir.path()).unwrap();
         let loaded = CatalogConfig::load(dir.path()).unwrap();
