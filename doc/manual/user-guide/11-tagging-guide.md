@@ -412,6 +412,58 @@ Review suggestions in the web UI -- accept good ones, dismiss bad ones, and adju
 
 ---
 
+## The Vocabulary File
+
+MAKI creates a `vocabulary.yaml` file in your catalog root when you run `maki init`. This file defines your planned tag hierarchy — a skeleton of categories and terms you intend to use. MAKI reads it and offers these tags in autocomplete, even before you've tagged a single asset with them.
+
+### Why it matters
+
+Without a vocabulary file, autocomplete can only suggest tags that already exist on at least one asset. When you add the first image of a new category, there's no guidance — you have to remember (or look up) your planned hierarchy. The vocabulary file bridges this gap: your planned structure is always available in autocomplete.
+
+### Editing the file
+
+The file uses a nested YAML tree format:
+
+```yaml
+subject:
+  nature:
+    - landscape
+    - flora
+    - sky
+  animal:
+    - bird
+    - mammal
+technique:
+  lighting:
+    - natural light
+    - stage lighting
+```
+
+Keys are hierarchy nodes, arrays are leaf lists. Edit the file in any text editor to add, remove, or reorganize categories as your collection grows. MAKI reads it on every command — changes take effect immediately.
+
+### Bootstrapping from existing tags
+
+If you already have a catalog with organic tags, export the current tag tree as a starting point:
+
+```bash
+maki tag export-vocabulary
+```
+
+This generates `vocabulary.yaml` from your existing tags, grouped into a nested tree. Edit it to add planned categories and remove unwanted entries.
+
+### Vocabulary vs. auto-tagging labels
+
+The vocabulary file and the auto-tagging label file (`labels` in `[ai]` config) serve different purposes:
+
+| | `vocabulary.yaml` | AI label file |
+|---|---|---|
+| **Purpose** | Autocomplete guidance | Vision model classification |
+| **Format** | Nested YAML tree | Flat text, one term per line |
+| **Content** | Full hierarchy including abstract/personal terms | Only visually recognizable concepts |
+| **Used by** | CLI and web UI autocomplete | `maki auto-tag` |
+
+---
+
 ## Quick-Start Checklist
 
 If you're starting fresh or resetting your tagging approach:
@@ -419,13 +471,14 @@ If you're starting fresh or resetting your tagging approach:
 1. Choose a language (English recommended)
 2. Choose a case convention (lowercase, proper nouns capitalized)
 3. Define your top-level facets (subject, location, person, technique, project)
-4. Write 50-100 tags for your most common subjects
-5. Save them as your label vocabulary for auto-tagging (`labels = "my-labels.txt"` in `maki.toml`)
-6. Set a confidence threshold (`threshold = 0.3` is a reasonable start)
-7. Tag your next import using the new vocabulary
-8. Run auto-tagging on a test batch and review the suggestions
-9. Expand your vocabulary as new subjects appear
-10. Schedule a quarterly review of your tag list
+4. Edit `vocabulary.yaml` in your catalog root to reflect your planned hierarchy
+5. Write 50-100 tags for your most common subjects
+6. Save them as your label vocabulary for auto-tagging (`labels = "my-labels.txt"` in `maki.toml`)
+7. Set a confidence threshold (`threshold = 0.3` is a reasonable start)
+8. Tag your next import using the new vocabulary
+9. Run auto-tagging on a test batch and review the suggestions
+10. Expand `vocabulary.yaml` as new subjects appear
+11. Schedule a quarterly review of your tag list and vocabulary file
 
 ---
 

@@ -9,6 +9,8 @@ Commands for importing files, applying metadata, and merging asset variants. Imp
 | [tag](#maki-tag) | Add or remove tags |
 | [tag rename](#maki-tag-rename) | Rename a tag across all assets |
 | [tag clear](#maki-tag-clear) | Remove all tags from an asset |
+| [tag expand-ancestors](#maki-tag-expand-ancestors) | Expand hierarchical tags to include ancestor paths |
+| [tag export-vocabulary](#maki-tag-export-vocabulary) | Export tag tree as a vocabulary.yaml file |
 | [edit](#maki-edit) | Edit metadata (name, rating, label, description, date) |
 | [group](#maki-group) | Merge variants into one asset |
 | [split](#maki-split) | Extract variants into standalone assets |
@@ -445,6 +447,70 @@ maki tag clear a1b2c3d4
 
 [tag](#maki-tag) -- add or remove individual tags.
 [tag rename](#maki-tag-rename) -- rename a tag across all assets.
+
+---
+
+## maki tag expand-ancestors {#maki-tag-expand-ancestors}
+
+### NAME
+
+maki-tag-expand-ancestors -- expand hierarchical tags to include all ancestor paths
+
+### SYNOPSIS
+
+    maki [GLOBAL FLAGS] tag expand-ancestors [QUERY] [--asset <ID>] [--apply]
+
+### DESCRIPTION
+
+Scans assets and adds missing ancestor paths for hierarchical tags. For example, if an asset has `subject|nature|landscape` but is missing `subject` and `subject|nature`, this command adds them.
+
+This is a one-time cleanup for tags created before ancestor expansion was implemented. New tags added via `maki tag` already expand ancestors automatically.
+
+### OPTIONS
+
+**--apply**
+: Execute changes. Without this flag, only reports what would change.
+
+### EXAMPLES
+
+```bash
+maki tag expand-ancestors              # preview
+maki tag expand-ancestors --apply --log
+```
+
+---
+
+## maki tag export-vocabulary {#maki-tag-export-vocabulary}
+
+### NAME
+
+maki-tag-export-vocabulary -- export the current tag tree as a vocabulary file
+
+### SYNOPSIS
+
+    maki [GLOBAL FLAGS] tag export-vocabulary [--output <FILE>]
+
+### DESCRIPTION
+
+Generates a `vocabulary.yaml` file from the current catalog's tag tree. Tags are grouped into a nested YAML hierarchy — the inverse of the flat pipe-separated storage format.
+
+Use this to bootstrap a vocabulary file from an existing catalog. Edit the generated file to add planned categories, remove unwanted entries, and organize your tag structure.
+
+### OPTIONS
+
+**--output \<FILE\>**
+: Output file path. Defaults to `vocabulary.yaml` in the catalog root.
+
+### EXAMPLES
+
+```bash
+maki tag export-vocabulary                         # writes vocabulary.yaml
+maki tag export-vocabulary --output ~/my-vocab.yaml  # custom path
+```
+
+### SEE ALSO
+
+[Tagging Guide](../user-guide/11-tagging-guide.md#the-vocabulary-file) -- vocabulary file format and design recommendations.
 
 ---
 

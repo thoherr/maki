@@ -235,6 +235,7 @@ Additional modules handle EXIF extraction, XMP reading/writing, configuration pa
 - `collections.yaml` -- static album definitions
 - `stacks.yaml` -- stack definitions (member order and pick)
 - `maki.toml` -- configuration
+- `vocabulary.yaml` -- planned tag hierarchy for autocomplete
 
 **Media Volumes** (may be offline): The actual asset files on external drives, NAS, or local directories. MAKI never moves or modifies original media files unless explicitly asked (via `relocate --remove-source`).
 

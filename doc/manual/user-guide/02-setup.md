@@ -81,6 +81,7 @@ This creates the following structure:
 ```
 ~/Photos/
   maki.toml          # Configuration file
+  vocabulary.yaml    # Planned tag hierarchy for autocomplete
   .gitignore         # Excludes derived files for optional git backup
   catalog.db         # SQLite database (cache/index)
   volumes.yaml       # Registered storage volumes
@@ -88,6 +89,8 @@ This creates the following structure:
   previews/          # Preview thumbnails (800px)
   smart-previews/    # High-resolution previews for zoom/pan (2560px)
 ```
+
+The `vocabulary.yaml` defines your planned tag hierarchy — MAKI uses it to offer autocomplete suggestions for tags you've planned but haven't used yet. Edit it to match your photography focus. See the [Tagging Guide](11-tagging-guide.md) for vocabulary design recommendations.
 
 The `.gitignore` is set up so you can optionally track the catalog with git for backup and history. See [Backing Up Your Catalog with Git](07-maintenance.md#backing-up-your-catalog-with-git) for details.
 
