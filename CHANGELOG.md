@@ -2,6 +2,27 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.3.8 (2026-04-05)
+
+### New Features
+- **`tag:=X` exact-level match** — prefix with `=` to match assets tagged at exactly this level, excluding those with deeper descendant tags. CLI: `maki search "tag:=location|Germany|Bayern"`. Web UI: click `▼` on a tag chip to toggle to `=` (this-level-only) mode.
+- **`rebuild-catalog --asset`** — per-asset rebuild from sidecar YAML. Deletes and re-inserts a single asset's SQLite rows (variants, locations, recipes, embeddings, faces) in seconds, avoiding a full rebuild that takes hours on large catalogs.
+- **`[cli]` config section** — default global flags in `maki.toml`: `log`, `time`, `verbose`. OR'd with command-line flags.
+
+### Enhancements
+- **Split hardening** — refuses to split off the identity variant (the one that generated the asset UUID). Clear error message with guidance. New asset IDs from split now use the correct DAM_NAMESPACE (consistent with import).
+- **Sync `--remove-stale` auto-cleanup** — assets that become locationless after stale removal are automatically deleted with their sidecars.
+- **Verify `--max-age` optimization** — queries SQLite for stale locations instead of loading all sidecars. For a 260k-asset catalog with 95% verification, loads ~13k sidecars instead of 260k.
+- **Autocomplete intermediate nodes** — tag autocomplete now shows intermediate hierarchy levels when the query matches their last component (e.g., typing "Wolfratshausen" shows both the city and venues below it).
+- **Volume label badges** — detail page shows volume labels as styled chips instead of plain text in variant and recipe locations.
+
+### Bug Fixes
+- **Split UUID namespace** — split-created assets now get the correct UUID (DAM_NAMESPACE instead of NAMESPACE_URL). Existing wrong IDs can be fixed with `scripts/check-split-ids.py`.
+
+### Documentation
+- `[cli]` config section, `rebuild-catalog --asset`, `refresh --reimport`, split identity variant protection, sync auto-cleanup — all documented in reference and cheat sheet.
+- **Tagging Guide** — new "How MAKI stores hierarchical tags (the roundtrip)" section explaining the import/writeback cycle.
+
 ## v4.3.7 (2026-04-04)
 
 ### New Features
