@@ -1597,7 +1597,21 @@ impl QueryEngine {
         // Refuse to extract all variants — at least one must remain
         let extract_set: HashSet<&str> = variant_hashes.iter().map(|h| h.as_str()).collect();
         if extract_set.len() >= source.variants.len() {
-            anyhow::bail!("Cannot extract all variants — at least one must remain");
+            anyhow::bail!("Cannot extract all variants — at least one must remain in the source asset");
+        }
+
+        // Check if the identity variant (the one that generated the asset UUID) is being split off
+        let identity_hash = source.variants.iter()
+            .find(|v| crate::models::Asset::id_for_hash(&v.content_hash) == source_uuid)
+            .map(|v| v.content_hash.clone());
+        if let Some(ref ih) = identity_hash {
+            if extract_set.contains(ih.as_str()) {
+                anyhow::bail!(
+                    "Cannot split off variant '{}' — it is the identity variant that generated this asset's ID. \
+                     Split the other variants instead, or use 'maki group' to reorganize.",
+                    &ih[..20.min(ih.len())]
+                );
+            }
         }
 
         let mut new_assets_info = Vec::new();
@@ -1612,8 +1626,9 @@ impl QueryEngine {
                 .ok_or_else(|| anyhow::anyhow!("Variant '{}' not found", hash))?;
             let mut variant = source.variants.remove(idx);
 
-            // Create new asset ID deterministically from variant hash
-            let new_uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, hash.as_bytes());
+            // Create new asset ID deterministically from variant hash (using the same
+            // namespace as Asset::new to ensure consistency if the file is reimported)
+            let new_uuid = crate::models::Asset::id_for_hash(hash);
             variant.asset_id = new_uuid;
             variant.role = crate::models::VariantRole::Original;
 
@@ -1666,6 +1681,7 @@ impl QueryEngine {
         // Save updated source asset (with extracted variants removed)
         store.save(&source)?;
         catalog.insert_asset(&source)?;
+        catalog.update_denormalized_variant_columns(&source)?;
 
         Ok(SplitResult {
             source_id: full_id,
@@ -5306,5 +5322,107 @@ mod tests {
         // Standalone flat tags remain (they're separate concepts)
         assert!(asset.tags.contains(&"Germany".to_string()));
         assert!(asset.tags.contains(&"Bayern".to_string()));
+    }
+
+    // ── split tests ────────────────────────────────────────
+
+    fn setup_split_catalog(variant_hashes: &[&str]) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("metadata")).unwrap();
+        crate::config::CatalogConfig::default().save(root).unwrap();
+        crate::device_registry::DeviceRegistry::init(root).unwrap();
+        let catalog = crate::catalog::Catalog::open(root).unwrap();
+        catalog.initialize().unwrap();
+
+        // First hash determines the asset ID (use full sha256: prefix)
+        let first_full = format!("sha256:{}", variant_hashes[0]);
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, &first_full);
+        asset.tags = vec!["landscape".to_string()];
+        asset.rating = Some(4);
+        for hash in variant_hashes {
+            let variant = crate::models::Variant {
+                content_hash: format!("sha256:{hash}"),
+                asset_id: asset.id,
+                role: crate::models::VariantRole::Original,
+                format: "jpg".to_string(),
+                file_size: 1000,
+                original_filename: format!("{hash}.jpg"),
+                source_metadata: Default::default(),
+                locations: vec![],
+            };
+            asset.variants.push(variant.clone());
+        }
+        // Insert asset first (variants reference it via FK)
+        catalog.insert_asset(&asset).unwrap();
+        for variant in &asset.variants {
+            catalog.insert_variant(variant).unwrap();
+        }
+        let store = crate::metadata_store::MetadataStore::new(root);
+        store.save(&asset).unwrap();
+
+        (dir, asset.id.to_string())
+    }
+
+    #[test]
+    fn split_extracts_variant_into_new_asset() {
+        let (dir, asset_id) = setup_split_catalog(&["aaa", "bbb", "ccc"]);
+        let engine = QueryEngine::new(dir.path());
+        let result = engine.split(&asset_id, &["sha256:bbb".to_string()]).unwrap();
+
+        assert_eq!(result.new_assets.len(), 1);
+        assert_eq!(result.new_assets[0].variant_hash, "sha256:bbb");
+
+        // Source should have 2 variants remaining
+        let store = crate::metadata_store::MetadataStore::new(dir.path());
+        let source: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
+        assert_eq!(source.variants.len(), 2);
+
+        // New asset should have 1 variant with inherited metadata
+        let new_id: uuid::Uuid = result.new_assets[0].asset_id.parse().unwrap();
+        let new_asset = store.load(new_id).unwrap();
+        assert_eq!(new_asset.variants.len(), 1);
+        assert_eq!(new_asset.tags, vec!["landscape".to_string()]);
+        assert_eq!(new_asset.rating, Some(4));
+    }
+
+    #[test]
+    fn split_refuses_all_variants() {
+        let (dir, asset_id) = setup_split_catalog(&["aaa", "bbb"]);
+        let engine = QueryEngine::new(dir.path());
+        let err = engine.split(&asset_id, &[
+            "sha256:aaa".to_string(),
+            "sha256:bbb".to_string(),
+        ]).unwrap_err();
+        assert!(err.to_string().contains("at least one must remain"));
+    }
+
+    #[test]
+    fn split_refuses_identity_variant() {
+        let (dir, asset_id) = setup_split_catalog(&["aaa", "bbb", "ccc"]);
+        let engine = QueryEngine::new(dir.path());
+
+        // "aaa" is the identity variant (Asset::new uses it for the UUID)
+        let err = engine.split(&asset_id, &["sha256:aaa".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("identity variant"), "error: {}", err);
+    }
+
+    #[test]
+    fn split_refuses_unknown_variant() {
+        let (dir, asset_id) = setup_split_catalog(&["aaa", "bbb"]);
+        let engine = QueryEngine::new(dir.path());
+        let err = engine.split(&asset_id, &["sha256:zzz".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("does not belong"));
+    }
+
+    #[test]
+    fn split_new_asset_id_matches_reimport() {
+        // Verify that the split-created asset ID matches what Asset::new would produce
+        let (dir, asset_id) = setup_split_catalog(&["aaa", "bbb"]);
+        let engine = QueryEngine::new(dir.path());
+        let result = engine.split(&asset_id, &["sha256:bbb".to_string()]).unwrap();
+
+        let expected_id = crate::models::Asset::id_for_hash("sha256:bbb");
+        assert_eq!(result.new_assets[0].asset_id, expected_id.to_string());
     }
 }

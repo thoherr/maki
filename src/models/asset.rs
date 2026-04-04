@@ -52,6 +52,11 @@ pub struct Asset {
 impl Asset {
     /// Create a new asset with a deterministic ID derived from the content hash.
     /// Same content hash always produces the same asset ID.
+    /// Compute the deterministic asset ID for a given content hash.
+    pub fn id_for_hash(content_hash: &str) -> Uuid {
+        Uuid::new_v5(&DAM_NAMESPACE, content_hash.as_bytes())
+    }
+
     pub fn new(asset_type: AssetType, content_hash: &str) -> Self {
         Self {
             id: Uuid::new_v5(&DAM_NAMESPACE, content_hash.as_bytes()),
