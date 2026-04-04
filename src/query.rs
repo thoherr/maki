@@ -2161,6 +2161,19 @@ impl QueryEngine {
 
         store.save(&asset)?;
         catalog.insert_asset(&asset)?;
+
+        // Re-insert all variants and file locations to fix SQLite sync gaps
+        for variant in &asset.variants {
+            catalog.insert_variant(variant)?;
+            for loc in &variant.locations {
+                catalog.insert_file_location(&variant.content_hash, loc)?;
+            }
+        }
+        // Re-insert all recipes
+        for recipe in &asset.recipes {
+            catalog.insert_recipe(recipe)?;
+        }
+
         catalog.update_denormalized_variant_columns(&asset)?;
 
         Ok(asset.tags.clone())
