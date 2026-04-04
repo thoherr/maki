@@ -1568,9 +1568,6 @@ fn main() {
             cli.log = cli.log || config.cli.log;
             cli.timing = cli.timing || config.cli.time;
             cli.verbose = cli.verbose || config.cli.verbose;
-            if config.cli.verbose {
-                cli.debug = cli.debug; // don't auto-enable debug from verbose config
-            }
         }
     }
 
