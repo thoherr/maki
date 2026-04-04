@@ -2193,14 +2193,22 @@ impl QueryEngine {
             .filter_map(|r| r.ok())
             .collect();
 
-        // Delete file locations for ALL variants (sidecar + stale SQLite-only ones)
+        // Delete order: recipes → file_locations → variants (respects FK constraints)
+        // 1. Delete all recipes for this asset's variants
+        for hash in &sqlite_hashes {
+            catalog.conn().execute(
+                "DELETE FROM recipes WHERE variant_hash = ?1",
+                rusqlite::params![hash],
+            )?;
+        }
+        // 2. Delete file locations for ALL variants
         for hash in &sqlite_hashes {
             catalog.conn().execute(
                 "DELETE FROM file_locations WHERE content_hash = ?1",
                 rusqlite::params![hash],
             )?;
         }
-        // Delete stale variant rows not in sidecar
+        // 3. Delete stale variant rows not in sidecar
         let sidecar_hashes: std::collections::HashSet<&str> = asset.variants.iter()
             .map(|v| v.content_hash.as_str())
             .collect();
@@ -2211,16 +2219,6 @@ impl QueryEngine {
                     rusqlite::params![hash],
                 )?;
             }
-        }
-        // Delete all recipes for this asset's variants
-        let all_hashes: Vec<&str> = sqlite_hashes.iter().map(|s| s.as_str())
-            .chain(sidecar_hashes.iter().copied())
-            .collect();
-        for hash in &all_hashes {
-            catalog.conn().execute(
-                "DELETE FROM recipes WHERE variant_hash = ?1",
-                rusqlite::params![hash],
-            )?;
         }
 
         // Re-insert from sidecar (source of truth)
