@@ -24,6 +24,14 @@ Ensure consistency between CaptureOne/Lightroom-imported tags (which expand all 
 
 **Complexity:** Medium (touches tag add, rename, remove, writeback, and import merge logic).
 
+### Tag Vocabulary File
+
+Predefined tag hierarchy in `vocabulary.yaml` that guides autocomplete and prevents vocabulary drift. Tree-format YAML, merged with actual tags for suggestions. Export command to bootstrap from existing tags. See `doc/proposals/tag-vocabulary.md`.
+
+**Status:** Proposal written, open for discussion.
+
+**Complexity:** Low (phase 1: read + autocomplete), Medium (phase 2: web UI, phase 3: export).
+
 ### Manual Translation (i18n)
 
 Produce the MAKI user manual in English and German from a single source using inline language markers. See `doc/proposals/manual-i18n.md`.
