@@ -2,6 +2,17 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.3.6 (2026-04-04)
+
+### New Features
+- **Tag vocabulary file** (`vocabulary.yaml`) — predefined tag hierarchy for autocomplete guidance. `maki init` creates a default vocabulary based on the Tagging Guide. Planned-but-unused tags appear in CLI tab completion and web UI autocomplete. Edit the YAML tree to define your vocabulary structure.
+- **`maki tag export-vocabulary`** — exports the current tag tree as `vocabulary.yaml`, merging with existing planned entries. Use `--prune` to remove unused entries.
+
+### Documentation
+- **Tagging Guide** — new "The Vocabulary File" section covering purpose, editing, bootstrapping, and comparison with AI labels.
+- **Reference** — `tag expand-ancestors` and `tag export-vocabulary` command documentation.
+- Roadmap cleaned up: completed proposals moved to archive.
+
 ## v4.3.5 (2026-04-04)
 
 ### New Features

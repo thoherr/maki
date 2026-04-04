@@ -4,7 +4,7 @@ A predefined tag hierarchy that guides autocomplete and prevents vocabulary drif
 
 **Date:** 2026-04-04
 
-**Status:** Proposal. Open for discussion.
+**Status:** Complete. All 4 phases implemented (v4.3.6).
 
 ---
 

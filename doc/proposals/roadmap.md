@@ -2,19 +2,11 @@
 
 Living document tracking planned enhancements. Previous proposals (all implemented or deferred) are in `archive/`. Active proposals are in `doc/proposals/`.
 
-Current version: **v4.3.5** (2026-04-04)
+Current version: **v4.3.6** (2026-04-04)
 
 ---
 
 ## Active Proposals
-
-### Tag Vocabulary File
-
-Predefined tag hierarchy in `vocabulary.yaml` that guides autocomplete and prevents vocabulary drift. Tree-format YAML, merged with actual tags for suggestions. Export command to bootstrap from existing tags. See `doc/proposals/tag-vocabulary.md`.
-
-**Status:** Proposal written, open for discussion.
-
-**Complexity:** Low (phase 1: read + autocomplete), Medium (phase 2: web UI, phase 3: export).
 
 ### Manual Translation (i18n)
 
@@ -198,5 +190,5 @@ Design documents for completed features are in `doc/proposals/archive/`. Key mil
 - **v4.0.1–v4.0.12**: Default browse filter, similarity browse, Windows support, CI/CD, unified numeric filters, XMP writeback safeguard, cheat sheet, automated releases, branded screenshots
 - **v4.1.x (Video Playback)**: HTML5 video player on detail page and lightbox, duration badges on browse cards, video metadata extraction via ffprobe (duration, codec, resolution, framerate) at import time, `generate-previews --force` backfills video metadata for existing assets. Phase 2 `duration:` and `codec:` search filters implemented (duration uses denormalized `video_duration` column with full `NumericFilter` support; codec uses denormalized `video_codec` column with LIKE matching). Remaining Phase 2 filter: `resolution:` (but `width:`/`height:` already cover this).
 - **v4.2.x**: Card-first workflow (media volume purpose, create-sidecars, auto-label, volume list filters), import profiles, video proxy generation with hover-to-play, user guide improvements (17 items across 3 passes)
-- **v4.3.x**: Tag hierarchy separator aligned with LR/C1 (`|` and `>`), tag rename/clear/expand-ancestors subcommands, ancestor expansion matching CaptureOne convention, git-based catalog backup, BTreeMap for deterministic YAML, Tagging Guide chapter
+- **v4.3.x**: Tag hierarchy separator aligned with LR/C1 (`|` and `>`), tag rename/clear/expand-ancestors/export-vocabulary subcommands, ancestor expansion matching CaptureOne convention, vocabulary.yaml for planned tag hierarchy with autocomplete integration, git-based catalog backup, BTreeMap for deterministic YAML, Tagging Guide chapter
 - **v4.1.x**: MAKI Pro edition (`pro` feature flag, `-pro` release artifacts), VLM/writeback/sync-metadata gated behind Pro, search filter reference card, `volume split`/`rename`, `edit --clear-tags`, improved `scattered:` filter with `/N` depth, star rating filter UX, consistent *(Pro)* markers in manual, repo cleanup (`doc/images/`, `doc/quickref/`)
