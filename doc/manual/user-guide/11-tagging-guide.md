@@ -214,7 +214,7 @@ Aim for **5-15 tags per image**:
 
 Example: a concert photo might carry `subject|performing arts|concert`, `subject|performing arts|concert|guitarist`, `location|Germany|Bayern|Gelting|Kulturbühne Hinterhalt`, `technique|lighting|stage lighting` -- four tags, good discoverability.
 
-Fewer than 5 means poor discoverability. More than 20 per image usually means you're tagging noise or duplicating information that belongs elsewhere.
+Fewer tags means poor discoverability. More than 20 per image usually means you're tagging noise or duplicating information that belongs elsewhere.
 
 ### Total vocabulary
 
