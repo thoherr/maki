@@ -1110,11 +1110,21 @@ pub async fn clear_tags(
 }
 
 /// GET /api/tags — all tags as JSON (for autocomplete).
+/// Merges actual catalog tags with vocabulary tags (planned but unused).
 pub async fn tags_api(State(state): State<Arc<AppState>>) -> Response {
     let state = state.clone();
     let result = tokio::task::spawn_blocking(move || {
         let catalog = state.catalog()?;
-        let tags = state.dropdown_cache.get_tags(&catalog);
+        let mut tags = state.dropdown_cache.get_tags(&catalog);
+        // Merge vocabulary tags (with count 0 for unused entries)
+        let vocab = crate::vocabulary::load_vocabulary(&state.catalog_root);
+        let existing: std::collections::HashSet<String> = tags.iter().map(|(name, _)| name.clone()).collect();
+        for vt in vocab {
+            if !existing.contains(&vt) {
+                tags.push((vt, 0));
+            }
+        }
+        tags.sort_by(|a, b| a.0.cmp(&b.0));
         Ok::<_, anyhow::Error>(tags)
     })
     .await;

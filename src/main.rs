@@ -1073,6 +1073,14 @@ enum TagCommands {
         #[arg(hide = true, trailing_var_arg = true)]
         asset_ids: Vec<String>,
     },
+
+    /// Export current tag tree as a vocabulary.yaml file
+    #[command(name = "export-vocabulary")]
+    ExportVocabulary {
+        /// Output file (default: vocabulary.yaml in catalog root)
+        #[arg(long)]
+        output: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1626,6 +1634,12 @@ smart-previews/\n\
 embeddings/\n\
 faces/\n\
 ")?;
+            }
+
+            // Write default tag vocabulary
+            let vocab_path = catalog_root.join("vocabulary.yaml");
+            if !vocab_path.exists() {
+                std::fs::write(&vocab_path, maki::vocabulary::default_vocabulary())?;
             }
 
             if cli.json {
@@ -2922,6 +2936,18 @@ faces/\n\
                             println!("  Run with --apply to expand ancestor tags.");
                         }
                     }
+                    Ok(())
+                }
+                Some(TagCommands::ExportVocabulary { output }) => {
+                    let catalog_root = maki::config::find_catalog_root()?;
+                    let catalog = maki::catalog::Catalog::open(&catalog_root)?;
+                    let tags = catalog.list_all_tags()?;
+                    let yaml = maki::vocabulary::tags_to_vocabulary_yaml(&tags);
+
+                    let out_path = output.map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| catalog_root.join("vocabulary.yaml"));
+                    std::fs::write(&out_path, &yaml)?;
+                    println!("Exported {} tags to {}", tags.len(), out_path.display());
                     Ok(())
                 }
                 None => {

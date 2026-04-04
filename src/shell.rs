@@ -133,16 +133,22 @@ impl ShellHelper {
 /// Load tag names and volume labels from the catalog for completion.
 fn load_completion_data(catalog_root: &Path) -> (Vec<String>, Vec<String>) {
     let db_path = catalog_root.join(".maki").join("catalog.db");
-    let tags;
-    let volumes;
+    let mut tags: Vec<String>;
+    let volumes: Vec<String>;
 
     if let Ok(catalog) = crate::catalog::Catalog::open_fast(&db_path) {
-        tags = catalog
+        let mut tag_set: std::collections::HashSet<String> = catalog
             .list_all_tags()
             .unwrap_or_default()
             .into_iter()
             .map(|(name, _count)| name)
             .collect();
+        // Merge vocabulary tags
+        for vt in crate::vocabulary::load_vocabulary(catalog_root) {
+            tag_set.insert(vt);
+        }
+        tags = tag_set.into_iter().collect();
+        tags.sort();
         volumes = catalog
             .list_volumes()
             .unwrap_or_default()
@@ -150,7 +156,7 @@ fn load_completion_data(catalog_root: &Path) -> (Vec<String>, Vec<String>) {
             .map(|(_id, label)| label)
             .collect();
     } else {
-        tags = Vec::new();
+        tags = crate::vocabulary::load_vocabulary(catalog_root);
         volumes = Vec::new();
     }
 

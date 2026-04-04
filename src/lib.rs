@@ -51,6 +51,7 @@ pub mod shell;
 pub mod stack;
 pub mod tag_util;
 pub mod vlm;
+pub mod vocabulary;
 pub mod web;
 pub mod xmp_reader;
 
