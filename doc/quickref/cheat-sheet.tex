@@ -34,8 +34,8 @@
 % Section styling — salmon header, thin rule below
 \titleformat{\section}{\small\bfseries\color{maki-salmon}}{}{0em}{}[\vspace{-2pt}{\color{maki-salmon!40}\hrule height 0.3pt}\vspace{2pt}]
 \titleformat{\subsection}{\footnotesize\ttfamily\bfseries\color{maki-nori}}{}{0em}{}
-\titlespacing{\section}{0pt}{4pt}{1pt}
-\titlespacing{\subsection}{0pt}{2pt}{0pt}
+\titlespacing{\section}{0pt}{3pt}{0pt}
+\titlespacing{\subsection}{0pt}{1.5pt}{0pt}
 
 % Compact list
 \setlist{nosep, leftmargin=1.2em, itemsep=0pt, parsep=0pt, topsep=0pt}
@@ -229,7 +229,8 @@ Sync with disk changes. \opt{--apply} \opt{--remove-stale}
 Bidirectional XMP sync. \opt{--asset} \opt{--dry-run}
 
 \subsection{maki refresh \textit{[PATHS...]}}
-Re-read changed recipes. \opt{--dry-run}
+Re-read changed recipes. \opt{--dry-run} \opt{--media} \\
+\opt{--reimport} — full re-extract from source files
 
 \subsection{maki writeback \textit{[QUERY]} \pro}
 Write pending edits to XMP. \opt{--all} \opt{--dry-run}
@@ -252,7 +253,7 @@ Copy/move files between volumes. \\
 \opt{--create-sidecars} \opt{--dry-run}
 
 \subsection{maki rebuild-catalog}
-Rebuild SQLite from YAML sidecars.
+Rebuild SQLite from YAML sidecars. \opt{--asset ID} (per-asset)
 
 \subsection{maki migrate}
 Run database schema migrations.
@@ -416,6 +417,7 @@ Placeholders: \cmd{\{id\}}, \cmd{\{name\}}, \cmd{\{filename\}}, \cmd{\{type\}}, 
 \cmd{[serve]} & port, bind, per\_page \\
 \cmd{[import]} & exclude, auto\_tags, smart\_previews, profiles \\
 \cmd{[browse]} & default\_filter \\
+\cmd{[cli]} & log, time, verbose (default global flags) \\
 \cmd{[writeback]} & enabled (default: false) \pro \\
 \cmd{[dedup]} & prefer \\
 \cmd{[verify]} & max\_age\_days \\

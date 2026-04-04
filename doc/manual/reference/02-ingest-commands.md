@@ -743,7 +743,7 @@ Each extracted variant:
 - Takes associated recipes with it.
 - Gets a deterministic UUID derived from its content hash.
 
-The source asset retains all non-extracted variants. At least one variant must remain in the source asset.
+The source asset retains all non-extracted variants. At least one variant must remain in the source asset. The **identity variant** (the one whose content hash generated the asset's UUID) cannot be split off — attempting to do so produces an error. Split the other variants instead.
 
 ### ARGUMENTS
 

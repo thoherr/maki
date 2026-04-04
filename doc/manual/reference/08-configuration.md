@@ -705,6 +705,39 @@ enabled = true
 
 ---
 
+## [cli] Section
+
+Default global flags. Values are OR'd with command-line flags — setting `log = true` here is equivalent to always passing `--log`.
+
+### log
+
+- **Type:** boolean
+- **Default:** `false`
+
+Enable per-file progress logging (`--log`) by default on all commands.
+
+### time
+
+- **Type:** boolean
+- **Default:** `false`
+
+Show elapsed time (`--time`) by default after every command.
+
+### verbose
+
+- **Type:** boolean
+- **Default:** `false`
+
+Enable verbose output (`--verbose`) by default.
+
+```toml
+[cli]
+log = true
+time = true
+```
+
+---
+
 ## Full Example
 
 A complete `maki.toml` with all options set and annotated:

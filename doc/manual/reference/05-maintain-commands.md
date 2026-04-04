@@ -191,7 +191,7 @@ New files are reported but not auto-imported -- run `maki import` separately to 
 : Apply changes to catalog and sidecar files. Without this flag, only reports what it found.
 
 **--remove-stale**
-: Remove catalog location records for missing files. Requires `--apply`.
+: Remove catalog location records for missing files. Requires `--apply`. Assets that become locationless (all locations removed) are automatically deleted along with their sidecar files.
 
 `--json` outputs a `SyncResult` with counts and detail arrays for each state.
 
@@ -282,6 +282,9 @@ Non-XMP recipes (COS, pp3, etc.) get their hash updated but no metadata extracti
 
 **--media**
 : Also re-extract embedded XMP from JPEG/TIFF media files (not just recipe files).
+
+**--reimport**
+: Clear all asset metadata and re-extract from source files (XMP sidecars, embedded XMP, EXIF). Also fully re-syncs SQLite with the sidecar YAML — deletes and re-inserts all variants, locations, and recipes. Deduplicates recipes and locations. Requires `--asset <ID>` or asset IDs as positional arguments. This is the CLI equivalent of the web UI "Re-import metadata" button.
 
 `--json` outputs a refresh result with changed/unchanged counts and detail arrays.
 
@@ -1306,35 +1309,34 @@ maki-rebuild-catalog -- rebuild the SQLite catalog from YAML sidecar files
 ### SYNOPSIS
 
 ```
-maki [GLOBAL FLAGS] rebuild-catalog
+maki [GLOBAL FLAGS] rebuild-catalog [--asset <ID>]
 ```
 
 ### DESCRIPTION
 
-Rebuilds the SQLite catalog database entirely from the YAML sidecar files in the `metadata/` directory. The sidecar files are the source of truth for all asset metadata; the SQLite database is a derived cache for fast queries.
+Rebuilds the SQLite catalog database from the YAML sidecar files. The sidecar files are the source of truth; the SQLite database is a derived cache.
 
-This command is useful when:
+**Full rebuild** (no flags): wipes all SQLite data rows and rebuilds from all sidecar files. Also restores collections, stacks, faces, people, and embeddings. For large catalogs (200k+ assets), this can take over an hour.
 
-- The SQLite database is corrupted or deleted.
-- Schema changes require a full rebuild.
-- The catalog needs to be verified against sidecar files.
-
-After rebuilding, all denormalized columns (best variant hash, primary format, variant count) are recomputed. Collections are preserved via `collections.yaml`. Stacks are restored from `stacks.yaml`, re-populating the `stacks` table and the `stack_id`/`stack_position` columns on the `assets` table. In the Pro edition: faces are restored from `faces.yaml`, people from `people.yaml`, ArcFace face embeddings from binary files in `embeddings/arcface/`, and SigLIP image embeddings from binary files in `embeddings/<model>/`. The `face_count` denormalized column is recomputed.
-
-### ARGUMENTS
-
-None.
+**Per-asset rebuild** (`--asset <ID>`): deletes and re-inserts a single asset's SQLite rows (variants, locations, recipes, embeddings, faces) from its sidecar. Takes seconds. Use this to fix sync mismatches on individual assets without a full rebuild.
 
 ### OPTIONS
 
-This command only accepts [global flags](00-cli-conventions.md#global-flags).
+**--asset \<ID\>**
+: Rebuild only a specific asset by ID or prefix. Deletes all SQLite rows for the asset and re-inserts from the sidecar YAML, including embeddings and faces.
 
 ### EXAMPLES
 
-Rebuild the catalog:
+Full rebuild:
 
 ```bash
 maki rebuild-catalog
+```
+
+Rebuild a single asset:
+
+```bash
+maki rebuild-catalog --asset a1b2c3d4
 ```
 
 Rebuild with timing:
