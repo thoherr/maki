@@ -1015,7 +1015,11 @@ enum Commands {
 
     /// Rebuild SQLite catalog from sidecar files
     #[command(display_order = 51)]
-    RebuildCatalog,
+    RebuildCatalog {
+        /// Rebuild only a specific asset (by ID or prefix)
+        #[arg(long)]
+        asset: Option<String>,
+    },
 
     /// Run database schema migrations
     #[command(display_order = 52)]
@@ -6177,8 +6181,141 @@ faces/\n\
 
             Ok(())
         }
-        Commands::RebuildCatalog => {
+        Commands::RebuildCatalog { asset } => {
             let catalog_root = maki::config::find_catalog_root()?;
+
+            if let Some(ref asset_id) = asset {
+                // Per-asset rebuild: delete and re-insert a single asset from its sidecar
+                let catalog = Catalog::open(&catalog_root)?;
+                let store = MetadataStore::new(&catalog_root);
+
+                // Resolve asset ID (try as UUID first, then prefix match in catalog)
+                let uuid: uuid::Uuid = if let Ok(u) = asset_id.parse() {
+                    u
+                } else if let Some(full) = catalog.resolve_asset_id(asset_id)? {
+                    full.parse()?
+                } else {
+                    // Not in SQLite — try loading sidecar directly
+                    anyhow::bail!("Asset '{}' not found in catalog. For new assets, use 'maki refresh --reimport --asset {}'", asset_id, asset_id);
+                };
+
+                let asset_obj = store.load(uuid)?;
+                let id_str = uuid.to_string();
+
+                // Delete all existing rows for this asset (FK checks off for safety)
+                let _ = catalog.conn().execute_batch("PRAGMA foreign_keys = OFF");
+
+                // Get all variant hashes (from SQLite, may differ from sidecar)
+                let sqlite_hashes: Vec<String> = catalog.conn()
+                    .prepare("SELECT content_hash FROM variants WHERE asset_id = ?1")?
+                    .query_map(rusqlite::params![&id_str], |r| r.get(0))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+
+                for hash in &sqlite_hashes {
+                    let _ = catalog.conn().execute("DELETE FROM recipes WHERE variant_hash = ?1", rusqlite::params![hash]);
+                    let _ = catalog.conn().execute("DELETE FROM file_locations WHERE content_hash = ?1", rusqlite::params![hash]);
+                }
+                let _ = catalog.conn().execute("DELETE FROM variants WHERE asset_id = ?1", rusqlite::params![&id_str]);
+                let _ = catalog.conn().execute("DELETE FROM faces WHERE asset_id = ?1", rusqlite::params![&id_str]);
+                let _ = catalog.conn().execute("DELETE FROM embeddings WHERE asset_id = ?1", rusqlite::params![&id_str]);
+                let _ = catalog.conn().execute("DELETE FROM collection_assets WHERE asset_id = ?1", rusqlite::params![&id_str]);
+                let _ = catalog.conn().execute("DELETE FROM assets WHERE id = ?1", rusqlite::params![&id_str]);
+
+                let _ = catalog.conn().execute_batch("PRAGMA foreign_keys = ON");
+
+                // Re-insert from sidecar
+                let registry = DeviceRegistry::new(&catalog_root);
+                for volume in registry.list()? {
+                    catalog.ensure_volume(&volume)?;
+                }
+
+                catalog.insert_asset(&asset_obj)?;
+                for variant in &asset_obj.variants {
+                    catalog.insert_variant(variant)?;
+                    for loc in &variant.locations {
+                        catalog.insert_file_location(&variant.content_hash, loc)?;
+                    }
+                }
+                for recipe in &asset_obj.recipes {
+                    catalog.insert_recipe(recipe)?;
+                }
+                catalog.update_denormalized_variant_columns(&asset_obj)?;
+
+                // Restore embedding from binary file if it exists
+                #[cfg(feature = "ai")]
+                {
+                    let emb_store = maki::embedding_store::EmbeddingStore::new(catalog.conn());
+                    let emb_base = catalog_root.join("embeddings");
+                    if emb_base.exists() {
+                        if let Ok(entries) = std::fs::read_dir(&emb_base) {
+                            for entry in entries.flatten() {
+                                let name = entry.file_name().to_string_lossy().to_string();
+                                if name == "arcface" || !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                                    continue;
+                                }
+                                let prefix = &id_str[..2];
+                                let bin_path = emb_base.join(&name).join(prefix).join(format!("{id_str}.bin"));
+                                if bin_path.exists() {
+                                    if let Ok(data) = std::fs::read(&bin_path) {
+                                        let embedding: Vec<f32> = data.chunks_exact(4)
+                                            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                                            .collect();
+                                        let _ = emb_store.store(&id_str, &embedding, &name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Restore faces for this asset
+                    let face_store = maki::face_store::FaceStore::new(catalog.conn());
+                    let faces_file = maki::face_store::load_faces_yaml(&catalog_root).unwrap_or_default();
+                    let asset_face_ids: Vec<String> = faces_file.faces.iter()
+                        .filter(|f| f.asset_id == id_str)
+                        .map(|f| f.id.clone())
+                        .collect();
+                    if !asset_face_ids.is_empty() {
+                        let filtered = maki::face_store::FacesFile {
+                            faces: faces_file.faces.into_iter().filter(|f| f.asset_id == id_str).collect(),
+                        };
+                        let _ = face_store.import_faces_from_yaml(&filtered);
+                    }
+                    // Restore ArcFace embeddings for this asset's faces
+                    let asset_faces = face_store.faces_for_asset(&id_str).unwrap_or_default();
+                    for face in &asset_faces {
+                        let prefix = &face.id[..2.min(face.id.len())];
+                        let bin_path = emb_base.join("arcface").join(prefix).join(format!("{}.bin", face.id));
+                        if bin_path.exists() {
+                            if let Ok(data) = std::fs::read(&bin_path) {
+                                let embedding: Vec<f32> = data.chunks_exact(4)
+                                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                                    .collect();
+                                let _ = face_store.import_face_embedding(&face.id, &embedding);
+                            }
+                        }
+                    }
+
+                    // Update face_count
+                    let _ = catalog.conn().execute(
+                        "UPDATE assets SET face_count = (SELECT COUNT(*) FROM faces WHERE faces.asset_id = ?1) WHERE id = ?1",
+                        rusqlite::params![&id_str],
+                    );
+                }
+
+                if cli.json {
+                    println!("{}", serde_json::json!({
+                        "asset_id": id_str,
+                        "variants": asset_obj.variants.len(),
+                        "recipes": asset_obj.recipes.len(),
+                    }));
+                } else {
+                    println!("Rebuilt asset {}: {} variant(s), {} recipe(s)",
+                        &id_str[..8], asset_obj.variants.len(), asset_obj.recipes.len());
+                }
+                return Ok(());
+            }
+
             let catalog = Catalog::open(&catalog_root)?;
             catalog.initialize()?;
 

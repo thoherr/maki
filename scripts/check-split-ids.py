@@ -213,70 +213,49 @@ def main():
         print(f"\nNo catalog.db found — run: maki rebuild-catalog")
         return
 
-    print(f"\nUpdating SQLite for {len(fixed_entries)} asset(s)...")
+    # Phase 2: Update SQLite per-asset using maki rebuild-catalog --asset
+    print(f"\nRebuilding {len(fixed_entries)} asset(s) in SQLite...")
+
+    # First, delete old asset IDs that no longer have sidecars
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = OFF")
-
-    updated = 0
-    skipped_conflict = 0
+    deleted = 0
     for m in fixed_entries:
         old_id = m["current_id"]
-        new_id = m["correct_id"]
         try:
-            # Check if the target ID already exists as a different asset
-            row = conn.execute("SELECT id FROM assets WHERE id = ?", (new_id,)).fetchone()
-            if row:
-                # Target ID exists — the split-off asset should be merged back.
-                # Delete the wrong-ID asset; its variants will be re-associated
-                # by reimport after we fix the sidecar.
-                print(f"  {old_id[:8]} → {new_id[:8]}: target exists, deleting old asset")
-                # Delete dependents of old asset
-                old_variants = [r[0] for r in conn.execute(
-                    "SELECT content_hash FROM variants WHERE asset_id = ?", (old_id,)).fetchall()]
-                for vh in old_variants:
-                    conn.execute("DELETE FROM recipes WHERE variant_hash = ?", (vh,))
-                    conn.execute("DELETE FROM file_locations WHERE content_hash = ?", (vh,))
-                conn.execute("DELETE FROM variants WHERE asset_id = ?", (old_id,))
-                conn.execute("DELETE FROM embeddings WHERE asset_id = ?", (old_id,))
-                conn.execute("DELETE FROM faces WHERE asset_id = ?", (old_id,))
-                conn.execute("DELETE FROM collection_assets WHERE asset_id = ?", (old_id,))
-                conn.execute("DELETE FROM assets WHERE id = ?", (old_id,))
-                updated += 1
-                continue
-
-            # No conflict — rename the asset ID across all tables
-            # Delete old embeddings first (has unique constraint on asset_id+model)
+            # Delete all dependents of the old asset
+            old_variants = [r[0] for r in conn.execute(
+                "SELECT content_hash FROM variants WHERE asset_id = ?", (old_id,)).fetchall()]
+            for vh in old_variants:
+                conn.execute("DELETE FROM recipes WHERE variant_hash = ?", (vh,))
+                conn.execute("DELETE FROM file_locations WHERE content_hash = ?", (vh,))
+            conn.execute("DELETE FROM variants WHERE asset_id = ?", (old_id,))
             conn.execute("DELETE FROM embeddings WHERE asset_id = ?", (old_id,))
-            conn.execute("UPDATE assets SET id = ? WHERE id = ?", (new_id, old_id))
-            conn.execute("UPDATE variants SET asset_id = ? WHERE asset_id = ?", (new_id, old_id))
-            conn.execute("UPDATE faces SET asset_id = ? WHERE asset_id = ?", (new_id, old_id))
-            conn.execute("UPDATE collection_assets SET asset_id = ? WHERE asset_id = ?", (new_id, old_id))
-            updated += 1
+            conn.execute("DELETE FROM faces WHERE asset_id = ?", (old_id,))
+            conn.execute("DELETE FROM collection_assets WHERE asset_id = ?", (old_id,))
+            conn.execute("DELETE FROM assets WHERE id = ?", (old_id,))
+            deleted += 1
         except Exception as e:
-            print(f"  ERROR updating {old_id[:8]}: {e}", file=sys.stderr)
-
+            print(f"  ERROR deleting {old_id[:8]}: {e}", file=sys.stderr)
     conn.commit()
     conn.execute("PRAGMA foreign_keys = ON")
     conn.close()
-    print(f"  Updated {updated} asset ID(s) in SQLite")
-    if skipped_conflict > 0:
-        print(f"  Skipped {skipped_conflict} with target ID conflicts")
+    print(f"  Deleted {deleted} old asset(s) from SQLite")
 
-    # Phase 3: Reimport to fully resync each asset from sidecar
-    print(f"\nReimporting {updated} asset(s) from sidecars...")
-    reimported = 0
+    # Then rebuild each corrected asset from its sidecar
+    rebuilt = 0
     for m in fixed_entries:
         new_id = m["correct_id"]
         result = subprocess.run(
-            ["maki", "refresh", "--reimport", "--asset", new_id],
+            ["maki", "rebuild-catalog", "--asset", new_id],
             capture_output=True, text=True,
         )
         if result.returncode == 0:
-            reimported += 1
+            rebuilt += 1
         else:
-            print(f"  WARNING: reimport {new_id[:8]} failed: {result.stderr.strip()}")
+            print(f"  WARNING: rebuild {new_id[:8]} failed: {result.stderr.strip()}")
 
-    print(f"\nDone. {reimported}/{updated} asset(s) fully resynced. No rebuild needed.")
+    print(f"\nDone. {rebuilt}/{len(fixed_entries)} asset(s) rebuilt. No full rebuild needed.")
 
 
 if __name__ == "__main__":
