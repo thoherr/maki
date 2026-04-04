@@ -4695,6 +4695,55 @@ impl Catalog {
     }
 
     /// Return asset IDs where all variants have zero file_locations.
+    /// Find asset IDs that have at least one file location with stale or missing verification.
+    /// Used by verify --max-age to skip loading sidecars for fully-verified assets.
+    /// Count total file locations, optionally filtered by volume.
+    pub fn count_file_locations(&self, volume_id: Option<&str>) -> Result<usize> {
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(vid) = volume_id {
+            ("SELECT COUNT(*) FROM file_locations WHERE volume_id = ?1".to_string(),
+             vec![Box::new(vid.to_string())])
+        } else {
+            ("SELECT COUNT(*) FROM file_locations".to_string(), vec![])
+        };
+        let count: usize = self.conn.query_row(&sql, rusqlite::params_from_iter(params.iter()), |r| r.get(0))?;
+        Ok(count)
+    }
+
+    /// Count file locations with stale or missing verification.
+    pub fn count_stale_locations(&self, max_age_days: u64, volume_id: Option<&str>) -> Result<usize> {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::days(max_age_days as i64)).to_rfc3339();
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(vid) = volume_id {
+            ("SELECT COUNT(*) FROM file_locations WHERE volume_id = ?1 AND (verified_at IS NULL OR verified_at < ?2)".to_string(),
+             vec![Box::new(vid.to_string()), Box::new(cutoff)])
+        } else {
+            ("SELECT COUNT(*) FROM file_locations WHERE verified_at IS NULL OR verified_at < ?1".to_string(),
+             vec![Box::new(cutoff)])
+        };
+        let count: usize = self.conn.query_row(&sql, rusqlite::params_from_iter(params.iter()), |r| r.get(0))?;
+        Ok(count)
+    }
+
+    pub fn find_assets_with_stale_locations(&self, max_age_days: u64, volume_id: Option<&str>) -> Result<Vec<String>> {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::days(max_age_days as i64)).to_rfc3339();
+        let sql = if let Some(vid) = volume_id {
+            format!(
+                "SELECT DISTINCT v.asset_id FROM file_locations fl \
+                 JOIN variants v ON fl.content_hash = v.content_hash \
+                 WHERE fl.volume_id = '{}' AND (fl.verified_at IS NULL OR fl.verified_at < ?1)",
+                vid.replace('\'', "''")
+            )
+        } else {
+            "SELECT DISTINCT v.asset_id FROM file_locations fl \
+             JOIN variants v ON fl.content_hash = v.content_hash \
+             WHERE fl.verified_at IS NULL OR fl.verified_at < ?1".to_string()
+        };
+        let mut stmt = self.conn.prepare(&sql)?;
+        let ids = stmt
+            .query_map(rusqlite::params![cutoff], |r| r.get(0))?
+            .collect::<std::result::Result<Vec<String>, _>>()?;
+        Ok(ids)
+    }
+
     pub fn list_orphaned_asset_ids(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT a.id FROM assets a WHERE NOT EXISTS ( \

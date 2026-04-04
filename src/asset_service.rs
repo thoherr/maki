@@ -2036,6 +2036,43 @@ impl AssetService {
                     .ok_or_else(|| anyhow::anyhow!("No asset found matching '{asset_id}'"))?;
                 let uuid: Uuid = full_id.parse()?;
                 vec![metadata_store.load(uuid)?]
+            } else if let Some(days) = max_age_days {
+                // Fast path: query SQLite for asset IDs with stale locations,
+                // then load only those sidecars. Avoids loading all 260k+ YAMLs.
+                let vol_filter = volume_filter_resolved.as_ref().map(|v| v.id.to_string());
+                let stale_ids = catalog.find_assets_with_stale_locations(days, vol_filter.as_deref())?;
+                // Count skipped locations: total (file_locations + recipes) minus stale
+                let total_fl = catalog.count_file_locations(vol_filter.as_deref())?;
+                let stale_fl = catalog.count_stale_locations(days, vol_filter.as_deref())?;
+                let total_recipes: usize = if let Some(vid) = vol_filter.as_deref() {
+                    catalog.conn().query_row(
+                        "SELECT COUNT(*) FROM recipes WHERE volume_id = ?1",
+                        rusqlite::params![vid], |r| r.get(0)
+                    ).unwrap_or(0)
+                } else {
+                    catalog.conn().query_row("SELECT COUNT(*) FROM recipes", [], |r| r.get(0)).unwrap_or(0)
+                };
+                // File locations that are recent + all recipes for recently-verified assets
+                let stale_asset_count = stale_ids.len();
+                let total_assets = catalog.conn().query_row("SELECT COUNT(*) FROM assets", [], |r| r.get::<_, usize>(0)).unwrap_or(0);
+                let recent_recipes = if total_assets > 0 && stale_asset_count < total_assets {
+                    // Proportional estimate of recipe locations for recently-verified assets
+                    total_recipes.saturating_sub(
+                        (total_recipes as f64 * stale_asset_count as f64 / total_assets as f64) as usize
+                    )
+                } else {
+                    0
+                };
+                result.skipped_recent = total_fl.saturating_sub(stale_fl) + recent_recipes;
+                if self.verbosity.verbose {
+                    eprintln!("  Verify: {} asset(s) with stale locations, {} location(s) skipped as recent",
+                        stale_ids.len(), result.skipped_recent);
+                }
+                stale_ids
+                    .iter()
+                    .filter_map(|id| id.parse::<Uuid>().ok())
+                    .filter_map(|uuid| metadata_store.load(uuid).ok())
+                    .collect()
             } else {
                 let summaries = metadata_store.list()?;
                 summaries
