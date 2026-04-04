@@ -2,6 +2,16 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.3.7 (2026-04-04)
+
+### New Features
+- **`maki refresh --reimport`** — CLI equivalent of the web UI "Re-import metadata" button. Clears and re-extracts all metadata (tags, description, rating, label, EXIF) from source files. Also fully re-syncs SQLite with the sidecar YAML, fixing variant/location/recipe mismatches from merge/split operations.
+
+### Bug Fixes
+- **Reimport metadata** — now re-extracts EXIF data (camera, lens, date) and recalculates `created_at` from earliest EXIF date. Previously only re-extracted XMP metadata.
+- **Reimport SQLite sync** — deletes and re-inserts all variants, file locations, and recipes from the sidecar YAML. Cleans up orphaned SQLite rows from stale merge/group operations. Deduplicates recipes and locations by path.
+- **Detail page preview sizing** — preview image no longer shrinks to a thumbnail when the variants table has long file paths. Preview column has a 300px minimum; paths wrap instead of stretching.
+
 ## v4.3.6 (2026-04-04)
 
 ### New Features
