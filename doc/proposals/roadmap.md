@@ -8,22 +8,6 @@ Current version: **v4.3.5** (2026-04-04)
 
 ## Active Proposals
 
-### Card-First Workflow
-
-Import directly from memory cards, cull on smart previews, and copy only keepers to the working drive — eliminating wasted copies of rejects. See `doc/proposals/archive/card-first-workflow.md`.
-
-**Status:** Complete. All 3 phases implemented (v4.2.x): `media` volume purpose, `--create-sidecars` on relocate + standalone command, auto-label on volume add, volume list filters.
-
-**Complexity:** Low (phase 1: media purpose), Medium (phase 2: sidecar creation).
-
-### Tag Hierarchy Expansion
-
-Ensure consistency between CaptureOne/Lightroom-imported tags (which expand all ancestor paths) and MAKI-created/renamed tags (which currently store only the leaf). Recommended approach: always expand ancestors on write, matching the industry convention. See `doc/proposals/tag-hierarchy-expansion.md`.
-
-**Status:** Complete. All 4 phases implemented (v4.3.5).
-
-**Complexity:** Medium (touches tag add, rename, remove, writeback, and import merge logic).
-
 ### Tag Vocabulary File
 
 Predefined tag hierarchy in `vocabulary.yaml` that guides autocomplete and prevents vocabulary drift. Tree-format YAML, merged with actual tags for suggestions. Export command to bootstrap from existing tags. See `doc/proposals/tag-vocabulary.md`.
@@ -39,14 +23,6 @@ Produce the MAKI user manual in English and German from a single source using in
 **Status:** Proposal written, not started.
 
 **Complexity:** Low (tooling), Medium (translation effort).
-
-### User Guide Improvements
-
-Audit of user guide chapters against the full CLI feature set. Adds coverage for missing commands (contact sheets, delete, preview management, volume split/rename, fix-recipes), expands workflow context for existing commands (backup-status, export, verify, relocate batch mode, saved-search favorites, stack from-tag), and introduces best-practice topics (archive lifecycle, drive failure recovery, multi-tool round-trips, video workflows, import strategies). See `doc/proposals/archive/user-guide-improvements.md`.
-
-**Status:** Complete. All 17 items implemented across 3 passes (2026-03-28).
-
-**Complexity:** Medium (17 items across 3 passes, mostly documentation).
 
 ---
 
@@ -140,14 +116,6 @@ The ZIP export modal shows "Preparing..." with no progress feedback.
 
 **Complexity:** Low-Medium.
 
-### Import Profiles
-
-Named preset configurations for different import scenarios (studio shoot, travel, phone backup).
-
-**Status:** Implemented (v4.2.x). Profiles in `[import.profiles.<name>]`, selected via `--profile`. Override exclude, auto_tags, smart_previews, embeddings, descriptions, include/skip file type groups.
-
-**Complexity:** Low.
-
 ### Volume Health Monitoring
 
 Surface drive health and verification staleness proactively.
@@ -174,18 +142,6 @@ Transcode non-browser-playable video formats (ProRes, AVCHD, MTS) to MP4 for web
 ---
 
 ## Tier 3 — Polish & Future
-
-### Hover-to-Play on Browse Grid
-
-Preview video playback on hover in the browse grid. Short video clips play silently when the cursor hovers over a video thumbnail.
-
-**Scope:**
-- On mouse enter: load the first few seconds of the video and play muted
-- On mouse leave: pause and show the static thumbnail
-- Only for online volumes with browser-playable formats
-- Opt-in via config or grid density setting (disabled on compact grid)
-
-**Complexity:** Low-Medium. HTML5 video with `preload="none"` and JS hover handlers.
 
 ### Undo / Edit History
 
@@ -241,4 +197,6 @@ Design documents for completed features are in `doc/proposals/archive/`. Key mil
 - **v4.0**: MAKI rebrand (binary `dam` → `maki`, config `dam.toml` → `maki.toml`, full visual rebrand), branded PDF manual
 - **v4.0.1–v4.0.12**: Default browse filter, similarity browse, Windows support, CI/CD, unified numeric filters, XMP writeback safeguard, cheat sheet, automated releases, branded screenshots
 - **v4.1.x (Video Playback)**: HTML5 video player on detail page and lightbox, duration badges on browse cards, video metadata extraction via ffprobe (duration, codec, resolution, framerate) at import time, `generate-previews --force` backfills video metadata for existing assets. Phase 2 `duration:` and `codec:` search filters implemented (duration uses denormalized `video_duration` column with full `NumericFilter` support; codec uses denormalized `video_codec` column with LIKE matching). Remaining Phase 2 filter: `resolution:` (but `width:`/`height:` already cover this).
+- **v4.2.x**: Card-first workflow (media volume purpose, create-sidecars, auto-label, volume list filters), import profiles, video proxy generation with hover-to-play, user guide improvements (17 items across 3 passes)
+- **v4.3.x**: Tag hierarchy separator aligned with LR/C1 (`|` and `>`), tag rename/clear/expand-ancestors subcommands, ancestor expansion matching CaptureOne convention, git-based catalog backup, BTreeMap for deterministic YAML, Tagging Guide chapter
 - **v4.1.x**: MAKI Pro edition (`pro` feature flag, `-pro` release artifacts), VLM/writeback/sync-metadata gated behind Pro, search filter reference card, `volume split`/`rename`, `edit --clear-tags`, improved `scattered:` filter with `/N` depth, star rating filter UX, consistent *(Pro)* markers in manual, repo cleanup (`doc/images/`, `doc/quickref/`)
