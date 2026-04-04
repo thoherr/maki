@@ -3128,29 +3128,47 @@ impl Catalog {
     /// Helper: generate tag LIKE clause parts for a single tag value.
     /// Returns a Vec of SQL expressions (each with params already pushed).
     ///
+    /// If the tag starts with `=`, only exact matches are returned (no descendants).
+    /// Otherwise, both exact and prefix (descendant) matches are generated.
+    ///
     /// Tags containing `"` may be stored in JSON two ways:
     /// - Unescaped: `"\"Sir\" Oliver Mally"` (serde_json proper)
     /// - Raw: `""Sir" Oliver Mally"` (legacy/malformed JSON)
     /// We match both forms.
     fn tag_like_parts(params: &mut Vec<Box<dyn rusqlite::types::ToSql>>, tag: &str) -> Vec<String> {
-        let stored = crate::tag_util::tag_input_to_storage(tag);
+        // Check for exact-match prefix
+        let (exact_only, tag_value) = if tag.starts_with('=') {
+            (true, &tag[1..])
+        } else {
+            (false, tag)
+        };
+        let stored = crate::tag_util::tag_input_to_storage(tag_value);
         let mut exprs = Vec::new();
 
-        // Primary patterns: match the stored form
-        params.push(Box::new(format!("%\"{stored}\"%")));
-        exprs.push("a.tags LIKE ?".to_string());
-        params.push(Box::new(format!("%\"{stored}|%")));
-        exprs.push("a.tags LIKE ?".to_string());
+        if exact_only {
+            // Exact/leaf match: has this tag but NOT any child tag.
+            // "assets tagged at exactly this level, not deeper"
+            params.push(Box::new(format!("%\"{stored}\"%")));
+            params.push(Box::new(format!("%\"{stored}|%")));
+            exprs.push("(a.tags LIKE ? AND a.tags NOT LIKE ?)".to_string());
+        } else {
+            // Exact match: tag appears as a complete JSON string value
+            params.push(Box::new(format!("%\"{stored}\"%")));
+            exprs.push("a.tags LIKE ?".to_string());
+            // Prefix/descendant match: tag followed by | (hierarchy separator)
+            params.push(Box::new(format!("%\"{stored}|%")));
+            exprs.push("a.tags LIKE ?".to_string());
+        }
 
         // If stored form differs from input, also match input form
-        if tag != stored {
-            params.push(Box::new(format!("%\"{tag}\"%")));
+        if tag_value != stored {
+            params.push(Box::new(format!("%\"{tag_value}\"%")));
             exprs.push("a.tags LIKE ?".to_string());
         }
 
         // If tag contains ", also match JSON-escaped form (\" in stored JSON)
-        if tag.contains('"') {
-            let json_escaped = tag.replace('"', "\\\"");
+        if tag_value.contains('"') {
+            let json_escaped = tag_value.replace('"', "\\\"");
             params.push(Box::new(format!("%\"{json_escaped}\"%")));
             exprs.push("a.tags LIKE ?".to_string());
         }

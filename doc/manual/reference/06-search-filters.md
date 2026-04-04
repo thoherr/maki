@@ -93,11 +93,13 @@ maki search "type:video rating:3+"
 
 ## tag
 
-**Syntax:** `tag:<name>` or `tag:"<multi-word name>"`
+**Syntax:** `tag:<name>`, `tag:"<multi-word name>"`, or `tag:=<name>` (exact match)
 
 **Description:** Filters to assets that have a specific tag. Supports quoted values for multi-word tags.
 
 **Hierarchical matching:** Tags can be organized hierarchically using `|` as a separator (e.g., `animals|birds|eagles`), aligned with Lightroom and CaptureOne conventions. `>` is also accepted as an alternative separator. Searching for a parent tag matches all descendants: `tag:animals` finds assets tagged `animals`, `animals|birds`, and `animals|birds|eagles`. Searching for an intermediate level also works: `tag:animals|birds` matches both `animals|birds` and `animals|birds|eagles`.
+
+**This-level-only match:** Prefix with `=` to match assets tagged at exactly this level, excluding those with deeper tags in the same branch. `tag:=location|Germany|Bayern` matches assets whose deepest tag in this branch is `Bayern` — NOT assets that also have `location|Germany|Bayern|München`. In the web UI, click the `▼` indicator on a tag chip to toggle to `=` (this-level-only) mode.
 
 `/` is treated as a literal character in tag names (e.g., `f/1.4` works naturally without escaping).
 
@@ -107,11 +109,13 @@ maki search "type:video rating:3+"
 maki search "tag:landscape"
 maki search 'tag:"Fools Theater"'
 maki search 'tag:"Black and White" rating:4+'
-maki search "tag:animals"                   # matches animals, animals|birds, animals|birds|eagles
-maki search "tag:animals|birds"             # matches animals|birds and animals|birds|eagles
+maki search "tag:animals"                      # matches animals, animals|birds, animals|birds|eagles
+maki search "tag:animals|birds"                # matches animals|birds and animals|birds|eagles
+maki search "tag:=animals|birds"               # this level only: has birds but no deeper tag
+maki search 'tag:="location|Germany|Bayern"'   # Bayern level only, not cities/venues below
 ```
 
-**SQL behavior:** `WHERE (a.tags LIKE '%"stored"%' OR a.tags LIKE '%"stored|%')`. The second LIKE clause enables parent-matches-children semantics.
+**SQL behavior:** `WHERE (a.tags LIKE '%"stored"%' OR a.tags LIKE '%"stored|%')`. The second LIKE clause enables parent-matches-children semantics. With `=` prefix: `WHERE (a.tags LIKE '%"stored"%' AND a.tags NOT LIKE '%"stored|%')` — matches the tag but excludes assets with deeper descendants.
 
 ---
 

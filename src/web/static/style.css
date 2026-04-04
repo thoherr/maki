@@ -834,6 +834,18 @@ select.badge {
     line-height: 1;
 }
 .tag-chip .remove-tag:hover { opacity: 1; }
+.tag-chip .tag-mode-toggle {
+    background: none;
+    border: none;
+    color: var(--tag-text);
+    cursor: pointer;
+    font-size: 0.65rem;
+    padding: 0 0.15rem;
+    margin-left: 0.2rem;
+    opacity: 0.5;
+    line-height: 1;
+}
+.tag-chip .tag-mode-toggle:hover { opacity: 1; }
 .clear-tags-btn {
     background: none;
     border: 1px solid var(--border);

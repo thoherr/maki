@@ -26,13 +26,43 @@
     function addTag(name) {
         name = name.trim();
         if (!name) return;
+        // Strip = prefix if user typed it manually
+        var exact = false;
+        if (name.charAt(0) === '=') { exact = true; name = name.substring(1); }
         var existing = getSelectedTags();
-        if (existing.indexOf(name) !== -1) return;
+        if (existing.indexOf(name) !== -1 || existing.indexOf('=' + name) !== -1) return;
 
         var chip = document.createElement('span');
         chip.className = 'tag-chip';
-        chip.setAttribute('data-tag', name);
-        chip.textContent = tagToDisplay(name);
+        chip.setAttribute('data-tag', exact ? '=' + name : name);
+        chip.setAttribute('data-exact', exact ? '1' : '0');
+
+        var label = document.createElement('span');
+        label.textContent = tagToDisplay(name);
+        chip.appendChild(label);
+
+        // Mode toggle: ▼ (with descendants) / = (exact only)
+        var toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'tag-mode-toggle';
+        toggle.title = exact ? 'This level only (click to include descendants)' : 'Including descendants (click for this level only)';
+        toggle.textContent = exact ? '=' : '\u25BC';
+        toggle.onclick = function() {
+            var isExact = chip.getAttribute('data-exact') === '1';
+            if (isExact) {
+                chip.setAttribute('data-exact', '0');
+                chip.setAttribute('data-tag', name);
+                toggle.textContent = '\u25BC';
+                toggle.title = 'Including descendants (click for this level only)';
+            } else {
+                chip.setAttribute('data-exact', '1');
+                chip.setAttribute('data-tag', '=' + name);
+                toggle.textContent = '=';
+                toggle.title = 'This level only (click to include descendants)';
+            }
+            onFilterChange();
+        };
+        chip.appendChild(toggle);
 
         var btn = document.createElement('button');
         btn.type = 'button';
