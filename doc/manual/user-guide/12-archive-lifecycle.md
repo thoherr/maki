@@ -8,24 +8,9 @@ Most photography tools focus on individual tasks — importing, tagging, exporti
 
 Files in a well-managed library flow through a predictable lifecycle. Each stage has a different purpose, and MAKI provides tools for every transition:
 
-```mermaid {width=52%}
-flowchart TD
-    IM["Import<br/><i>maki import</i>"]
-    WK["Working Drive<br/>(fast SSD)"]
-    CU["Cull & Organize<br/><i>rate, tag, stack</i>"]
-    AR["Archive Drive<br/>(long-term storage)"]
-    BK["Backup Drive<br/>(redundancy copy)"]
-    VE["Verify & Maintain<br/><i>maki verify</i><br/><i>maki backup-status</i>"]
-    EX["Export & Deliver<br/><i>maki export</i><br/><i>maki contact-sheet</i>"]
+![Asset & Metadata Workflow — from shutter click to fully managed catalog](../images/asset-workflow.png)
 
-    IM --> WK
-    WK --> CU
-    CU --> AR
-    CU --> EX
-    AR --> BK
-    BK --> VE
-    VE --> AR
-```
+\newpage
 
 The flow is:
 

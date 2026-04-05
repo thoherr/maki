@@ -100,7 +100,7 @@ for f in "${FILES[@]}"; do
     section="$cur_section"
 
     # Append file, rewriting relative image paths for pandoc resource resolution
-    sed 's|\.\./screenshots/|screenshots/|g; s|\.\./\.\.\/images/maki-|maki-|g; s|\.\./maki-|maki-|g' "$filepath" >> "$TMPFILE"
+    sed 's|\.\./screenshots/|screenshots/|g; s|\.\./\.\.\/images/maki-|maki-|g; s|\.\./maki-|maki-|g; s|\.\./images/||g' "$filepath" >> "$TMPFILE"
 done
 
 # --- Rewrite cross-document .md links to internal anchors ---
