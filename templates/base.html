@@ -37,10 +37,16 @@
 <div class="keyboard-help" id="keyboard-help">
     <div class="keyboard-help-inner">
         <div class="keyboard-help-header">
-            <h2>Keyboard Shortcuts</h2>
+            <h2>Help</h2>
             <button class="keyboard-help-close" id="kb-help-close">&times;</button>
         </div>
         <div class="keyboard-help-body" id="kb-help-body"></div>
+        <div class="keyboard-help-docs">
+            <h3>Documentation</h3>
+            <a href="https://github.com/thoherr/maki/releases/latest/download/maki-manual.pdf" target="_blank">User Manual</a>
+            <a href="https://github.com/thoherr/maki/releases/latest/download/cheat-sheet.pdf" target="_blank">Cheat Sheet</a>
+            <a href="https://github.com/thoherr/maki/releases/latest/download/search-filters.pdf" target="_blank">Search Filters</a>
+        </div>
     </div>
 </div>
 <script>
@@ -106,12 +112,6 @@
             }
             html += '</div>';
         }
-        html += '</div>';
-        html += '<div class="keyboard-help-docs">';
-        html += '<h3>Documentation</h3>';
-        html += '<a href="https://github.com/thoherr/maki/releases/latest/download/maki-manual.pdf" target="_blank">User Manual</a>';
-        html += '<a href="https://github.com/thoherr/maki/releases/latest/download/cheat-sheet.pdf" target="_blank">Cheat Sheet</a>';
-        html += '<a href="https://github.com/thoherr/maki/releases/latest/download/search-filters.pdf" target="_blank">Search Filters</a>';
         html += '</div>';
         body.innerHTML = html;
     }

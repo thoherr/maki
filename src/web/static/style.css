@@ -3043,8 +3043,8 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     margin: 0 0 0.5rem;
 }
 .keyboard-help-docs {
-    margin-top: 1rem;
-    padding-top: 0.75rem;
+    margin: 0 1.25rem;
+    padding: 0.75rem 0 1rem;
     border-top: 1px solid var(--border);
     display: flex;
     flex-wrap: wrap;
