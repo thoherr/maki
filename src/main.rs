@@ -1025,6 +1025,14 @@ enum Commands {
     #[command(display_order = 52)]
     Migrate,
 
+    /// Open documentation in the browser
+    #[command(display_order = 55)]
+    Doc {
+        /// Which document: manual, cheatsheet, filters (default: manual)
+        #[arg(default_value = "manual")]
+        document: String,
+    },
+
     /// Start an interactive asset management shell
     #[command(display_order = 56)]
     Shell {
@@ -6473,6 +6481,28 @@ faces/\n\
                 if result.errors > 0 {
                     println!("  {} error(s) encountered", result.errors);
                 }
+            }
+            Ok(())
+        }
+        Commands::Doc { document } => {
+            let url = match document.to_lowercase().as_str() {
+                "manual" | "man" | "guide" => "https://github.com/thoherr/maki/releases/latest/download/maki-manual.pdf",
+                "cheatsheet" | "cheat" | "cs" => "https://github.com/thoherr/maki/releases/latest/download/cheat-sheet.pdf",
+                "filters" | "search" | "filter" | "sf" => "https://github.com/thoherr/maki/releases/latest/download/search-filters.pdf",
+                _ => {
+                    anyhow::bail!("Unknown document '{}'. Available: manual, cheatsheet, filters", document);
+                }
+            };
+            if cli.json {
+                println!("{}", serde_json::json!({ "url": url }));
+            } else {
+                println!("Opening {url}");
+                #[cfg(target_os = "macos")]
+                { let _ = std::process::Command::new("open").arg(url).spawn(); }
+                #[cfg(target_os = "linux")]
+                { let _ = std::process::Command::new("xdg-open").arg(url).spawn(); }
+                #[cfg(target_os = "windows")]
+                { let _ = std::process::Command::new("cmd").args(["/c", "start", url]).spawn(); }
             }
             Ok(())
         }

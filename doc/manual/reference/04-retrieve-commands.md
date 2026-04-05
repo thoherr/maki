@@ -12,6 +12,7 @@ Commands for finding assets, inspecting details, exporting files, and browsing t
 | [duplicates](#maki-duplicates) | Find files with multiple locations |
 | [stats](#maki-stats) | Catalog statistics and health overview |
 | [backup-status](#maki-backup-status) | Check backup coverage and find at-risk assets |
+| [doc](#maki-doc) | Open documentation in the browser |
 | [serve](#maki-serve) | Start the web UI |
 | [shell](#maki-shell) | Interactive command shell |
 
@@ -834,6 +835,41 @@ maki --json backup-status | jq '.at_risk_count'
 [duplicates](#maki-duplicates) -- find duplicate files across volumes.
 [stats](#maki-stats) -- general catalog statistics.
 [verify](05-maintain-commands.md#maki-verify) -- verify file integrity.
+
+---
+
+## maki doc
+
+### NAME
+
+maki-doc -- open documentation in the browser
+
+### SYNOPSIS
+
+    maki [GLOBAL FLAGS] doc [DOCUMENT]
+
+### DESCRIPTION
+
+Opens the specified MAKI documentation PDF in the default browser. The PDFs are served from the latest GitHub release — no local files needed, always up to date.
+
+### ARGUMENTS
+
+**DOCUMENT** (optional, default: `manual`)
+: Which document to open. Accepted values:
+
+| Value | Aliases | Document |
+|-------|---------|----------|
+| `manual` | `man`, `guide` | User Manual |
+| `cheatsheet` | `cheat`, `cs` | Cheat Sheet |
+| `filters` | `search`, `filter`, `sf` | Search Filter Reference |
+
+### EXAMPLES
+
+```bash
+maki doc                # open user manual
+maki doc cheatsheet     # open cheat sheet
+maki doc filters        # open search filter reference
+```
 
 ---
 
