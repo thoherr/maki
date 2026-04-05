@@ -2,6 +2,15 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.3.9 (2026-04-05)
+
+### New Features
+- **`maki doc`** — opens documentation PDFs in the browser. `maki doc manual`, `maki doc cheatsheet`, `maki doc filters`. Links to latest GitHub release — always up to date, no local files needed.
+- **Web UI documentation links** — the keyboard shortcuts help dialog (`?`) now includes a "Documentation" footer with links to the User Manual, Cheat Sheet, and Search Filter Reference PDFs.
+
+### Documentation
+- **Archive Lifecycle** — branded "Asset & Metadata Workflow" illustration replaces the mermaid flowchart, showing the complete data flow from camera to backup with MAKI at the center.
+
 ## v4.3.8 (2026-04-05)
 
 ### New Features
