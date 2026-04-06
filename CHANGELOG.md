@@ -2,6 +2,21 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.3.10 (2026-04-06)
+
+### Enhancements
+- **Tags page filter persists** across navigation — filter text is saved in sessionStorage, restored when navigating back to the tags page. Enables the tag cleanup workflow: filter → click tag → fix in browse → navigate back.
+- **Tag autocomplete refreshes on focus** — picks up CLI tag changes without restarting the server. Server-side `/api/tags` now queries SQLite directly (bypasses stale cache).
+- **Ensemble category** in person hierarchy for named groups (band, choir, orchestra, team). Default vocabulary updated.
+
+### Bug Fixes
+- **Batch delete showToast error** — delete succeeded but success message failed with "showToast is not defined". Fixed.
+- **fix-scattered-groups.py** — disabled the auto-regroup phase that incorrectly regrouped the entire catalog.
+
+### Documentation
+- **XMP sidecar prerequisite** — new table with per-tool settings for CaptureOne, Lightroom, RawTherapee, DxO, darktable. Cross-referenced from setup and tagging chapters.
+- **Tagging Guide** — clarified overlapping subject categories (person vs performing arts), leaf-level tag counts vs stored totals, ensemble category with examples, singular forms in hierarchy examples.
+
 ## v4.3.9 (2026-04-05)
 
 ### New Features
