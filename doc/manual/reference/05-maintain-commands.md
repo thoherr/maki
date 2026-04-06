@@ -286,6 +286,9 @@ Non-XMP recipes (COS, pp3, etc.) get their hash updated but no metadata extracti
 **--reimport**
 : Clear all asset metadata and re-extract from source files (XMP sidecars, embedded XMP, EXIF). Also fully re-syncs SQLite with the sidecar YAML — deletes and re-inserts all variants, locations, and recipes. Deduplicates recipes and locations. Requires `--asset <ID>` or asset IDs as positional arguments. This is the CLI equivalent of the web UI "Re-import metadata" button.
 
+**--exif-only**
+: Re-extract only EXIF/source metadata (camera, lens, ISO, exposure, resolution, date) from media files, WITHOUT clearing tags, description, rating, or color label. Useful for backfilling missing EXIF data on assets whose tags and ratings have been manually curated. Requires `--asset <ID>` or asset IDs as positional arguments.
+
 `--json` outputs a refresh result with changed/unchanged counts and detail arrays.
 
 `--log` prints per-file status to stderr.

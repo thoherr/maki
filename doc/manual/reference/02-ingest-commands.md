@@ -807,6 +807,8 @@ maki [GLOBAL FLAGS] auto-group [QUERY] [--apply]
 
 Groups assets by filename stem using fuzzy prefix matching. This handles the common case where export tools (CaptureOne, Lightroom, Photoshop) append suffixes to the original filename: `Z91_8561.ARW` matches `Z91_8561-1-HighRes.tif` because `Z91_8561` is a prefix of `Z91_8561-1-HighRes` and the next character (`-`) is non-alphanumeric (a separator).
 
+**Directory-local grouping**: By default, stem matching is restricted to assets whose files are in the same directory neighborhood (session root = parent of the variant's directory). This prevents `DSC_0001` from a 2019 shoot being grouped with `DSC_0001` from a 2024 shoot. Use `--global` to match across all directories (dangerous — only for carefully scoped queries).
+
 **Fuzzy prefix matching rules**:
 - Two stems match if the shorter is a prefix of the longer and the character immediately after the prefix in the longer string is non-alphanumeric (e.g., `-`, `_`, ` `, `(`).
 - This prevents false positives: `DSC_001` does not match `DSC_0010` because `0` is alphanumeric.
@@ -816,7 +818,9 @@ Groups assets by filename stem using fuzzy prefix matching. This handles the com
 
 **Target selection** within each group: (1) prefer the asset that has a RAW variant, then (2) the oldest asset by creation date.
 
-Without `--apply`, runs in report-only mode (dry run) and shows what would be grouped. With `--apply`, performs the merging: donor variants are moved to the target asset with their role changed from `original` to `alternate`, tags and recipes are merged, and donor assets are deleted.
+Without `--apply`, runs in report-only mode (dry run) and shows what would be grouped. With `--apply`, performs the merging: donor variants are moved to the target asset with their role set to `export` (for non-RAW in mixed RAW+non-RAW groups), tags and recipes are merged, and donor assets are deleted.
+
+With `--log`, each stem group is printed as it's found during processing (real-time progress).
 
 An optional search query scopes which assets are considered. Only assets matching the query participate in grouping.
 
@@ -829,6 +833,9 @@ An optional search query scopes which assets are considered. Only assets matchin
 
 **--apply**
 : Actually perform the grouping. Without this flag, the command only reports what it would do.
+
+**--global**
+: Match stems across all directories instead of restricting to the same directory neighborhood. **Dangerous**: may merge unrelated assets with the same camera-generated filename across different shoots. Only use with a carefully scoped query.
 
 `--json` outputs an `AutoGroupResult` with `groups` (array of group details), `total_donors_merged`, `total_variants_moved`, and `dry_run` boolean.
 
