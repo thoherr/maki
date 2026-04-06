@@ -1338,7 +1338,7 @@ window.triggerSearch = onFilterChange;
                 var msg = data.deleted + ' asset' + (data.deleted === 1 ? '' : 's') + ' deleted';
                 if (data.files_removed > 0) msg += ', ' + data.files_removed + ' file' + (data.files_removed === 1 ? '' : 's') + ' removed';
                 if (data.errors && data.errors.length > 0) msg += ' (' + data.errors.length + ' error' + (data.errors.length === 1 ? '' : 's') + ')';
-                showToast(msg);
+                alert(msg);
             })
             .catch(function(err) { alert('Delete failed: ' + err.message); })
             .finally(function() { setButtonsBusy(false); });
