@@ -141,6 +141,10 @@ subject
 You don't need all of these on day one. Start with the top two levels and add
 leaf nodes as your collection demands them.
 
+**When categories overlap:** `subject|person` describes the *composition* of the photo (a portrait, a group scene, someone doing an activity), not the profession or context. A musician on stage is `subject|performing arts|concert|musician` — the photo shows a performance, not a person doing a generic activity. The same musician backstage in a headshot is `subject|person|portrait`. The rule: ask "what is the photo *about*?" — if the answer is "a concert" use `performing arts`, if it's "a portrait of someone" use `person`.
+
+Similarly, `subject|person|activity` is for general activities (hiking, cooking, sports) where the activity defines the image. A wedding guest dancing → `subject|person|activity|dance`. A ballet performance → `subject|performing arts|dance|ballet`. Context matters more than the literal content.
+
 ### location hierarchy
 
 ```
