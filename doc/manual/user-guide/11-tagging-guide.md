@@ -310,6 +310,8 @@ The [IPTC Photo Metadata Standard](https://iptc.org/standards/photo-metadata/) d
 
 ### How MAKI stores hierarchical tags (the roundtrip)
 
+**Prerequisite:** Your photo editor must be configured to write XMP sidecar files. Most tools don't do this by default — see [Working with External Tools](07-maintenance.md#prerequisite-enable-xmp-sidecar-writing-in-your-photo-editor) for per-tool settings.
+
 CaptureOne and Lightroom write two representations of the same hierarchy to XMP:
 
 - **`dc:subject`**: flat individual components — `location`, `Germany`, `Bayern`, `Wolfratshausen`

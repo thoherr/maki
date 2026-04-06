@@ -366,7 +366,7 @@ auto_tags = [         # Tags automatically applied to every new asset
 
 ### Recommended settings
 
-If you use Lightroom, CaptureOne, or another tool that reads `.xmp` sidecar files, enable XMP writeback so your edits in MAKI are visible to those tools:
+If you use Lightroom, CaptureOne, or another tool that reads `.xmp` sidecar files, enable XMP writeback so your edits in MAKI are visible to those tools. Also make sure your photo editor is configured to **write XMP sidecar files** — most tools don't do this by default. See [Working with External Tools](07-maintenance.md#working-with-external-tools) for per-tool settings.
 
 ```toml
 [writeback]

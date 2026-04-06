@@ -409,6 +409,20 @@ Shows what would change without modifying any files.
 
 MAKI is designed to coexist with tools like CaptureOne, Lightroom, RawTherapee, and DxO. Metadata flows between MAKI and these tools through XMP sidecar files. This section describes common round-trip scenarios.
 
+### Prerequisite: enable XMP sidecar writing in your photo editor
+
+Most photo editors do **not** write XMP sidecar files by default. You need to enable this in each tool's settings, otherwise MAKI has no metadata to read.
+
+| Tool | Setting | Location |
+|------|---------|----------|
+| **CaptureOne** | Enable "Auto-write XMP sidecar" | Preferences → General → Metadata, or per-session in the tool tab |
+| **Lightroom Classic** | Enable "Automatically write changes into XMP" | Catalog Settings → Metadata |
+| **RawTherapee** | XMP sidecars are always written | No setting needed |
+| **DxO PhotoLab** | Enable "Write to XMP sidecar" | Preferences → General |
+| **darktable** | Enable "Write sidecar file for each image" | Settings → Storage |
+
+Without this setting, your ratings, keywords, and labels stay locked inside the tool's proprietary database and are invisible to MAKI.
+
 ### "I rated and tagged in CaptureOne/Lightroom — how do I get those changes into MAKI?"
 
 External tools write ratings, keywords, descriptions, and color labels to `.xmp` sidecar files. Use `refresh` to read those changes:
