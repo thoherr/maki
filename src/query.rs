@@ -1699,17 +1699,22 @@ impl QueryEngine {
     ///
     /// Picks the best target per group (RAW preferred, then oldest) and merges.
     pub fn auto_group(&self, asset_ids: &[String], dry_run: bool) -> Result<AutoGroupResult> {
-        self.auto_group_inner(asset_ids, dry_run, false)
+        self.auto_group_inner(asset_ids, dry_run, false, |_, _| {})
+    }
+
+    /// Auto-group with progress callback.
+    pub fn auto_group_with_log(&self, asset_ids: &[String], dry_run: bool, on_group: impl FnMut(&str, usize)) -> Result<AutoGroupResult> {
+        self.auto_group_inner(asset_ids, dry_run, false, on_group)
     }
 
     /// Auto-group with explicit global scope (no directory partitioning).
     /// DANGEROUS: groups by stem across all directories. Use only with a
     /// carefully scoped asset_ids list.
     pub fn auto_group_global(&self, asset_ids: &[String], dry_run: bool) -> Result<AutoGroupResult> {
-        self.auto_group_inner(asset_ids, dry_run, true)
+        self.auto_group_inner(asset_ids, dry_run, true, |_, _| {})
     }
 
-    fn auto_group_inner(&self, asset_ids: &[String], dry_run: bool, global_scope: bool) -> Result<AutoGroupResult> {
+    fn auto_group_inner(&self, asset_ids: &[String], dry_run: bool, global_scope: bool, mut on_group: impl FnMut(&str, usize)) -> Result<AutoGroupResult> {
         let catalog = Catalog::open(&self.catalog_root)?;
 
         // Deduplicate input IDs
@@ -1865,6 +1870,7 @@ impl QueryEngine {
                 total_donors_merged += donor_count;
             }
 
+            on_group(&root_stem, entries.len());
             all_groups.push(StemGroupEntry {
                 stem: root_stem,
                 target_id,

@@ -4421,10 +4421,15 @@ faces/\n\
                     .collect()
             };
 
+            let show_log = cli.log;
             let result = if global {
                 engine.auto_group_global(&asset_ids, !apply)?
             } else {
-                engine.auto_group(&asset_ids, !apply)?
+                engine.auto_group_with_log(&asset_ids, !apply, |stem, count| {
+                    if show_log {
+                        eprintln!("  {} — {} asset(s)", stem, count);
+                    }
+                })?
             };
 
             if cli.json {
@@ -4433,16 +4438,6 @@ faces/\n\
                 if result.groups.is_empty() {
                     eprintln!("No groupable assets found");
                 } else {
-                    if cli.log {
-                        for group in &result.groups {
-                            let short_id = &group.target_id[..8.min(group.target_id.len())];
-                            eprintln!(
-                                "{} — {} asset(s) → target {short_id}",
-                                group.stem,
-                                group.asset_ids.len(),
-                            );
-                        }
-                    }
                     println!(
                         "{} stem group(s), {} donor(s) {}, {} variant(s) moved",
                         result.groups.len(),
