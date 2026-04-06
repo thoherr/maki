@@ -353,6 +353,35 @@ max_age_days = 30
 
 ---
 
+## [group] Section
+
+Controls how `maki auto-group` identifies session boundaries (shoot/event roots) when partitioning assets into directory neighborhoods.
+
+### session_root_pattern
+
+- **Type:** string (regex)
+- **Default:** `^\d{4}-\d{2}`
+
+A regular expression matched against each directory component in a variant's path. The deepest (rightmost) matching component becomes the session root — all files below that directory are considered part of the same session and eligible for stem matching.
+
+The default pattern matches directory names starting with `YYYY-MM` (e.g., `2024-10`, `2024-10-05-wedding`, `2025-05-09-event`), which works for the common `year/year-month/year-month-day-event/` hierarchy.
+
+Set to an empty string to disable session root detection entirely; auto-group then falls back to parent-directory grouping (each immediate parent directory is its own group scope).
+
+```toml
+[group]
+# Default: date-prefixed directories
+session_root_pattern = '^\d{4}-\d{2}'
+
+# Match directories starting with "shoot-" or "project-"
+# session_root_pattern = '^(shoot|project)-'
+
+# Disable session root detection (parent-directory fallback)
+# session_root_pattern = ''
+```
+
+---
+
 ## [contact_sheet] Section
 
 Default settings for `maki contact-sheet`. All fields are optional; CLI flags override these values.

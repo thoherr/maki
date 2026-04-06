@@ -208,6 +208,38 @@ fn is_default_import(i: &ImportConfig) -> bool {
     *i == ImportConfig::default()
 }
 
+/// Auto-group behavior configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroupConfig {
+    /// Regex pattern to identify session root directories.
+    /// Auto-group uses this to determine which directory level is the "shoot"
+    /// boundary — files below the matching directory can be grouped, files in
+    /// different matching directories cannot.
+    ///
+    /// Default: `^\d{4}-\d{2}` (matches directories starting with YYYY-MM,
+    /// e.g., 2024-10, 2024-10-05-wedding, 2025-05-09-event).
+    ///
+    /// Set to an empty string to fall back to parent-directory grouping.
+    #[serde(default = "default_session_root_pattern")]
+    pub session_root_pattern: String,
+}
+
+fn default_session_root_pattern() -> String {
+    r"^\d{4}-\d{2}".to_string()
+}
+
+impl Default for GroupConfig {
+    fn default() -> Self {
+        Self {
+            session_root_pattern: default_session_root_pattern(),
+        }
+    }
+}
+
+fn is_default_group(g: &GroupConfig) -> bool {
+    *g == GroupConfig::default()
+}
+
 /// Dedup behavior configuration.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct DedupConfig {
@@ -600,6 +632,8 @@ pub struct CatalogConfig {
     pub writeback: WritebackConfig,
     #[serde(default, skip_serializing_if = "is_default_cli")]
     pub cli: CliDefaults,
+    #[serde(default, skip_serializing_if = "is_default_group")]
+    pub group: GroupConfig,
 }
 
 impl Default for CatalogConfig {
@@ -617,6 +651,7 @@ impl Default for CatalogConfig {
             browse: BrowseConfig::default(),
             writeback: WritebackConfig::default(),
             cli: CliDefaults::default(),
+            group: GroupConfig::default(),
         }
     }
 }
@@ -845,6 +880,7 @@ max_edge = 1000
             browse: BrowseConfig::default(),
             writeback: WritebackConfig::default(),
             cli: CliDefaults::default(),
+            group: GroupConfig::default(),
         };
         let toml_str = toml::to_string_pretty(&original).unwrap();
         let parsed: CatalogConfig = toml::from_str(&toml_str).unwrap();
@@ -996,6 +1032,7 @@ max_edge = 1000
             browse: BrowseConfig::default(),
             writeback: WritebackConfig::default(),
             cli: CliDefaults::default(),
+            group: GroupConfig::default(),
         };
         original.save(dir.path()).unwrap();
         let loaded = CatalogConfig::load(dir.path()).unwrap();

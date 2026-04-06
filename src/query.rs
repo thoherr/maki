@@ -690,22 +690,21 @@ fn stem_prefix_matches(short: &str, long: &str) -> bool {
 /// - `Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Output/Web` → `Pictures/Masters/2024/2024-10/2024-10-05-jazz-band`
 /// - `Photos/2024-10-05/RAW` → `Photos/2024-10-05`
 /// - `Unsorted/photos` → `Unsorted/photos` (no date found, falls back to full path)
-fn find_session_root(dir: &str) -> String {
+fn find_session_root(dir: &str, session_root_pattern: &str) -> String {
     let parts: Vec<&str> = dir.split('/').collect();
-    // Regex: starts with YYYY-MM-DD or YYYY-MM (4 digits, dash, 2 digits)
-    let date_prefix = |s: &str| -> bool {
-        let bytes = s.as_bytes();
-        bytes.len() >= 7
-            && bytes[0..4].iter().all(|b| b.is_ascii_digit())
-            && bytes[4] == b'-'
-            && bytes[5..7].iter().all(|b| b.is_ascii_digit())
+    let re = if session_root_pattern.is_empty() {
+        None
+    } else {
+        regex::Regex::new(session_root_pattern).ok()
     };
 
-    // Find the deepest (rightmost) component that starts with a date
+    // Find the deepest (rightmost) component that matches the session root pattern
     let mut session_idx = None;
-    for (i, part) in parts.iter().enumerate() {
-        if date_prefix(part) {
-            session_idx = Some(i);
+    if let Some(ref re) = re {
+        for (i, part) in parts.iter().enumerate() {
+            if re.is_match(part) {
+                session_idx = Some(i);
+            }
         }
     }
 
@@ -1817,9 +1816,11 @@ impl QueryEngine {
         let neighborhoods: Vec<Vec<StemEntry>> = if global_scope {
             vec![entries]
         } else {
+            let config = crate::config::CatalogConfig::load(&self.catalog_root).unwrap_or_default();
+            let pattern = &config.group.session_root_pattern;
             let mut dir_groups: HashMap<String, Vec<StemEntry>> = HashMap::new();
             for entry in entries {
-                let session_root = find_session_root(&entry.dir);
+                let session_root = find_session_root(&entry.dir, pattern);
                 dir_groups.entry(session_root).or_default().push(entry);
             }
             dir_groups.into_values().collect()
@@ -5536,10 +5537,12 @@ mod tests {
 
     // ── find_session_root tests ─────────────────────────
 
+    const DEFAULT_SESSION_PATTERN: &str = r"^\d{4}-\d{2}";
+
     #[test]
     fn session_root_date_dir() {
         assert_eq!(
-            find_session_root("Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Capture"),
+            find_session_root("Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Capture", DEFAULT_SESSION_PATTERN),
             "Pictures/Masters/2024/2024-10/2024-10-05-jazz-band"
         );
     }
@@ -5547,7 +5550,7 @@ mod tests {
     #[test]
     fn session_root_deep_output() {
         assert_eq!(
-            find_session_root("Pictures/Masters/2025/2025-05/2025-05-09-wedding/Output/Final/Web"),
+            find_session_root("Pictures/Masters/2025/2025-05/2025-05-09-wedding/Output/Final/Web", DEFAULT_SESSION_PATTERN),
             "Pictures/Masters/2025/2025-05/2025-05-09-wedding"
         );
     }
@@ -5555,7 +5558,7 @@ mod tests {
     #[test]
     fn session_root_selects_subdir() {
         assert_eq!(
-            find_session_root("Pictures/Masters/2025/2025-05/2025-05-09-wedding/Selects/Goettweig"),
+            find_session_root("Pictures/Masters/2025/2025-05/2025-05-09-wedding/Selects/Goettweig", DEFAULT_SESSION_PATTERN),
             "Pictures/Masters/2025/2025-05/2025-05-09-wedding"
         );
     }
@@ -5564,7 +5567,7 @@ mod tests {
     fn session_root_no_date() {
         // Falls back to parent directory
         assert_eq!(
-            find_session_root("Unsorted/photos/batch1"),
+            find_session_root("Unsorted/photos/batch1", DEFAULT_SESSION_PATTERN),
             "Unsorted/photos"
         );
     }
@@ -5572,8 +5575,26 @@ mod tests {
     #[test]
     fn session_root_different_shoots_same_camera() {
         // Different dates produce different session roots
-        let root_2023 = find_session_root("Pictures/Masters/2023/2023-10/2023-10-26-red-bird/Capture");
-        let root_2024 = find_session_root("Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Capture");
+        let root_2023 = find_session_root("Pictures/Masters/2023/2023-10/2023-10-26-red-bird/Capture", DEFAULT_SESSION_PATTERN);
+        let root_2024 = find_session_root("Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Capture", DEFAULT_SESSION_PATTERN);
         assert_ne!(root_2023, root_2024);
+    }
+
+    #[test]
+    fn session_root_custom_pattern() {
+        // Custom pattern matching "shoot-" prefix
+        assert_eq!(
+            find_session_root("archive/shoot-001/RAW", r"^shoot-"),
+            "archive/shoot-001"
+        );
+    }
+
+    #[test]
+    fn session_root_empty_pattern_falls_back() {
+        // Empty pattern = no session root detection, falls back to parent dir
+        assert_eq!(
+            find_session_root("Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Capture", ""),
+            "Pictures/Masters/2024/2024-10/2024-10-05-jazz-band"
+        );
     }
 }
