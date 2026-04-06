@@ -266,13 +266,15 @@ def main():
                 print(f"  FAILED reimport {aid[:8]}: {stderr}")
 
     # Phase 4: Re-group by stem
-    if not args.skip_regroup:
-        print(f"\nRe-grouping by filename stem...")
-        ok, stdout, stderr = maki_run("auto-group", "--apply")
-        if ok:
-            print(f"  {stdout}")
-        else:
-            print(f"  Auto-group: {stderr}")
+    # TODO: THIS IS TOTALLY WRONG, SINCE IT REGROUPS THE WHOLE CATALOG SIMPLY BY STEM
+    # We have to regroup by the found directory names that we splitted....
+    #if not args.skip_regroup:
+    #    print(f"\nRe-grouping by filename stem...")
+    #    ok, stdout, stderr = maki_run("auto-group", "--apply")
+    #    if ok:
+    #        print(f"  {stdout}")
+    #    else:
+    #        print(f"  Auto-group: {stderr}")
 
     print("\nDone.")
     print("Review the results in the web UI and run 'maki generate-previews --upgrade' if needed.")
