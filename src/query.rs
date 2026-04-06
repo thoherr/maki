@@ -1699,6 +1699,17 @@ impl QueryEngine {
     ///
     /// Picks the best target per group (RAW preferred, then oldest) and merges.
     pub fn auto_group(&self, asset_ids: &[String], dry_run: bool) -> Result<AutoGroupResult> {
+        self.auto_group_inner(asset_ids, dry_run, false)
+    }
+
+    /// Auto-group with explicit global scope (no directory partitioning).
+    /// DANGEROUS: groups by stem across all directories. Use only with a
+    /// carefully scoped asset_ids list.
+    pub fn auto_group_global(&self, asset_ids: &[String], dry_run: bool) -> Result<AutoGroupResult> {
+        self.auto_group_inner(asset_ids, dry_run, true)
+    }
+
+    fn auto_group_inner(&self, asset_ids: &[String], dry_run: bool, global_scope: bool) -> Result<AutoGroupResult> {
         let catalog = Catalog::open(&self.catalog_root)?;
 
         // Deduplicate input IDs
@@ -1711,9 +1722,10 @@ impl QueryEngine {
                 .collect()
         };
 
-        // Load details for each asset and extract stem
+        // Load details for each asset and extract stem + directory
         struct StemEntry {
             stem: String,
+            dir: String, // parent directory of primary variant
             asset_id: String,
             details: crate::catalog::AssetDetails,
         }
@@ -1723,19 +1735,56 @@ impl QueryEngine {
                 Some(d) => d,
                 None => continue,
             };
-            let stem = if let Some(v) = details.variants.first() {
-                std::path::Path::new(&v.original_filename)
+            let (stem, dir) = if let Some(v) = details.variants.first() {
+                let s = std::path::Path::new(&v.original_filename)
                     .file_stem()
                     .map(|s| s.to_string_lossy().to_uppercase())
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                // Extract directory from the first file location of the first variant
+                let d = if let Some(loc) = v.locations.first() {
+                    let p = std::path::Path::new(&loc.relative_path);
+                    p.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                (s, d)
             } else {
                 continue;
             };
             if stem.is_empty() {
                 continue;
             }
-            entries.push(StemEntry { stem, asset_id: id.clone(), details });
+            entries.push(StemEntry { stem, dir, asset_id: id.clone(), details });
         }
+
+        // Partition by directory neighborhood: group entries whose directories
+        // share a common parent (sibling directories under the same session root).
+        // This prevents DSC_0001 from 2019 being grouped with DSC_0001 from 2024.
+        let neighborhoods: Vec<Vec<StemEntry>> = if global_scope {
+            vec![entries]
+        } else {
+            // Group by "session root" = parent of the variant's directory.
+            // e.g., for "Pictures/Masters/2024/2024-03/2024-03-15/Capture/file.nef"
+            // the directory is "Pictures/Masters/2024/2024-03/2024-03-15/Capture"
+            // and the session root is "Pictures/Masters/2024/2024-03/2024-03-15".
+            let mut dir_groups: HashMap<String, Vec<StemEntry>> = HashMap::new();
+            for entry in entries {
+                let session_root = std::path::Path::new(&entry.dir)
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| entry.dir.clone());
+                dir_groups.entry(session_root).or_default().push(entry);
+            }
+            dir_groups.into_values().collect()
+        };
+
+        // Process each neighborhood independently
+        let mut all_groups = Vec::new();
+        let mut total_donors_merged = 0;
+        let mut total_variants_moved = 0;
+
+        for neighborhood in neighborhoods {
+            let mut entries = neighborhood;
 
         // Sort by stem length (shortest first) for prefix resolution
         entries.sort_by_key(|e| e.stem.len());
@@ -1747,14 +1796,13 @@ impl QueryEngine {
         for entry in &entries {
             let stem = &entry.stem;
             if stem_to_root.contains_key(stem) {
-                // Another asset with the same stem already resolved
                 continue;
             }
             let mut found_root = None;
             for root in &roots {
                 if stem_prefix_matches(root, stem) {
                     found_root = Some(root.clone());
-                    break; // first (shortest) root wins
+                    break;
                 }
             }
             match found_root {
@@ -1780,10 +1828,6 @@ impl QueryEngine {
         }
 
         // Filter to groups with >1 distinct asset and merge
-        let mut groups = Vec::new();
-        let mut total_donors_merged = 0;
-        let mut total_variants_moved = 0;
-
         for (root_stem, mut entries) in group_map {
             if entries.len() < 2 {
                 continue;
@@ -1821,7 +1865,7 @@ impl QueryEngine {
                 total_donors_merged += donor_count;
             }
 
-            groups.push(StemGroupEntry {
+            all_groups.push(StemGroupEntry {
                 stem: root_stem,
                 target_id,
                 asset_ids: all_ids,
@@ -1829,11 +1873,13 @@ impl QueryEngine {
             });
         }
 
+        } // end neighborhood loop
+
         // Sort groups by stem for deterministic output
-        groups.sort_by(|a, b| a.stem.cmp(&b.stem));
+        all_groups.sort_by(|a, b| a.stem.cmp(&b.stem));
 
         Ok(AutoGroupResult {
-            groups,
+            groups: all_groups,
             total_donors_merged,
             total_variants_moved,
             dry_run,

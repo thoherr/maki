@@ -218,6 +218,9 @@ enum Commands {
         /// Apply grouping (default: report-only)
         #[arg(long)]
         apply: bool,
+        /// Group across all directories (DANGEROUS: may merge unrelated assets with same filename)
+        #[arg(long)]
+        global: bool,
     },
 
     /// Auto-tag assets using AI vision model (requires --features ai)
@@ -4403,7 +4406,7 @@ faces/\n\
                 }
             }
         }
-        Commands::AutoGroup { query, apply } => {
+        Commands::AutoGroup { query, apply, global } => {
             let catalog_root = maki::config::find_catalog_root()?;
             let engine = QueryEngine::new(&catalog_root);
 
@@ -4418,7 +4421,11 @@ faces/\n\
                     .collect()
             };
 
-            let result = engine.auto_group(&asset_ids, !apply)?;
+            let result = if global {
+                engine.auto_group_global(&asset_ids, !apply)?
+            } else {
+                engine.auto_group(&asset_ids, !apply)?
+            };
 
             if cli.json {
                 println!("{}", serde_json::to_string(&result)?);
