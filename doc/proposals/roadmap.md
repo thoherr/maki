@@ -22,9 +22,9 @@ Produce the MAKI user manual in English and German from a single source using in
 
 Add SigLIP 2 multilingual model variant so `text:` queries work in German, French, Spanish, etc. Requires re-embedding the catalog after switching. See `doc/proposals/german-text-search.md`.
 
-**Status:** Proposal written, not started.
+**Status:** Verified — ready to implement. ONNX model `onnx-community/siglip2-base-patch16-256-ONNX` confirmed available with the file layout MAKI already expects.
 
-**Complexity:** Low (~half day) if ONNX-quantized SigLIP 2 is available on Hugging Face; one-time re-embed cost on the user side.
+**Complexity:** Low (~half day). One-time re-embed cost on the user side.
 
 ---
 

@@ -2,7 +2,9 @@
 
 ## Status
 
-Draft — 2026-04-07
+**Verified — ready to implement** — 2026-04-07
+
+ONNX-converted multilingual SigLIP 2 models confirmed available on Hugging Face under `onnx-community/siglip2-*-ONNX`. File layout matches what MAKI already expects. No tokenizer code changes needed.
 
 ## Problem
 
@@ -46,7 +48,21 @@ These are trained on **multilingual web-scale image-text pairs (WebLI)** includi
    }
    ```
 
-2. **Verify ONNX export availability**. Check Hugging Face for an `onnx-community/siglip2-*` repo with quantized `vision_model_quantized.onnx` and `text_model_quantized.onnx` files matching the layout MAKI expects. If not available, convert with `optimum-cli export onnx --model google/siglip2-base-patch16-256 ./out/`.
+2. **ONNX export — verified available**. The repo `onnx-community/siglip2-base-patch16-256-ONNX` contains exactly the file layout MAKI needs:
+   - `onnx/vision_model_quantized.onnx` (94.7 MB)
+   - `onnx/text_model_quantized.onnx` (283 MB)
+   - `tokenizer.json` (34.4 MB, multilingual SentencePiece, vocab 256k)
+   - `config.json`, `preprocessor_config.json`, `tokenizer_config.json`
+
+   Other variants in the same family are also available if higher quality or different resolution is desired:
+
+   | Repo | Image | Notes |
+   |------|-------|-------|
+   | `siglip2-base-patch16-224-ONNX` | 224 | smaller, faster |
+   | **`siglip2-base-patch16-256-ONNX`** | **256** | **drop-in replacement of current default** |
+   | `siglip2-base-patch16-384-ONNX` | 384 | better detail, slower |
+   | `siglip2-large-patch16-256-ONNX` | 256 | higher quality, 2-3× slower |
+   | `siglip2-so400m-patch14-384-ONNX` | 384 | best quality, much slower |
 
 3. **Confirm tokenizer compatibility**. The Rust `tokenizers` crate (already a dependency) supports SentencePiece via `tokenizer.json`. The multilingual model's tokenizer is bigger (~250k vocab vs ~32k) but the loading code doesn't care — it's just a JSON file. **No code changes needed** to the tokenizer path.
 
@@ -114,9 +130,18 @@ At query time, look up each word in the dictionary and substitute. Trivial to im
 
 **Total**: ~4 hours of focused work, plus the catalog re-embed time on the user side.
 
+## Verification notes (2026-04-07)
+
+The simplified `config.json` in the ONNX repo doesn't include all the parameters MAKI's `ModelSpec` needs:
+
+- `embedding_dim`: **768** (same as SigLIP 1 base — architecture is identical)
+- `max_text_len`: **64** (SigLIP 2 default, same as SigLIP 1)
+- `logit_scale` / `logit_bias`: not in the simplified config. These are only used by auto-tag (multi-label classification), **not** by `text:` search. For text search alone, placeholder values would work. To enable auto-tag with this model, dump these from the original `google/siglip2-base-patch16-256` PyTorch config with a one-time Python snippet.
+- `pad_token_id`: needs verification from `tokenizer_config.json` (likely `1`, same as SigLIP 1).
+
 ## Open questions
 
-- Are ONNX-quantized SigLIP 2 variants available on Hugging Face, or do we need to convert ourselves and host them?
 - Should we make the multilingual model the default for new catalogs, or keep the English model as default and document multilingual as an opt-in?
 - Do we want to expose a `text_lang:` hint in the query syntax, or just trust the multilingual model to figure it out from the query text?
 - How do we communicate the "you must re-embed" requirement clearly enough that users don't try the new model and conclude it's broken?
+- Should we offer multiple SigLIP 2 size variants in `MODEL_SPECS` upfront, or start with just `siglip2-base-256-multi` and add larger variants on demand?
