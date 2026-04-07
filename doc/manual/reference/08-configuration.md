@@ -415,7 +415,17 @@ Controls AI auto-tagging behavior for `maki auto-tag`.
 - **Type:** string
 - **Default:** `"siglip-vit-b16-256"`
 
-Which SigLIP model to use. Available models: `siglip-vit-b16-256` (768-dim, ~207 MB, good balance) and `siglip-vit-l16-256` (1024-dim, ~670 MB, higher accuracy). The CLI `--model` flag overrides this value. Embeddings are stored per model, so switching models doesn't corrupt existing data.
+Which SigLIP model to use. Available models:
+
+| Model ID | Size | Embedding dim | Notes |
+|----------|------|---------------|-------|
+| `siglip-vit-b16-256` | ~207 MB | 768 | English-only, good balance (default) |
+| `siglip-vit-l16-256` | ~670 MB | 1024 | English-only, higher accuracy |
+| `siglip2-base-256-multi` | ~410 MB | 768 | **Multilingual** (German, French, Spanish, Italian, Japanese, Chinese, etc.) |
+
+The CLI `--model` flag overrides this value. Embeddings are stored per `(asset_id, model_id)`, so switching models doesn't corrupt existing data — but the new model has its own empty embedding store and you must run `maki embed --force` to populate it before `text:` or `auto-tag` will return results with the new model.
+
+**Multilingual model**: `siglip2-base-256-multi` is Google's SigLIP 2 base, trained on the WebLI dataset across many languages. Use this if you want to type `text:` queries in German or any non-English language. It uses the Gemma SentencePiece tokenizer (vocab 256k) and is a drop-in replacement for `siglip-vit-b16-256` in dimensions and image resolution.
 
 ### threshold
 

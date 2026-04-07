@@ -102,6 +102,28 @@ pub const MODEL_SPECS: &[ModelSpec] = &[
         max_text_len: 64,
         pad_token_id: 1,
     },
+    ModelSpec {
+        // SigLIP 2 multilingual base — supports German, French, Spanish, Italian,
+        // Japanese, Chinese, and many other languages via Gemma SentencePiece
+        // tokenizer (vocab 256k). Drop-in replacement for siglip-vit-b16-256 in
+        // dimensions and resolution. Switching models requires re-embedding the
+        // catalog: `maki embed --force`.
+        id: "siglip2-base-256-multi",
+        display_name: "SigLIP 2 Base 256 (multilingual)",
+        hf_repo: "onnx-community/siglip2-base-patch16-256-ONNX",
+        embedding_dim: 768,
+        image_size: 256,
+        // logit_scale / logit_bias are only used by auto-tag (multi-label
+        // classification). The values from SigLIP 1 base are reasonable
+        // approximations for similarity ranking but should be replaced with
+        // the actual SigLIP 2 base values from google/siglip2-base-patch16-256
+        // if precise auto-tag confidence calibration is needed.
+        logit_scale: 4.7129,
+        logit_bias: -12.9283,
+        max_text_len: 64,
+        // Gemma tokenizer uses pad_token_id = 0 (vs 1 for SigLIP 1's tokenizer)
+        pad_token_id: 0,
+    },
 ];
 
 /// Default model ID.

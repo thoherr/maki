@@ -2,9 +2,16 @@
 
 ## Status
 
-**Verified — ready to implement** — 2026-04-07
+**Implemented in v4.3.12** — 2026-04-07
 
-ONNX-converted multilingual SigLIP 2 models confirmed available on Hugging Face under `onnx-community/siglip2-*-ONNX`. File layout matches what MAKI already expects. No tokenizer code changes needed.
+`siglip2-base-256-multi` model added to `MODEL_SPECS`. End-to-end test confirmed: model downloads, image embedding works, German text queries produce meaningful (distinct) embeddings. To use:
+
+```toml
+[ai]
+model = "siglip2-base-256-multi"
+```
+
+Then `maki auto-tag --download` to fetch the model, `maki embed '' --force` to re-embed the catalog.
 
 ## Problem
 
