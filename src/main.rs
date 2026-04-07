@@ -3590,8 +3590,23 @@ faces/\n\
             let catalog_root = maki::config::find_catalog_root()?;
             let config = CatalogConfig::load(&catalog_root)?;
 
-            // Resolve model ID: CLI --model > config ai.model > default
-            let model_id = model.as_deref().unwrap_or(&config.ai.model);
+            // Resolve model ID: CLI --model > config ai.model > default.
+            // For --download/--remove-model, also accept the positional `query`
+            // as a model id when --model isn't given and the positional looks
+            // like a known model (this is what users naturally type).
+            let model_id_owned: Option<String> = if (download || remove_model) && model.is_none() {
+                query
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty() && maki::ai::get_model_spec(s).is_some())
+                    .map(|s| s.to_string())
+            } else {
+                None
+            };
+            let model_id = model_id_owned
+                .as_deref()
+                .or(model.as_deref())
+                .unwrap_or(&config.ai.model);
             let _spec = maki::ai::get_model_spec(model_id)
                 .ok_or_else(|| anyhow::anyhow!(
                     "Unknown model: {model_id}. Run 'maki auto-tag --list-models' to see available models."
