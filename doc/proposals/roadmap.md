@@ -18,6 +18,16 @@ Produce the MAKI user manual in English and German from a single source using in
 
 ---
 
+### Multilingual `text:` Search *(Pro)*
+
+Add SigLIP 2 multilingual model variant so `text:` queries work in German, French, Spanish, etc. Requires re-embedding the catalog after switching. See `doc/proposals/german-text-search.md`.
+
+**Status:** Proposal written, not started.
+
+**Complexity:** Low (~half day) if ONNX-quantized SigLIP 2 is available on Hugging Face; one-time re-embed cost on the user side.
+
+---
+
 ## Tier 1 — High Value
 
 ### Auto-Stack by Similarity (Catalog-wide) *(Pro)*
