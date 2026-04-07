@@ -114,6 +114,8 @@ All filters can be combined in a single query. Remaining tokens become free-text
 
 **Hierarchical tag matching**: The `tag:` filter matches hierarchically. Searching for `tag:animals` finds assets tagged `animals`, `animals|birds`, `animals|birds|eagles`, and any other descendant of `animals`. To match only the exact tag, use the full path (e.g., `tag:animals|birds|eagles`).
 
+**Multilingual `text:` search** *(Pro)*: The default AI model is English-only. To search in German, French, Spanish, etc., switch to the multilingual model in `maki.toml` and re-embed: see [AI Models](02-setup.md#ai-models-pro) in the setup guide.
+
 For the complete filter reference with detailed syntax and behavior, see [Search Filters](../reference/06-search-filters.md).
 
 ---

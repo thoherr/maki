@@ -377,6 +377,48 @@ enabled = true
 
 For a complete reference of every option and its behavior, see the [Configuration Reference](../reference/08-configuration.md).
 
+## AI Models *(Pro)*
+
+MAKI Pro uses SigLIP vision-language models for `text:` search (find images by typed description), similarity browsing, and `auto-tag`. The model is downloaded once on demand and cached in `~/.maki/models/`.
+
+### Available models
+
+| Model ID | Size | Languages | Use case |
+|----------|------|-----------|----------|
+| `siglip-vit-b16-256` *(default)* | ~207 MB | English only | Fast, good quality, English queries |
+| `siglip-vit-l16-256` | ~670 MB | English only | Higher accuracy, slower |
+| `siglip2-base-256-multi` | ~410 MB | **Multilingual** | German, French, Spanish, Italian, Japanese, Chinese, and many more |
+
+All models produce embeddings stored per `(asset_id, model_id)`, so you can switch back and forth without losing data — but each model has its own embedding store and you must run `maki embed '' --force` to populate it after switching.
+
+### Choosing a model
+
+If you only ever type `text:` queries in English, the default `siglip-vit-b16-256` is the right choice. If you want to type queries in your native language — `text:Sonnenuntergang am Strand`, `text:coucher de soleil sur la plage`, `text:atardecer en la playa` — switch to `siglip2-base-256-multi`.
+
+```toml
+[ai]
+model = "siglip2-base-256-multi"
+```
+
+Then download the model and re-embed your catalog:
+
+```bash
+maki auto-tag --download              # one-time, ~410 MB
+maki embed '' --force                  # re-embeds all assets with the new model
+```
+
+> **Note:** The re-embedding step is the time-consuming part. On a catalog of 100k assets it takes hours. Plan it as an overnight or background task. You can keep using MAKI for other tasks while it runs.
+
+### Listing and managing models
+
+```bash
+maki auto-tag --list-models                       # show all known models, downloaded status, sizes
+maki auto-tag --download --model <id>             # download a specific model
+maki auto-tag --remove-model --model <id>         # delete cached files for a model
+```
+
+The active model is the one referenced in `[ai] model` in `maki.toml`, or the CLI `--model` flag if given.
+
 ---
 
 Next: [Ingesting Assets](03-ingest.md) -- importing files into the catalog, auto-grouping, and metadata extraction.

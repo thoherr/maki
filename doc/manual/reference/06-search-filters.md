@@ -886,6 +886,15 @@ maki search "text:\"mountain landscape\":100"               # return top 100 mat
 
 **Behavior:** Loads the SigLIP model (text encoder), encodes the query string into an embedding vector, loads the in-memory embedding index, and returns the top N assets by dot-product similarity (default 50, configurable). The result set can be further filtered by all other search filters (AND logic). Since SigLIP is a vision-language model trained on image-text pairs, queries describe visual content ("red car", "sunset over water", "portrait of a woman") rather than metadata. Results quality depends on how well the SigLIP model generalizes.
 
+**Multilingual queries:** The default model (`siglip-vit-b16-256`) is English-only. For German, French, Spanish, Italian, Japanese, Chinese, and many other languages, switch to the multilingual model:
+
+```toml
+[ai]
+model = "siglip2-base-256-multi"
+```
+
+Then re-embed your catalog (`maki embed '' --force`). Once switched, German queries like `text:"Sonnenuntergang am Strand"` or `text:"Hochzeit im Park"` work natively without translation. See the [setup guide](../user-guide/02-setup.md#ai-models-pro) for the full migration steps.
+
 ---
 
 ## Combining Filters
