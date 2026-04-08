@@ -424,7 +424,7 @@ Which SigLIP model to use. Available models:
 | `siglip2-base-256-multi` | ~410 MB | 768 | **Multilingual** (German, French, Spanish, Italian, Japanese, Chinese, etc.) |
 | `siglip2-large-256-multi` | ~920 MB | 1024 | **Multilingual**, higher accuracy, slower |
 
-The CLI `--model` flag overrides this value. Embeddings are stored per `(asset_id, model_id)`, so switching models doesn't corrupt existing data — but the new model has its own empty embedding store and you must run `maki embed --force` to populate it before `text:` or `auto-tag` will return results with the new model.
+The CLI `--model` flag overrides this value. Embeddings are stored per `(asset_id, model_id)`, so switching models doesn't corrupt existing data — the old model's embeddings stay intact. After switching, run `maki embed ''` (without `--force`) to generate embeddings for the new model: it processes only assets that don't yet have an embedding for the active model, and is restart-safe. See [Switching models](../user-guide/02-setup.md#switching-models) in the setup guide for the full workflow.
 
 **Multilingual model**: `siglip2-base-256-multi` is Google's SigLIP 2 base, trained on the WebLI dataset across many languages. Use this if you want to type `text:` queries in German or any non-English language. It uses the Gemma SentencePiece tokenizer (vocab 256k) and is a drop-in replacement for `siglip-vit-b16-256` in dimensions and image resolution.
 

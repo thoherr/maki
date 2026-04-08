@@ -893,7 +893,7 @@ maki search "text:\"mountain landscape\":100"               # return top 100 mat
 model = "siglip2-base-256-multi"
 ```
 
-Then re-embed your catalog (`maki embed '' --force`). Once switched, German queries like `text:"Sonnenuntergang am Strand"` or `text:"Hochzeit im Park"` work natively without translation. See the [setup guide](../user-guide/02-setup.md#ai-models-pro) for the full migration steps.
+Then run `maki embed ''` (no `--force` needed — embeddings are stored per `(asset_id, model_id)`, so the new model only embeds assets that don't yet have one for it; existing English-model embeddings are untouched). Once switched, German queries like `text:"Sonnenuntergang am Strand"` or `text:"Hochzeit im Park"` work natively without translation. See [Switching models](../user-guide/02-setup.md#switching-models) in the setup guide for the full workflow and verification commands.
 
 ---
 

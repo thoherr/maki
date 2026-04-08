@@ -1068,7 +1068,9 @@ Pre-computes image embeddings for visual similarity search (`maki auto-tag --sim
 
 For each matching asset, the command finds the best available image (smart preview → regular preview → original file on an online volume), encodes it with SigLIP, and stores the embedding in the SQLite catalog's `embeddings` table and as a binary file under `embeddings/<model>/<prefix>/<asset_id>.bin`.
 
-By default, assets that already have a stored embedding for the active model are skipped. Use `--force` to re-generate embeddings (e.g., after switching to a higher-resolution preview).
+By default, assets that already have a stored embedding **for the active model** are skipped. Embeddings are keyed by `(asset_id, model_id)`, so switching to a different model and running `maki embed ''` will generate embeddings for the new model only — existing embeddings for other models are untouched and the run is restart-safe (resumes after Ctrl-C). See [Switching models](../user-guide/02-setup.md#switching-models) in the setup guide.
+
+Use `--force` only when you want to **regenerate** embeddings that already exist for the active model — for example, after replacing the on-disk model file with a corrected version. For a model switch, do NOT use `--force`; it would re-embed everything and waste hours of compute.
 
 **Scope required**: at least one scope (positional query, `--asset`, or `--volume`) must be specified to prevent accidental full-catalog processing. Use `""` (empty query) to process all assets.
 
@@ -1086,10 +1088,10 @@ By default, assets that already have a stored embedding for the active model are
 : Process only assets on a specific volume.
 
 **--model \<ID\>**
-: Select which SigLIP model to use. Available: `siglip-vit-b16-256` (default), `siglip-vit-l16-256`. Overrides `[ai] model` in `maki.toml`.
+: Select which SigLIP model to use. Available: `siglip-vit-b16-256` (default), `siglip-vit-l16-256`, `siglip2-base-256-multi`, `siglip2-large-256-multi`. Overrides `[ai] model` in `maki.toml`.
 
 **--force**
-: Re-generate embeddings even if they already exist for the active model.
+: Re-generate embeddings even if they already exist for the active model. **Not needed when switching models** — embeddings are stored per `(asset_id, model_id)`, so a new model starts with an empty store and `maki embed ''` (without `--force`) generates the missing embeddings only.
 
 **--export**
 : Export all existing embeddings from SQLite to binary files. No scope filter required. Useful as a one-time migration to populate the file-based persistence layer from existing data.
@@ -1118,10 +1120,16 @@ Generate embeddings for a specific volume:
 maki embed --volume "Photos 2024"
 ```
 
-Force re-generation with a different model:
+Switch to a different model and generate the missing embeddings (no `--force` — only assets without an embedding for the new model are processed):
 
 ```bash
-maki embed "" --model siglip-vit-l16-256 --force
+maki embed "" --model siglip-vit-l16-256
+```
+
+Force re-generation of all embeddings for the active model (only when you really want to rebuild from scratch — takes hours on large catalogs):
+
+```bash
+maki embed "" --force
 ```
 
 Generate embeddings for untagged images only:

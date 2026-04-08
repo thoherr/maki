@@ -390,35 +390,75 @@ MAKI Pro uses SigLIP vision-language models for `text:` search (find images by t
 | `siglip2-base-256-multi` | ~410 MB | 768 | **Multilingual** | German, French, Spanish, Italian, Japanese, Chinese, etc. |
 | `siglip2-large-256-multi` | ~920 MB | 1024 | **Multilingual** | Same languages, higher accuracy, slower |
 
-All models produce embeddings stored per `(asset_id, model_id)`, so you can switch back and forth without losing data — but each model has its own embedding store and you must run `maki embed '' --force` to populate it after switching.
+Embeddings are stored per `(asset_id, model_id)` in both the SQLite catalog and the on-disk embedding store. This means you can switch back and forth between models without losing any data — each model has its own independent embedding set, and the others stay untouched.
 
 ### Choosing a model
 
 If you only ever type `text:` queries in English, the default `siglip-vit-b16-256` is the right choice. If you want to type queries in your native language — `text:Sonnenuntergang am Strand`, `text:coucher de soleil sur la plage`, `text:atardecer en la playa` — switch to `siglip2-base-256-multi`.
+
+### Switching models
+
+Switching the active AI model is a three-step process:
+
+**Step 1**: Update `maki.toml` to point at the new model:
 
 ```toml
 [ai]
 model = "siglip2-base-256-multi"
 ```
 
-Then download the model and re-embed your catalog:
+**Step 2**: Download the model files (one-time, ~410 MB for the multilingual base model; ~920 MB for large):
 
 ```bash
-maki auto-tag --download              # one-time, ~410 MB
-maki embed '' --force                  # re-embeds all assets with the new model
+maki auto-tag --download siglip2-base-256-multi
 ```
 
-> **Note:** The re-embedding step is the time-consuming part. On a catalog of 100k assets it takes hours. Plan it as an overnight or background task. You can keep using MAKI for other tasks while it runs.
+**Step 3**: Generate embeddings for the new model:
+
+```bash
+maki embed ''
+```
+
+This processes only the assets that **don't yet have an embedding for the new model** and skips everything that does. Because embeddings are keyed by `(asset_id, model_id)`, the existing English-model embeddings count for nothing here — every asset starts as "missing" for the new model and gets embedded.
+
+> **Important — don't use `--force` here.** The `--force` flag re-embeds *every* asset, including those that already have an embedding for the current model. That's the right thing for a "rebuild from scratch" scenario (e.g. after replacing the on-disk model file with a corrected version), but for a model switch it just wastes hours of CPU/GPU time. On a 260k catalog, embedding from scratch takes ~36 hours; without `--force` the same command resumes from where it left off and only does the missing work.
+
+If you interrupted an earlier `maki embed` run (Ctrl-C, machine sleep, power loss), simply running `maki embed ''` again resumes — all assets that were already embedded for the active model are skipped. This makes the migration restart-safe and crash-safe.
+
+### Verifying the active model and embedding counts
+
+To see how many embeddings exist per model in your catalog:
+
+```bash
+sqlite3 .maki/catalog.db "SELECT model, COUNT(*) FROM embeddings GROUP BY model;"
+```
+
+You'll see one row per model that has any embeddings. After switching, the count for the old model stays where it was, and the count for the new model grows from zero as you run `maki embed ''`.
+
+### Switching back
+
+Because the old embeddings are still in the catalog, switching back is instant — just put the old model id back in `maki.toml`. No re-embedding needed; the existing embeddings are already there.
 
 ### Listing and managing models
 
 ```bash
-maki auto-tag --list-models                       # show all known models, downloaded status, sizes
-maki auto-tag --download --model <id>             # download a specific model
-maki auto-tag --remove-model --model <id>         # delete cached files for a model
+maki auto-tag --list-models                  # show all known models with downloaded status and sizes
+maki auto-tag --download <model-id>          # download a specific model
+maki auto-tag --remove-model <model-id>      # delete cached files for a model (frees disk space)
 ```
 
 The active model is the one referenced in `[ai] model` in `maki.toml`, or the CLI `--model` flag if given.
+
+### Disk space cleanup
+
+Old model embeddings remain in the catalog and embedding store after a switch. They are small (~3 KB per asset for base, ~4 KB for large) and don't slow anything down — `text:` and similarity search only query the active model. If you're certain you don't want to switch back, you can delete unused embeddings directly:
+
+```bash
+sqlite3 .maki/catalog.db "DELETE FROM embeddings WHERE model = 'siglip-vit-b16-256';"
+maki cleanup    # removes orphaned on-disk embedding binaries
+```
+
+But unless disk space is a real concern, just leaving old embeddings in place is the simplest option.
 
 ---
 

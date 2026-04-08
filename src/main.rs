@@ -300,7 +300,7 @@ enum Commands {
         #[arg(long, display_order = 4)]
         model: Option<String>,
 
-        /// Re-generate even if embedding already exists
+        /// Re-generate embeddings that already exist for the active model. Not needed when switching models — embeddings are stored per (asset_id, model_id), so a model switch only generates the missing ones.
         #[arg(long, display_order = 10)]
         force: bool,
 
