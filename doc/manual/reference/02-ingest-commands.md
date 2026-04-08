@@ -893,8 +893,8 @@ maki-auto-tag -- suggest or apply tags to images using AI (SigLIP zero-shot clas
 maki [GLOBAL FLAGS] auto-tag [QUERY] [OPTIONS]
 maki [GLOBAL FLAGS] auto-tag [OPTIONS] --asset <ID>
 maki [GLOBAL FLAGS] auto-tag [OPTIONS] --volume <LABEL>
-maki [GLOBAL FLAGS] auto-tag --download [--model <ID>]
-maki [GLOBAL FLAGS] auto-tag --remove-model [--model <ID>]
+maki [GLOBAL FLAGS] auto-tag --download [<MODEL_ID> | --model <ID>]
+maki [GLOBAL FLAGS] auto-tag --remove-model [<MODEL_ID> | --model <ID>]
 maki [GLOBAL FLAGS] auto-tag --list-models
 maki [GLOBAL FLAGS] auto-tag --similar <ASSET_ID>
 ```
@@ -903,14 +903,16 @@ maki [GLOBAL FLAGS] auto-tag --similar <ASSET_ID>
 
 Uses SigLIP vision-language models to classify images against a configurable tag vocabulary via zero-shot classification. Each image is encoded into an embedding, scored against all label embeddings using sigmoid scoring, and labels above the confidence threshold are suggested as tags.
 
-Two models are available:
+Four models are available:
 
-| Model ID | Name | Embedding | Size | Notes |
-|----------|------|-----------|------|-------|
-| `siglip-vit-b16-256` | SigLIP ViT-B/16-256 | 768-dim | ~207 MB | Default, good balance |
-| `siglip-vit-l16-256` | SigLIP ViT-L/16-256 | 1024-dim | ~670 MB | Higher accuracy |
+| Model ID | Embedding | Size | Languages | Notes |
+|----------|-----------|------|-----------|-------|
+| `siglip-vit-b16-256` | 768-dim | ~207 MB | English only | Default, good balance |
+| `siglip-vit-l16-256` | 1024-dim | ~670 MB | English only | Higher accuracy, slower |
+| `siglip2-base-256-multi` | 768-dim | ~410 MB | **Multilingual** | German, French, Spanish, Italian, Japanese, Chinese, etc. |
+| `siglip2-large-256-multi` | 1024-dim | ~920 MB | **Multilingual** | Same languages, higher accuracy, slower |
 
-Select with `--model <id>` or set `[ai] model` in `maki.toml`. The default is `siglip-vit-b16-256`.
+Select with `--model <id>` or set `[ai] model` in `maki.toml`. The default is `siglip-vit-b16-256`. For non-English `text:` queries, use one of the multilingual SigLIP 2 variants — see [Switching models](../user-guide/02-setup.md#switching-models) in the setup guide.
 
 By default runs in **report-only mode** -- shows suggested tags without applying them. Use `--apply` to write suggested tags to assets.
 
@@ -938,7 +940,7 @@ Model files are downloaded from HuggingFace on first use. Use `--download` to pr
 : Process only assets on a specific volume.
 
 **--model \<ID\>**
-: Select which SigLIP model to use. Available: `siglip-vit-b16-256` (default), `siglip-vit-l16-256`. Overrides `[ai] model` in `maki.toml`. Also applies to `--download` and `--remove-model`.
+: Select which SigLIP model to use. Available: `siglip-vit-b16-256` (default), `siglip-vit-l16-256`, `siglip2-base-256-multi`, `siglip2-large-256-multi`. Overrides `[ai] model` in `maki.toml`. Also applies to `--download` and `--remove-model`. For convenience, `--download` and `--remove-model` also accept the model id as a positional argument: `maki auto-tag --download siglip2-base-256-multi`.
 
 **--threshold \<FLOAT\>**
 : Minimum confidence score to suggest a tag (default: 0.1). Range: 0.0 to 1.0. Higher values produce fewer but more confident suggestions.

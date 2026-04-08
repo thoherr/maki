@@ -1471,7 +1471,7 @@ Setup:
 Ingest & Edit:
   import             Import files into the catalog
   delete             Delete assets from the catalog
-  tag                Add or remove tags on an asset
+  tag                Add, remove, rename, clear, or expand tags (supports subcommands)
   edit               Edit asset metadata (name, description, rating, label, date)
   group              Group variants into one asset
   split              Split variants out of an asset into new standalone assets
@@ -1492,6 +1492,8 @@ Retrieve:
   duplicates         Find duplicate files
   stats              Show catalog statistics
   backup-status      Check backup coverage and find under-backed-up assets
+  doc                Open documentation in the browser (manual, cheatsheet, filters)
+  licenses           Show MAKI license and third-party crate licenses
 
 Maintain:
   verify             Check file integrity

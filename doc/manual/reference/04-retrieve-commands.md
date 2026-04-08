@@ -6,13 +6,14 @@ Commands for finding assets, inspecting details, exporting files, and browsing t
 |---------|-------------|
 | [search](#maki-search) | Find assets by text, filters, and metadata |
 | [show](#maki-show) | Display full asset details |
-| [preview](#maki-preview) | Show asset preview in terminal or OS viewer |
+| [preview](#maki-preview) | Open asset preview in OS default image viewer |
 | [export](#maki-export) | Copy matching files to a directory or ZIP |
 | [contact-sheet](#maki-contact-sheet) | Generate PDF contact sheets |
 | [duplicates](#maki-duplicates) | Find files with multiple locations |
 | [stats](#maki-stats) | Catalog statistics and health overview |
 | [backup-status](#maki-backup-status) | Check backup coverage and find at-risk assets |
 | [doc](#maki-doc) | Open documentation in the browser |
+| [licenses](#maki-licenses) | Show MAKI license and third-party crate licenses |
 | [serve](#maki-serve) | Start the web UI |
 | [shell](#maki-shell) | Interactive command shell |
 
@@ -862,6 +863,47 @@ maki doc                # open user manual
 maki doc cheatsheet     # open cheat sheet
 maki doc filters        # open search filter reference
 ```
+
+---
+
+## maki licenses
+
+### NAME
+
+maki-licenses -- show MAKI license and third-party crate licenses
+
+### SYNOPSIS
+
+    maki [GLOBAL FLAGS] licenses [--summary]
+
+### DESCRIPTION
+
+Prints a summary of MAKI's own license (Apache-2.0), the third-party Rust crates compiled into the binary (all permissive open-source licenses), the AI models downloaded on demand from Hugging Face (Apache-2.0), and the external tools called by MAKI (dcraw, ffmpeg, curl — installed separately).
+
+The full license text for every Rust dependency is in the file `THIRD_PARTY_LICENSES.md`, shipped alongside the `maki` binary in every release archive. It is also available at:
+
+```
+https://github.com/thoherr/maki/releases/latest/download/THIRD_PARTY_LICENSES.md
+```
+
+### OPTIONS
+
+**--summary**
+: Show only the section headers and pointers to the full license text, without the explanatory paragraphs.
+
+`--json` outputs a structured object with the license metadata for scripting.
+
+### EXAMPLES
+
+```bash
+maki licenses                # full overview
+maki licenses --summary      # short version
+maki licenses --json         # machine-readable
+```
+
+### SEE ALSO
+
+[Licenses & Acknowledgements](11-licenses.md) -- the manual appendix with the complete licensing breakdown.
 
 ---
 
