@@ -2022,6 +2022,16 @@ impl QueryEngine {
     }
 
     /// Rename a tag across all assets that have it.
+    /// Rename a tag across the catalog.
+    ///
+    /// `old_tag` may be prefixed with the same `=` (exact level) and `^`
+    /// (case-sensitive) markers as the `tag:` search filter, in any order:
+    /// - `tag rename Foo Bar` — case-insensitive, includes descendants (default)
+    /// - `tag rename =Foo Bar` — exact level only, case-insensitive
+    /// - `tag rename ^Foo Bar` — case-sensitive, includes descendants
+    /// - `tag rename =^Foo Bar` — exact level AND case-sensitive
+    ///
+    /// `new_tag` is always taken literally (no prefix parsing).
     pub fn tag_rename(
         &self,
         old_tag: &str,
@@ -2034,22 +2044,41 @@ impl QueryEngine {
         let online = Self::load_online_volumes(&self.catalog_root);
         let content_store = ContentStore::new(&self.catalog_root);
 
+        // Strip the optional =/^ markers from `old_tag`. The new_tag is always
+        // taken literally — we never want to rename to a marker-prefixed value.
+        let mut rest = old_tag;
+        let mut exact_only = false;
+        let mut case_sensitive = false;
+        loop {
+            if let Some(s) = rest.strip_prefix('=') { exact_only = true; rest = s; }
+            else if let Some(s) = rest.strip_prefix('^') { case_sensitive = true; rest = s; }
+            else { break; }
+        }
+        let old_tag = rest;
+
         // Find assets that have the exact tag OR any descendant (prefix match)
-        let matches = catalog.assets_with_tag_or_prefix(old_tag)?;
+        let matches = catalog.assets_with_tag_or_prefix(old_tag, case_sensitive, exact_only)?;
         let mut result = TagRenameResult { dry_run: !apply, matched: matches.len(), ..Default::default() };
 
-        let old_lower = old_tag.to_lowercase();
-        let old_prefix_lower = format!("{}|", old_lower);
-        let new_lower = new_tag.to_lowercase();
-        let new_prefix = format!("{}|", new_tag);
+        // Comparison helpers honoring case_sensitive flag.
+        let cmp_eq = |a: &str, b: &str| -> bool {
+            if case_sensitive { a == b } else { a.to_lowercase() == b.to_lowercase() }
+        };
+        let cmp_starts = |a: &str, b: &str| -> bool {
+            if case_sensitive { a.starts_with(b) } else { a.to_lowercase().starts_with(&b.to_lowercase()) }
+        };
+
+        let old_prefix = format!("{old_tag}|");
+        let new_prefix = format!("{new_tag}|");
 
         for (asset_id, _stack_id) in &matches {
             let uuid: uuid::Uuid = asset_id.parse()?;
             let mut asset = store.load(uuid)?;
 
-            // Find all tags that match: exact match OR prefix match (descendants)
-            let has_exact = asset.tags.iter().any(|t| t.to_lowercase() == old_lower);
-            let has_descendants = asset.tags.iter().any(|t| t.to_lowercase().starts_with(&old_prefix_lower));
+            // Find all tags that match: exact match OR (unless exact_only) prefix match (descendants)
+            let has_exact = asset.tags.iter().any(|t| cmp_eq(t, old_tag));
+            let has_descendants = !exact_only
+                && asset.tags.iter().any(|t| cmp_starts(t, &old_prefix));
 
             if !has_exact && !has_descendants {
                 result.skipped += 1;
@@ -2058,17 +2087,15 @@ impl QueryEngine {
             }
 
             // Check if the rename would be a no-op (already correct)
-            // For exact match: check if old tag is already the new tag
-            // For descendants: check if all descendant prefixes are already correct
             let exact_already_correct = if has_exact {
-                let actual = asset.tags.iter().find(|t| t.to_lowercase() == old_lower);
+                let actual = asset.tags.iter().find(|t| cmp_eq(t, old_tag));
                 actual.map(|t| t == new_tag).unwrap_or(false)
             } else {
                 true
             };
             let descendants_already_correct = !has_descendants || asset.tags.iter()
-                .filter(|t| t.to_lowercase().starts_with(&old_prefix_lower))
-                .all(|t| t.to_lowercase().starts_with(&format!("{}|", new_lower)));
+                .filter(|t| cmp_starts(t, &old_prefix))
+                .all(|t| cmp_starts(t, &new_prefix));
 
             if exact_already_correct && descendants_already_correct {
                 result.skipped += 1;
@@ -2077,10 +2104,10 @@ impl QueryEngine {
             }
 
             // Check if asset already has the new exact tag (for merge detection)
-            let has_new_separately = if old_lower == new_lower {
+            let has_new_separately = if cmp_eq(old_tag, new_tag) {
                 false
             } else {
-                asset.tags.iter().any(|t| t.to_lowercase() == new_lower)
+                asset.tags.iter().any(|t| cmp_eq(t, new_tag))
             };
             let has_exact_new = asset.tags.contains(&new_tag.to_string());
 
@@ -2095,24 +2122,24 @@ impl QueryEngine {
 
             if apply {
                 // Build the list of tags to remove and tags to add.
-                // For each tag in the asset:
-                // - Exact match (case-insensitive): remove, add new_tag (unless merged)
-                // - Prefix match (starts with old|): remove, add with prefix replaced
                 let mut tags_to_remove = Vec::new();
                 let mut tags_to_add = Vec::new();
 
                 for tag in &asset.tags {
-                    let tag_lower = tag.to_lowercase();
-                    if tag_lower == old_lower {
+                    if cmp_eq(tag, old_tag) {
                         // Exact match
                         tags_to_remove.push(tag.clone());
                         if action == TagRenameAction::Renamed {
                             tags_to_add.push(new_tag.to_string());
                         }
-                    } else if tag_lower.starts_with(&old_prefix_lower) {
-                        // Descendant: replace prefix
+                    } else if !exact_only && cmp_starts(tag, &old_prefix) {
+                        // Descendant: replace prefix (preserving the rest of the tag verbatim)
                         tags_to_remove.push(tag.clone());
-                        let new_descendant = format!("{}{}", new_prefix, &tag[old_prefix_lower.len()..]);
+                        // For case-sensitive: prefix length matches. For case-insensitive:
+                        // the prefix may differ in case from old_prefix, so use the matched
+                        // prefix length (same as old_prefix.len() since case mapping preserves
+                        // ASCII length, which is the only safe assumption here).
+                        let new_descendant = format!("{}{}", new_prefix, &tag[old_prefix.len()..]);
                         tags_to_add.push(new_descendant);
                     }
                 }
@@ -2122,25 +2149,21 @@ impl QueryEngine {
 
                 // Also remove old standalone ancestors that are now covered by
                 // the expanded new tags (e.g., standalone "Germany" when we're
-                // adding "location|Germany|Bayern|München" which includes "location|Germany")
+                // adding "location|Germany|Bayern|München" which includes "location|Germany").
+                // In case-insensitive mode, also collapse case variants into the canonical form.
                 for existing_tag in &asset.tags {
-                    let el = existing_tag.to_lowercase();
                     if !tags_to_remove.contains(existing_tag) {
-                        // Check if this existing tag is a bare component name that's
-                        // now covered by one of the expanded adds
-                        let covered = expanded_adds.iter().any(|a| a.to_lowercase() == el);
+                        let covered = expanded_adds.iter().any(|a| cmp_eq(a, existing_tag));
                         if covered && !expanded_adds.iter().any(|a| a == existing_tag) {
-                            // Same content but different case — will be replaced by the expanded version
                             tags_to_remove.push(existing_tag.clone());
                         }
                     }
                 }
 
-                // Apply removals, then add expanded tags (dedup case-insensitive)
+                // Apply removals, then add expanded tags (dedup honors case_sensitive flag).
                 asset.tags.retain(|t| !tags_to_remove.iter().any(|r| r == t));
                 for add in &expanded_adds {
-                    let add_lower = add.to_lowercase();
-                    if !asset.tags.iter().any(|t| t.to_lowercase() == add_lower) {
+                    if !asset.tags.iter().any(|t| cmp_eq(t, add)) {
                         asset.tags.push(add.clone());
                     }
                 }
@@ -5340,6 +5363,126 @@ mod tests {
         let store = crate::metadata_store::MetadataStore::new(dir.path());
         let asset: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
         assert!(asset.tags.contains(&"livestream".to_string()));
+    }
+
+    #[test]
+    fn tag_rename_case_sensitive_only_targets_exact_case() {
+        // Two assets, one tagged "Landscape" (capitalized), one "landscape" (lowercase).
+        // Renaming with `^Landscape` → `nature` must touch only the capitalized one.
+        let (dir, a1_id) = setup_tag_rename_catalog(&["Landscape"]);
+        let store = crate::metadata_store::MetadataStore::new(dir.path());
+
+        let mut a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:rt2");
+        a2.tags = vec!["landscape".to_string()];
+        let v2 = crate::models::Variant {
+            content_hash: "sha256:rt2".to_string(),
+            asset_id: a2.id,
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 100,
+            original_filename: "rt2.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        a2.variants.push(v2.clone());
+        let a2_id = a2.id.to_string();
+        let catalog = Catalog::open(dir.path()).unwrap();
+        catalog.insert_asset(&a2).unwrap();
+        catalog.insert_variant(&v2).unwrap();
+        store.save(&a2).unwrap();
+
+        let engine = QueryEngine::new(dir.path());
+        let result = engine.tag_rename("^Landscape", "nature", true, |_, _| {}).unwrap();
+        assert_eq!(result.renamed, 1, "only the exact-case tag should be renamed");
+
+        let a1: crate::models::Asset = store.load(a1_id.parse().unwrap()).unwrap();
+        let a2: crate::models::Asset = store.load(a2_id.parse().unwrap()).unwrap();
+        assert!(a1.tags.contains(&"nature".to_string()), "Landscape → nature");
+        assert!(!a1.tags.contains(&"Landscape".to_string()));
+        assert!(a2.tags.contains(&"landscape".to_string()), "lowercase landscape untouched");
+        assert!(!a2.tags.contains(&"nature".to_string()));
+    }
+
+    #[test]
+    fn tag_rename_exact_only_skips_descendants() {
+        let (dir, asset_id) = setup_tag_rename_catalog(&[
+            "location|Germany|Bayern",
+            "location|Germany",
+        ]);
+        let engine = QueryEngine::new(dir.path());
+        // `=location|Germany` matches that exact tag but NOT `location|Germany|Bayern`.
+        let result = engine.tag_rename("=location|Germany", "country|Germany", true, |_, _| {}).unwrap();
+        assert_eq!(result.renamed, 1);
+
+        let store = crate::metadata_store::MetadataStore::new(dir.path());
+        let asset: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
+        // The exact tag is renamed
+        assert!(asset.tags.contains(&"country|Germany".to_string()));
+        // The descendant is NOT touched
+        assert!(asset.tags.contains(&"location|Germany|Bayern".to_string()));
+    }
+
+    #[test]
+    fn tag_rename_combined_exact_and_case_sensitive() {
+        let (dir, asset_id) = setup_tag_rename_catalog(&[
+            "Animals|Cats",   // exact case match for "Animals" but a descendant exists
+            "animals|Birds",  // wrong case — must NOT be touched in case-sensitive mode
+            "Animals",        // exact case match, no descendant — this is the one to rename
+        ]);
+        let engine = QueryEngine::new(dir.path());
+        // `=^Animals` → only assets with the exact tag "Animals" at exactly this level,
+        // case-sensitive. The asset has all three tags; the rename should touch ONLY
+        // the standalone "Animals" tag because:
+        //  - "Animals|Cats" is a descendant (excluded by =)
+        //  - "animals|Birds" is wrong case (excluded by ^)
+        let result = engine.tag_rename("=^Animals", "Wildlife", true, |_, _| {}).unwrap();
+        assert_eq!(result.renamed, 1);
+
+        let store = crate::metadata_store::MetadataStore::new(dir.path());
+        let asset: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
+        assert!(asset.tags.contains(&"Wildlife".to_string()), "Animals → Wildlife");
+        assert!(!asset.tags.contains(&"Animals".to_string()), "Animals removed");
+        assert!(asset.tags.contains(&"Animals|Cats".to_string()), "descendant untouched");
+        assert!(asset.tags.contains(&"animals|Birds".to_string()), "wrong-case sibling untouched");
+    }
+
+    #[test]
+    fn tag_rename_case_sensitive_descendants() {
+        let (dir, asset_id) = setup_tag_rename_catalog(&[
+            "Sport|Football",
+            "sport|Football",
+        ]);
+        let engine = QueryEngine::new(dir.path());
+        // `^Sport` → match descendants of "Sport" (capitalized) but NOT "sport"
+        let result = engine.tag_rename("^Sport", "Sports", true, |_, _| {}).unwrap();
+        assert_eq!(result.renamed, 1);
+
+        let store = crate::metadata_store::MetadataStore::new(dir.path());
+        let asset: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
+        assert!(asset.tags.contains(&"Sports|Football".to_string()), "Sport|Football → Sports|Football");
+        assert!(asset.tags.contains(&"sport|Football".to_string()), "lowercase sport|Football untouched");
+    }
+
+    #[test]
+    fn tag_rename_marker_order_independent() {
+        let (dir, asset_id) = setup_tag_rename_catalog(&[
+            "Foo|Bar",
+            "Foo",
+        ]);
+        let store = crate::metadata_store::MetadataStore::new(dir.path());
+
+        let engine = QueryEngine::new(dir.path());
+        // Both `=^` and `^=` should produce the same result
+        let r1 = engine.tag_rename("=^Foo", "X", false, |_, _| {}).unwrap();
+        let r2 = engine.tag_rename("^=Foo", "X", false, |_, _| {}).unwrap();
+        assert_eq!(r1.renamed, r2.renamed);
+        assert_eq!(r1.matched, r2.matched);
+
+        // Apply via the second form and verify
+        let _ = engine.tag_rename("^=Foo", "X", true, |_, _| {}).unwrap();
+        let asset: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
+        assert!(asset.tags.contains(&"X".to_string()));
+        assert!(asset.tags.contains(&"Foo|Bar".to_string()), "descendant untouched");
     }
 
     #[test]

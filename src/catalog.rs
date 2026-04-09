@@ -3967,16 +3967,68 @@ impl Catalog {
 
     /// Find assets that have a tag matching exactly or starting with `tag|` (prefix match).
     /// Used by tag rename to cascade renames to descendant tags.
-    pub fn assets_with_tag_or_prefix(&self, tag: &str) -> Result<Vec<(String, Option<String>)>> {
-        let prefix = format!("{}|", tag);
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT a.id, a.stack_id \
-             FROM assets a, json_each(a.tags) AS je \
-             WHERE je.value = ?1 COLLATE NOCASE \
-                OR je.value LIKE ?2 COLLATE NOCASE \
-             ORDER BY a.created_at ASC",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![tag, format!("{}%", prefix)], |r| {
+    /// Find assets whose tag set contains `tag`, optionally including descendants
+    /// (`tag|child`) and optionally case-sensitive.
+    ///
+    /// - `case_sensitive = false` (default): uses `COLLATE NOCASE` for the equality
+    ///   check and `LIKE … COLLATE NOCASE` for the prefix check.
+    /// - `case_sensitive = true`: uses byte-exact equality and `GLOB` for the
+    ///   prefix check (GLOB is case-sensitive in SQLite).
+    /// - `exact_only = true`: skips the descendant prefix check, returning only
+    ///   assets tagged at exactly this level.
+    pub fn assets_with_tag_or_prefix(
+        &self,
+        tag: &str,
+        case_sensitive: bool,
+        exact_only: bool,
+    ) -> Result<Vec<(String, Option<String>)>> {
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match (case_sensitive, exact_only) {
+            (false, false) => {
+                // Default: case-insensitive, include descendants
+                (
+                    "SELECT DISTINCT a.id, a.stack_id \
+                     FROM assets a, json_each(a.tags) AS je \
+                     WHERE je.value = ?1 COLLATE NOCASE \
+                        OR je.value LIKE ?2 COLLATE NOCASE \
+                     ORDER BY a.created_at ASC".to_string(),
+                    vec![Box::new(tag.to_string()), Box::new(format!("{}|%", tag))],
+                )
+            }
+            (false, true) => {
+                // Case-insensitive, exact level only (no descendants)
+                (
+                    "SELECT DISTINCT a.id, a.stack_id \
+                     FROM assets a, json_each(a.tags) AS je \
+                     WHERE je.value = ?1 COLLATE NOCASE \
+                     ORDER BY a.created_at ASC".to_string(),
+                    vec![Box::new(tag.to_string())],
+                )
+            }
+            (true, false) => {
+                // Case-sensitive, include descendants. GLOB uses `*` as wildcard.
+                (
+                    "SELECT DISTINCT a.id, a.stack_id \
+                     FROM assets a, json_each(a.tags) AS je \
+                     WHERE je.value = ?1 \
+                        OR je.value GLOB ?2 \
+                     ORDER BY a.created_at ASC".to_string(),
+                    vec![Box::new(tag.to_string()), Box::new(format!("{}|*", tag))],
+                )
+            }
+            (true, true) => {
+                // Case-sensitive, exact level only
+                (
+                    "SELECT DISTINCT a.id, a.stack_id \
+                     FROM assets a, json_each(a.tags) AS je \
+                     WHERE je.value = ?1 \
+                     ORDER BY a.created_at ASC".to_string(),
+                    vec![Box::new(tag.to_string())],
+                )
+            }
+        };
+        let mut stmt = self.conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(param_refs.as_slice(), |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)

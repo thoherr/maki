@@ -355,9 +355,20 @@ maki-tag-rename -- rename a tag across all assets that have it
 
 Finds all assets tagged with OLD_TAG and replaces that tag with NEW_TAG. This is an atomic bulk operation — every affected asset is updated in the catalog, YAML sidecar, and XMP recipe files (if writeback is enabled) in a single pass.
 
-Matching is **case-insensitive**, consistent with tag search. `maki tag rename "Concert" "concert"` finds and renames "Concert", "CONCERT", and "concert" variants. The stored result uses the exact case specified in NEW_TAG.
+By default, matching is **case-insensitive** and **cascades to descendant tags**, consistent with the default `tag:` search filter behavior. `maki tag rename "Concert" "concert"` finds and renames "Concert", "CONCERT", and "concert" variants. The stored result uses the exact case specified in NEW_TAG.
 
-**Ancestor expansion:** When renaming a flat tag to a hierarchical one (e.g., "Munich" to "location|Germany|Bavaria|Munich"), all ancestor paths are automatically added (`location`, `location|Germany`, `location|Germany|Bavaria`). This matches the CaptureOne/Lightroom convention. The rename also cascades to descendant tags — renaming a parent renames all children.
+**Prefix markers** for OLD_TAG match the `tag:` search syntax exactly, so the rename behavior is 100% consistent with what you see in search results. The markers can be combined in any order:
+
+| OLD_TAG syntax | Behavior |
+|----------------|----------|
+| `Foo` | Case-insensitive, includes descendants (default) |
+| `=Foo` | Exact level only — does NOT touch `Foo|child` tags |
+| `^Foo` | Case-sensitive — `Foo` and `foo` are different tags |
+| `=^Foo` or `^=Foo` | Both: exact level AND case-sensitive |
+
+NEW_TAG is always taken literally (no prefix parsing) and is stored with the exact case given.
+
+**Ancestor expansion:** When renaming a flat tag to a hierarchical one (e.g., "Munich" to "location|Germany|Bavaria|Munich"), all ancestor paths are automatically added (`location`, `location|Germany`, `location|Germany|Bavaria`). This matches the CaptureOne/Lightroom convention. The rename cascades to descendant tags by default — renaming a parent renames all children — unless you use the `=` exact-level marker.
 
 If an asset already has NEW_TAG (in any case variant), the old tag is simply removed without creating a duplicate.
 
@@ -366,10 +377,10 @@ Without `--apply`, runs in report-only mode showing which assets would be affect
 ### ARGUMENTS
 
 **OLD_TAG** (required)
-: The tag to rename. Uses the same input conventions as `maki tag`: `|` (or `>`) for hierarchy. Matched case-insensitively.
+: The tag to rename. Uses the same input conventions as `maki tag`: `|` (or `>`) for hierarchy. Default matching is case-insensitive and includes descendants. Optional `=` and/or `^` prefix markers tighten matching as described above.
 
 **NEW_TAG** (required)
-: The replacement tag. Stored with the exact case given.
+: The replacement tag. Always taken literally and stored with the exact case given.
 
 ### OPTIONS
 
@@ -384,10 +395,28 @@ Rename a flat tag to a hierarchical one (also removes standalone "Germany" and "
 maki tag rename "Munich" "location|Germany|Bavaria|Munich" --apply
 ```
 
-Normalize casing:
+Normalize casing across all variants:
 
 ```bash
 maki tag rename "Concert" "concert" --apply
+```
+
+Rename only the capitalized variant, leaving the lowercase one alone (e.g., when cleaning up case duplicates):
+
+```bash
+maki tag rename "^Landscape" "Landscape" --apply
+```
+
+Rename only the exact tag, not its descendants (e.g., promote `Animals` to `Wildlife` without touching `Animals|Cats`):
+
+```bash
+maki tag rename "=Animals" "Wildlife" --apply
+```
+
+Combined: rename only the exact-case, exact-level tag:
+
+```bash
+maki tag rename "=^Birds" "Aves" --apply
 ```
 
 Consolidate synonyms across languages:
@@ -412,7 +441,7 @@ maki tag rename "old-tag" "new-tag"
 
 [tag](#maki-tag) -- add or remove tags on a single asset.
 [tag clear](#maki-tag-clear) -- remove all tags from an asset.
-[search](04-retrieve-commands.md#maki-search) -- `tag:` filter for finding tagged assets.
+[search](04-retrieve-commands.md#maki-search) -- `tag:` filter for finding tagged assets, with the same `=` and `^` prefix markers.
 
 ---
 

@@ -2,6 +2,22 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.3.15 (unreleased)
+
+### Enhancements
+- **`maki tag rename` accepts the same `=`/`^` prefix markers as `tag:` search** — closes a consistency gap between search and rename. By default, rename is case-insensitive and cascades to descendants (unchanged). New prefix markers on `OLD_TAG`:
+  - `=Foo` — exact level only, does not touch `Foo|child` tags
+  - `^Foo` — case-sensitive, treats `Foo` and `foo` as different tags
+  - `=^Foo` / `^=Foo` — both, in any order
+
+  Useful for cleaning up case-duplicate tags after spotting them on the tags page: e.g. `maki tag rename "^Landscape" "landscape" --apply` renames only the capitalized variant, leaving the lowercase one alone. The new modes are 100% consistent with the `tag:` search filter syntax — what you can find with search, you can rename. NEW_TAG is always taken literally (no prefix parsing).
+
+  Backend: `Catalog::assets_with_tag_or_prefix` extended with `case_sensitive` and `exact_only` flags. Case-sensitive queries use SQLite `GLOB` (matching the `tag:^` search path). 5 new tests cover the new modes and the order-independence of `=^` vs `^=`.
+
+### Documentation
+- `tag rename` reference: new markers documented with a table and 3 new examples (case-sensitive only, exact-level only, combined).
+- Cheat sheet: hint on the `tag rename` entry that `OLD` accepts `=` and `^` prefixes.
+
 ## v4.3.14 (2026-04-09)
 
 ### New Features

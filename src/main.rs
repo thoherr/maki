@@ -1064,10 +1064,12 @@ enum Commands {
 enum TagCommands {
     /// Rename a tag across all assets
     Rename {
-        /// Current tag name
+        /// Current tag name. Optional prefix markers (in any order) match the
+        /// `tag:` search filter syntax: `=Foo` matches the exact level only
+        /// (no descendants), `^Foo` is case-sensitive, `=^Foo` is both.
         old_tag: String,
 
-        /// New tag name
+        /// New tag name (always taken literally; no prefix parsing)
         new_tag: String,
 
         /// Apply changes (default: report-only)
