@@ -2,6 +2,22 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.3.14 (unreleased)
+
+### New Features
+- **Case-sensitive tag matching via `^` prefix** — tag matching is still case-insensitive by default (the right choice for 99% of searches), but you can now prefix a tag with `^` to force a case-sensitive match: `tag:^Landscape` matches `Landscape` but not `landscape`. Useful for cleaning up case-duplicate tags after spotting them on the tags page (which already counts case-sensitively). Stackable with the existing `=` exact-level marker in any order: `tag:=^Foo` or `tag:^=Foo`. Backend uses SQLite `GLOB` instead of `LIKE` for these queries.
+- **Per-chip case-sensitivity toggle in the web UI** — each tag chip in the filter bar now has a small `cc`/`Cc` toggle next to the existing `▼`/`=` exact-level toggle. Click to flip that specific chip between case-insensitive (`cc`, default) and case-sensitive (`Cc`). Different chips can have different modes in the same query. State persists through URL round-trips because the `^` prefix is embedded in the tag value itself.
+- **Unrated filter (`rating:0`)** — `rating:0` now matches both `rating = 0` and `rating IS NULL` (unrated assets), matching the user's mental model where "unrated" and "0 stars" are the same thing. Any rating filter whose range includes 0 (`rating:0-2`, `rating:0,3`, etc.) is wrapped in `(a.rating IS NULL OR ...)` by a new `rating_clause` helper. Filters that don't match 0 (`rating:3+`, `rating:2-4`) still correctly exclude NULL.
+- **∅ marker in the rating filter UI** — a clickable `∅` icon before the stars toggles the `rating:0` filter. Gives the "show me the rest" (unrated) case first-class UI access.
+
+### Bug Fixes
+- **Color label filter returned "No results found"** *(regression, since labels were introduced)* — the equality filter helper lowercased the search value (`"Red"` → `"red"`) but labels are stored capitalized (`"Red"`, `"Blue"`, ...). SQLite's default `=` is case-sensitive, so the match always failed. Fixed by using `COLLATE NOCASE` on the SQL clause and preserving the user's original casing. Users can now type `label:red`, `label:Red`, or `label:RED` interchangeably.
+
+### Documentation
+- Search filter reference: expanded `rating:` section with the new unrated semantics and SQL behavior for the NULL-handling cases; expanded `tag:` section with `^` case-sensitive syntax and the per-chip UI toggle; updated `label:` SQL behavior to document `COLLATE NOCASE`.
+- Cheat sheet: added `rating:0` to the numeric filter table; added `tag:=landscape` and `tag:^Landscape` rows to the text-and-metadata table.
+- Search filter quickref (`.tex`/`.md`): added the new tag and rating syntax examples.
+
 ## v4.3.13 (2026-04-08)
 
 ### New Features

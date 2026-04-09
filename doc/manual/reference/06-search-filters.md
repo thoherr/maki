@@ -162,23 +162,30 @@ maki search "format:tif tag:processed"
 
 Ratings are extracted from XMP during import. Microsoft Photo ratings (percentage values 1--99) are automatically normalized to the 1--5 scale (1=1, 25=2, 50=3, 75=4, 99=5).
 
+**Unrated assets:** Assets without a rating are stored with `rating = NULL` in the catalog. `rating:0` (and any filter that includes 0 in its range or value list) matches both NULL-rated assets and assets with an explicit rating of 0 — users mentally treat "unrated" and "0 stars" as the same thing. Conversely, `rating:1+` and any filter that excludes 0 also excludes unrated assets.
+
+**Web UI:** Click the small ∅ marker to the left of the stars to filter for unrated assets (equivalent to `rating:0`). Click it again to clear the filter. Click any star to set the minimum rating as before.
+
 **Examples:**
 
 ```
 maki search "rating:5"          # exactly 5 stars
-maki search "rating:3+"         # 3 stars or more
+maki search "rating:3+"         # 3 stars or more (excludes unrated and 0)
 maki search "rating:3-5"        # 3, 4, or 5 stars
 maki search "rating:2,4"        # exactly 2 or 4 stars
 maki search "rating:2,4+"       # exactly 2, or 4 stars and above
-maki search "rating:0"          # unrated assets
+maki search "rating:0"          # unrated OR 0-star assets ("the rest")
 ```
 
 **SQL behavior:**
-- Exact: `WHERE a.rating = ?`
-- Minimum: `WHERE a.rating >= ?`
-- Range: `WHERE a.rating >= ? AND a.rating <= ?`
-- Values: `WHERE a.rating IN (?, ?)`
-- Combined: `WHERE (a.rating IN (?) OR a.rating >= ?)`
+- Exact (non-zero): `WHERE a.rating = ?`
+- Exact 0: `WHERE (a.rating IS NULL OR a.rating = 0)`
+- Minimum (> 0): `WHERE a.rating >= ?`
+- Minimum 0 or less: `WHERE (a.rating IS NULL OR a.rating >= ?)`
+- Range including 0: `WHERE (a.rating IS NULL OR (a.rating >= ? AND a.rating <= ?))`
+- Values including 0: `WHERE (a.rating IS NULL OR a.rating IN (...))`
+
+Rating filters use a dedicated `rating_clause` helper that detects whether the filter matches 0 and wraps the standard numeric clause in `(a.rating IS NULL OR ...)` when it does. Filters that don't match 0 (e.g., `rating:3+`, `rating:2-4`) use the standard numeric comparison and correctly exclude NULL.
 
 Pure assets-table filter, no JOIN required.
 
@@ -200,7 +207,7 @@ maki search "label:blue"
 maki search "label:Green rating:4+"
 ```
 
-**SQL behavior:** `WHERE a.color_label = ?`. Pure assets-table filter, no JOIN required.
+**SQL behavior:** `WHERE a.color_label = ? COLLATE NOCASE`. Pure assets-table filter, no JOIN required. The `COLLATE NOCASE` makes the comparison case-insensitive so users can type `label:red`, `label:Red`, or `label:RED` interchangeably regardless of how the label is stored in the catalog.
 
 ---
 

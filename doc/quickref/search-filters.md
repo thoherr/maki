@@ -11,7 +11,7 @@ Filters combine with **AND** — every filter must match. Free-text tokens that 
 | Tag case-sensitive | `tag:^<name>` | `tag:^Landscape` (not "landscape") |
 | Exclude tag | `-tag:<name>` | `-tag:rejected` |
 | Format | `format:<ext>` | `format:nef`, `format:jpg` |
-| Rating (exact) | `rating:<N>` | `rating:5` |
+| Rating (exact) | `rating:<N>` | `rating:5`, `rating:0` (unrated) |
 | Rating (minimum) | `rating:<N>+` | `rating:3+` |
 | Rating (range) | `rating:<N>-<M>` | `rating:3-5` |
 | Rating (OR) | `rating:<N>,<M>` | `rating:2,4` |
