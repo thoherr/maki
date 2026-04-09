@@ -1071,6 +1071,20 @@ select.badge {
 .rating-filter-stars .star.filled { color: #f5a623; }
 .rating-filter-stars .star.empty { color: #ccc; }
 .rating-filter-stars .star:hover { transform: scale(1.2); }
+.rating-unrated {
+    cursor: pointer;
+    user-select: none;
+    color: #ccc;
+    font-size: 0.95rem;
+    margin-right: 0.15rem;
+    padding: 0 0.15rem;
+    border-radius: 3px;
+    transition: color 0.15s, background 0.15s;
+}
+.rating-unrated:hover { color: var(--text); transform: scale(1.15); }
+.rating-unrated.active { color: var(--primary); background: rgba(232, 99, 74, 0.12); }
+[data-theme="dark"] .rating-unrated { color: #555; }
+[data-theme="dark"] .rating-unrated:hover { color: var(--text); }
 .rating-filter-hint {
     font-size: 0.75rem;
     color: var(--text-muted);

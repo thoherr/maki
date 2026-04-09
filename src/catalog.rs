@@ -2626,6 +2626,37 @@ impl Catalog {
     /// `needs_v_join`: true when any filter references the `v` (variants) table directly.
     /// `needs_fl_join`: true when any filter references `fl` (file_locations); implies `needs_v_join`.
     /// Generate SQL WHERE clause for a NumericFilter on a given column.
+    /// Rating-specific clause builder that treats `rating IS NULL` as equivalent
+    /// to `rating = 0`. Users expect `rating:0` to match unrated assets.
+    fn rating_clause(
+        filter: &NumericFilter,
+        clauses: &mut Vec<String>,
+        params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    ) {
+        // True if the filter matches the value 0.
+        let matches_zero = match filter {
+            NumericFilter::Exact(v) => *v == 0.0,
+            NumericFilter::Min(v) => *v <= 0.0,
+            NumericFilter::Range(lo, hi) => *lo <= 0.0 && *hi >= 0.0,
+            NumericFilter::Values(vs) => vs.iter().any(|v| *v == 0.0),
+            NumericFilter::ValuesOrMin { values, min } => {
+                values.iter().any(|v| *v == 0.0) || *min <= 0.0
+            }
+        };
+
+        if matches_zero {
+            // Build the normal clause into a temporary, then wrap in (IS NULL OR <clause>).
+            let mut inner_clauses: Vec<String> = Vec::new();
+            Self::numeric_clause(filter, "a.rating", &mut inner_clauses, params);
+            // numeric_clause always adds exactly one clause.
+            if let Some(inner) = inner_clauses.into_iter().next() {
+                clauses.push(format!("(a.rating IS NULL OR {inner})"));
+            }
+        } else {
+            Self::numeric_clause(filter, "a.rating", clauses, params);
+        }
+    }
+
     fn numeric_clause(
         filter: &NumericFilter,
         column: &str,
@@ -2849,7 +2880,13 @@ impl Catalog {
         }
 
         // --- Numeric filters (all use unified NumericFilter type) ---
-        if let Some(ref f) = opts.rating { Self::numeric_clause(f, "a.rating", &mut clauses, &mut params); }
+        // Rating is special: an unrated asset has `rating IS NULL`, but users
+        // mentally treat "0 stars" and "unrated" as the same thing. We rewrite
+        // any rating filter that matches 0 (Exact(0), Values containing 0,
+        // Range 0-N, ValuesOrMin with 0) to also match NULL.
+        if let Some(ref f) = opts.rating {
+            Self::rating_clause(f, &mut clauses, &mut params);
+        }
 
         // --- Color label (equality on a.color_label) ---
         Self::add_equality_filter(&mut clauses, &mut params, opts.color_labels, opts.color_labels_exclude, "a.color_label", &mut false, false);
@@ -3232,18 +3269,22 @@ impl Catalog {
         _needs_join: &mut bool,
         _is_join_col: bool,
     ) {
+        // Case-insensitive equality via COLLATE NOCASE. This handles both
+        // asset_type (stored lowercase) and color_label (stored capitalized
+        // like "Red"/"Blue") without having to know the canonical case per
+        // column. The user can type any casing in the query.
         let include: Vec<&str> = entries.iter()
             .flat_map(|e| e.split(',').map(|s| s.trim()))
             .filter(|s| !s.is_empty())
             .collect();
         if include.len() == 1 {
-            clauses.push(format!("{column} = ?"));
-            params.push(Box::new(include[0].to_lowercase()));
+            clauses.push(format!("{column} = ? COLLATE NOCASE"));
+            params.push(Box::new(include[0].to_string()));
         } else if include.len() > 1 {
             let placeholders: Vec<&str> = include.iter().map(|_| "?").collect();
-            clauses.push(format!("{column} IN ({})", placeholders.join(",")));
+            clauses.push(format!("{column} COLLATE NOCASE IN ({})", placeholders.join(",")));
             for v in &include {
-                params.push(Box::new(v.to_lowercase()));
+                params.push(Box::new(v.to_string()));
             }
         }
         let exclude: Vec<&str> = exclude_entries.iter()
@@ -3251,13 +3292,13 @@ impl Catalog {
             .filter(|s| !s.is_empty())
             .collect();
         if exclude.len() == 1 {
-            clauses.push(format!("({column} IS NULL OR {column} != ?)"));
-            params.push(Box::new(exclude[0].to_lowercase()));
+            clauses.push(format!("({column} IS NULL OR {column} != ? COLLATE NOCASE)"));
+            params.push(Box::new(exclude[0].to_string()));
         } else if exclude.len() > 1 {
             let placeholders: Vec<&str> = exclude.iter().map(|_| "?").collect();
-            clauses.push(format!("({column} IS NULL OR {column} NOT IN ({}))", placeholders.join(",")));
+            clauses.push(format!("({column} IS NULL OR {column} COLLATE NOCASE NOT IN ({}))", placeholders.join(",")));
             for v in &exclude {
-                params.push(Box::new(v.to_lowercase()));
+                params.push(Box::new(v.to_string()));
             }
         }
     }
@@ -5152,6 +5193,155 @@ mod tests {
         let results = catalog.search_assets(Some("sunset"), None, None, None, None, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name.as_deref(), Some("sunset photo"));
+    }
+
+    // ── color label & rating-0 regression tests ───────────────
+
+    fn setup_rating_label_catalog() -> Catalog {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        // Asset 1: rating=5, color_label="Red"
+        let mut a1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:rl1");
+        a1.rating = Some(5);
+        a1.color_label = Some("Red".to_string());
+        let v1 = crate::models::Variant {
+            content_hash: "sha256:rl1".to_string(),
+            asset_id: a1.id.clone(),
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 1000,
+            original_filename: "rl1.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        a1.variants.push(v1.clone());
+        catalog.insert_asset(&a1).unwrap();
+        catalog.insert_variant(&v1).unwrap();
+
+        // Asset 2: rating=0, color_label="Blue"
+        let mut a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:rl2");
+        a2.rating = Some(0);
+        a2.color_label = Some("Blue".to_string());
+        let v2 = crate::models::Variant {
+            content_hash: "sha256:rl2".to_string(),
+            asset_id: a2.id.clone(),
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 1000,
+            original_filename: "rl2.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        a2.variants.push(v2.clone());
+        catalog.insert_asset(&a2).unwrap();
+        catalog.insert_variant(&v2).unwrap();
+
+        // Asset 3: rating=NULL (unrated), no color label
+        let mut a3 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:rl3");
+        a3.rating = None;
+        a3.color_label = None;
+        let v3 = crate::models::Variant {
+            content_hash: "sha256:rl3".to_string(),
+            asset_id: a3.id.clone(),
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 1000,
+            original_filename: "rl3.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        a3.variants.push(v3.clone());
+        catalog.insert_asset(&a3).unwrap();
+        catalog.insert_variant(&v3).unwrap();
+
+        // Asset 4: rating=3, no color label
+        let mut a4 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:rl4");
+        a4.rating = Some(3);
+        let v4 = crate::models::Variant {
+            content_hash: "sha256:rl4".to_string(),
+            asset_id: a4.id.clone(),
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 1000,
+            original_filename: "rl4.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        a4.variants.push(v4.clone());
+        catalog.insert_asset(&a4).unwrap();
+        catalog.insert_variant(&v4).unwrap();
+
+        catalog
+    }
+
+    #[test]
+    fn search_color_label_case_insensitive() {
+        let catalog = setup_rating_label_catalog();
+        // User types "Red" (capitalized) — matches stored "Red"
+        let labels = vec!["Red".to_string()];
+        let opts = SearchOptions { color_labels: &labels, per_page: u32::MAX, ..Default::default() };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original_filename, "rl1.jpg");
+
+        // User types "red" (lowercase) — also matches stored "Red"
+        let labels_lower = vec!["red".to_string()];
+        let opts_lower = SearchOptions { color_labels: &labels_lower, per_page: u32::MAX, ..Default::default() };
+        let results_lower = catalog.search_paginated(&opts_lower).unwrap();
+        assert_eq!(results_lower.len(), 1);
+
+        // User types "BLUE" (uppercase) — matches stored "Blue"
+        let labels_up = vec!["BLUE".to_string()];
+        let opts_up = SearchOptions { color_labels: &labels_up, per_page: u32::MAX, ..Default::default() };
+        let results_up = catalog.search_paginated(&opts_up).unwrap();
+        assert_eq!(results_up.len(), 1);
+        assert_eq!(results_up[0].original_filename, "rl2.jpg");
+    }
+
+    #[test]
+    fn search_rating_zero_matches_unrated_and_zero() {
+        let catalog = setup_rating_label_catalog();
+        // rating:0 should match both NULL-rated and 0-rated assets (a2, a3)
+        let opts = SearchOptions {
+            rating: Some(NumericFilter::Exact(0.0)),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        let names: Vec<&str> = results.iter().map(|r| r.original_filename.as_str()).collect();
+        assert_eq!(results.len(), 2, "rating:0 should match rl2 (rating=0) and rl3 (NULL). Got: {names:?}");
+        assert!(names.contains(&"rl2.jpg"));
+        assert!(names.contains(&"rl3.jpg"));
+    }
+
+    #[test]
+    fn search_rating_exact_3_excludes_null() {
+        let catalog = setup_rating_label_catalog();
+        // rating:3 should only match the 3-star asset, not NULL
+        let opts = SearchOptions {
+            rating: Some(NumericFilter::Exact(3.0)),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original_filename, "rl4.jpg");
+    }
+
+    #[test]
+    fn search_rating_min_1_excludes_unrated_and_zero() {
+        let catalog = setup_rating_label_catalog();
+        // rating:1+ should NOT include unrated (NULL) or 0-rated — only a1, a4
+        let opts = SearchOptions {
+            rating: Some(NumericFilter::Min(1.0)),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 2);
+        let names: Vec<&str> = results.iter().map(|r| r.original_filename.as_str()).collect();
+        assert!(names.contains(&"rl1.jpg"));
+        assert!(names.contains(&"rl4.jpg"));
     }
 
     #[test]

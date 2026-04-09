@@ -210,6 +210,7 @@
     var currentRating = "{{ rating }}";
     var ratingStars = document.querySelectorAll('#rating-stars .star');
     var ratingHint = document.getElementById('rating-hint');
+    var ratingUnrated = document.getElementById('rating-unrated');
 
     function getFilterRating() { return currentRating; }
 
@@ -221,6 +222,10 @@
             s.className = 'star ' + (active ? 'filled' : 'empty');
             s.innerHTML = active ? '&#9733;' : '&#9734;';
         });
+        if (ratingUnrated) {
+            if (value === '0') { ratingUnrated.classList.add('active'); }
+            else { ratingUnrated.classList.remove('active'); }
+        }
         ratingHint.textContent = value || '';
     }
 
@@ -242,6 +247,14 @@
             onFilterChange();
         });
     });
+
+    if (ratingUnrated) {
+        ratingUnrated.style.cursor = 'pointer';
+        ratingUnrated.addEventListener('click', function() {
+            setRatingFilter(currentRating === '0' ? '' : '0');
+            onFilterChange();
+        });
+    }
 
     window.getFilterRating = getFilterRating;
     window.setRatingFilter = setRatingFilter;

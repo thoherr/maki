@@ -20,6 +20,7 @@
     <div class="filter-row-bottom">
         <div class="filter-row-left">
             <div class="rating-filter-stars" id="rating-stars">
+                <span class="rating-unrated{% if rating == "0" %} active{% endif %}" id="rating-unrated" title="Unrated (0 stars)" data-value="0">&#x2205;</span>
                 {% for i in 1..=5u8 %}
                 {% let filled = rating == "5" && i <= 5 || rating == "4+" && i <= 4 || rating == "4" && i <= 4 || rating == "3+" && i <= 3 || rating == "3" && i <= 3 || rating == "2+" && i <= 2 || rating == "2" && i <= 2 || rating == "1+" && i <= 1 || rating == "1" && i <= 1 %}
                 <span class="star {% if filled %}filled{% else %}empty{% endif %}" data-value="{{ i }}">{% if filled %}&#9733;{% else %}&#9734;{% endif %}</span>
