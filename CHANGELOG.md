@@ -2,7 +2,7 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## v4.3.14 (unreleased)
+## v4.3.14 (2026-04-09)
 
 ### New Features
 - **Case-sensitive tag matching via `^` prefix** — tag matching is still case-insensitive by default (the right choice for 99% of searches), but you can now prefix a tag with `^` to force a case-sensitive match: `tag:^Landscape` matches `Landscape` but not `landscape`. Useful for cleaning up case-duplicate tags after spotting them on the tags page (which already counts case-sensitively). Stackable with the existing `=` exact-level marker in any order: `tag:=^Foo` or `tag:^=Foo`. Backend uses SQLite `GLOB` instead of `LIKE` for these queries.

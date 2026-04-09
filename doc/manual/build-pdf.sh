@@ -258,6 +258,7 @@ cat > "$TMPDIR/header.tex" << 'LATEX'
 \newunicodechar{ℹ}{{\symbolfont ℹ}}
 \newfontfamily{\mathsymbolfont}{STIX Two Math}[Scale=MatchLowercase]
 \newunicodechar{✓}{{\mathsymbolfont ✓}}
+\newunicodechar{∅}{{\mathsymbolfont ∅}}
 
 % Brand colors
 \definecolor{maki-salmon}{HTML}{e8634a}
