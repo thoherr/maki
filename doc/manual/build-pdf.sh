@@ -132,7 +132,7 @@ perl -i -pe '
         "08-configuration.md"       => "configuration-reference-maki.toml",
         "09-data-model.md"          => "data-model",
         "10-vlm-models.md"          => "vlm-model-guide",
-        "11-licenses.md"            => "licenses-and-acknowledgements",
+        "11-licenses.md"            => "licenses-acknowledgements",
         "01-rest-api.md"            => "rest-api-reference",
         "02-module-reference.md"    => "module-reference",
         "03-building-and-testing.md"=> "building-testing",
