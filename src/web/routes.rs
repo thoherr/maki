@@ -1144,7 +1144,7 @@ pub async fn stats_api(State(state): State<Arc<AppState>>) -> Response {
     let state = state.clone();
     let result = tokio::task::spawn_blocking(move || {
         let catalog = state.catalog()?;
-        let (assets, variants, recipes, total_size) = catalog.stats_overview()?;
+        let (assets, variants, recipes, total_size, _locs) = catalog.stats_overview()?;
         Ok::<_, anyhow::Error>(serde_json::json!({
             "assets": assets,
             "variants": variants,

@@ -29,7 +29,7 @@
             </svg>
         </div>
         <div class="stat-value">{{ stats.overview.variants }}</div>
-        <div class="stat-label">Variants</div>
+        <div class="stat-label">Variants{% if stats.overview.file_locations != stats.overview.variants %} <span style="font-size:0.7rem;font-weight:400;color:var(--text-muted);">({{ stats.overview.file_locations }} locations)</span>{% endif %}</div>
     </div>
     <div class="stat-card accent-amber">
         <div class="stat-icon">

@@ -164,6 +164,7 @@ pub struct OverviewStats {
     /// Number of unique recipe content hashes (distinct XMP files).
     /// The difference `recipes - unique_recipes` is the number of
     /// duplicate recipe locations (e.g. from backup volumes).
+    pub file_locations: u64,
     pub unique_recipes: u64,
     pub volumes_total: u64,
     pub volumes_online: u64,
@@ -2584,15 +2585,16 @@ impl Catalog {
     // ── Stats queries ──────────────────────────────────────────────
 
     /// Core overview counts: (assets, variants, recipes, total_size).
-    pub fn stats_overview(&self) -> Result<(u64, u64, u64, u64)> {
+    pub fn stats_overview(&self) -> Result<(u64, u64, u64, u64, u64)> {
         self.conn.query_row(
             "SELECT \
                 (SELECT COUNT(*) FROM assets), \
                 (SELECT COUNT(*) FROM variants), \
                 (SELECT COUNT(*) FROM recipes), \
-                (SELECT COALESCE(SUM(file_size), 0) FROM variants)",
+                (SELECT COALESCE(SUM(file_size), 0) FROM variants), \
+                (SELECT COUNT(*) FROM file_locations)",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         ).map_err(Into::into)
     }
 
@@ -4338,7 +4340,7 @@ impl Catalog {
         show_verified: bool,
         limit: usize,
     ) -> Result<CatalogStats> {
-        let (assets, variants, recipes, total_size) = self.stats_overview()?;
+        let (assets, variants, recipes, total_size, file_locations) = self.stats_overview()?;
         let (_, unique_recipes) = self.stats_recipe_counts()?;
 
         let volumes_total = volumes_info.len() as u64;
@@ -4349,6 +4351,7 @@ impl Catalog {
             assets,
             variants,
             recipes,
+            file_locations,
             unique_recipes,
             volumes_total,
             volumes_online,
@@ -7100,7 +7103,7 @@ mod tests {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
 
-        let (assets, variants, recipes, size) = catalog.stats_overview().unwrap();
+        let (assets, variants, recipes, size, _locs) = catalog.stats_overview().unwrap();
         assert_eq!(assets, 0);
         assert_eq!(variants, 0);
         assert_eq!(recipes, 0);
@@ -7111,7 +7114,7 @@ mod tests {
     fn stats_overview_with_data() {
         let catalog = setup_search_catalog();
 
-        let (assets, variants, recipes, size) = catalog.stats_overview().unwrap();
+        let (assets, variants, recipes, size, _locs) = catalog.stats_overview().unwrap();
         assert_eq!(assets, 2);
         assert_eq!(variants, 2);
         assert_eq!(recipes, 0);
