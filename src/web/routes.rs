@@ -4126,6 +4126,7 @@ fn run_import_with_progress(
                     "skipped"
                 }
                 crate::asset_service::FileStatus::RecipeAttached |
+                crate::asset_service::FileStatus::RecipeLocationAdded |
                 crate::asset_service::FileStatus::RecipeUpdated => {
                     recipes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     "recipe"

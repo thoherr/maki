@@ -154,6 +154,7 @@ pub enum FileStatus {
     LocationAdded,
     Skipped,
     RecipeAttached,
+    RecipeLocationAdded,
     RecipeUpdated,
 }
 
@@ -165,6 +166,7 @@ pub struct ImportResult {
     pub locations_added: usize,
     pub skipped: usize,
     pub recipes_attached: usize,
+    pub recipes_location_added: usize,
     pub recipes_updated: usize,
     pub previews_generated: usize,
     pub smart_previews_generated: usize,
@@ -722,6 +724,7 @@ impl AssetService {
         let mut locations_added = 0;
         let mut skipped = 0;
         let mut recipes_attached = 0;
+        let mut recipes_location_added = 0;
         let mut recipes_updated = 0;
         let mut previews_generated = 0;
         let mut smart_previews_generated = 0;
@@ -1174,8 +1177,13 @@ impl AssetService {
                                 metadata_store.save(&asset)?;
                                 catalog.insert_recipe(&recipe)?;
                             }
-                            recipes_attached += 1;
-                            on_file(file_path, FileStatus::RecipeAttached, file_start.elapsed());
+                            if already_known_content {
+                                recipes_location_added += 1;
+                                on_file(file_path, FileStatus::RecipeLocationAdded, file_start.elapsed());
+                            } else {
+                                recipes_attached += 1;
+                                on_file(file_path, FileStatus::RecipeAttached, file_start.elapsed());
+                            }
                         }
                         continue;
                     }
@@ -1330,8 +1338,13 @@ impl AssetService {
                     catalog.insert_recipe(&recipe)?;
                 }
 
-                recipes_attached += 1;
-                on_file(file_path, FileStatus::RecipeAttached, file_start.elapsed());
+                if already_known_content {
+                    recipes_location_added += 1;
+                    on_file(file_path, FileStatus::RecipeLocationAdded, file_start.elapsed());
+                } else {
+                    recipes_attached += 1;
+                    on_file(file_path, FileStatus::RecipeAttached, file_start.elapsed());
+                }
             }
         }
 
@@ -1341,6 +1354,7 @@ impl AssetService {
             locations_added,
             skipped,
             recipes_attached,
+            recipes_location_added,
             recipes_updated,
             previews_generated,
             smart_previews_generated,

@@ -2159,6 +2159,7 @@ faces/\n\
                         FileStatus::LocationAdded => "location added",
                         FileStatus::Skipped => "skipped",
                         FileStatus::RecipeAttached => "recipe",
+                        FileStatus::RecipeLocationAdded => "recipe location added",
                         FileStatus::RecipeUpdated => "recipe updated",
                     };
                     let name = path.file_name()
@@ -2458,6 +2459,9 @@ faces/\n\
                 }
                 if result.recipes_attached > 0 {
                     parts.push(format!("{} recipe(s) attached", result.recipes_attached));
+                }
+                if result.recipes_location_added > 0 {
+                    parts.push(format!("{} recipe location(s) added", result.recipes_location_added));
                 }
                 if result.recipes_updated > 0 {
                     parts.push(format!("{} recipe(s) updated", result.recipes_updated));
