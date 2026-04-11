@@ -60,12 +60,10 @@
             <div class="bar-track">
                 <div class="bar-fill {{ bucket.volume_count|backup_bar_class(result.min_copies) }}" data-value="{{ bucket.asset_count }}"></div>
             </div>
-            <span class="bar-value">
-                {{ bucket.asset_count }}
-                {% if bucket.volume_count == "0" || bucket.volume_count == "1" %}
-                <span class="badge-at-risk">AT RISK</span>
-                {% endif %}
-            </span>
+            {% if bucket.volume_count == "0" || bucket.volume_count == "1" %}
+            <span class="badge-at-risk">AT RISK</span>
+            {% endif %}
+            <span class="bar-value">{{ bucket.asset_count }}</span>
         </div>
         {% endif %}
     {% endfor %}
