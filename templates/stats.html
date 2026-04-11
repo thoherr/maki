@@ -39,8 +39,8 @@
                 <line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line>
             </svg>
         </div>
-        <div class="stat-value">{{ stats.overview.recipes }}</div>
-        <div class="stat-label">Recipes</div>
+        <div class="stat-value">{{ stats.overview.unique_recipes }}</div>
+        <div class="stat-label">Recipes{% if stats.overview.recipes != stats.overview.unique_recipes %} <span style="font-size:0.7rem;font-weight:400;color:var(--text-muted);">({{ stats.overview.recipes }} locations)</span>{% endif %}</div>
     </div>
     <div class="stat-card accent-purple">
         <div class="stat-icon">

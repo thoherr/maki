@@ -161,6 +161,10 @@ pub struct OverviewStats {
     pub assets: u64,
     pub variants: u64,
     pub recipes: u64,
+    /// Number of unique recipe content hashes (distinct XMP files).
+    /// The difference `recipes - unique_recipes` is the number of
+    /// duplicate recipe locations (e.g. from backup volumes).
+    pub unique_recipes: u64,
     pub volumes_total: u64,
     pub volumes_online: u64,
     pub volumes_offline: u64,
@@ -2592,6 +2596,18 @@ impl Catalog {
         ).map_err(Into::into)
     }
 
+    /// Recipe counts: (total_recipe_rows, unique_content_hashes).
+    /// The difference is the number of duplicate recipe locations (e.g. backups).
+    pub fn stats_recipe_counts(&self) -> Result<(u64, u64)> {
+        self.conn.query_row(
+            "SELECT \
+                (SELECT COUNT(*) FROM recipes), \
+                (SELECT COUNT(DISTINCT content_hash) FROM recipes)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).map_err(Into::into)
+    }
+
     /// Asset type breakdown: Vec<(type_name, count)>.
     pub fn stats_asset_types(&self) -> Result<Vec<(String, u64)>> {
         let mut stmt = self.conn.prepare(
@@ -4323,6 +4339,7 @@ impl Catalog {
         limit: usize,
     ) -> Result<CatalogStats> {
         let (assets, variants, recipes, total_size) = self.stats_overview()?;
+        let (_, unique_recipes) = self.stats_recipe_counts()?;
 
         let volumes_total = volumes_info.len() as u64;
         let volumes_online = volumes_info.iter().filter(|v| v.2).count() as u64;
@@ -4332,6 +4349,7 @@ impl Catalog {
             assets,
             variants,
             recipes,
+            unique_recipes,
             volumes_total,
             volumes_online,
             volumes_offline,

@@ -78,7 +78,9 @@ A pointer to where a Variant physically lives on disk. A single Variant can have
 
 ### Recipe
 
-A processing sidecar file attached to a Variant. Unlike Variants, Recipes are identified by **location** (volume + path) rather than content hash, because external tools like CaptureOne routinely modify them in place.
+A processing sidecar file attached to a Variant. Each Recipe record represents one physical file on one volume. When the same XMP file exists on multiple volumes (e.g. backup copies), there are multiple Recipe records with the same `content_hash` but different locations — conceptually one recipe with multiple locations, mirroring how Variants work. The detail page and stats page group recipes by `(variant_hash, content_hash)` to reflect this: "1 recipe, 3 locations" rather than "3 recipes".
+
+When importing, if a recipe's content hash is already known for the asset (from any volume), the recipe file is tracked for location purposes but its metadata is **not re-merged** — this prevents stale XMP data from backup copies from overwriting curated tags or ratings.
 
 | Field | Type | Description |
 |-------|------|-------------|

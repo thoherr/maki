@@ -524,13 +524,13 @@
 
         {% if !recipes.is_empty() %}
         <details>
-            <summary>Recipes ({{ recipes.len() }}){% if has_pending_writeback %} <span class="badge" style="background:#e67e22;color:#fff;font-size:0.7rem;margin-left:4px;">pending</span>{% endif %}</summary>
+            <summary>Recipes ({{ recipes.len() }}{% if recipe_location_count != recipes.len() %}, {{ recipe_location_count }} locations{% endif %}){% if has_pending_writeback %} <span class="badge" style="background:#e67e22;color:#fff;font-size:0.7rem;margin-left:4px;">pending</span>{% endif %}</summary>
             <table class="variants-table">
                 <thead>
                     <tr>
                         <th>Type</th>
                         <th>Software</th>
-                        <th>Location</th>
+                        <th>Locations</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -538,10 +538,14 @@
                     <tr>
                         <td><span class="badge">{{ r.recipe_type }}</span>{% if r.pending_writeback %} <span title="Metadata changes not yet written to this XMP file" style="color:#e67e22;cursor:help;">&#x21bb;</span>{% endif %}</td>
                         <td>{{ r.software }}</td>
-                        <td><span class="badge volume-badge">{{ r.volume_label }}</span> {{ r.relative_path }}{% if r.is_online %}
-                            <button class="reveal-btn" title="Reveal in file manager"
-                                onclick="fetch('/api/open-location',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({volume_id:'{{ r.volume_id }}',relative_path:'{{ r.relative_path }}'})}).then(function(r){if(!r.ok)r.text().then(function(t){alert(t)})})">&#128194;</button><button class="reveal-btn" title="Open terminal here"
-                                onclick="fetch('/api/open-terminal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({volume_id:'{{ r.volume_id }}',relative_path:'{{ r.relative_path }}'})}).then(function(r){if(!r.ok)r.text().then(function(t){alert(t)})})">&gt;_</button>{% endif %}</td>
+                        <td>
+                            {% for loc in r.locations %}
+                            <div><span class="badge volume-badge">{{ loc.volume_label }}</span> {{ loc.relative_path }}{% if loc.pending_writeback %} <span title="Pending writeback" style="color:#e67e22;cursor:help;">&#x21bb;</span>{% endif %}{% if loc.is_online %}
+                                <button class="reveal-btn" title="Reveal in file manager"
+                                    onclick="fetch('/api/open-location',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({volume_id:'{{ loc.volume_id }}',relative_path:'{{ loc.relative_path }}'})}).then(function(r){if(!r.ok)r.text().then(function(t){alert(t)})})">&#128194;</button><button class="reveal-btn" title="Open terminal here"
+                                    onclick="fetch('/api/open-terminal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({volume_id:'{{ loc.volume_id }}',relative_path:'{{ loc.relative_path }}'})}).then(function(r){if(!r.ok)r.text().then(function(t){alert(t)})})">&gt;_</button>{% endif %}</div>
+                            {% endfor %}
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>

@@ -219,9 +219,19 @@ pub struct LocationRow {
     pub is_online: bool,
 }
 
+/// A recipe grouped by (variant_hash, content_hash) — mirrors how variants
+/// group their locations. Identical copies of the same XMP file on different
+/// volumes appear as one recipe with multiple locations.
 pub struct RecipeRow {
     pub recipe_type: String,
     pub software: String,
+    pub content_hash: String,
+    pub variant_hash: String,
+    pub pending_writeback: bool,
+    pub locations: Vec<RecipeLocationRow>,
+}
+
+pub struct RecipeLocationRow {
     pub volume_label: String,
     pub volume_id: String,
     pub relative_path: String,
@@ -331,6 +341,7 @@ pub struct AssetPage {
     pub best_variant_hash: String,
     pub variants: Vec<VariantRow>,
     pub recipes: Vec<RecipeRow>,
+    pub recipe_location_count: usize,
     pub has_pending_writeback: bool,
     pub collections: Vec<AssetCollectionChip>,
     pub stack_members: Vec<StackMemberCard>,
@@ -455,23 +466,39 @@ impl AssetPage {
             })
             .collect();
 
-        let recipes: Vec<RecipeRow> = details
-            .recipes
-            .iter()
-            .map(|r| {
+        // Group recipes by (variant_hash, content_hash) so identical copies
+        // on different volumes appear as one recipe with multiple locations —
+        // mirroring how variants display their locations.
+        let recipes: Vec<RecipeRow> = {
+            use std::collections::BTreeMap;
+            let mut groups: BTreeMap<(String, String), RecipeRow> = BTreeMap::new();
+            for r in &details.recipes {
                 let vid = r.volume_id.clone().unwrap_or_default();
                 let online = volume_online.get(&vid).copied().unwrap_or(false);
-                RecipeRow {
-                    recipe_type: r.recipe_type.clone(),
-                    software: r.software.clone(),
+                let key = (
+                    r.variant_hash.clone(),
+                    r.content_hash.clone(),
+                );
+                let loc = RecipeLocationRow {
                     volume_label: r.volume_label.clone().unwrap_or_else(|| "-".to_string()),
                     volume_id: vid,
                     relative_path: r.relative_path.as_deref().unwrap_or("-").to_string(),
                     is_online: online,
                     pending_writeback: r.pending_writeback,
-                }
-            })
-            .collect();
+                };
+                let group = groups.entry(key.clone()).or_insert_with(|| RecipeRow {
+                    recipe_type: r.recipe_type.clone(),
+                    software: r.software.clone(),
+                    content_hash: key.1.clone(),
+                    variant_hash: key.0.clone(),
+                    pending_writeback: false,
+                    locations: Vec::new(),
+                });
+                if r.pending_writeback { group.pending_writeback = true; }
+                group.locations.push(loc);
+            }
+            groups.into_values().collect()
+        };
 
         let is_video = details.asset_type == "video";
         let video_url_val = if is_video {
@@ -533,6 +560,7 @@ impl AssetPage {
             best_variant_hash,
             variants,
             has_pending_writeback: recipes.iter().any(|r| r.pending_writeback),
+            recipe_location_count: recipes.iter().map(|r| r.locations.len()).sum(),
             recipes,
             collections: collections
                 .into_iter()
