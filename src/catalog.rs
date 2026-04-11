@@ -3290,10 +3290,21 @@ impl Catalog {
         }
 
         if exact_only {
-            // Exact/leaf match: has this tag but NOT any child tag.
+            // Exact/leaf match: the tag exists on the asset BUT is never
+            // followed by `|child` at any position in any tag path.
+            //
+            // With ancestor expansion (CaptureOne/Lightroom convention),
+            // `location|Germany|Bayern|Holzkirchen|Marktplatz` also creates
+            // standalone tags `Holzkirchen`, `Bayern`, etc. A naive check
+            // for `"Holzkirchen|` misses the mid-path case
+            // `|Holzkirchen|Marktplatz`. Two NOT clauses cover both:
+            //   1. NOT "stored|...  (stored is at the start of a tag path)
+            //   2. NOT |stored|...  (stored is mid-path, after a |)
             params.push(Box::new(pat(&format!("\"{stored}\""))));
             params.push(Box::new(desc_pat(&stored)));
-            exprs.push(format!("(a.tags {op} ? AND a.tags NOT {op} ?)"));
+            let mid_desc_pat = format!("{wild}|{stored}|{wild}");
+            params.push(Box::new(mid_desc_pat));
+            exprs.push(format!("(a.tags {op} ? AND a.tags NOT {op} ? AND a.tags NOT {op} ?)"));
         } else {
             params.push(Box::new(pat(&format!("\"{stored}\""))));
             exprs.push(format!("a.tags {op} ?"));
@@ -5709,6 +5720,85 @@ mod tests {
         let results2 = catalog.search_paginated(&opts2).unwrap();
         assert_eq!(results2.len(), 1);
         assert_eq!(results2[0].original_filename, "cs1.jpg");
+    }
+
+    #[test]
+    fn search_tag_exact_with_ancestor_expansion() {
+        // Simulates the CaptureOne/Lightroom ancestor expansion scenario.
+        // An asset tagged `location|Germany|Bayern|Holzkirchen|Marktplatz`
+        // also gets standalone ancestor tags: `Holzkirchen`, `Bayern`, etc.
+        // tag:=Holzkirchen should EXCLUDE this asset because Holzkirchen
+        // is a non-leaf component (it has `|Marktplatz` below it).
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        // Asset 1: Holzkirchen is a MID-PATH component (has deeper tags)
+        let mut a1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ae1");
+        a1.tags = vec![
+            "location".to_string(),
+            "location|Germany".to_string(),
+            "location|Germany|Bayern".to_string(),
+            "location|Germany|Bayern|Holzkirchen".to_string(),
+            "location|Germany|Bayern|Holzkirchen|Marktplatz".to_string(),
+            // Standalone ancestors from expand_ancestors:
+            "Germany".to_string(),
+            "Bayern".to_string(),
+            "Holzkirchen".to_string(),
+            "Marktplatz".to_string(),
+        ];
+        let v1 = crate::models::Variant {
+            content_hash: "sha256:ae1".to_string(),
+            asset_id: a1.id.clone(),
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 100,
+            original_filename: "ae1.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        a1.variants.push(v1.clone());
+        catalog.insert_asset(&a1).unwrap();
+        catalog.insert_variant(&v1).unwrap();
+
+        // Asset 2: Holzkirchen IS the leaf (no deeper tags)
+        let mut a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ae2");
+        a2.tags = vec![
+            "location".to_string(),
+            "location|Germany".to_string(),
+            "location|Germany|Bayern".to_string(),
+            "location|Germany|Bayern|Holzkirchen".to_string(),
+            "Germany".to_string(),
+            "Bayern".to_string(),
+            "Holzkirchen".to_string(),
+        ];
+        let v2 = crate::models::Variant {
+            content_hash: "sha256:ae2".to_string(),
+            asset_id: a2.id.clone(),
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 100,
+            original_filename: "ae2.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        a2.variants.push(v2.clone());
+        catalog.insert_asset(&a2).unwrap();
+        catalog.insert_variant(&v2).unwrap();
+
+        // tag:=Holzkirchen should match ONLY ae2 (Holzkirchen is leaf),
+        // NOT ae1 (Holzkirchen has Marktplatz below it)
+        let tags = vec!["=Holzkirchen".to_string()];
+        let opts = SearchOptions { tags: &tags, per_page: u32::MAX, ..Default::default() };
+        let results = catalog.search_paginated(&opts).unwrap();
+        let names: Vec<&str> = results.iter().map(|r| r.original_filename.as_str()).collect();
+        assert_eq!(results.len(), 1, "tag:=Holzkirchen should match only ae2. Got: {names:?}");
+        assert_eq!(results[0].original_filename, "ae2.jpg");
+
+        // tag:Holzkirchen (without =) should match BOTH
+        let tags_no_eq = vec!["Holzkirchen".to_string()];
+        let opts_no_eq = SearchOptions { tags: &tags_no_eq, per_page: u32::MAX, ..Default::default() };
+        let results_no_eq = catalog.search_paginated(&opts_no_eq).unwrap();
+        assert_eq!(results_no_eq.len(), 2, "tag:Holzkirchen should match both");
     }
 
     #[test]
