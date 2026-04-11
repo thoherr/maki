@@ -12,7 +12,7 @@
 #   - maki.toml, volumes.yaml, collections, searches, vocabulary
 #   - metadata/ (YAML sidecars — source of truth)
 #   - catalog.db (SQLite — derived, but expensive to rebuild)
-#   - previews/, smart-previews/, embeddings/, face-crops/
+#   - previews/, smart-previews/, embeddings/, faces/
 #
 # Complements scripts/backup-catalog.sh (git-based, metadata only) by
 # including all derived files so a restore doesn't require hours of
