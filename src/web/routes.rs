@@ -1109,6 +1109,48 @@ pub async fn clear_tags(
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct RenameTagRequest {
+    pub old_tag: String,
+    pub new_tag: String,
+    #[serde(default)]
+    pub apply: bool,
+}
+
+/// POST /api/tag/rename — rename a tag across all assets.
+pub async fn rename_tag_api(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RenameTagRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let old_storage = crate::tag_util::tag_input_to_storage(&req.old_tag);
+        let new_storage = crate::tag_util::tag_input_to_storage(&req.new_tag);
+        if new_storage.is_empty() {
+            anyhow::bail!("New tag name cannot be empty");
+        }
+        let engine = state.query_engine();
+        let result = engine.tag_rename(&old_storage, &new_storage, req.apply, |_, _| {})?;
+        if req.apply {
+            state.dropdown_cache.invalidate_tags();
+        }
+        Ok::<_, anyhow::Error>(serde_json::json!({
+            "matched": result.matched,
+            "renamed": result.renamed,
+            "removed": result.removed,
+            "skipped": result.skipped,
+            "dry_run": result.dry_run,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
 /// GET /api/tags — all tags as JSON (for autocomplete).
 /// Merges actual catalog tags with vocabulary tags (planned but unused).
 pub async fn tags_api(State(state): State<Arc<AppState>>) -> Response {

@@ -40,6 +40,7 @@
             {{ t.own_count }}
             {% endif %}
         </span>
+        <button class="tag-rename-btn" title="Rename tag" data-tag="{{ t.name }}">&#9998;</button>
     </div>
     {% endfor %}
 </div>
@@ -184,7 +185,110 @@
         searchInput.value = saved;
         filterTags(saved);
     }
+    // ── Tag rename modal ──────────────────────────────────────────
+    var renameOverlay = document.getElementById('rename-overlay');
+    var renameOldEl = document.getElementById('rename-old');
+    var renameNewEl = document.getElementById('rename-new');
+    var renamePreviewBtn = document.getElementById('rename-preview');
+    var renameApplyBtn = document.getElementById('rename-apply');
+    var renameResultEl = document.getElementById('rename-result');
+
+    document.querySelectorAll('.tag-rename-btn').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var tag = this.getAttribute('data-tag');
+            renameOldEl.textContent = tag;
+            renameOldEl.setAttribute('data-tag', tag);
+            renameNewEl.value = tag;
+            renameResultEl.textContent = '';
+            renameApplyBtn.disabled = true;
+            renameOverlay.style.display = 'flex';
+            renameNewEl.focus();
+            renameNewEl.select();
+        });
+    });
+
+    function closeRenameModal() {
+        renameOverlay.style.display = 'none';
+    }
+
+    document.getElementById('rename-cancel').addEventListener('click', closeRenameModal);
+    renameOverlay.addEventListener('click', function(e) {
+        if (e.target === renameOverlay) closeRenameModal();
+    });
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && renameOverlay.style.display !== 'none') closeRenameModal();
+    });
+
+    function doRename(apply) {
+        var oldTag = renameOldEl.getAttribute('data-tag');
+        var newTag = renameNewEl.value.trim();
+        if (!newTag) { renameResultEl.textContent = 'New tag cannot be empty.'; return; }
+        if (oldTag === newTag && !apply) { renameResultEl.textContent = 'Tags are identical.'; return; }
+
+        var btn = apply ? renameApplyBtn : renamePreviewBtn;
+        btn.disabled = true;
+        btn.textContent = apply ? 'Applying...' : 'Checking...';
+
+        fetch('/api/tag/rename', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ old_tag: oldTag, new_tag: newTag, apply: apply })
+        })
+        .then(function(r) {
+            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            return r.json();
+        })
+        .then(function(data) {
+            var parts = [];
+            if (data.renamed > 0) parts.push(data.renamed + ' renamed');
+            if (data.removed > 0) parts.push(data.removed + ' merged');
+            if (data.skipped > 0) parts.push(data.skipped + ' skipped');
+            if (parts.length === 0) parts.push('no matching assets');
+            var prefix = apply ? 'Done: ' : 'Preview: ';
+            renameResultEl.textContent = prefix + parts.join(', ') + ' (of ' + data.matched + ' matched)';
+            if (!apply && data.renamed + data.removed > 0) {
+                renameApplyBtn.disabled = false;
+            }
+            if (apply) {
+                // Reload the page after a short delay to show the result
+                setTimeout(function() { window.location.reload(); }, 800);
+            }
+        })
+        .catch(function(err) {
+            renameResultEl.textContent = 'Error: ' + err.message;
+        })
+        .finally(function() {
+            btn.disabled = false;
+            btn.textContent = apply ? 'Apply' : 'Preview';
+        });
+    }
+
+    renamePreviewBtn.addEventListener('click', function() { doRename(false); });
+    renameApplyBtn.addEventListener('click', function() { doRename(true); });
+    renameNewEl.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); doRename(false); }
+    });
 })();
 </script>
+
+<!-- Rename tag modal -->
+<div class="import-overlay" id="rename-overlay" style="display:none">
+    <div class="import-modal" style="max-width:450px;">
+        <h2>Rename Tag</h2>
+        <div style="margin-bottom:0.75rem;">
+            <label style="font-size:0.82rem;color:var(--text-muted);display:block;margin-bottom:0.2rem;">From</label>
+            <code id="rename-old" style="font-size:0.9rem;"></code>
+        </div>
+        <label style="font-size:0.82rem;color:var(--text-muted);display:block;margin-bottom:0.2rem;">To</label>
+        <input type="text" id="rename-new" class="form-input" style="width:100%;box-sizing:border-box;margin-bottom:0.75rem;" placeholder="new|tag|name">
+        <div style="display:flex;gap:0.5rem;">
+            <button class="batch-btn" id="rename-preview">Preview</button>
+            <button class="batch-btn batch-btn-primary" id="rename-apply" disabled>Apply</button>
+            <button class="batch-btn" id="rename-cancel">Cancel</button>
+        </div>
+        <div id="rename-result" style="margin-top:0.75rem;font-size:0.88rem;color:var(--text-muted);min-height:1.2em;"></div>
+    </div>
+</div>
 {% endif %}
 {% endblock %}
