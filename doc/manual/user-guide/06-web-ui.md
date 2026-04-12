@@ -445,7 +445,9 @@ For locations on online volumes, two action buttons appear next to each path:
 
 ### Recipes
 
-An expandable section lists attached recipe files (XMP sidecars, CaptureOne settings, etc.) with columns for recipe type, software, and file path. Recipes with pending write-back changes (edits made while the volume was offline) show an orange sync indicator. When any recipe has pending changes, a "Write back to XMP" button appears at the top of the section — clicking it replays the queued edits to the recipe files on disk (equivalent to `maki writeback --asset`).
+An expandable section lists attached recipe files (XMP sidecars, CaptureOne settings, etc.) with columns for recipe type, software, and locations. Recipes are grouped by content: identical copies of the same XMP file on different volumes (e.g. from a backup) show as "1 recipe, 3 locations" rather than three separate entries — mirroring how variants display their locations. Different XMP content (e.g. pre/post edit) shows as separate recipe rows. The section header shows the unique recipe count and total location count when they differ.
+
+Recipes with pending write-back changes (edits made while the volume was offline) show an orange sync indicator per location. When any recipe has pending changes, a "Write back to XMP" button appears at the top of the section — clicking it replays the queued edits to the recipe files on disk (equivalent to `maki writeback --asset`).
 
 ### Source metadata
 
@@ -631,7 +633,14 @@ Navigate to `/tags` or click "Tags" in the navigation bar.
 - **Live text filter**: type in the filter input to narrow the tag list. Filtering begins at 2 characters. The count display updates to show "X of Y" tags.
 - **Multi-column layout**: tags flow into multiple columns automatically, adapting to the viewport width.
 - **Clickable tags**: click any tag name to jump to the browse page filtered by that tag.
-- **Hierarchical tree view**: tags containing `/` separators are displayed as a collapsible tree. Each node shows its own count (assets tagged with that exact tag) and a total count (including all descendants). Click the disclosure triangle to expand or collapse a branch. Clicking a parent tag searches for all descendants.
+- **Hierarchical tree view**: tags containing `|` separators are displayed as a collapsible tree. Each node shows its own count (assets tagged with that exact tag) and a total count (including all descendants). Click the disclosure triangle to expand or collapse a branch. Clicking a parent tag searches for all descendants.
+- **Prefix-anchored filter**: type a leading `|` in the filter input to match only tags that *start* with the query at a hierarchy boundary (e.g., `|wed` matches `wedding` and `events|wedding` but not `midweek`).
+- **Rename tags**: hover over any tag row to reveal a pencil icon (✏). Click it to open a rename dialog with:
+  - **From** (read-only, pre-filled with the clicked tag)
+  - **To** (editable input with tag autocomplete from your existing vocabulary)
+  - **Preview** button (dry run — shows how many assets would be affected)
+  - **Apply** button (enabled after preview confirms changes)
+  - Press **Enter** once to preview, **Enter** again to apply — two keystrokes to rename. The page reloads automatically after a successful rename. This is the web equivalent of `maki tag rename`.
 
 
 ## Collections Page
