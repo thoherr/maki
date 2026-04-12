@@ -931,7 +931,7 @@ impl AssetService {
                     group_asset = Some(asset);
                 } else {
                     // Additional media file → add variant to existing group asset
-                    let asset = group_asset.as_mut().unwrap();
+                    let asset = group_asset.as_mut().expect("group_asset must be Some when processing grouped recipe");
                     let mut exif_data = crate::exif_reader::extract(file_path);
                     if determine_asset_type(ext) == AssetType::Video {
                         let video_meta = crate::preview::extract_video_metadata(file_path);
@@ -1129,7 +1129,7 @@ impl AssetService {
                                 if !dry_run {
                                     let recipe_id = existing.id;
                                     let recipe_id_str = recipe_id.to_string();
-                                    let recipe_mut = asset.recipes.iter_mut().find(|r| r.id == recipe_id).unwrap();
+                                    let recipe_mut = asset.recipes.iter_mut().find(|r| r.id == recipe_id).expect("recipe must exist after location check");
                                     recipe_mut.content_hash = content_hash.clone();
                                     catalog.update_recipe_content_hash(&recipe_id_str, &content_hash)?;
                                     if ext.eq_ignore_ascii_case("xmp") {
@@ -1260,7 +1260,7 @@ impl AssetService {
                     .as_ref()
                     .expect("primary_variant_hash should be set when group_asset is Some");
 
-                let asset = group_asset.as_mut().unwrap();
+                let asset = group_asset.as_mut().expect("group_asset must be Some when processing grouped recipe");
 
                 // Location-based recipe dedup: find existing recipe at same location
                 let existing_recipe = asset.recipes.iter().find(|r| {
@@ -1281,7 +1281,7 @@ impl AssetService {
                         let recipe_id_str = recipe_id.to_string();
 
                         // Update in-memory
-                        let recipe_mut = asset.recipes.iter_mut().find(|r| r.id == recipe_id).unwrap();
+                        let recipe_mut = asset.recipes.iter_mut().find(|r| r.id == recipe_id).expect("recipe must exist after location check");
                         recipe_mut.content_hash = content_hash.clone();
 
                         // Update catalog
@@ -5150,7 +5150,7 @@ impl AssetService {
             }
 
             // Pick the oldest date
-            let oldest = candidates.into_iter().min().unwrap();
+            let oldest = candidates.into_iter().min().expect("candidates non-empty after date extraction");
 
             // Compare with current created_at (allow 1 second tolerance for rounding)
             let diff = (asset.created_at - oldest).num_seconds().abs();
@@ -6539,7 +6539,7 @@ impl AssetService {
                         .into_iter()
                         .zip(chunk.iter())
                         .map(|(h, item)| {
-                            let (aid, elapsed, vlm_result) = h.join().unwrap();
+                            let (aid, elapsed, vlm_result) = h.join().expect("VLM processing thread should not panic");
                             (aid, item.existing_tags.clone(), elapsed, vlm_result)
                         })
                         .collect()

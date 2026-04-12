@@ -716,7 +716,7 @@ impl Catalog {
                     Err(_) => return Ok(dir.to_string()),
                 }
             }
-            let re = &cache.as_ref().unwrap().1;
+            let re = &cache.as_ref().expect("regex cache just populated").1;
 
             // Find deepest matching component
             let mut session_idx = None;
