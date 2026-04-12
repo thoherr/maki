@@ -449,51 +449,25 @@ pub async fn search_api(
     let result = tokio::task::spawn_blocking(move || {
         let catalog = state.catalog()?;
 
-        let query = params.q.as_deref().unwrap_or("");
-        let asset_type = params.asset_type.as_deref().unwrap_or("");
-        let tag = params.tag.as_deref().unwrap_or("");
-        let format = params.format.as_deref().unwrap_or("");
-        let volume = params.volume.as_deref().unwrap_or("");
-        let rating_str = params.rating.as_deref().unwrap_or("");
-        let label_str = params.label.as_deref().unwrap_or("");
-        let sort_str = params.sort.as_deref().unwrap_or("date_desc");
-        let page = params.page.unwrap_or(1).max(1);
-
-        let collection_str = params.collection.as_deref().unwrap_or("");
-        let path_str = params.path.as_deref().unwrap_or("");
-        let person_str = params.person.as_deref().unwrap_or("");
-        let collapse_stacks = params.stacks.as_deref().unwrap_or("1") == "1";
-
-        let nodefault = params.nodefault.as_deref() == Some("1");
-        let mut parsed = merge_search_params(query, asset_type, tag, format, rating_str, label_str);
-        apply_default_filter(&mut parsed, &state.default_filter, nodefault);
-
-        // Normalize absolute path → volume-relative + implicit volume filter
-        let path_volume_id = if !path_str.is_empty() {
-            let registry = DeviceRegistry::new(&state.catalog_root);
-            let vols = registry.list().unwrap_or_default();
-            let (normalized, vol_id) = normalize_path_for_search(path_str, &vols, None);
-            if !normalized.is_empty() {
-                parsed.path_prefixes.push(normalized);
-            }
-            vol_id
-        } else {
-            None
-        };
-
-        // Push collection from dropdown into parsed struct
-        if !collection_str.is_empty() {
-            parsed.collections.push(collection_str.to_string());
-        }
-
-        // Push person from dropdown into parsed struct
-        if !person_str.is_empty() {
-            parsed.persons.push(person_str.to_string());
-        }
+        let bf = build_parsed_search(&params, &state);
+        let parsed = bf.parsed;
+        let volume = bf.volume;
+        let path_volume_id = bf.path_volume_id;
+        let sort_str = bf.sort_str;
+        let page = bf.page;
+        let collapse_stacks = bf.collapse_stacks;
+        let query = bf.query;
+        let asset_type = bf.asset_type;
+        let tag = bf.tag;
+        let format_filter = bf.format_filter;
+        let rating_str = bf.rating;
+        let label_str = bf.label;
+        let collection_str = bf.collection;
+        let path_str = bf.path;
 
         let mut opts = parsed.to_search_options();
         if !volume.is_empty() {
-            opts.volume = Some(volume);
+            opts.volume = Some(&volume);
         }
         if let Some(ref vid) = path_volume_id {
             if opts.volume.is_none() {
@@ -622,7 +596,7 @@ pub async fn search_api(
         { has_similarity = false; }
 
         let per_page = if has_similarity { u32::MAX } else { state.per_page };
-        let effective_sort = if has_similarity && params.sort.is_none() { "similarity_desc" } else { sort_str };
+        let effective_sort = if has_similarity && params.sort.is_none() { "similarity_desc" } else { &sort_str };
         opts.sort = SearchSort::from_str(effective_sort);
         opts.page = if has_similarity { 1 } else { page };
         opts.per_page = per_page;
@@ -654,15 +628,15 @@ pub async fn search_api(
         link_cards(&mut cards);
 
         let tmpl = ResultsPartial {
-            query: query.to_string(),
-            asset_type: asset_type.to_string(),
-            tag: tag.to_string(),
-            format_filter: format.to_string(),
+            query,
+            asset_type,
+            tag,
+            format_filter,
             volume: volume.to_string(),
-            rating: rating_str.to_string(),
-            label: label_str.to_string(),
-            collection: collection_str.to_string(),
-            path: path_str.to_string(),
+            rating: rating_str,
+            label: label_str,
+            collection: collection_str,
+            path: path_str,
             sort: effective_sort.to_string(),
             cards,
             total,
@@ -694,51 +668,17 @@ pub async fn page_ids_api(
     let result = tokio::task::spawn_blocking(move || {
         let catalog = state.catalog()?;
 
-        let query = params.q.as_deref().unwrap_or("");
-        let asset_type = params.asset_type.as_deref().unwrap_or("");
-        let tag = params.tag.as_deref().unwrap_or("");
-        let format = params.format.as_deref().unwrap_or("");
-        let volume = params.volume.as_deref().unwrap_or("");
-        let rating_str = params.rating.as_deref().unwrap_or("");
-        let label_str = params.label.as_deref().unwrap_or("");
-        let sort_str = params.sort.as_deref().unwrap_or("date_desc");
-        let page = params.page.unwrap_or(1).max(1);
-
-        let collection_str = params.collection.as_deref().unwrap_or("");
-        let path_str = params.path.as_deref().unwrap_or("");
-        let person_str = params.person.as_deref().unwrap_or("");
-        let collapse_stacks = params.stacks.as_deref().unwrap_or("1") == "1";
-
-        let nodefault = params.nodefault.as_deref() == Some("1");
-        let mut parsed = merge_search_params(query, asset_type, tag, format, rating_str, label_str);
-        apply_default_filter(&mut parsed, &state.default_filter, nodefault);
-
-        // Normalize absolute path → volume-relative + implicit volume filter
-        let path_volume_id = if !path_str.is_empty() {
-            let registry = DeviceRegistry::new(&state.catalog_root);
-            let vols = registry.list().unwrap_or_default();
-            let (normalized, vol_id) = normalize_path_for_search(path_str, &vols, None);
-            if !normalized.is_empty() {
-                parsed.path_prefixes.push(normalized);
-            }
-            vol_id
-        } else {
-            None
-        };
-
-        // Push collection from dropdown into parsed struct
-        if !collection_str.is_empty() {
-            parsed.collections.push(collection_str.to_string());
-        }
-
-        // Push person from dropdown into parsed struct
-        if !person_str.is_empty() {
-            parsed.persons.push(person_str.to_string());
-        }
+        let bf = build_parsed_search(&params, &state);
+        let parsed = bf.parsed;
+        let volume = bf.volume;
+        let path_volume_id = bf.path_volume_id;
+        let sort_str = bf.sort_str;
+        let page = bf.page;
+        let collapse_stacks = bf.collapse_stacks;
 
         let mut opts = parsed.to_search_options();
         if !volume.is_empty() {
-            opts.volume = Some(volume);
+            opts.volume = Some(&volume);
         }
         if let Some(ref vid) = path_volume_id {
             if opts.volume.is_none() {
@@ -803,7 +743,7 @@ pub async fn page_ids_api(
         }
 
         let per_page = state.per_page;
-        opts.sort = SearchSort::from_str(sort_str);
+        opts.sort = SearchSort::from_str(&sort_str);
         opts.page = page;
         opts.per_page = per_page;
         opts.collapse_stacks = collapse_stacks;
@@ -3084,56 +3024,37 @@ pub async fn calendar_api(
             chrono::Utc::now().format("%Y").to_string().parse::<i32>().unwrap_or(2026)
         });
 
-        let query = params.q.as_deref().unwrap_or("");
-        let person_str = params.person.as_deref().unwrap_or("");
-        let asset_type = params.asset_type.as_deref().unwrap_or("");
-        let tag = params.tag.as_deref().unwrap_or("");
-        let format = params.format.as_deref().unwrap_or("");
-        let volume = params.volume.as_deref().unwrap_or("");
-        let rating_str = params.rating.as_deref().unwrap_or("");
-        let label_str = params.label.as_deref().unwrap_or("");
-        let collection_str = params.collection.as_deref().unwrap_or("");
-        let path_str = params.path.as_deref().unwrap_or("");
-
-        let nodefault = params.nodefault.as_deref() == Some("1");
-        let mut parsed = merge_search_params(query, asset_type, tag, format, rating_str, label_str);
-        apply_default_filter(&mut parsed, &state.default_filter, nodefault);
-
-        // Normalize absolute path → volume-relative + implicit volume filter
-        let path_volume_id = if !path_str.is_empty() {
-            let registry = DeviceRegistry::new(&state.catalog_root);
-            let vols = registry.list().unwrap_or_default();
-            let (normalized, vol_id) = normalize_path_for_search(path_str, &vols, None);
-            if !normalized.is_empty() {
-                parsed.path_prefixes.push(normalized);
-            }
-            vol_id
-        } else {
-            None
+        let search_params = SearchParams {
+            q: params.q.clone(),
+            asset_type: params.asset_type.clone(),
+            tag: params.tag.clone(),
+            format: params.format.clone(),
+            volume: params.volume.clone(),
+            rating: params.rating.clone(),
+            label: params.label.clone(),
+            collection: params.collection.clone(),
+            path: params.path.clone(),
+            person: params.person.clone(),
+            sort: None,
+            page: None,
+            stacks: params.stacks.clone(),
+            nodefault: params.nodefault.clone(),
         };
-
-        // Push collection from dropdown into parsed struct
-        if !collection_str.is_empty() {
-            parsed.collections.push(collection_str.to_string());
-        }
-
-        // Push person from dropdown into parsed struct
-        if !person_str.is_empty() {
-            parsed.persons.push(person_str.to_string());
-        }
+        let bf = build_parsed_search(&search_params, &state);
+        let parsed = bf.parsed;
+        let volume = bf.volume;
+        let path_volume_id = bf.path_volume_id;
+        let collapse_stacks = bf.collapse_stacks;
 
         let mut opts = parsed.to_search_options();
         if !volume.is_empty() {
-            opts.volume = Some(volume);
+            opts.volume = Some(&volume);
         }
         if let Some(ref vid) = path_volume_id {
             if opts.volume.is_none() {
                 opts.volume = Some(vid);
             }
         }
-
-        // Collapse stacks (default: yes)
-        let collapse_stacks = params.stacks.as_deref().unwrap_or("1") == "1";
         opts.collapse_stacks = collapse_stacks;
 
         // Resolve collection filter to asset IDs
@@ -3241,57 +3162,39 @@ pub async fn map_api(
     let result = tokio::task::spawn_blocking(move || {
         let catalog = state.catalog()?;
 
-        let query = params.q.as_deref().unwrap_or("");
-        let asset_type = params.asset_type.as_deref().unwrap_or("");
-        let tag = params.tag.as_deref().unwrap_or("");
-        let format = params.format.as_deref().unwrap_or("");
-        let volume = params.volume.as_deref().unwrap_or("");
-        let rating_str = params.rating.as_deref().unwrap_or("");
-        let label_str = params.label.as_deref().unwrap_or("");
-        let collection_str = params.collection.as_deref().unwrap_or("");
-        let path_str = params.path.as_deref().unwrap_or("");
-        let person_str = params.person.as_deref().unwrap_or("");
         let limit = params.limit.unwrap_or(10_000);
 
-        let nodefault = params.nodefault.as_deref() == Some("1");
-        let mut parsed = merge_search_params(query, asset_type, tag, format, rating_str, label_str);
-        apply_default_filter(&mut parsed, &state.default_filter, nodefault);
-
-        // Normalize absolute path → volume-relative + implicit volume filter
-        let path_volume_id = if !path_str.is_empty() {
-            let registry = DeviceRegistry::new(&state.catalog_root);
-            let vols = registry.list().unwrap_or_default();
-            let (normalized, vol_id) = normalize_path_for_search(path_str, &vols, None);
-            if !normalized.is_empty() {
-                parsed.path_prefixes.push(normalized);
-            }
-            vol_id
-        } else {
-            None
+        let search_params = SearchParams {
+            q: params.q.clone(),
+            asset_type: params.asset_type.clone(),
+            tag: params.tag.clone(),
+            format: params.format.clone(),
+            volume: params.volume.clone(),
+            rating: params.rating.clone(),
+            label: params.label.clone(),
+            collection: params.collection.clone(),
+            path: params.path.clone(),
+            person: params.person.clone(),
+            sort: None,
+            page: None,
+            stacks: params.stacks.clone(),
+            nodefault: params.nodefault.clone(),
         };
-
-        // Push collection from dropdown into parsed struct
-        if !collection_str.is_empty() {
-            parsed.collections.push(collection_str.to_string());
-        }
-
-        // Push person from dropdown into parsed struct
-        if !person_str.is_empty() {
-            parsed.persons.push(person_str.to_string());
-        }
+        let bf = build_parsed_search(&search_params, &state);
+        let parsed = bf.parsed;
+        let volume = bf.volume;
+        let path_volume_id = bf.path_volume_id;
+        let collapse_stacks = bf.collapse_stacks;
 
         let mut opts = parsed.to_search_options();
         if !volume.is_empty() {
-            opts.volume = Some(volume);
+            opts.volume = Some(&volume);
         }
         if let Some(ref vid) = path_volume_id {
             if opts.volume.is_none() {
                 opts.volume = Some(vid);
             }
         }
-
-        // Collapse stacks (default: yes)
-        let collapse_stacks = params.stacks.as_deref().unwrap_or("1") == "1";
         opts.collapse_stacks = collapse_stacks;
 
         // Resolve collection filter to asset IDs
@@ -3414,56 +3317,37 @@ pub async fn facets_api(
     let result = tokio::task::spawn_blocking(move || {
         let catalog = state.catalog()?;
 
-        let query = params.q.as_deref().unwrap_or("");
-        let asset_type = params.asset_type.as_deref().unwrap_or("");
-        let tag = params.tag.as_deref().unwrap_or("");
-        let format = params.format.as_deref().unwrap_or("");
-        let volume = params.volume.as_deref().unwrap_or("");
-        let rating_str = params.rating.as_deref().unwrap_or("");
-        let label_str = params.label.as_deref().unwrap_or("");
-        let collection_str = params.collection.as_deref().unwrap_or("");
-        let path_str = params.path.as_deref().unwrap_or("");
-        let person_str = params.person.as_deref().unwrap_or("");
-
-        let nodefault = params.nodefault.as_deref() == Some("1");
-        let mut parsed = merge_search_params(query, asset_type, tag, format, rating_str, label_str);
-        apply_default_filter(&mut parsed, &state.default_filter, nodefault);
-
-        // Normalize absolute path → volume-relative + implicit volume filter
-        let path_volume_id = if !path_str.is_empty() {
-            let registry = DeviceRegistry::new(&state.catalog_root);
-            let vols = registry.list().unwrap_or_default();
-            let (normalized, vol_id) = normalize_path_for_search(path_str, &vols, None);
-            if !normalized.is_empty() {
-                parsed.path_prefixes.push(normalized);
-            }
-            vol_id
-        } else {
-            None
+        let search_params = SearchParams {
+            q: params.q.clone(),
+            asset_type: params.asset_type.clone(),
+            tag: params.tag.clone(),
+            format: params.format.clone(),
+            volume: params.volume.clone(),
+            rating: params.rating.clone(),
+            label: params.label.clone(),
+            collection: params.collection.clone(),
+            path: params.path.clone(),
+            person: params.person.clone(),
+            sort: None,
+            page: None,
+            stacks: params.stacks.clone(),
+            nodefault: params.nodefault.clone(),
         };
-
-        // Push collection from dropdown into parsed struct
-        if !collection_str.is_empty() {
-            parsed.collections.push(collection_str.to_string());
-        }
-
-        // Push person from dropdown into parsed struct
-        if !person_str.is_empty() {
-            parsed.persons.push(person_str.to_string());
-        }
+        let bf = build_parsed_search(&search_params, &state);
+        let parsed = bf.parsed;
+        let volume = bf.volume;
+        let path_volume_id = bf.path_volume_id;
+        let collapse_stacks = bf.collapse_stacks;
 
         let mut opts = parsed.to_search_options();
         if !volume.is_empty() {
-            opts.volume = Some(volume);
+            opts.volume = Some(&volume);
         }
         if let Some(ref vid) = path_volume_id {
             if opts.volume.is_none() {
                 opts.volume = Some(vid);
             }
         }
-
-        // Collapse stacks (default: yes)
-        let collapse_stacks = params.stacks.as_deref().unwrap_or("1") == "1";
         opts.collapse_stacks = collapse_stacks;
 
         // Resolve collection filter to asset IDs
