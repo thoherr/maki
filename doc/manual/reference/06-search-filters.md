@@ -641,24 +641,24 @@ Pure assets-table filter, no JOIN required.
 
 **Values:** Non-negative integer
 
-**Description:** Filters by the total number of file locations across all variants of an asset. This counts every stored copy of every variant — a file on 3 volumes has 3 copies. Useful for finding assets with insufficient backup coverage or identifying heavily-duplicated files.
+**Description:** Counts the number of **distinct volumes** where any file of this asset exists. An asset with a RAW file on volume Media and a backup on volume MediaBackup has `copies:2` — two volumes, regardless of how many individual files (variants, recipes) exist on each. This matches the backup-status page semantics and gives a meaningful answer to "how many drives would I have to lose before this asset is gone?"
 
 Common patterns:
-- `copies:1` — assets with only a single copy on disk (no backup)
-- `copies:2+` — assets with at least two copies (backed up)
+- `copies:1` — assets on only one volume (at risk — matches the backup-status "AT RISK" count)
+- `copies:2+` — assets on at least two volumes (backed up)
 - `copies:0` — equivalent to `orphan:true` (no file locations at all)
 
 **Examples:**
 
 ```
-maki search "copies:1"              # single-copy assets (backup risk)
-maki search "copies:2"              # exactly 2 copies
-maki search "copies:3+"             # 3 or more copies
+maki search "copies:1"              # at-risk assets (single volume)
+maki search "copies:2"              # on exactly 2 volumes
+maki search "copies:3+"             # on 3 or more volumes
 maki search "copies:1 rating:4+"    # highly-rated assets with no backup
 maki search "copies:2+ type:video"  # backed-up videos
 ```
 
-**SQL behavior:** Scalar subquery: `(SELECT COUNT(*) FROM file_locations fl2 JOIN variants v2 ON fl2.content_hash = v2.content_hash WHERE v2.asset_id = a.id) = N` (or `>= N` for minimum). Self-contained, no outer JOIN flags needed.
+**SQL behavior:** Scalar subquery: `(SELECT COUNT(DISTINCT fl2.volume_id) FROM file_locations fl2 JOIN variants v2 ON fl2.content_hash = v2.content_hash WHERE v2.asset_id = a.id)`. Self-contained, no outer JOIN flags needed.
 
 ---
 
