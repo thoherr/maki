@@ -24,6 +24,9 @@ Usage:
     # Custom session root pattern (overrides maki.toml)
     python3 scripts/fix-scattered-groups.py --min-scattered 4 --pattern '^(shoot|project)-'
 
+    # Scope to a specific directory tree (excludes export/, screensaver/, etc.)
+    python3 scripts/fix-scattered-groups.py --min-scattered 4 --query 'path:Pictures/Masters'
+
     # Start with the worst offenders, review, then widen
     python3 scripts/fix-scattered-groups.py --min-scattered 10 --apply
     python3 scripts/fix-scattered-groups.py --min-scattered 4 --apply
@@ -178,6 +181,8 @@ def main():
                         help="Skip metadata reimport after split")
     parser.add_argument("--skip-regroup", action="store_true",
                         help="Skip auto-group after split")
+    parser.add_argument("--query", "-q", type=str, default="",
+                        help="Additional search query to scope assets (e.g. 'path:Pictures/Masters')")
     parser.add_argument("--limit", type=int, default=0,
                         help="Process at most N assets (0 = unlimited)")
     args = parser.parse_args()
@@ -190,6 +195,8 @@ def main():
         asset_ids = [args.asset]
     else:
         query = f"scattered:{args.min_scattered}+"
+        if args.query:
+            query = f"{query} {args.query}"
         print(f"Searching for assets with {query}...")
         asset_ids = maki_ids(query)
         print(f"Found {len(asset_ids)} asset(s)")
