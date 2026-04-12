@@ -24,8 +24,8 @@ Usage:
     # Custom session root pattern (overrides maki.toml)
     python3 scripts/fix-scattered-groups.py --min-scattered 4 --pattern '^(shoot|project)-'
 
-    # Scope to a specific directory tree (excludes export/, screensaver/, etc.)
-    python3 scripts/fix-scattered-groups.py --min-scattered 4 --query 'path:Pictures/Masters'
+    # Scope to a specific directory tree (ignores locations in export/, screensaver/, etc.)
+    python3 scripts/fix-scattered-groups.py --min-scattered 4 --path Pictures/Masters
 
     # Start with the worst offenders, review, then widen
     python3 scripts/fix-scattered-groups.py --min-scattered 10 --apply
@@ -142,8 +142,13 @@ def find_session_root(path, pattern):
     return "/".join(parts[:-1]) if len(parts) > 1 else dir_path
 
 
-def analyze_asset(asset_id, pattern):
-    """Analyze an asset and return variant groups by session root."""
+def analyze_asset(asset_id, pattern, path_filter=None):
+    """Analyze an asset and return variant groups by session root.
+
+    If path_filter is set, only locations whose path starts with the filter
+    are considered. Locations outside the filter are silently ignored — they
+    won't cause splits (e.g. exports in a different directory tree).
+    """
     details = maki_json("show", asset_id)
     if not details or "variants" not in details:
         return None, None
@@ -154,6 +159,8 @@ def analyze_asset(asset_id, pattern):
         content_hash = variant["content_hash"]
         for loc in variant.get("locations", []):
             path = loc.get("relative_path", "")
+            if path_filter and not path.startswith(path_filter):
+                continue
             session = find_session_root(path, pattern)
             groups[session].append({
                 "content_hash": content_hash,
@@ -181,8 +188,12 @@ def main():
                         help="Skip metadata reimport after split")
     parser.add_argument("--skip-regroup", action="store_true",
                         help="Skip auto-group after split")
+    parser.add_argument("--path", type=str, default=None,
+                        help="Only consider locations under this path prefix. Adds path: to the "
+                             "search query AND filters locations during analysis, so exports or "
+                             "screensaver dirs outside this tree don't cause splits.")
     parser.add_argument("--query", "-q", type=str, default="",
-                        help="Additional search query to scope assets (e.g. 'path:Pictures/Masters')")
+                        help="Additional search query to scope assets (e.g. 'type:image')")
     parser.add_argument("--limit", type=int, default=0,
                         help="Process at most N assets (0 = unlimited)")
     args = parser.parse_args()
@@ -195,6 +206,8 @@ def main():
         asset_ids = [args.asset]
     else:
         query = f"scattered:{args.min_scattered}+"
+        if args.path:
+            query = f"{query} path:{args.path}"
         if args.query:
             query = f"{query} {args.query}"
         print(f"Searching for assets with {query}...")
@@ -219,7 +232,7 @@ def main():
 
     for i, asset_id in enumerate(asset_ids):
         short_id = asset_id[:8]
-        details, groups = analyze_asset(asset_id, pattern)
+        details, groups = analyze_asset(asset_id, pattern, args.path)
         if not details or not groups:
             print(f"  [{i+1}/{len(asset_ids)}] {short_id} — skipped (could not load)")
             continue
