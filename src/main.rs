@@ -2552,6 +2552,16 @@ faces/\n\
                     _ => {
                         if !explicit_format {
                             println!("No results found.");
+                            // Hint: if the query has a filter like tag:X followed by
+                            // unquoted words, the user likely forgot inner quotes.
+                            let parsed = maki::query::parse_search_query(&query);
+                            let has_filter = !parsed.tags.is_empty() || !parsed.cameras.is_empty()
+                                || !parsed.lenses.is_empty() || !parsed.descriptions.is_empty()
+                                || !parsed.collections.is_empty() || !parsed.path_prefixes.is_empty();
+                            if has_filter && parsed.text.is_some() {
+                                eprintln!("Hint: values with spaces need inner quotes, e.g. tag:\"my tag\"");
+                                eprintln!("  Shell example: maki search 'tag:\"my tag\" rating:3+'");
+                            }
                         }
                     }
                 }

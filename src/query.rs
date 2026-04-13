@@ -2169,14 +2169,26 @@ impl QueryEngine {
 
             // Find all tags that match: exact match OR (unless exact_only) prefix match (descendants)
             let has_exact = asset.tags.iter().any(|t| cmp_eq(t, old_tag));
-            let has_descendants = !exact_only
-                && asset.tags.iter().any(|t| cmp_starts(t, &old_prefix));
+            let has_descendants = asset.tags.iter().any(|t| cmp_starts(t, &old_prefix));
 
-            if !has_exact && !has_descendants {
+            if !has_exact && (exact_only || !has_descendants) {
                 result.skipped += 1;
                 on_asset(&asset_id[..8.min(asset_id.len())], TagRenameAction::Skipped);
                 continue;
             }
+
+            // With exact_only, skip assets where the tag is not a leaf — i.e.,
+            // the asset also has descendant tags (old_tag|...). This matches the
+            // semantics of `=` in search filters: only assets where the tag sits
+            // at a leaf level, not those that merely carry it as an expanded ancestor.
+            if exact_only && has_descendants {
+                result.skipped += 1;
+                on_asset(&asset_id[..8.min(asset_id.len())], TagRenameAction::Skipped);
+                continue;
+            }
+
+            // Beyond this point, descendants are only relevant when not exact_only
+            let has_descendants = !exact_only && has_descendants;
 
             // Check if the rename would be a no-op (already correct)
             let exact_already_correct = if has_exact {
@@ -5542,45 +5554,118 @@ mod tests {
 
     #[test]
     fn tag_rename_exact_only_skips_descendants() {
-        let (dir, asset_id) = setup_tag_rename_catalog(&[
-            "location|Germany|Bayern",
-            "location|Germany",
-        ]);
-        let engine = QueryEngine::new(dir.path());
-        // `=location|Germany` matches that exact tag but NOT `location|Germany|Bayern`.
-        let result = engine.tag_rename("=location|Germany", "country|Germany", true, |_, _| {}).unwrap();
-        assert_eq!(result.renamed, 1);
+        // `=` means "leaf only": only rename on assets where the tag has no descendants.
+        // Asset 1: has both parent and child → tag is NOT a leaf → skipped
+        // Asset 2: has only the parent tag → tag IS a leaf → renamed
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("metadata")).unwrap();
+        crate::config::CatalogConfig::default().save(root).unwrap();
+        crate::device_registry::DeviceRegistry::init(root).unwrap();
+        let catalog = crate::catalog::Catalog::open(root).unwrap();
+        catalog.initialize().unwrap();
+        let store = crate::metadata_store::MetadataStore::new(root);
 
-        let store = crate::metadata_store::MetadataStore::new(dir.path());
-        let asset: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
-        // The exact tag is renamed
-        assert!(asset.tags.contains(&"country|Germany".to_string()));
-        // The descendant is NOT touched
-        assert!(asset.tags.contains(&"location|Germany|Bayern".to_string()));
+        // Asset 1: has descendant → not a leaf
+        let mut a1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ren1");
+        a1.tags = vec!["location|Germany|Bayern".to_string(), "location|Germany".to_string()];
+        let v1 = crate::models::Variant {
+            content_hash: "sha256:ren1".to_string(), asset_id: a1.id,
+            role: crate::models::VariantRole::Original, format: "jpg".to_string(),
+            file_size: 100, original_filename: "a1.jpg".to_string(),
+            source_metadata: Default::default(), locations: vec![],
+        };
+        a1.variants.push(v1.clone());
+        catalog.insert_asset(&a1).unwrap();
+        catalog.insert_variant(&v1).unwrap();
+        store.save(&a1).unwrap();
+        let a1_id = a1.id.to_string();
+
+        // Asset 2: leaf only
+        let mut a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ren2");
+        a2.tags = vec!["location|Germany".to_string()];
+        let v2 = crate::models::Variant {
+            content_hash: "sha256:ren2".to_string(), asset_id: a2.id,
+            role: crate::models::VariantRole::Original, format: "jpg".to_string(),
+            file_size: 100, original_filename: "a2.jpg".to_string(),
+            source_metadata: Default::default(), locations: vec![],
+        };
+        a2.variants.push(v2.clone());
+        catalog.insert_asset(&a2).unwrap();
+        catalog.insert_variant(&v2).unwrap();
+        store.save(&a2).unwrap();
+        let a2_id = a2.id.to_string();
+
+        let engine = QueryEngine::new(root);
+        let result = engine.tag_rename("=location|Germany", "country|Germany", true, |_, _| {}).unwrap();
+        assert_eq!(result.renamed, 1, "only the leaf asset should be renamed");
+        assert_eq!(result.skipped, 1, "non-leaf asset should be skipped");
+
+        let a1_after: crate::models::Asset = store.load(a1_id.parse().unwrap()).unwrap();
+        assert!(a1_after.tags.contains(&"location|Germany".to_string()), "non-leaf untouched");
+        assert!(a1_after.tags.contains(&"location|Germany|Bayern".to_string()), "descendant untouched");
+
+        let a2_after: crate::models::Asset = store.load(a2_id.parse().unwrap()).unwrap();
+        assert!(a2_after.tags.contains(&"country|Germany".to_string()), "leaf renamed");
+        assert!(!a2_after.tags.contains(&"location|Germany".to_string()), "old leaf tag removed");
     }
 
     #[test]
     fn tag_rename_combined_exact_and_case_sensitive() {
-        let (dir, asset_id) = setup_tag_rename_catalog(&[
-            "Animals|Cats",   // exact case match for "Animals" but a descendant exists
-            "animals|Birds",  // wrong case — must NOT be touched in case-sensitive mode
-            "Animals",        // exact case match, no descendant — this is the one to rename
-        ]);
-        let engine = QueryEngine::new(dir.path());
-        // `=^Animals` → only assets with the exact tag "Animals" at exactly this level,
-        // case-sensitive. The asset has all three tags; the rename should touch ONLY
-        // the standalone "Animals" tag because:
-        //  - "Animals|Cats" is a descendant (excluded by =)
-        //  - "animals|Birds" is wrong case (excluded by ^)
-        let result = engine.tag_rename("=^Animals", "Wildlife", true, |_, _| {}).unwrap();
-        assert_eq!(result.renamed, 1);
+        // `=^Animals` → leaf-only + case-sensitive. An asset that has descendants
+        // of "Animals" is NOT a leaf at that tag, so it gets skipped.
+        // Only an asset with standalone "Animals" (no descendant) is renamed.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("metadata")).unwrap();
+        crate::config::CatalogConfig::default().save(root).unwrap();
+        crate::device_registry::DeviceRegistry::init(root).unwrap();
+        let catalog = crate::catalog::Catalog::open(root).unwrap();
+        catalog.initialize().unwrap();
+        let store = crate::metadata_store::MetadataStore::new(root);
 
-        let store = crate::metadata_store::MetadataStore::new(dir.path());
-        let asset: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
-        assert!(asset.tags.contains(&"Wildlife".to_string()), "Animals → Wildlife");
-        assert!(!asset.tags.contains(&"Animals".to_string()), "Animals removed");
-        assert!(asset.tags.contains(&"Animals|Cats".to_string()), "descendant untouched");
-        assert!(asset.tags.contains(&"animals|Birds".to_string()), "wrong-case sibling untouched");
+        // Asset 1: has "Animals" but also descendants → not a leaf → skipped
+        let mut a1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ec1");
+        a1.tags = vec!["Animals|Cats".to_string(), "animals|Birds".to_string(), "Animals".to_string()];
+        let v1 = crate::models::Variant {
+            content_hash: "sha256:ec1".to_string(), asset_id: a1.id,
+            role: crate::models::VariantRole::Original, format: "jpg".to_string(),
+            file_size: 100, original_filename: "a1.jpg".to_string(),
+            source_metadata: Default::default(), locations: vec![],
+        };
+        a1.variants.push(v1.clone());
+        catalog.insert_asset(&a1).unwrap();
+        catalog.insert_variant(&v1).unwrap();
+        store.save(&a1).unwrap();
+        let a1_id = a1.id.to_string();
+
+        // Asset 2: standalone "Animals" only (leaf) — this is the one to rename
+        let mut a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ec2");
+        a2.tags = vec!["Animals".to_string()];
+        let v2 = crate::models::Variant {
+            content_hash: "sha256:ec2".to_string(), asset_id: a2.id,
+            role: crate::models::VariantRole::Original, format: "jpg".to_string(),
+            file_size: 100, original_filename: "a2.jpg".to_string(),
+            source_metadata: Default::default(), locations: vec![],
+        };
+        a2.variants.push(v2.clone());
+        catalog.insert_asset(&a2).unwrap();
+        catalog.insert_variant(&v2).unwrap();
+        store.save(&a2).unwrap();
+        let a2_id = a2.id.to_string();
+
+        let engine = QueryEngine::new(root);
+        let result = engine.tag_rename("=^Animals", "Wildlife", true, |_, _| {}).unwrap();
+        assert_eq!(result.renamed, 1, "only the leaf asset should be renamed");
+        assert_eq!(result.skipped, 1, "non-leaf asset should be skipped");
+
+        let a1_after: crate::models::Asset = store.load(a1_id.parse().unwrap()).unwrap();
+        assert!(a1_after.tags.contains(&"Animals".to_string()), "non-leaf Animals untouched");
+        assert!(a1_after.tags.contains(&"Animals|Cats".to_string()), "descendant untouched");
+
+        let a2_after: crate::models::Asset = store.load(a2_id.parse().unwrap()).unwrap();
+        assert!(a2_after.tags.contains(&"Wildlife".to_string()), "leaf Animals → Wildlife");
+        assert!(!a2_after.tags.contains(&"Animals".to_string()), "old tag removed");
     }
 
     #[test]
@@ -5602,8 +5687,9 @@ mod tests {
 
     #[test]
     fn tag_rename_marker_order_independent() {
+        // Test that `=^` and `^=` produce the same result (order doesn't matter).
+        // Use a leaf-only tag so the `=` (leaf) semantics don't skip the asset.
         let (dir, asset_id) = setup_tag_rename_catalog(&[
-            "Foo|Bar",
             "Foo",
         ]);
         let store = crate::metadata_store::MetadataStore::new(dir.path());
@@ -5619,7 +5705,6 @@ mod tests {
         let _ = engine.tag_rename("^=Foo", "X", true, |_, _| {}).unwrap();
         let asset: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
         assert!(asset.tags.contains(&"X".to_string()));
-        assert!(asset.tags.contains(&"Foo|Bar".to_string()), "descendant untouched");
     }
 
     #[test]
