@@ -1439,6 +1439,25 @@ enum FacesCommands {
         apply: bool,
     },
 
+    /// Save aligned 112x112 face crops for visual debugging
+    DumpAligned {
+        /// Search query to scope which assets
+        #[arg(long)]
+        query: Option<String>,
+
+        /// Specific asset (ID or prefix)
+        #[arg(long)]
+        asset: Option<String>,
+
+        /// Output directory for aligned crops
+        #[arg(long, default_value = "./aligned-faces")]
+        output: PathBuf,
+
+        /// Maximum number of faces to save (0 = unlimited)
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+
     /// Analyze face embedding similarity distribution (diagnostic)
     Similarity {
         /// Search query to scope which assets' faces to analyze
@@ -4516,6 +4535,92 @@ faces/\n\
                     } else {
                         println!("Dry run — would delete {count} unassigned face record(s).");
                         println!("  Run with --apply to actually delete.");
+                    }
+                    Ok(())
+                }
+                FacesCommands::DumpAligned { query, asset, output, limit } => {
+                    let catalog = maki::catalog::Catalog::open(&catalog_root)?;
+
+                    // Resolve scope to asset IDs.
+                    let scoped_ids: Vec<String> = if let Some(ref a) = asset {
+                        let full_id = catalog
+                            .resolve_asset_id(a)?
+                            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{a}'"))?;
+                        vec![full_id]
+                    } else {
+                        let engine = QueryEngine::new(&catalog_root);
+                        let q = query.as_deref().unwrap_or("*");
+                        let rows = engine.search(q)?;
+                        rows.into_iter().map(|r| r.asset_id).collect()
+                    };
+                    eprintln!("Scope: {} asset(s)", scoped_ids.len());
+
+                    std::fs::create_dir_all(&output)?;
+                    let metadata_store = maki::metadata_store::MetadataStore::new(&catalog_root);
+                    let online = maki::device_registry::DeviceRegistry::new(&catalog_root)
+                        .list().unwrap_or_default()
+                        .into_iter()
+                        .filter(|v| v.is_online)
+                        .map(|v| (v.id, v.mount_point))
+                        .collect::<std::collections::HashMap<_, _>>();
+                    let face_model_dir = maki::face::resolve_face_model_dir(&config.ai);
+                    let mut detector = maki::face::FaceDetector::load(&face_model_dir, maki::Verbosity::default())?;
+
+                    let mut saved = 0usize;
+                    let mut skipped_offline = 0usize;
+                    let mut skipped_missing = 0usize;
+                    let mut skipped_no_faces = 0usize;
+                    for aid in &scoped_ids {
+                        if limit > 0 && saved >= limit { break; }
+                        let uuid: uuid::Uuid = match aid.parse() {
+                            Ok(u) => u,
+                            Err(_) => continue,
+                        };
+                        let asset = match metadata_store.load(uuid) {
+                            Ok(a) => a,
+                            Err(_) => continue,
+                        };
+                        let variant = match asset.variants.first() {
+                            Some(v) => v,
+                            None => continue,
+                        };
+                        let loc = match variant.locations.iter().find(|l| online.contains_key(&l.volume_id)) {
+                            Some(l) => l,
+                            None => { skipped_offline += 1; continue; }
+                        };
+                        let full_path = match online.get(&loc.volume_id) {
+                            Some(mp) => mp.join(&loc.relative_path),
+                            None => { skipped_offline += 1; continue; }
+                        };
+                        if !full_path.exists() { skipped_missing += 1; continue; }
+
+                        // Detect faces + landmarks on the fly.
+                        let detected = detector.detect_faces(&full_path, 0.5).unwrap_or_default();
+                        if detected.is_empty() { skipped_no_faces += 1; continue; }
+
+                        let img = match image::open(&full_path) {
+                            Ok(i) => i,
+                            Err(_) => continue,
+                        };
+
+                        for (i, df) in detected.iter().enumerate() {
+                            if limit > 0 && saved >= limit { break; }
+                            let aligned = maki::face::align_face_to_arcface(&img, &df.landmarks);
+                            let short_asset = &aid[..8.min(aid.len())];
+                            let path = output.join(format!("{short_asset}_{i}.jpg"));
+                            aligned.save(&path)?;
+                            eprintln!("  saved {} (conf={:.2})", path.display(), df.confidence);
+                            saved += 1;
+                        }
+                    }
+                    println!(
+                        "Saved {saved} aligned face crop(s) to {}",
+                        output.display()
+                    );
+                    if skipped_offline + skipped_missing + skipped_no_faces > 0 {
+                        println!(
+                            "Skipped: {skipped_offline} offline, {skipped_missing} missing on disk, {skipped_no_faces} no faces detected"
+                        );
                     }
                     Ok(())
                 }
