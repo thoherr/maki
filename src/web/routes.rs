@@ -324,6 +324,7 @@ pub async fn browse_page(
                 rating: rating_str.to_string(),
                 label: label_str.to_string(),
                 collection: collection_str.to_string(),
+                person: person_str.to_string(),
                 path: path_str.to_string(),
                 sort: effective_sort.to_string(),
                 cards,
@@ -463,6 +464,7 @@ pub async fn search_api(
         let rating_str = bf.rating;
         let label_str = bf.label;
         let collection_str = bf.collection;
+        let person_str = bf.person;
         let path_str = bf.path;
 
         let mut opts = parsed.to_search_options();
@@ -636,6 +638,7 @@ pub async fn search_api(
             rating: rating_str,
             label: label_str,
             collection: collection_str,
+            person: person_str,
             path: path_str,
             sort: effective_sort.to_string(),
             cards,

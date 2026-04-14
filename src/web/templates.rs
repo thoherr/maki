@@ -307,6 +307,7 @@ pub struct ResultsPartial {
     pub rating: String,
     pub label: String,
     pub collection: String,
+    pub person: String,
     pub path: String,
     pub sort: String,
     pub cards: Vec<AssetCard>,
