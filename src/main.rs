@@ -4186,8 +4186,10 @@ faces/\n\
                 }
                 FacesCommands::Status => {
                     let exists = maki::face::FaceDetector::models_exist(&face_model_dir);
+                    let current_model = maki::face::RECOGNITION_MODEL.id;
                     println!("Face model directory: {}", face_model_dir.display());
                     println!("Models downloaded: {}", if exists { "yes" } else { "no" });
+                    println!("Current recognition model: {current_model}");
 
                     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
                     let _ = maki::face_store::FaceStore::initialize(catalog.conn());
@@ -4195,12 +4197,30 @@ faces/\n\
                     println!("Total faces detected: {}", store.total_faces());
                     println!("Total people: {}", store.total_people());
 
+                    let by_model = store.face_counts_by_model().unwrap_or_default();
+                    if !by_model.is_empty() {
+                        println!("Faces by recognition model:");
+                        for (model, count) in &by_model {
+                            let marker = if model == current_model { " (current)" } else { "" };
+                            println!("  {model}: {count}{marker}");
+                        }
+                        let stale: u32 = by_model.iter()
+                            .filter(|(m, _)| m != current_model)
+                            .map(|(_, c)| *c).sum();
+                        if stale > 0 {
+                            println!("  {stale} face(s) use a different recognition model and will be");
+                            println!("  ignored by clustering. Re-run `maki faces detect --force` to update.");
+                        }
+                    }
+
                     if cli.json {
                         let json = serde_json::json!({
                             "model_dir": face_model_dir.to_string_lossy(),
                             "models_downloaded": exists,
+                            "current_recognition_model": current_model,
                             "total_faces": store.total_faces(),
                             "total_people": store.total_people(),
+                            "faces_by_model": by_model.iter().map(|(m, c)| serde_json::json!({"model": m, "count": c})).collect::<Vec<_>>(),
                         });
                         println!("{}", serde_json::to_string_pretty(&json)?);
                     }
@@ -4532,8 +4552,8 @@ faces/\n\
                     // Filter by assignment + confidence; also look up asset_id for each
                     // kept face so the output can point back to a real asset.
                     let filtered: Vec<(String, String, String, Vec<f32>, f32)> = faces.into_iter()
-                        .filter(|(_, pid, _, conf)| (all || pid.is_none()) && *conf >= min_confidence)
-                        .filter_map(|(id, pid, emb, conf)| {
+                        .filter(|(_, pid, _, conf, _)| (all || pid.is_none()) && *conf >= min_confidence)
+                        .filter_map(|(id, pid, emb, conf, _model)| {
                             let asset_id = face_store.get_face(&id).ok().flatten().map(|f| f.asset_id)?;
                             Some((id, pid.unwrap_or_default(), asset_id, emb, conf))
                         })

@@ -6270,6 +6270,7 @@ impl AssetService {
                             if let Err(e) = face_store.store_face(
                                 &face_id, aid, face.bbox_x, face.bbox_y, face.bbox_w, face.bbox_h,
                                 embedding, face.confidence,
+                                crate::face::RECOGNITION_MODEL.id,
                             ) {
                                 result.errors.push(format!("{short_id}: store error: {e:#}"));
                             } else {

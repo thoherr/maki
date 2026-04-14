@@ -672,7 +672,7 @@ fn next_date_bound(s: &str) -> String {
 }
 
 /// Current schema version. Bump this whenever `run_migrations()` changes.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 // ═══ CATALOG STRUCT & CONNECTION ═══
 
@@ -996,6 +996,16 @@ impl Catalog {
                     AND json_extract(v.source_metadata, '$.video_codec') IS NOT NULL \
                     LIMIT 1 \
                  ) WHERE video_codec IS NULL",
+            );
+        }
+
+        // ── v5 → v6: track which face recognition model produced each embedding ──
+        // Existing rows are marked with the legacy INT8 model id so new FP32
+        // embeddings don't silently mix with incompatible ones during clustering.
+        if current < 6 {
+            let _ = self.conn.execute_batch("ALTER TABLE faces ADD COLUMN recognition_model TEXT");
+            let _ = self.conn.execute_batch(
+                "UPDATE faces SET recognition_model = 'arcface-resnet100-int8' WHERE recognition_model IS NULL",
             );
         }
 

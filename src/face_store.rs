@@ -84,6 +84,7 @@ impl<'a> FaceStore<'a> {
                 embedding BLOB NOT NULL,
                 confidence REAL NOT NULL,
                 created_at TEXT NOT NULL,
+                recognition_model TEXT,
                 FOREIGN KEY (asset_id) REFERENCES assets(id),
                 FOREIGN KEY (person_id) REFERENCES people(id)
             );
@@ -96,6 +97,10 @@ impl<'a> FaceStore<'a> {
     }
 
     /// Store a detected face with its embedding.
+    ///
+    /// `recognition_model` stamps which ArcFace variant produced the embedding,
+    /// so clustering can avoid mixing embeddings from incompatible models when
+    /// upgrading (e.g. from INT8 to FP32).
     pub fn store_face(
         &self,
         id: &str,
@@ -106,13 +111,14 @@ impl<'a> FaceStore<'a> {
         bbox_h: f32,
         embedding: &[f32],
         confidence: f32,
+        recognition_model: &str,
     ) -> Result<()> {
         let blob = embedding_to_blob(embedding);
         let now = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
-            "INSERT OR REPLACE INTO faces (id, asset_id, person_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, confidence, created_at)
-             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            rusqlite::params![id, asset_id, bbox_x, bbox_y, bbox_w, bbox_h, blob, confidence, now],
+            "INSERT OR REPLACE INTO faces (id, asset_id, person_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, confidence, created_at, recognition_model)
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            rusqlite::params![id, asset_id, bbox_x, bbox_y, bbox_w, bbox_h, blob, confidence, now, recognition_model],
         )?;
         Ok(())
     }
@@ -411,6 +417,21 @@ impl<'a> FaceStore<'a> {
         Ok(count)
     }
 
+    /// Group face counts by `recognition_model`. NULL coalesced to "unknown".
+    /// Useful for showing upgrade status when the recognition model changes.
+    pub fn face_counts_by_model(&self) -> Result<Vec<(String, u32)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT COALESCE(recognition_model, 'unknown'), COUNT(*) \
+             FROM faces GROUP BY recognition_model ORDER BY COUNT(*) DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let model: String = row.get(0)?;
+            let count: u32 = row.get(1)?;
+            Ok((model, count))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().context("Failed to group faces by model")
+    }
+
     /// Delete a person and unassign their faces.
     pub fn delete_person(&self, person_id: &str) -> Result<()> {
         self.conn.execute(
@@ -425,19 +446,20 @@ impl<'a> FaceStore<'a> {
     }
 
     /// Get all face embeddings grouped by person (for clustering).
-    /// Returns (face_id, person_id, embedding, confidence) tuples.
-    pub fn all_face_embeddings(&self) -> Result<Vec<(String, Option<String>, Vec<f32>, f32)>> {
+    /// Returns (face_id, person_id, embedding, confidence, recognition_model) tuples.
+    pub fn all_face_embeddings(&self) -> Result<Vec<(String, Option<String>, Vec<f32>, f32, Option<String>)>> {
         self.face_embeddings_scoped(None)
     }
 
     /// Get face embeddings, optionally scoped to specific asset IDs.
-    /// Returns (face_id, person_id, embedding, confidence) tuples.
-    pub fn face_embeddings_scoped(&self, asset_ids: Option<&[String]>) -> Result<Vec<(String, Option<String>, Vec<f32>, f32)>> {
+    /// Returns (face_id, person_id, embedding, confidence, recognition_model) tuples.
+    /// `recognition_model` is None for faces embedded before model-version tracking was added.
+    pub fn face_embeddings_scoped(&self, asset_ids: Option<&[String]>) -> Result<Vec<(String, Option<String>, Vec<f32>, f32, Option<String>)>> {
         let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match asset_ids {
             Some(ids) if !ids.is_empty() => {
                 let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
                 let sql = format!(
-                    "SELECT id, person_id, embedding, confidence FROM faces WHERE asset_id IN ({})",
+                    "SELECT id, person_id, embedding, confidence, recognition_model FROM faces WHERE asset_id IN ({})",
                     placeholders.join(",")
                 );
                 let params: Vec<Box<dyn rusqlite::types::ToSql>> = ids.iter()
@@ -446,7 +468,7 @@ impl<'a> FaceStore<'a> {
                 (sql, params)
             }
             _ => {
-                ("SELECT id, person_id, embedding, confidence FROM faces".to_string(), Vec::new())
+                ("SELECT id, person_id, embedding, confidence, recognition_model FROM faces".to_string(), Vec::new())
             }
         };
         let mut stmt = self.conn.prepare(&sql)?;
@@ -456,13 +478,14 @@ impl<'a> FaceStore<'a> {
             let person_id: Option<String> = row.get(1)?;
             let blob: Vec<u8> = row.get(2)?;
             let confidence: f32 = row.get(3)?;
-            Ok((id, person_id, blob, confidence))
+            let model: Option<String> = row.get(4)?;
+            Ok((id, person_id, blob, confidence, model))
         })?;
         let mut result = Vec::new();
         for row in rows {
-            let (id, person_id, blob, confidence) = row?;
+            let (id, person_id, blob, confidence, model) = row?;
             let emb = blob_to_embedding(&blob);
-            result.push((id, person_id, emb, confidence));
+            result.push((id, person_id, emb, confidence, model));
         }
         Ok(result)
     }
@@ -552,13 +575,29 @@ impl<'a> FaceStore<'a> {
         asset_ids: Option<&[String]>,
     ) -> Result<(Vec<Vec<String>>, usize)> {
         let all = self.face_embeddings_scoped(asset_ids)?;
-        // Only cluster unassigned faces above the confidence threshold
+        let current_model = crate::face::RECOGNITION_MODEL.id;
+        // Cluster only unassigned faces above the confidence threshold AND
+        // embedded with the current recognition model. Embeddings from a
+        // different model live in a different vector space and must not be
+        // mixed with current-model embeddings.
+        let mut skipped_wrong_model = 0usize;
         let unassigned: Vec<(String, Vec<f32>)> = all
             .into_iter()
-            .filter(|(_, pid, _, conf)| pid.is_none() && *conf >= min_confidence)
-            .map(|(id, _, emb, _)| (id, emb))
+            .filter(|(_, pid, _, conf, _)| pid.is_none() && *conf >= min_confidence)
+            .filter_map(|(id, _, emb, _, model)| {
+                match model.as_deref() {
+                    Some(m) if m == current_model => Some((id, emb)),
+                    _ => { skipped_wrong_model += 1; None }
+                }
+            })
             .collect();
         let n = unassigned.len();
+        if skipped_wrong_model > 0 {
+            eprintln!(
+                "Warning: skipped {skipped_wrong_model} face(s) embedded with a different recognition model. \
+                 Re-run `maki faces detect --force` on those assets to re-embed with the current model ({current_model})."
+            );
+        }
 
         if n == 0 {
             return Ok((Vec::new(), 0));
@@ -988,7 +1027,7 @@ mod tests {
 
         let emb = vec![0.1f32; 512];
         store
-            .store_face("face-1", "asset-1", 0.1, 0.2, 0.3, 0.4, &emb, 0.95)
+            .store_face("face-1", "asset-1", 0.1, 0.2, 0.3, 0.4, &emb, 0.95, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
 
         let faces = store.faces_for_asset("asset-1").unwrap();
@@ -1006,7 +1045,7 @@ mod tests {
         assert!(!store.has_faces("asset-1"));
 
         store
-            .store_face("face-1", "asset-1", 0.0, 0.0, 0.5, 0.5, &vec![0.0; 512], 0.9)
+            .store_face("face-1", "asset-1", 0.0, 0.0, 0.5, 0.5, &vec![0.0; 512], 0.9, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
 
         assert!(store.has_faces("asset-1"));
@@ -1021,10 +1060,10 @@ mod tests {
         assert_eq!(store.face_count("asset-1"), 0);
 
         store
-            .store_face("f1", "asset-1", 0.0, 0.0, 0.3, 0.3, &vec![0.0; 512], 0.9)
+            .store_face("f1", "asset-1", 0.0, 0.0, 0.3, 0.3, &vec![0.0; 512], 0.9, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
         store
-            .store_face("f2", "asset-1", 0.5, 0.0, 0.3, 0.3, &vec![0.0; 512], 0.8)
+            .store_face("f2", "asset-1", 0.5, 0.0, 0.3, 0.3, &vec![0.0; 512], 0.8, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
 
         assert_eq!(store.face_count("asset-1"), 2);
@@ -1037,7 +1076,7 @@ mod tests {
 
         let emb = vec![0.5f32; 512];
         store
-            .store_face("face-1", "asset-1", 0.0, 0.0, 0.5, 0.5, &emb, 0.9)
+            .store_face("face-1", "asset-1", 0.0, 0.0, 0.5, 0.5, &emb, 0.9, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
 
         let retrieved = store.get_face_embedding("face-1").unwrap().unwrap();
@@ -1084,7 +1123,7 @@ mod tests {
         let store = FaceStore::new(&conn);
 
         store
-            .store_face("f1", "asset-1", 0.0, 0.0, 0.5, 0.5, &vec![0.0; 512], 0.9)
+            .store_face("f1", "asset-1", 0.0, 0.0, 0.5, 0.5, &vec![0.0; 512], 0.9, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
         let pid = store.create_person(Some("Alice")).unwrap();
         store.assign_face_to_person("f1", &pid).unwrap();
@@ -1116,10 +1155,10 @@ mod tests {
         let pid2 = store.create_person(Some("Also Alice")).unwrap();
 
         store
-            .store_face("f1", "asset-1", 0.0, 0.0, 0.5, 0.5, &vec![0.0; 512], 0.9)
+            .store_face("f1", "asset-1", 0.0, 0.0, 0.5, 0.5, &vec![0.0; 512], 0.9, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
         store
-            .store_face("f2", "asset-2", 0.0, 0.0, 0.5, 0.5, &vec![0.0; 512], 0.8)
+            .store_face("f2", "asset-2", 0.0, 0.0, 0.5, 0.5, &vec![0.0; 512], 0.8, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
         store.assign_face_to_person("f1", &pid1).unwrap();
         store.assign_face_to_person("f2", &pid2).unwrap();
@@ -1141,10 +1180,10 @@ mod tests {
         let store = FaceStore::new(&conn);
 
         store
-            .store_face("f1", "asset-1", 0.0, 0.0, 0.3, 0.3, &vec![0.0; 512], 0.9)
+            .store_face("f1", "asset-1", 0.0, 0.0, 0.3, 0.3, &vec![0.0; 512], 0.9, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
         store
-            .store_face("f2", "asset-1", 0.5, 0.0, 0.3, 0.3, &vec![0.0; 512], 0.8)
+            .store_face("f2", "asset-1", 0.5, 0.0, 0.3, 0.3, &vec![0.0; 512], 0.8, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
 
         let deleted = store.delete_faces_for_asset("asset-1").unwrap();
@@ -1159,7 +1198,7 @@ mod tests {
 
         let pid = store.create_person(Some("Alice")).unwrap();
         store
-            .store_face("f1", "asset-1", 0.0, 0.0, 0.5, 0.5, &vec![0.0; 512], 0.9)
+            .store_face("f1", "asset-1", 0.0, 0.0, 0.5, 0.5, &vec![0.0; 512], 0.9, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
         store.assign_face_to_person("f1", &pid).unwrap();
 
@@ -1181,13 +1220,13 @@ mod tests {
         emb_c[0] = 1.0;
 
         store
-            .store_face("f1", "asset-1", 0.0, 0.0, 0.5, 0.5, &emb_a, 0.9)
+            .store_face("f1", "asset-1", 0.0, 0.0, 0.5, 0.5, &emb_a, 0.9, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
         store
-            .store_face("f2", "asset-1", 0.5, 0.0, 0.5, 0.5, &emb_b, 0.8)
+            .store_face("f2", "asset-1", 0.5, 0.0, 0.5, 0.5, &emb_b, 0.8, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
         store
-            .store_face("f3", "asset-2", 0.0, 0.0, 0.5, 0.5, &emb_c, 0.7)
+            .store_face("f3", "asset-2", 0.0, 0.0, 0.5, 0.5, &emb_c, 0.7, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
 
         let results = store
@@ -1208,7 +1247,7 @@ mod tests {
         assert_eq!(store.total_people(), 0);
 
         store
-            .store_face("f1", "asset-1", 0.0, 0.0, 0.5, 0.5, &vec![0.0; 512], 0.9)
+            .store_face("f1", "asset-1", 0.0, 0.0, 0.5, 0.5, &vec![0.0; 512], 0.9, crate::face::RECOGNITION_MODEL.id)
             .unwrap();
         store.create_person(Some("Alice")).unwrap();
 
@@ -1295,8 +1334,8 @@ mod tests {
 
         // Create test data
         let emb = vec![0.5f32; 512];
-        store.store_face("face-1", "asset-1", 0.1, 0.2, 0.3, 0.4, &emb, 0.95).unwrap();
-        store.store_face("face-2", "asset-2", 0.5, 0.6, 0.1, 0.1, &emb, 0.80).unwrap();
+        store.store_face("face-1", "asset-1", 0.1, 0.2, 0.3, 0.4, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
+        store.store_face("face-2", "asset-2", 0.5, 0.6, 0.1, 0.1, &emb, 0.80, crate::face::RECOGNITION_MODEL.id).unwrap();
         let person_id = store.create_person(Some("Alice")).unwrap();
         store.assign_face_to_person("face-1", &person_id).unwrap();
 
@@ -1359,7 +1398,7 @@ mod tests {
         let store = FaceStore::new(&conn);
 
         let emb = vec![0.5f32; 512];
-        store.store_face("face-1", "asset-1", 0.1, 0.2, 0.3, 0.4, &emb, 0.95).unwrap();
+        store.store_face("face-1", "asset-1", 0.1, 0.2, 0.3, 0.4, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
         store.create_person(Some("Bob")).unwrap();
 
         store.save_all_yaml(dir.path()).unwrap();
@@ -1403,15 +1442,15 @@ mod tests {
         // Person A: axis 0, Person B: axis 100, Person C: axis 200.
         for (i, v) in [0.01, 0.02, 0.03].iter().enumerate() {
             let emb = synth_embedding(0, *v);
-            store.store_face(&format!("a{i}"), "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95).unwrap();
+            store.store_face(&format!("a{i}"), "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
         }
         for (i, v) in [0.01, 0.02, 0.03].iter().enumerate() {
             let emb = synth_embedding(100, *v);
-            store.store_face(&format!("b{i}"), "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95).unwrap();
+            store.store_face(&format!("b{i}"), "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
         }
         for (i, v) in [0.01, 0.02, 0.03].iter().enumerate() {
             let emb = synth_embedding(200, *v);
-            store.store_face(&format!("c{i}"), "asset-2", 0.0, 0.0, 0.1, 0.1, &emb, 0.95).unwrap();
+            store.store_face(&format!("c{i}"), "asset-2", 0.0, 0.0, 0.1, 0.1, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
         }
 
         let (clusters, unassigned) = store.cluster_faces(0.5, 0.0, None).unwrap();
@@ -1434,9 +1473,9 @@ mod tests {
         let emb_a = synth_embedding(0, 0.01);
         let emb_a2 = synth_embedding(0, 0.02);
         let emb_low = synth_embedding(0, 0.03);
-        store.store_face("hi1", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb_a, 0.95).unwrap();
-        store.store_face("hi2", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb_a2, 0.95).unwrap();
-        store.store_face("low", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb_low, 0.3).unwrap();
+        store.store_face("hi1", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb_a, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
+        store.store_face("hi2", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb_a2, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
+        store.store_face("low", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb_low, 0.3, crate::face::RECOGNITION_MODEL.id).unwrap();
 
         let (_, unassigned) = store.cluster_faces(0.5, 0.7, None).unwrap();
         assert_eq!(unassigned, 2, "low-confidence face must be excluded");
@@ -1448,8 +1487,8 @@ mod tests {
         let store = FaceStore::new(&conn);
 
         let emb = synth_embedding(0, 0.0);
-        store.store_face("f1", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95).unwrap();
-        store.store_face("f2", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95).unwrap();
+        store.store_face("f1", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
+        store.store_face("f2", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
 
         let pid = store.create_person(Some("Alice")).unwrap();
         store.assign_face_to_person("f1", &pid).unwrap();
@@ -1464,9 +1503,9 @@ mod tests {
         let store = FaceStore::new(&conn);
 
         let emb = vec![0.1f32; 512];
-        store.store_face("kept", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95).unwrap();
-        store.store_face("orphan1", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95).unwrap();
-        store.store_face("orphan2", "asset-2", 0.0, 0.0, 0.1, 0.1, &emb, 0.95).unwrap();
+        store.store_face("kept", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
+        store.store_face("orphan1", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
+        store.store_face("orphan2", "asset-2", 0.0, 0.0, 0.1, 0.1, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
 
         let pid = store.create_person(Some("Alice")).unwrap();
         store.assign_face_to_person("kept", &pid).unwrap();

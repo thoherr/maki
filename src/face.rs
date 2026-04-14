@@ -32,13 +32,21 @@ pub const DETECTION_MODEL: FaceModelSpec = FaceModelSpec {
     approx_size: 230_000,
 };
 
-/// Recognition model: ArcFace for face embeddings.
+/// Recognition model: ArcFace ResNet-100 (FP32) for face embeddings.
+///
+/// Previously used the INT8-quantized variant (28MB), which produced embeddings
+/// clustered in a narrow similarity band (0.65–0.94) — effectively unusable for
+/// clustering. The FP32 version is ~9× larger but produces much better-separated
+/// embeddings.
+///
+/// `id` doubles as the recognition_model stamp on face rows, so the clustering
+/// code can detect and skip embeddings produced by an older model variant.
 pub const RECOGNITION_MODEL: FaceModelSpec = FaceModelSpec {
-    id: "arcface-resnet100",
-    display_name: "ArcFace ResNet-100",
-    hf_repo: "onnxmodelzoo/arcfaceresnet100-11-int8",
-    filename: "arcfaceresnet100-11-int8.onnx",
-    approx_size: 28_000_000,
+    id: "arcface-resnet100-fp32",
+    display_name: "ArcFace ResNet-100 (FP32)",
+    hf_repo: "onnxmodelzoo/arcfaceresnet100-8",
+    filename: "arcfaceresnet100-8.onnx",
+    approx_size: 261_000_000,
 };
 
 /// All face model specs for listing/downloading.
@@ -838,7 +846,7 @@ mod tests {
     fn face_model_specs_complete() {
         assert_eq!(FACE_MODEL_SPECS.len(), 2);
         assert_eq!(FACE_MODEL_SPECS[0].id, "yunet-face-detection");
-        assert_eq!(FACE_MODEL_SPECS[1].id, "arcface-resnet100");
+        assert_eq!(FACE_MODEL_SPECS[1].id, "arcface-resnet100-fp32");
     }
 
     #[test]
