@@ -469,16 +469,18 @@ Selects the ONNX Runtime execution provider for AI inference (SigLIP, YuNet, Arc
 ### face_cluster_threshold
 
 - **Type:** float (0.0--1.0)
-- **Default:** `0.5`
+- **Default:** `0.35`
 
-Similarity threshold for face auto-clustering. Higher values require faces to be more similar to be grouped into the same person. Lower values produce larger groups with more potential false matches.
+Minimum average cosine similarity for two face clusters to be merged during agglomerative clustering. Tuned for the aligned FP32 ArcFace pipeline where intra-person similarity typically falls in 0.5–0.9 and inter-person similarity is near zero or slightly negative.
+
+Higher values produce tighter, more conservative clusters (more singletons, less risk of mixing people). Lower values produce bigger clusters at the risk of merging similar-looking different people. Use `maki faces similarity` to inspect your data's actual distribution before picking a value far from the default.
 
 ### face_min_confidence
 
 - **Type:** float (0.0--1.0)
-- **Default:** `0.5`
+- **Default:** `0.7`
 
-Minimum confidence score for a face detection to be stored. Faces below this threshold are discarded during detection.
+Default value for the `--min-confidence` flag on `maki faces cluster` — face detections below this confidence are dropped before clustering (blurry, profile, or partial faces produce noisy embeddings that hurt cluster purity). Can also be passed per-invocation to override.
 
 ### text_limit
 
@@ -494,8 +496,8 @@ labels = "my-labels.txt"
 model_dir = "~/.maki/models"
 prompt = "a photograph of {}"
 execution_provider = "auto"
-face_cluster_threshold = 0.5
-face_min_confidence = 0.5
+face_cluster_threshold = 0.35
+face_min_confidence = 0.7
 text_limit = 50
 ```
 
@@ -966,8 +968,8 @@ When a field is absent from `maki.toml`, these defaults apply:
 | `ai.model_dir` | `"~/.maki/models"` |
 | `ai.prompt` | `"a photograph of {}"` |
 | `ai.execution_provider` | `"auto"` |
-| `ai.face_cluster_threshold` | `0.5` |
-| `ai.face_min_confidence` | `0.5` |
+| `ai.face_cluster_threshold` | `0.35` |
+| `ai.face_min_confidence` | `0.7` |
 | `ai.text_limit` | `50` |
 | `vlm.endpoint` | `"http://localhost:11434"` |
 | `vlm.model` | `"qwen2.5vl:3b"` |

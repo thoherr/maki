@@ -102,23 +102,32 @@ Download the MAKI Pro binary or build with `cargo build --features pro` to enabl
 
 ## Face Recognition (MAKI Pro)
 
-Download the MAKI Pro binary or build with `cargo build --features pro` to enable face detection and people management. Uses two ONNX models: YuNet for face detection (bounding boxes + landmarks) and ArcFace for face recognition (512-dim embeddings). Models are downloaded via `maki faces download`.
+Download the MAKI Pro binary or build with `cargo build --features pro`. Uses two ONNX models: YuNet for face detection (bounding boxes + 5-point landmarks, ~230 KB) and ArcFace ResNet-100 FP32 for recognition (512-dim embeddings, ~261 MB). Each detected face is aligned to a canonical 112×112 template via a 5-point similarity transform before embedding — matching InsightFace's reference preprocessing.
 
 **CLI workflow**: detect faces → cluster into groups → name people:
 
 ```
 maki faces download                                    # download YuNet + ArcFace models
-maki faces detect --query "type:image" --apply         # detect faces in images
-maki faces cluster --apply                             # group similar faces into people
+maki faces detect --query "type:image" --apply         # detect + embed faces
+maki faces cluster --apply                             # group similar faces (HAC, default threshold 0.35)
 maki faces people                                      # list unnamed person groups
 maki faces name <person-id> "Alice"                    # name a person
 ```
 
-**Web UI**: `/people` page with person gallery, asset detail face chips with assign/unassign, browse filter by `faces:` and `person:` filters, batch face detection from the browse toolbar.
+**Diagnostic commands** for tuning clustering:
 
-**Data persistence**: Face records, people, and embeddings are stored in both SQLite (for queries) and files (YAML + binary) for rebuild resilience. `maki faces export` migrates existing SQLite data to files; `maki embed --export` does the same for image similarity embeddings.
+```
+maki faces similarity --query <scope>           # histogram of pairwise similarities
+maki faces dump-aligned --query <scope>         # save aligned 112x112 crops for visual check
+maki faces clean --apply                        # delete unassigned orphan faces
+maki faces status                               # show per-model face counts and stale-embedding warnings
+```
 
-**Search filters**: `faces:any` / `faces:none` / `faces:N` / `faces:N+` (face count), `person:<name>` (assigned person). **Config**: `[ai] face_cluster_threshold` (default 0.5), `[ai] face_min_confidence` (default 0.5).
+**Web UI**: `/people` page with person gallery and per-cluster browse links (works for both named people and unnamed clusters), asset detail face chips with assign/unassign, browse filter by `faces:` and `person:` that persists across pagination.
+
+**Data persistence**: Face records (including `recognition_model` stamp for migration safety), people, and embeddings live in both SQLite and files (YAML + binary) for rebuild resilience.
+
+**Search filters**: `faces:any` / `faces:none` / `faces:N` / `faces:N+` (face count), `person:<name>` (matches name or person UUID). **Config**: `[ai] face_cluster_threshold` (default `0.35`), `[ai] face_min_confidence` (default `0.7`).
 
 ## VLM Image Descriptions (MAKI Pro)
 

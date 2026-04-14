@@ -624,7 +624,7 @@ maki ss run "Five Stars" --format ids | xargs maki col add "Portfolio"
 
 ## People Management (Face Recognition) *(Pro)*
 
-MAKI can detect faces in your images, group them into people, and let you search by person. Uses YuNet for face detection and ArcFace for face recognition.
+MAKI detects faces in your images, groups them into people, and lets you search by person. Uses YuNet for face detection (outputs 5-point landmarks) and ArcFace ResNet-100 FP32 for face recognition (512-dim embeddings). Faces are aligned to a canonical 112×112 template before embedding — the same preprocessing ArcFace was trained with.
 
 ### Setup
 
@@ -634,7 +634,7 @@ Download the required models first:
 maki faces download
 ```
 
-This downloads the YuNet face detection model (~230 KB) and ArcFace recognition model (~28 MB) to the model cache directory.
+This downloads the YuNet face detection model (~230 KB) and the ArcFace ResNet-100 FP32 recognition model (~261 MB) to `~/.maki/models/faces/`.
 
 ### Detecting faces
 
@@ -644,14 +644,20 @@ Run face detection on your catalog:
 maki faces detect --query "type:image" --apply
 ```
 
-This finds faces in each image's preview, stores bounding boxes and embeddings, and generates face crop thumbnails. Use `--log` for per-asset progress.
+This finds faces in each image's preview, stores bounding boxes + embeddings + the face model id, and generates a small JPEG thumbnail per face. Use `--log` for per-asset progress.
 
-You can scope detection to a specific shoot or volume:
+You can scope detection to a specific shoot, volume, or single asset:
 
 ```
 maki faces detect --query "path:Capture/2026-03" --apply
 maki faces detect --volume "Photos" --apply
 maki faces detect --asset a1b2c3d4 --apply
+```
+
+Use `--force` to re-detect even on assets that already have faces — useful after upgrading the recognition model or tweaking detection parameters:
+
+```
+maki faces detect --force --query 'tag:"person|refugee"' --apply
 ```
 
 ### Clustering faces into people
@@ -662,18 +668,45 @@ After detection, cluster similar faces into groups:
 maki faces cluster --apply
 ```
 
-This uses greedy single-linkage clustering to group faces that look similar enough (default threshold 0.5). Each group becomes an unnamed person.
+Uses agglomerative hierarchical clustering (average linkage, UPGMA) — order-independent and produces tighter clusters than simpler greedy approaches. Each resulting group becomes an **unnamed** person ("Unknown (abc12345)" on the people page) until you name it.
 
-Adjust the threshold for stricter or looser grouping:
+Only faces embedded with the **current** recognition model participate; faces from an older model variant are skipped with a warning (re-run `faces detect --force` to update them).
+
+The two main knobs:
+
+- `--threshold <F>` — minimum average cosine similarity for two clusters to merge. Default **0.35**.
+- `--min-confidence <F>` — drop low-quality face detections before clustering. Default **0.7**.
 
 ```
-maki faces cluster --threshold 0.6 --apply    # stricter (fewer false matches)
-maki faces cluster --threshold 0.4 --apply    # looser (more grouped together)
+maki faces cluster --threshold 0.45 --apply     # stricter (tighter clusters)
+maki faces cluster --threshold 0.3 --apply      # looser (bigger clusters)
 ```
 
-### Naming people
+### Tuning the threshold
 
-List the discovered people and name them:
+The right threshold depends on your data — portrait-heavy collections, group photos, and family albums all have different similarity distributions. MAKI provides two diagnostic commands to help.
+
+**`maki faces similarity`** — prints percentile stats and a histogram of pairwise cosine similarities for a scope:
+
+```
+maki faces similarity --query 'tag:"person|refugee"' --min-confidence 0.7
+```
+
+A healthy distribution is **bimodal**: a big hump near zero (different-person pairs) and a smaller hump in the 0.5–0.9 range (same-person pairs), with a valley between. Pick a threshold in that valley.
+
+If the distribution is unimodal or flat (all pairs in a narrow band), the embeddings aren't discriminating well — check detection confidence, face size, and the recognition model. Add `--top 5` to list each face's nearest neighbors (with asset IDs) for spot-checking.
+
+**`maki faces dump-aligned`** — saves the 112×112 aligned crops to disk so you can visually verify alignment is working:
+
+```
+maki faces dump-aligned --query 'tag:"person|refugee"' --limit 30
+```
+
+Open `./aligned-faces/` and check: faces should be centered, eyes level, face filling most of the frame. If crops look mirrored, rotated, or squashed, alignment is broken.
+
+### Naming and managing people
+
+List discovered people and name them:
 
 ```
 maki faces people
@@ -681,24 +714,23 @@ maki faces name 550e8400-... "Alice"
 maki faces name 661f9511-... "Bob"
 ```
 
-### Managing people
-
-Merge duplicate person groups:
+Merge two person groups (e.g., when the same person ended up in two clusters):
 
 ```
-maki faces merge 550e8400-... 661f9511-...    # merge source into target
+maki faces merge <target_id> <source_id>
 ```
 
-Remove a face from a person (misidentification):
+Remove a face from a person (misidentification), or delete a person entirely:
 
 ```
-maki faces unassign face-uuid-...
+maki faces unassign <face-uuid>
+maki faces delete-person <person-id>      # unassigns the person's faces
 ```
 
-Delete a person entirely (faces become unassigned):
+Then sweep up the unassigned orphans:
 
 ```
-maki faces delete-person 550e8400-...
+maki faces clean --apply
 ```
 
 ### Searching by face and person
@@ -706,22 +738,21 @@ maki faces delete-person 550e8400-...
 Use the `faces:` and `person:` search filters:
 
 ```
-maki search "faces:any"                # assets with detected faces
-maki search "faces:none type:image"    # images without faces
-maki search "faces:2+"                # group photos (2+ faces)
-maki search "person:Alice"            # assets containing Alice
-maki search "person:Alice rating:4+"  # Alice's best photos
+maki search "faces:any"                 # assets with detected faces
+maki search "faces:none type:image"     # images without faces
+maki search "faces:2+"                  # group photos (2+ faces)
+maki search "person:Alice"              # assets containing Alice
+maki search "person:Alice rating:4+"    # Alice's best photos
 ```
 
 ### Web UI
 
-The web UI provides a complete face management experience:
+The web UI provides the full face management experience:
 
-- **People page** (`/people`) — gallery grid of person cards with thumbnails, names, and face counts. Inline rename, merge, and delete. "Cluster" button for on-demand clustering.
-- **Asset detail page** — faces section shows detected faces as chips with crop thumbnails and confidence scores. "Detect faces" button for on-demand detection. Assign/unassign faces to people via dropdown.
-- **Browse filters** — person dropdown in the filter row, and `faces:` filter in the query input.
-- **Batch toolbar** — "Detect faces" button processes all selected assets.
-- **Browse cards** — face count badge alongside variant count.
+- **People page** (`/people`) — gallery of person cards with thumbnails, names, and face counts. Inline rename, merge, delete. Clicking any card (named or "Unknown") navigates to the browse view filtered to that person's assets.
+- **Asset detail page** — faces section with crop thumbnails, confidence, and assignment controls. Already-assigned faces show the person name (or "Unknown (...)" for unnamed clusters) as a clickable link.
+- **Browse filters** — person dropdown in the filter row; `faces:` and `person:` filters in the query input. The person filter persists across pagination and sort changes.
+- **Batch toolbar** — "Detect faces" processes all selected assets in one go.
 
 ### Configuration
 
@@ -729,9 +760,21 @@ In `maki.toml`:
 
 ```toml
 [ai]
-face_cluster_threshold = 0.5    # clustering similarity threshold
-face_min_confidence = 0.5       # minimum detection confidence
+face_cluster_threshold = 0.35   # clustering similarity threshold (HAC average-linkage)
+face_min_confidence = 0.7       # drop low-quality detections from clustering
 ```
+
+### Upgrading from older face recognition
+
+v4.4.0 replaced the face recognition pipeline wholesale (new model, proper alignment, corrected preprocessing). Existing face embeddings live in a different vector space than new ones and are skipped by clustering. To migrate:
+
+```
+maki faces status                # see how many faces are stale
+maki faces clean --apply         # delete stale unassigned faces (optional)
+maki faces detect --force --query <scope> --apply   # re-embed with the new pipeline
+```
+
+For named people you want to keep, `faces detect --force` will preserve the person assignments — it just re-embeds. You'll probably want to re-cluster any auto-clusters afterward.
 
 ---
 

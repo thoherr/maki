@@ -2,6 +2,58 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.4.0 (2026-04-15)
+
+### Face Recognition — Full Pipeline Rewrite *(Pro)*
+
+This release overhauls the face recognition pipeline end to end. The previous version produced cosine similarities clustered in a narrow band (~0.65–0.95 regardless of who was in the image), making auto-clustering effectively unusable. The new pipeline produces a proper bimodal distribution — different people at ~0 similarity, same person at 0.5–0.9 — and clusters cleanly.
+
+Key changes:
+
+- **New recognition model** — ArcFace ResNet-100 FP32 (`onnxmodelzoo/arcfaceresnet100-8`, ~261 MB) replaces the previous INT8 variant (~28 MB). Much better embedding quality.
+- **Proper 5-point landmark alignment** — each detected face is warped into a canonical 112×112 template via a least-squares similarity transform before embedding. Matches InsightFace's reference preprocessing. Without alignment, ArcFace treats every face as visually similar regardless of identity.
+- **Corrected preprocessing** — the model has normalization nodes (`Sub`, `Mul`) baked into its ONNX graph. MAKI now passes raw `[0, 255]` pixel values and lets the model apply its own mean/std. Previous versions applied the normalization externally as well, double-normalizing and collapsing the embedding space.
+- **Agglomerative hierarchical clustering** — replaces the old greedy single-linkage algorithm. Order-independent, uses average linkage (UPGMA) via the Lance-Williams update formula. Produces tighter, better-separated clusters.
+- **Model version tracking** — new `recognition_model` column on `faces` (schema v5→v6). Clustering filters to the current model id; old embeddings are skipped with a warning.
+- **New defaults** — `face_cluster_threshold` `0.5 → 0.35`, `face_min_confidence` `0.5 → 0.7`. Tuned for the new pipeline.
+
+### New commands *(Pro)*
+
+- **`maki faces clean [--apply]`** — delete unassigned face records. Useful after experimenting with thresholds or after a model upgrade.
+- **`maki faces similarity [--query …] [--top N]`** — diagnostic command that prints percentile stats and a histogram of pairwise cosine similarities for a scoped face set. Use it to pick a clustering threshold by finding the valley between inter-person and intra-person humps.
+- **`maki faces dump-aligned [--query …]`** — save the 112×112 aligned crops to disk for visual verification of the alignment pipeline.
+
+### New flags
+
+- **`--min-confidence`** on `maki faces cluster` — drop low-confidence face detections before clustering. Defaults to `[ai] face_min_confidence` (0.7).
+- **`--force`** on `maki faces detect` — re-detect/re-embed faces even on assets that already have face records. Required when upgrading the recognition model.
+
+### Other improvements
+
+- **`stack from-tag --remove-tags`** now sweeps up orphan tags on single-asset or already-stacked tags too, not just those forming new stacks. Makes it a true post-migration cleanup flag.
+- **`tag rename =`** uses leaf-only semantics, matching `=` in search. Only renames assets where the tag has no descendants, skipping ancestor-expanded duplicates.
+- **Hierarchical tag search matches at any level** — `tag:Altstätten` now finds `location|Switzerland|Altstätten`, not just root-level entries. Four LIKE patterns cover standalone, parent, leaf-child, and mid-path positions. No substring matching.
+- **People filter preserved across pagination and sort** in the browse UI — previously lost on "next page".
+- **Unnamed face clusters are browseable from the people page** — clicking "Unknown (abc12345)" now actually filters the browse to that cluster's assets. The filter uses the person's UUID so it works regardless of whether the cluster has been named.
+- **Asset detail page shows cluster assignment for unnamed faces** — instead of the "Assign to…" dropdown, unnamed-cluster faces show as a clickable "Unknown (abc12345)" link.
+- **Quoting hint on empty search** — when a query returns no results and looks like it has unquoted spaces in a filter (e.g. `tag:foo bar`), MAKI prints a reminder: values with spaces need inner quotes, `tag:"foo bar"`.
+- **Asset ID whitespace trimming** — `resolve_asset_id` now trims whitespace (including non-breaking spaces) from the prefix, handling copy-paste artifacts from the web UI.
+- **Stronger active state for ∅ filter icons** (rating "unrated", label "unlabeled") — a solid colored border plus bold text, matching the color-dot selection style.
+- **`label:none` search filter** — find assets without any color label, matching the existing `rating:0` and `volume:none` patterns. Available in CLI search, web UI filter bar (∅ icon next to color dots), and saved searches.
+
+### Upgrading from v4.3.x
+
+Existing face embeddings are from an older model variant and will not cluster with new ones. They remain in the database untouched but are skipped by clustering with a clear warning (`maki faces status` shows the count).
+
+```
+maki faces download              # fetch the ~261 MB FP32 model
+maki faces status                # see how many faces are stale
+maki faces clean --apply         # delete stale unassigned faces
+maki faces detect --force --query <scope> --apply  # re-embed with the new pipeline
+```
+
+Schema migration v5→v6 runs automatically on first launch.
+
 ## v4.3.20 (2026-04-14)
 
 ### New Features

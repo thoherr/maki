@@ -1120,18 +1120,21 @@ maki-faces-cluster -- group similar faces into people
 ### SYNOPSIS
 
 ```
-maki [GLOBAL FLAGS] faces cluster [--query <Q>] [--asset <id>] [--volume <label>] [--threshold <F>] [--apply]
+maki [GLOBAL FLAGS] faces cluster [--query <Q>] [--asset <id>] [--volume <label>]
+                                  [--threshold <F>] [--min-confidence <F>] [--apply]
 ```
 
 ### DESCRIPTION
 
-Groups similar face embeddings into unnamed person groups using greedy single-linkage clustering. Faces that have already been assigned to a person are skipped.
+Groups similar face embeddings into unnamed person groups using **agglomerative hierarchical clustering with average linkage** (UPGMA). This is order-independent and produces tighter, better-separated clusters than simpler greedy approaches. Faces already assigned to a person are skipped.
 
-The threshold controls how similar two faces must be to be grouped together (0.0–1.0, higher = stricter). Default is 0.5, configurable via `[ai] face_cluster_threshold` in `maki.toml`.
+The threshold is the minimum average cosine similarity for two clusters to merge (0.0–1.0, higher = stricter). Default is **0.35**, configurable via `[ai] face_cluster_threshold` in `maki.toml`. The default is tuned for the aligned FP32 ArcFace pipeline where intra-person similarity typically falls in 0.5–0.9 and inter-person similarity is near zero or negative.
+
+The `--min-confidence` flag filters out low-quality face detections (blurry, profile, partial) whose noisy embeddings hurt cluster purity. Default is **0.7**, configurable via `[ai] face_min_confidence`.
+
+Only faces embedded with the **current** recognition model are clustered. If older embeddings from a previous model version exist, the command prints a warning listing how many were skipped — those assets need `maki faces detect --force` to be re-embedded.
 
 Without `--apply`, shows a dry-run report of cluster sizes. With `--apply`, creates person records and assigns faces.
-
-Scope filters (`--query`, `--asset`, `--volume`) limit which faces are considered for clustering.
 
 ### OPTIONS
 
@@ -1145,12 +1148,28 @@ Scope filters (`--query`, `--asset`, `--volume`) limit which faces are considere
 : Scope clustering to faces on assets on a specific volume.
 
 **--threshold \<F\>**
-: Similarity threshold for clustering (default 0.5).
+: Similarity threshold for clustering (default 0.35).
+
+**--min-confidence \<F\>**
+: Skip face detections whose confidence is below this value (default 0.7).
 
 **--apply**
 : Actually create person groups (default is dry run).
 
 `--json`, `--log`, `--time` for output control.
+
+### TUNING THE THRESHOLD
+
+The right threshold depends on your dataset. Use `maki faces similarity` to see your embedding distribution, then pick a threshold in the valley between the inter-person and intra-person humps.
+
+| Threshold | Behavior |
+|-----------|----------|
+| `0.3`     | Aggressive merging — bigger clusters, may mix similar-looking people |
+| `0.35` (default) | Balanced — usually a good starting point |
+| `0.45`    | Conservative — tighter clusters, more singletons/small groups |
+| `0.6+`    | Very strict — mostly splits same-person photos into separate clusters |
+
+Start with a dry run at the default, eyeball the cluster sizes, and adjust.
 
 ### EXAMPLES
 
@@ -1163,7 +1182,7 @@ maki faces cluster
 Apply clustering with a stricter threshold:
 
 ```bash
-maki faces cluster --threshold 0.6 --apply
+maki faces cluster --threshold 0.45 --apply
 ```
 
 Cluster only faces from a specific shoot:
@@ -1172,10 +1191,172 @@ Cluster only faces from a specific shoot:
 maki faces cluster --query "path:Capture/2026-03" --apply
 ```
 
+Use a higher confidence filter to skip profile/blurry faces:
+
+```bash
+maki faces cluster --min-confidence 0.85 --apply
+```
+
 ### SEE ALSO
 
 [faces detect](#maki-faces-detect) -- detect faces first.
+[faces similarity](#maki-faces-similarity) -- analyze embedding distribution.
 [faces name](#maki-faces-name) -- name the resulting person groups.
+
+---
+
+## maki faces clean *(Pro)* {#maki-faces-clean}
+
+### NAME
+
+maki-faces-clean -- delete unassigned face records
+
+### SYNOPSIS
+
+```
+maki [GLOBAL FLAGS] faces clean [--apply]
+```
+
+### DESCRIPTION
+
+Deletes face records that have no person assigned (`person_id IS NULL`). Useful for:
+
+- Cleaning up after experimenting with clustering thresholds.
+- Removing stale embeddings after a recognition-model upgrade — old embeddings sit idle, and this command sweeps them up before you re-detect with the new model.
+- Dropping orphan faces left behind after `faces delete-person`.
+
+Assigned faces (already part of a named or unnamed person cluster) are untouched.
+
+Without `--apply`, reports how many faces would be deleted. With `--apply`, performs the deletion.
+
+### OPTIONS
+
+**--apply**
+: Actually delete the faces (default is dry run).
+
+### EXAMPLES
+
+```bash
+maki faces clean                 # how many orphans are there?
+maki faces clean --apply         # delete them all
+```
+
+### SEE ALSO
+
+[faces cluster](#maki-faces-cluster) -- group faces into people.
+[faces delete-person](#maki-faces-delete-person) -- remove a person (unassigns their faces, which this command can then clean up).
+
+---
+
+## maki faces similarity *(Pro)* {#maki-faces-similarity}
+
+### NAME
+
+maki-faces-similarity -- analyze face embedding distribution
+
+### SYNOPSIS
+
+```
+maki [GLOBAL FLAGS] faces similarity [--query <Q>] [--asset <id>] [--volume <label>]
+                                     [--min-confidence <F>] [--top <N>] [--all]
+```
+
+### DESCRIPTION
+
+Diagnostic command. Computes all pairwise cosine similarities between faces in the given scope and prints:
+
+- **Percentile statistics**: min, p10, p25, median, mean, p75, p90, p95, p99, max.
+- **Histogram**: 10 buckets spanning the min–max range, each showing how many pairs fall into that similarity range.
+
+Interpreting the histogram:
+
+- **Bimodal (two clear humps)** — healthy embeddings. The lower hump is inter-person pairs (different people), the upper hump is intra-person pairs (same person). A good clustering threshold sits in the valley between them.
+- **Single hump or narrow band** — embeddings are not discriminating well. Check that detection confidence is high enough, face crops are large enough, and the recognition model matches expectations.
+
+With `--top N`, also prints each face's top-N nearest neighbors (face_id/asset_id/similarity) so you can spot-check whether a face's closest matches are actually the same person. This is invaluable for understanding clustering results.
+
+### OPTIONS
+
+**--query \<Q\>**, **--asset \<id\>**, **--volume \<label\>**
+: Scope the analysis.
+
+**--min-confidence \<F\>**
+: Ignore face detections with confidence below this value (default 0.0 — include all).
+
+**--top \<N\>**
+: For each face, list its top-N nearest neighbors with similarity scores (default 0 — summary only).
+
+**--all**
+: Include already-assigned faces (default: only unassigned).
+
+### EXAMPLES
+
+Summary of unassigned refugee portraits:
+
+```bash
+maki faces similarity --query 'tag:"person|refugee"' --min-confidence 0.7
+```
+
+Per-face nearest neighbors to spot-check clustering:
+
+```bash
+maki faces similarity --query 'tag:"person|refugee"' --top 5
+```
+
+Include already-named people to see intra-cluster consistency:
+
+```bash
+maki faces similarity --query 'tag:"person|refugee"' --all
+```
+
+### SEE ALSO
+
+[faces cluster](#maki-faces-cluster) -- group faces using the threshold you picked.
+[faces dump-aligned](#maki-faces-dump-aligned) -- save aligned crops for visual inspection.
+
+---
+
+## maki faces dump-aligned *(Pro)* {#maki-faces-dump-aligned}
+
+### NAME
+
+maki-faces-dump-aligned -- save aligned 112×112 face crops for visual debugging
+
+### SYNOPSIS
+
+```
+maki [GLOBAL FLAGS] faces dump-aligned [--query <Q>] [--asset <id>]
+                                       [--output <DIR>] [--limit <N>]
+```
+
+### DESCRIPTION
+
+Detects faces on the fly and saves the resulting 112×112 ArcFace-aligned crops to disk. Used to verify that the alignment pipeline (5-point landmark similarity transform) is producing the crops the recognition model expects.
+
+Healthy output: all crops at roughly the same face scale, eyes approximately level, face filling most of the 112×112 frame. If crops look mirrored, rotated, squashed, or offset, alignment math is wrong (or landmarks from the detector have an unexpected order).
+
+Uses the same image-resolution path as `faces detect` — smart preview → regular preview → original file on an online volume.
+
+### OPTIONS
+
+**--query \<Q\>**, **--asset \<id\>**
+: Scope which assets to process.
+
+**--output \<DIR\>**
+: Output directory (default: `./aligned-faces`).
+
+**--limit \<N\>**
+: Maximum number of crops to save (default 20, 0 = unlimited).
+
+### EXAMPLES
+
+```bash
+maki faces dump-aligned --query 'tag:"person|refugee"' --limit 30
+```
+
+### SEE ALSO
+
+[faces similarity](#maki-faces-similarity) -- diagnose embedding quality numerically.
 
 ---
 
@@ -1389,7 +1570,9 @@ maki [GLOBAL FLAGS] faces download
 
 ### DESCRIPTION
 
-Downloads the YuNet face detection model and ArcFace face recognition model from HuggingFace. Models are cached in the model directory (default `~/.cache/maki/models`, configurable via `[ai] model_dir` in `maki.toml`).
+Downloads the YuNet face detection model (~230 KB) and ArcFace ResNet-100 FP32 face recognition model (~261 MB) from HuggingFace. Models are cached in `~/.maki/models/faces/` by default, configurable via `[ai] model_dir` in `maki.toml`.
+
+The recognition model has normalization nodes baked into its ONNX graph; the pipeline passes raw pixel values and lets the model apply its own mean/std. Faces are aligned to a canonical 112×112 template using a 5-point similarity transform before embedding, matching how ArcFace was trained.
 
 ### EXAMPLES
 
@@ -1413,12 +1596,27 @@ maki [GLOBAL FLAGS] faces status
 
 ### DESCRIPTION
 
-Shows the download status of face detection and recognition models. Reports whether the YuNet face detection model and ArcFace face recognition model are downloaded and ready to use.
+Shows the download status of face models and the breakdown of stored face embeddings by recognition model. If the current recognition model differs from the one used for some stored embeddings (e.g., after upgrading), the command prints how many faces are "stale" and prompts you to re-run `maki faces detect --force` to re-embed them. Stale embeddings are silently skipped by clustering.
 
 ### EXAMPLES
 
 ```bash
 maki faces status
+```
+
+Typical output after an upgrade:
+
+```
+Face model directory: /Users/jane/.maki/models/faces
+Models downloaded: yes
+Current recognition model: arcface-resnet100-fp32-aligned-v2
+Total faces detected: 387
+Total people: 4
+Faces by recognition model:
+  arcface-resnet100-fp32-aligned-v2: 349 (current)
+  arcface-resnet100-int8: 38
+  38 face(s) use a different recognition model and will be
+  ignored by clustering. Re-run `maki faces detect --force` to update.
 ```
 
 ### SEE ALSO
