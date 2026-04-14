@@ -42,7 +42,7 @@ pub const DETECTION_MODEL: FaceModelSpec = FaceModelSpec {
 /// `id` doubles as the recognition_model stamp on face rows, so the clustering
 /// code can detect and skip embeddings produced by an older model variant.
 pub const RECOGNITION_MODEL: FaceModelSpec = FaceModelSpec {
-    id: "arcface-resnet100-fp32-aligned",
+    id: "arcface-resnet100-fp32-aligned-v2",
     display_name: "ArcFace ResNet-100 (FP32, aligned)",
     hf_repo: "onnxmodelzoo/arcfaceresnet100-8",
     filename: "arcfaceresnet100-8.onnx",
@@ -215,13 +215,23 @@ impl FaceDetector {
 
         let rgb = align_face_to_arcface(&img, &face.landmarks);
 
-        // Build NCHW tensor with standard ArcFace normalization: (pixel - 127.5) / 127.5
+        // Build NCHW tensor. The onnxmodelzoo/arcfaceresnet100-8 model has
+        // normalization baked into the graph (Sub + Mul scalar nodes at the
+        // start — they apply `(pixel - 127.5) / 128.0` internally). Passing
+        // externally-normalized values would double-normalize and collapse
+        // the embedding space — which is exactly the symptom we saw before
+        // fixing this: all pairwise cosine similarities clustered in [0.87, 1.00].
+        //
+        // InsightFace's reference implementation auto-detects this by
+        // scanning for Sub/Mul nodes at the start of the graph. For this
+        // specific model we know it has them, so we pass raw [0, 255] pixel
+        // values as f32 directly.
         let mut tensor = Array4::<f32>::zeros((1, 3, 112, 112));
         for y in 0..112usize {
             for x in 0..112usize {
                 let pixel = rgb.get_pixel(x as u32, y as u32);
                 for c in 0..3 {
-                    tensor[[0, c, y, x]] = (pixel[c] as f32 - 127.5) / 127.5;
+                    tensor[[0, c, y, x]] = pixel[c] as f32;
                 }
             }
         }
@@ -838,7 +848,7 @@ pub(crate) fn invert_similarity(m: [[f32; 3]; 2]) -> [[f32; 3]; 2] {
 ///
 /// Uses bilinear interpolation; out-of-bounds samples get black pixels. Output
 /// is guaranteed to be exactly 112×112 regardless of source image size.
-pub(crate) fn align_face_to_arcface(
+pub fn align_face_to_arcface(
     source: &image::DynamicImage,
     landmarks_normalized: &[(f32, f32); 5],
 ) -> image::RgbImage {
@@ -1086,7 +1096,7 @@ mod tests {
     fn face_model_specs_complete() {
         assert_eq!(FACE_MODEL_SPECS.len(), 2);
         assert_eq!(FACE_MODEL_SPECS[0].id, "yunet-face-detection");
-        assert_eq!(FACE_MODEL_SPECS[1].id, "arcface-resnet100-fp32-aligned");
+        assert_eq!(FACE_MODEL_SPECS[1].id, "arcface-resnet100-fp32-aligned-v2");
     }
 
     #[test]
