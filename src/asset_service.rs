@@ -6215,6 +6215,7 @@ impl AssetService {
         let _ = crate::face_store::FaceStore::initialize(catalog.conn());
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         let engine = crate::query::QueryEngine::new(&self.catalog_root);
+        let metadata_store = crate::metadata_store::MetadataStore::new(&self.catalog_root);
         let preview_gen = crate::preview::PreviewGenerator::new(&self.catalog_root, crate::Verbosity::quiet(), &self.preview_config);
         let registry = crate::device_registry::DeviceRegistry::new(&self.catalog_root);
         let volumes = registry.list()?;
@@ -6235,8 +6236,16 @@ impl AssetService {
             let t0 = std::time::Instant::now();
             let short_id = &aid[..8.min(aid.len())];
 
-            // Skip if already detected (unless force)
-            if !force && face_store.has_faces(aid) {
+            // Skip if this asset has already been scanned (regardless of whether
+            // any face was found). Without this, every landscape / product shot /
+            // document in the catalog gets re-scanned on every `detect` run —
+            // waste of compute proportional to catalog size.
+            //
+            // `--force` bypasses the check entirely. A secondary fallback on
+            // `has_faces()` covers pre-v7 catalogs whose face_scan_status column
+            // wasn't populated until migration (assets with faces get backfilled
+            // during migration, but this is belt-and-braces for partial upgrades).
+            if !force && (catalog.is_face_scan_done(aid) || face_store.has_faces(aid)) {
                 result.assets_skipped += 1;
                 on_asset(aid, 0, t0.elapsed());
                 continue;
@@ -6253,6 +6262,8 @@ impl AssetService {
             let image_path = match self.find_image_for_ai(&details, &preview_gen, &online_volumes) {
                 Some(p) => p,
                 None => {
+                    // No accessible image — don't mark as scanned, so a later run
+                    // with the volume online will actually process it.
                     result.assets_skipped += 1;
                     continue;
                 }
@@ -6279,12 +6290,33 @@ impl AssetService {
                             }
                         }
                         let _ = catalog.update_face_count(aid);
+                        // Mark the asset as scanned regardless of whether any faces
+                        // were found. This is the key optimization: without it, a
+                        // 100k-asset catalog with mostly landscapes gets re-scanned
+                        // in full on every `faces detect` run.
+                        //
+                        // Persist to both SQLite (fast filtering) AND the YAML sidecar
+                        // (source of truth for rebuild-catalog). If only SQLite had it,
+                        // a rebuild would lose the "scanned, no face" knowledge and the
+                        // whole catalog would need re-scanning on the first detect run
+                        // post-rebuild.
+                        let _ = catalog.mark_face_scan_done(aid);
+                        if let Ok(uid) = aid.parse::<uuid::Uuid>() {
+                            if let Ok(mut asset) = metadata_store.load(uid) {
+                                if asset.face_scan_status.as_deref() != Some("done") {
+                                    asset.face_scan_status = Some("done".to_string());
+                                    let _ = metadata_store.save(&asset);
+                                }
+                            }
+                        }
                     }
                     result.faces_detected += n;
                     result.assets_processed += 1;
                     on_asset(aid, n, t0.elapsed());
                 }
                 Err(e) => {
+                    // Detection failed (I/O error, decode error, etc.) — don't
+                    // mark as scanned so a future run can retry.
                     result.errors.push(format!("{short_id}: {e:#}"));
                 }
             }

@@ -6731,6 +6731,12 @@ faces/\n\
                         "UPDATE assets SET face_count = (SELECT COUNT(*) FROM faces WHERE faces.asset_id = ?1) WHERE id = ?1",
                         rusqlite::params![&id_str],
                     );
+                    // Legacy upgrade fallback: see the full-catalog rebuild for context.
+                    let _ = catalog.conn().execute(
+                        "UPDATE assets SET face_scan_status = 'done' \
+                         WHERE id = ?1 AND face_scan_status IS NULL AND face_count > 0",
+                        rusqlite::params![&id_str],
+                    );
                 }
 
                 if cli.json {
@@ -6846,6 +6852,15 @@ faces/\n\
                         "UPDATE assets SET face_count = (
                             SELECT COUNT(*) FROM faces WHERE faces.asset_id = assets.id
                         ) WHERE id IN (SELECT DISTINCT asset_id FROM faces)"
+                    );
+                    // Legacy upgrade fallback: if an asset has face records but its
+                    // YAML sidecar predates the face_scan_status field, mark it as
+                    // scanned. This matters only for users upgrading from v4.4.2 or
+                    // earlier — newer writes always put face_scan_status in the
+                    // sidecar, so this branch is a no-op for fresh catalogs.
+                    let _ = catalog.conn().execute_batch(
+                        "UPDATE assets SET face_scan_status = 'done' \
+                         WHERE face_scan_status IS NULL AND face_count > 0"
                     );
                 }
 

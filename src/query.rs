@@ -1778,6 +1778,10 @@ impl QueryEngine {
                 description: source.description.clone(),
                 rating: source.rating,
                 color_label: source.color_label.clone(),
+                // New split-off asset starts unscanned — its own image may have
+                // faces that the source asset's scan never saw (different crop,
+                // different variant, etc.)
+                face_scan_status: None,
                 preview_rotation: None,
                 preview_variant: None,
                 variants: vec![variant.clone()],

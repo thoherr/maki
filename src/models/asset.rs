@@ -39,6 +39,17 @@ pub struct Asset {
     pub rating: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_label: Option<String>,
+    /// Face-detection scan status.
+    ///
+    /// `None` = never scanned. `Some("done")` = scan completed, regardless of
+    /// whether any faces were found. Without this field in the sidecar, a
+    /// `rebuild-catalog` would lose the "scanned, no face" knowledge and every
+    /// landscape / document / product shot would be re-scanned — potentially
+    /// hours of wasted work on a big catalog. Also prevents deleted-face
+    /// ghosts from coming back: once a user dismisses a detection, the asset
+    /// stays marked as scanned and won't be re-detected on subsequent runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face_scan_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_rotation: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -67,6 +78,7 @@ impl Asset {
             description: None,
             rating: None,
             color_label: None,
+            face_scan_status: None,
             preview_rotation: None,
             preview_variant: None,
             variants: Vec::new(),

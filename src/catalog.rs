@@ -672,7 +672,7 @@ fn next_date_bound(s: &str) -> String {
 }
 
 /// Current schema version. Bump this whenever `run_migrations()` changes.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 // ═══ CATALOG STRUCT & CONNECTION ═══
 
@@ -1009,6 +1009,27 @@ impl Catalog {
             );
         }
 
+        // ── v6 → v7: distinguish "never scanned for faces" from "scanned, no face found" ──
+        // Without this, `maki faces detect` re-scans every zero-face asset (landscapes,
+        // product shots, documents) on every run — wasting compute proportional to catalog
+        // size. The new column is set to 'done' once detection completes, regardless of
+        // face count, and the scan loop uses it instead of `has_faces()` to decide whether
+        // to skip.
+        //
+        // Backfill: any asset with at least one face row already counts as "done" — if you
+        // saw a face there, you obviously ran detection. Assets without faces get NULL,
+        // meaning they'll be scanned on the next `detect` run (no regression vs. today).
+        if current < 7 {
+            let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN face_scan_status TEXT");
+            let _ = self.conn.execute_batch(
+                "UPDATE assets SET face_scan_status = 'done' \
+                 WHERE face_scan_status IS NULL AND face_count > 0",
+            );
+            let _ = self.conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_assets_face_scan_status ON assets(face_scan_status) WHERE face_scan_status IS NULL",
+            );
+        }
+
         // Stamp the new schema version
         let _ = self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -1099,8 +1120,8 @@ impl Catalog {
         // intermediate DELETE that triggers FK constraint violations on
         // variants/faces/collection_assets referencing this asset.
         self.conn.execute(
-            "INSERT INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count, latitude, longitude, preview_rotation, preview_variant, video_duration, video_codec) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
+            "INSERT INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count, latitude, longitude, preview_rotation, preview_variant, video_duration, video_codec, face_scan_status) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18) \
              ON CONFLICT(id) DO UPDATE SET \
                name = excluded.name, \
                created_at = excluded.created_at, \
@@ -1117,7 +1138,8 @@ impl Catalog {
                preview_rotation = excluded.preview_rotation, \
                preview_variant = excluded.preview_variant, \
                video_duration = excluded.video_duration, \
-               video_codec = excluded.video_codec",
+               video_codec = excluded.video_codec, \
+               face_scan_status = excluded.face_scan_status",
             rusqlite::params![
                 asset.id.to_string(),
                 asset.name,
@@ -1136,6 +1158,7 @@ impl Catalog {
                 asset.preview_variant,
                 video_duration,
                 video_codec,
+                asset.face_scan_status.as_deref(),
             ],
         )?;
         Ok(())
@@ -1211,6 +1234,38 @@ impl Catalog {
             rusqlite::params![asset_id],
         )?;
         Ok(())
+    }
+
+    /// Mark an asset as having been scanned for faces (regardless of face count).
+    /// Used by `maki faces detect` to avoid re-scanning zero-face assets on every run.
+    pub fn mark_face_scan_done(&self, asset_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE assets SET face_scan_status = 'done' WHERE id = ?1",
+            rusqlite::params![asset_id],
+        )?;
+        Ok(())
+    }
+
+    /// Clear the face-scan-done flag for an asset. Used by `--force` to ensure
+    /// the asset gets re-scanned even if it had been marked done previously.
+    pub fn clear_face_scan_status(&self, asset_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE assets SET face_scan_status = NULL WHERE id = ?1",
+            rusqlite::params![asset_id],
+        )?;
+        Ok(())
+    }
+
+    /// Check whether an asset has been scanned for faces (regardless of whether
+    /// any were found). Returns true if `face_scan_status = 'done'`.
+    pub fn is_face_scan_done(&self, asset_id: &str) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM assets WHERE id = ?1 AND face_scan_status = 'done'",
+                rusqlite::params![asset_id],
+                |_| Ok(()),
+            )
+            .is_ok()
     }
 
     /// Update just the created_at date for an asset in the catalog.
@@ -6244,6 +6299,28 @@ mod tests {
         let prefix = &full_id[..8];
         let resolved = catalog.resolve_asset_id(prefix).unwrap();
         assert_eq!(resolved.as_deref(), Some(full_id.as_str()));
+    }
+
+    #[test]
+    fn face_scan_status_default_is_null() {
+        // Newly-inserted assets start with face_scan_status = NULL so the first
+        // `faces detect` run will scan them.
+        let catalog = setup_search_catalog();
+        let rows = catalog.search_assets(None, None, None, None, None, None).unwrap();
+        let aid = &rows[0].asset_id;
+        assert!(!catalog.is_face_scan_done(aid), "new asset should be unscanned");
+    }
+
+    #[test]
+    fn mark_face_scan_done_roundtrips() {
+        let catalog = setup_search_catalog();
+        let rows = catalog.search_assets(None, None, None, None, None, None).unwrap();
+        let aid = &rows[0].asset_id;
+        assert!(!catalog.is_face_scan_done(aid));
+        catalog.mark_face_scan_done(aid).unwrap();
+        assert!(catalog.is_face_scan_done(aid), "should be marked done after mark_face_scan_done");
+        catalog.clear_face_scan_status(aid).unwrap();
+        assert!(!catalog.is_face_scan_done(aid), "should be unscanned after clear_face_scan_status");
     }
 
     #[test]
