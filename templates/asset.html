@@ -93,6 +93,9 @@
         <details{% if !faces.is_empty() %} open{% endif %}>
             <summary>Faces ({{ faces.len() }})</summary>
             <button class="btn btn-sm" id="detect-faces-btn">Detect faces</button>
+            <!-- All known people — shared data source for the per-face combobox.
+                 Rendered once here; each combobox filters this list as the user types. -->
+            <script id="face-assign-people-data" type="application/json">[{% for p in all_people %}{"id":"{{ p.id }}","name":"{{ p.name|js_string|safe }}"}{% if !loop.last %},{% endif %}{% endfor %}]</script>
             <div id="faces-section" class="faces-section">
                 {% for f in faces %}
                 <div class="face-chip" data-face-id="{{ f.face_id }}">
@@ -111,13 +114,10 @@
                         {% endif %}
                         <button class="face-unassign" data-face-id="{{ f.face_id }}" title="Unassign">&times;</button>
                         {% else %}
-                        <select class="face-assign-select" data-face-id="{{ f.face_id }}">
-                            <option value="">Assign to...</option>
-                            {% for p in all_people %}
-                            <option value="{{ p.id }}">{{ p.name }}</option>
-                            {% endfor %}
-                            <option value="__new__">+ New person</option>
-                        </select>
+                        <div class="face-assign-combobox" data-face-id="{{ f.face_id }}">
+                            <input type="text" class="face-assign-input" placeholder="Assign to…" autocomplete="off" aria-label="Assign face to person">
+                            <div class="face-assign-dropdown" hidden></div>
+                        </div>
                         {% endif %}
                         <button class="face-delete" data-face-id="{{ f.face_id }}" title="Delete face">&#128465;</button>
                     </div>
@@ -144,40 +144,161 @@
                     });
             });
 
-            document.querySelectorAll('.face-assign-select').forEach(function(sel) {
-                sel.addEventListener('change', function() {
-                    var faceId = this.dataset.faceId;
-                    var personId = this.value;
-                    if (!personId) return;
-                    if (personId === '__new__') {
-                        var name = prompt('Enter person name:');
-                        if (!name) { this.value = ''; return; }
-                        fetch('/api/people', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({name: name})
-                        })
-                        .then(function(r) { return r.json(); })
-                        .then(function(data) {
-                            if (!data.id) { alert('Failed to create person'); window.location.reload(); return; }
-                            return fetch('/api/faces/' + faceId + '/assign', {
-                                method: 'PUT',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify({person_id: data.id})
-                            });
-                        })
-                        .then(function() { markBrowseDirty(); window.location.reload(); })
-                        .catch(function(err) { alert('Failed: ' + err.message); window.location.reload(); });
+            // ── Face assignment combobox ──
+            // A searchable replacement for the old plain <select>. Scales to
+            // hundreds/thousands of people where the native dropdown would be
+            // unwieldy. Filters `allPeople` on input, keyboard-navigable,
+            // "+ Create new" always offered when there's a non-empty query.
+            var allPeople = [];
+            try {
+                var dataEl = document.getElementById('face-assign-people-data');
+                if (dataEl && dataEl.textContent.trim()) {
+                    allPeople = JSON.parse(dataEl.textContent);
+                }
+            } catch (e) { /* leave allPeople empty */ }
+
+            function assignFaceToPerson(faceId, personId) {
+                return fetch('/api/faces/' + faceId + '/assign', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({person_id: personId})
+                }).then(function(r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                });
+            }
+
+            function createPersonAndAssign(name, faceId) {
+                return fetch('/api/people', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name: name})
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (!data.id) throw new Error('Failed to create person');
+                    return assignFaceToPerson(faceId, data.id);
+                });
+            }
+
+            document.querySelectorAll('.face-assign-combobox').forEach(function(box) {
+                var input = box.querySelector('.face-assign-input');
+                var dropdown = box.querySelector('.face-assign-dropdown');
+                var faceId = box.dataset.faceId;
+                var activeIdx = -1;          // index of currently-highlighted item (incl. "create new" row)
+                var items = [];              // currently-rendered items: {label, action}
+
+                function closeDropdown() {
+                    dropdown.hidden = true;
+                    dropdown.innerHTML = '';
+                    activeIdx = -1;
+                    items = [];
+                }
+
+                function render() {
+                    var q = input.value.trim().toLowerCase();
+                    var matches = allPeople;
+                    if (q) {
+                        matches = allPeople.filter(function(p) {
+                            return p.name.toLowerCase().indexOf(q) !== -1;
+                        });
+                    }
+                    // Cap visible matches for very large lists; show count if truncated.
+                    var cap = 30;
+                    var truncated = matches.length > cap;
+                    var shown = truncated ? matches.slice(0, cap) : matches;
+
+                    items = shown.map(function(p) {
+                        return {
+                            label: p.name,
+                            action: function() {
+                                assignFaceToPerson(faceId, p.id)
+                                    .then(function() { markBrowseDirty(); window.location.reload(); })
+                                    .catch(function(err) { alert('Assign failed: ' + err.message); });
+                            }
+                        };
+                    });
+                    // Always-last row: create a new person from whatever the user typed,
+                    // only when there's actually text to use as the name.
+                    if (q) {
+                        items.push({
+                            label: '+ Create new person "' + input.value.trim() + '"',
+                            isCreate: true,
+                            action: function() {
+                                createPersonAndAssign(input.value.trim(), faceId)
+                                    .then(function() { markBrowseDirty(); window.location.reload(); })
+                                    .catch(function(err) { alert('Create+assign failed: ' + err.message); window.location.reload(); });
+                            }
+                        });
+                    }
+
+                    dropdown.innerHTML = '';
+                    if (items.length === 0) {
+                        dropdown.hidden = true;
                         return;
                     }
-                    fetch('/api/faces/' + faceId + '/assign', {
-                        method: 'PUT',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({person_id: personId})
-                    })
-                    .then(function(r) { return r.json(); })
-                    .then(function() { markBrowseDirty(); window.location.reload(); })
-                    .catch(function(err) { alert('Assign failed: ' + err.message); });
+                    items.forEach(function(item, i) {
+                        var row = document.createElement('div');
+                        row.className = 'face-assign-option' + (item.isCreate ? ' face-assign-option-create' : '');
+                        row.textContent = item.label;
+                        row.addEventListener('mousedown', function(e) {
+                            e.preventDefault(); // don't blur the input before click fires
+                            item.action();
+                        });
+                        row.addEventListener('mouseenter', function() {
+                            activeIdx = i;
+                            updateActive();
+                        });
+                        dropdown.appendChild(row);
+                    });
+                    if (truncated) {
+                        var info = document.createElement('div');
+                        info.className = 'face-assign-truncated';
+                        info.textContent = 'Showing first ' + cap + ' of ' + matches.length + ' matches — keep typing to narrow.';
+                        dropdown.appendChild(info);
+                    }
+                    activeIdx = 0;
+                    updateActive();
+                    dropdown.hidden = false;
+                }
+
+                function updateActive() {
+                    var rows = dropdown.querySelectorAll('.face-assign-option');
+                    rows.forEach(function(r, i) {
+                        r.classList.toggle('active', i === activeIdx);
+                    });
+                    var activeRow = rows[activeIdx];
+                    if (activeRow) activeRow.scrollIntoView({block: 'nearest'});
+                }
+
+                input.addEventListener('focus', render);
+                input.addEventListener('input', render);
+                input.addEventListener('keydown', function(e) {
+                    if (dropdown.hidden && (e.key === 'ArrowDown' || e.key === 'Enter')) {
+                        render();
+                        return;
+                    }
+                    if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        if (items.length === 0) return;
+                        activeIdx = Math.min(activeIdx + 1, items.length - 1);
+                        updateActive();
+                    } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        if (items.length === 0) return;
+                        activeIdx = Math.max(activeIdx - 1, 0);
+                        updateActive();
+                    } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (activeIdx >= 0 && items[activeIdx]) items[activeIdx].action();
+                    } else if (e.key === 'Escape') {
+                        closeDropdown();
+                        input.blur();
+                    }
+                });
+                // Close dropdown on blur (after a tick so clicks on options still fire).
+                input.addEventListener('blur', function() {
+                    setTimeout(closeDropdown, 120);
                 });
             });
 

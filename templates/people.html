@@ -17,6 +17,19 @@
 <p class="empty-state">No people found. Detect faces first with <code>maki faces detect</code>, then cluster them with the button above or <code>maki faces cluster --apply</code>.</p>
 {% else %}
 
+<!-- Filter input — client-side substring match against names (incl. "Unknown (…)" synthesized labels) -->
+<div class="people-filter">
+    <input
+        type="text"
+        id="people-filter-input"
+        placeholder="Filter people by name…"
+        autocomplete="off"
+        aria-label="Filter people"
+    >
+    <button class="btn btn-small people-filter-clear" id="people-filter-clear" title="Clear filter" hidden>&#215;</button>
+    <span class="people-filter-count" id="people-filter-count"></span>
+</div>
+
 <!-- Selection toolbar — visible when 2+ person cards are selected (merge requires at least two) -->
 <div class="people-selection-toolbar" id="people-toolbar" hidden>
     <span class="selection-count"><span id="selection-count">0</span> selected</span>
@@ -124,6 +137,42 @@
                 .then(function() { card.remove(); })
                 .catch(function(err) { alert('Delete failed: ' + err.message); });
         });
+    });
+
+    // ── Filter: client-side substring match against person name ──
+    // No backend round-trip — we already have every card rendered; just
+    // hide/show them as the user types. This scales comfortably into
+    // the low thousands of cards without any jank.
+    var filterInput = document.getElementById('people-filter-input');
+    var filterClear = document.getElementById('people-filter-clear');
+    var filterCount = document.getElementById('people-filter-count');
+    var allCards = document.querySelectorAll('.person-card');
+
+    function applyFilter() {
+        var q = filterInput.value.trim().toLowerCase();
+        filterClear.hidden = q === '';
+        var visible = 0;
+        allCards.forEach(function(card) {
+            var name = (card.dataset.name || '').toLowerCase();
+            var match = q === '' || name.indexOf(q) !== -1;
+            card.hidden = !match;
+            if (match) visible++;
+        });
+        if (q === '') {
+            filterCount.textContent = '';
+        } else {
+            filterCount.textContent = visible + ' of ' + allCards.length + ' matching';
+        }
+    }
+
+    filterInput.addEventListener('input', applyFilter);
+    filterInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') { filterInput.value = ''; applyFilter(); }
+    });
+    filterClear.addEventListener('click', function() {
+        filterInput.value = '';
+        applyFilter();
+        filterInput.focus();
     });
 
     // ── Merge UI: selection, target picking, modal, confirm ──

@@ -3506,6 +3506,34 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     color: var(--text);
 }
 
+/* Client-side people filter */
+.people-filter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0;
+}
+.people-filter input[type="text"] {
+    flex: 0 1 320px;
+    padding: 6px 10px;
+    font-size: 0.95rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+}
+.people-filter input[type="text"]:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+.people-filter-count {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+.people-filter-clear {
+    padding: 0 10px;
+}
+
 /* Toolbar visible when people are selected for merge */
 .people-selection-toolbar {
     display: flex;
@@ -3690,6 +3718,62 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     border-radius: 4px;
     background: var(--bg-input);
     color: var(--text);
+}
+/* Face assignment combobox — replaces the plain <select> to handle large
+   people lists with type-to-filter. Positioned relative to the .face-meta
+   container so the dropdown can overlay nearby content. */
+.face-assign-combobox {
+    position: relative;
+    display: inline-block;
+}
+.face-assign-input {
+    font-size: 0.8rem;
+    padding: 2px 6px;
+    width: 140px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-input);
+    color: var(--text);
+}
+.face-assign-input:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+.face-assign-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    min-width: 220px;
+    max-height: 260px;
+    overflow-y: auto;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 20;
+    margin-top: 2px;
+    font-size: 0.85rem;
+}
+.face-assign-option {
+    padding: 6px 10px;
+    cursor: pointer;
+    color: var(--text);
+}
+.face-assign-option.active,
+.face-assign-option:hover {
+    background: rgba(232, 99, 74, 0.12);
+}
+.face-assign-option-create {
+    border-top: 1px solid var(--border);
+    color: var(--primary);
+    font-weight: 500;
+}
+.face-assign-truncated {
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    background: var(--bg);
+    border-top: 1px solid var(--border);
 }
 .face-delete {
     background: none;
