@@ -50,6 +50,7 @@ FILES=(
     user-guide/10-organizing-and-culling.md
     user-guide/11-tagging-guide.md
     user-guide/12-archive-lifecycle.md
+    user-guide/13-visual-discovery.md
 
     # Reference Guide
     reference/00-cli-conventions.md
