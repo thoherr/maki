@@ -19,8 +19,8 @@ Workflow-oriented guides that walk you through common tasks.
 9. [Interactive Shell](user-guide/09-shell.md) — Variables, tab completion, script files, and session management
 10. [Organizing & Culling](user-guide/10-organizing-and-culling.md) — Rating vs. curation, default filters, and workflow patterns
 11. [Tagging Guide](user-guide/11-tagging-guide.md) — Tagging principles, vocabulary structure, and practical techniques
-12. [The Archive Lifecycle](user-guide/12-archive-lifecycle.md) — Storage strategy, backup workflows, and long-term library management
-13. [Visual Discovery](user-guide/13-visual-discovery.md) — Face recognition, similarity search, and strolling: finding photos by what they look like
+12. [Visual Discovery](user-guide/12-visual-discovery.md) — Face recognition, similarity search, and strolling: finding photos by what they look like
+13. [The Archive Lifecycle](user-guide/13-archive-lifecycle.md) — Storage strategy, backup workflows, and long-term library management
 
 ## Reference Guide
 

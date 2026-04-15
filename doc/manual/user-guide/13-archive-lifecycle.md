@@ -322,5 +322,5 @@ The best defense is prevention: regular verification, backup coverage checks, an
 
 ---
 
-Previous: [Tagging Guide](11-tagging-guide.md) |
+Previous: [Visual Discovery](12-visual-discovery.md) |
 [Back to Manual](../index.md)

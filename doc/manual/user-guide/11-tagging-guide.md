@@ -547,7 +547,7 @@ If you're starting fresh or resetting your tagging approach:
 
 ---
 
-Next: [The Archive Lifecycle](12-archive-lifecycle.md) -- storage strategy, backup workflows, and long-term library management.
+Next: [Visual Discovery](12-visual-discovery.md) -- face recognition, similarity search, and strolling: finding photos by what they look like.
 
 Previous: [Organizing & Culling](10-organizing-and-culling.md) |
 [Back to Manual](../index.md)
