@@ -190,21 +190,18 @@ pub async fn browse_page(
             opts.collection_exclude_ids = Some(&collection_exclude_ids);
         }
 
-        // Resolve person filter to asset IDs
+        // Resolve person filter to asset IDs.
+        // Multiple person entries are AND'd: an asset must contain all of
+        // the named people. Comma within an entry is OR (matches any name).
+        // See `intersect_name_groups` for the shared logic.
         let person_ids;
         if !parsed.persons.is_empty() {
             #[cfg(feature = "ai")]
             {
                 let face_store = crate::face_store::FaceStore::new(catalog.conn());
-                let mut all_ids = std::collections::HashSet::new();
-                for person_entry in parsed.persons.iter() {
-                    for person_name in person_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                        if let Ok(ids) = face_store.find_person_asset_ids(person_name) {
-                            all_ids.extend(ids);
-                        }
-                    }
-                }
-                person_ids = all_ids.into_iter().collect::<Vec<_>>();
+                person_ids = intersect_name_groups(&parsed.persons, |name| {
+                    face_store.find_person_asset_ids(name).unwrap_or_default()
+                });
                 opts.person_asset_ids = Some(&person_ids);
             }
             #[cfg(not(feature = "ai"))]
@@ -509,21 +506,18 @@ pub async fn search_api(
             opts.collection_exclude_ids = Some(&collection_exclude_ids);
         }
 
-        // Resolve person filter to asset IDs
+        // Resolve person filter to asset IDs.
+        // Multiple person entries are AND'd: an asset must contain all of
+        // the named people. Comma within an entry is OR (matches any name).
+        // See `intersect_name_groups` for the shared logic.
         let person_ids;
         if !parsed.persons.is_empty() {
             #[cfg(feature = "ai")]
             {
                 let face_store = crate::face_store::FaceStore::new(catalog.conn());
-                let mut all_ids = std::collections::HashSet::new();
-                for person_entry in parsed.persons.iter() {
-                    for person_name in person_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                        if let Ok(ids) = face_store.find_person_asset_ids(person_name) {
-                            all_ids.extend(ids);
-                        }
-                    }
-                }
-                person_ids = all_ids.into_iter().collect::<Vec<_>>();
+                person_ids = intersect_name_groups(&parsed.persons, |name| {
+                    face_store.find_person_asset_ids(name).unwrap_or_default()
+                });
                 opts.person_asset_ids = Some(&person_ids);
             }
             #[cfg(not(feature = "ai"))]
@@ -721,21 +715,18 @@ pub async fn page_ids_api(
             opts.collection_exclude_ids = Some(&collection_exclude_ids);
         }
 
-        // Resolve person filter to asset IDs
+        // Resolve person filter to asset IDs.
+        // Multiple person entries are AND'd: an asset must contain all of
+        // the named people. Comma within an entry is OR (matches any name).
+        // See `intersect_name_groups` for the shared logic.
         let person_ids;
         if !parsed.persons.is_empty() {
             #[cfg(feature = "ai")]
             {
                 let face_store = crate::face_store::FaceStore::new(catalog.conn());
-                let mut all_ids = std::collections::HashSet::new();
-                for person_entry in parsed.persons.iter() {
-                    for person_name in person_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                        if let Ok(ids) = face_store.find_person_asset_ids(person_name) {
-                            all_ids.extend(ids);
-                        }
-                    }
-                }
-                person_ids = all_ids.into_iter().collect::<Vec<_>>();
+                person_ids = intersect_name_groups(&parsed.persons, |name| {
+                    face_store.find_person_asset_ids(name).unwrap_or_default()
+                });
                 opts.person_asset_ids = Some(&person_ids);
             }
             #[cfg(not(feature = "ai"))]
@@ -1406,6 +1397,38 @@ struct BrowseFilters {
 /// works across browse_page, search_api, page_ids_api, calendar_api, map_api,
 /// and facets_api. Each handler calls this, then adds handler-specific logic
 /// (template rendering, JSON formatting, etc.).
+/// Resolve a list of comma-OR'd / entry-ANDed name groups against a
+/// lookup function and return the asset IDs that match all entries.
+///
+/// Matches the catalog's tag semantics: comma within an entry is OR
+/// ("any of these names"), separate entries are AND ("must match all
+/// of these"). For person filters this means `person:Alice person:Bob`
+/// returns assets that contain BOTH Alice and Bob, while
+/// `person:Alice,Bob` returns assets that contain EITHER.
+///
+/// Returns an empty Vec when `entries` is empty (caller should not call
+/// this when there's no filter to apply).
+#[cfg(feature = "ai")]
+fn intersect_name_groups<F>(entries: &[String], lookup: F) -> Vec<String>
+where
+    F: Fn(&str) -> Vec<String>,
+{
+    let mut current: Option<std::collections::HashSet<String>> = None;
+    for entry in entries {
+        let mut group: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for name in entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            for id in lookup(name) {
+                group.insert(id);
+            }
+        }
+        current = match current {
+            None => Some(group),
+            Some(prev) => Some(prev.intersection(&group).cloned().collect()),
+        };
+    }
+    current.unwrap_or_default().into_iter().collect()
+}
+
 fn build_parsed_search(params: &SearchParams, state: &AppState) -> BrowseFilters {
     let query = params.q.as_deref().unwrap_or("");
     let asset_type = params.asset_type.as_deref().unwrap_or("");
@@ -1425,7 +1448,16 @@ fn build_parsed_search(params: &SearchParams, state: &AppState) -> BrowseFilters
     // Parse query + overlay explicit dropdown params
     let mut parsed = parse_search_query(query);
     if !asset_type.is_empty() { parsed.asset_types.push(asset_type.to_string()); }
-    if !tag.is_empty() { parsed.tags.push(tag.to_string()); }
+    // Tags from the URL param: comma is the chip-list separator (= AND across
+    // entries at the catalog level). Note: this overrides the historical
+    // "comma = OR" behaviour for the dedicated `tag=` URL param. Power users
+    // who want OR can still type `tag:a,b` in the q field — that goes through
+    // parse_search_query, which preserves the comma as one entry → catalog OR.
+    if !tag.is_empty() {
+        for t in tag.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            parsed.tags.push(t.to_string());
+        }
+    }
     if !fmt.is_empty() { parsed.formats.push(fmt.to_string()); }
     if !rating_str.is_empty() { parsed.rating = crate::query::parse_numeric_filter(rating_str); }
     if label_str == "none" {
@@ -1492,7 +1524,11 @@ fn merge_search_params(
 ) -> ParsedSearch {
     let mut parsed = parse_search_query(query);
     if !asset_type.is_empty() { parsed.asset_types.push(asset_type.to_string()); }
-    if !tag.is_empty() { parsed.tags.push(tag.to_string()); }
+    if !tag.is_empty() {
+        for t in tag.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            parsed.tags.push(t.to_string());
+        }
+    }
     if !format.is_empty() { parsed.formats.push(format.to_string()); }
     if !rating_str.is_empty() { parsed.rating = crate::query::parse_numeric_filter(rating_str); }
     if label == "none" {
@@ -3111,21 +3147,16 @@ pub async fn calendar_api(
             opts.collection_exclude_ids = Some(&collection_exclude_ids);
         }
 
-        // Resolve person filter to asset IDs
+        // Resolve person filter to asset IDs (multi-entry = AND).
+        // See `intersect_name_groups` for the shared logic.
         let person_ids;
         if !parsed.persons.is_empty() {
             #[cfg(feature = "ai")]
             {
                 let face_store = crate::face_store::FaceStore::new(catalog.conn());
-                let mut all_ids = std::collections::HashSet::new();
-                for pe in parsed.persons.iter() {
-                    for pn in pe.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                        if let Ok(ids) = face_store.find_person_asset_ids(pn) {
-                            all_ids.extend(ids);
-                        }
-                    }
-                }
-                person_ids = all_ids.into_iter().collect::<Vec<_>>();
+                person_ids = intersect_name_groups(&parsed.persons, |name| {
+                    face_store.find_person_asset_ids(name).unwrap_or_default()
+                });
                 opts.person_asset_ids = Some(&person_ids);
             }
             #[cfg(not(feature = "ai"))]
@@ -3251,21 +3282,16 @@ pub async fn map_api(
             opts.collection_exclude_ids = Some(&collection_exclude_ids);
         }
 
-        // Resolve person filter to asset IDs
+        // Resolve person filter to asset IDs (multi-entry = AND).
+        // See `intersect_name_groups` for the shared logic.
         let person_ids;
         if !parsed.persons.is_empty() {
             #[cfg(feature = "ai")]
             {
                 let face_store = crate::face_store::FaceStore::new(catalog.conn());
-                let mut all_ids = std::collections::HashSet::new();
-                for pe in parsed.persons.iter() {
-                    for pn in pe.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                        if let Ok(ids) = face_store.find_person_asset_ids(pn) {
-                            all_ids.extend(ids);
-                        }
-                    }
-                }
-                person_ids = all_ids.into_iter().collect::<Vec<_>>();
+                person_ids = intersect_name_groups(&parsed.persons, |name| {
+                    face_store.find_person_asset_ids(name).unwrap_or_default()
+                });
                 opts.person_asset_ids = Some(&person_ids);
             }
             #[cfg(not(feature = "ai"))]
@@ -3404,21 +3430,16 @@ pub async fn facets_api(
             opts.collection_exclude_ids = Some(&collection_exclude_ids);
         }
 
-        // Resolve person filter to asset IDs
+        // Resolve person filter to asset IDs (multi-entry = AND).
+        // See `intersect_name_groups` for the shared logic.
         let person_ids;
         if !parsed.persons.is_empty() {
             #[cfg(feature = "ai")]
             {
                 let face_store = crate::face_store::FaceStore::new(catalog.conn());
-                let mut all_ids = std::collections::HashSet::new();
-                for pe in parsed.persons.iter() {
-                    for pn in pe.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                        if let Ok(ids) = face_store.find_person_asset_ids(pn) {
-                            all_ids.extend(ids);
-                        }
-                    }
-                }
-                person_ids = all_ids.into_iter().collect::<Vec<_>>();
+                person_ids = intersect_name_groups(&parsed.persons, |name| {
+                    face_store.find_person_asset_ids(name).unwrap_or_default()
+                });
                 opts.person_asset_ids = Some(&person_ids);
             }
             #[cfg(not(feature = "ai"))]
@@ -6575,15 +6596,9 @@ pub async fn export_zip(
                 #[cfg(feature = "ai")]
                 {
                     let face_store = crate::face_store::FaceStore::new(catalog.conn());
-                    let mut all_ids = std::collections::HashSet::new();
-                    for person_entry in parsed.persons.iter() {
-                        for person_name in person_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                            if let Ok(ids) = face_store.find_person_asset_ids(person_name) {
-                                all_ids.extend(ids);
-                            }
-                        }
-                    }
-                    person_ids = all_ids.into_iter().collect::<Vec<_>>();
+                    person_ids = intersect_name_groups(&parsed.persons, |name| {
+                        face_store.find_person_asset_ids(name).unwrap_or_default()
+                    });
                     opts.person_asset_ids = Some(&person_ids);
                 }
                 #[cfg(not(feature = "ai"))]
