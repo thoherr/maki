@@ -3506,6 +3506,116 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     color: var(--text);
 }
 
+/* Merge suggestions panel — lazy-loaded similar-cluster candidates */
+.merge-suggestions {
+    margin: 16px 0;
+    padding: 14px 16px;
+    background: rgba(232, 99, 74, 0.06);
+    border: 1px solid rgba(232, 99, 74, 0.3);
+    border-radius: var(--radius);
+}
+.merge-suggestions[hidden] {
+    display: none;
+}
+.merge-suggestions-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+.merge-suggestions-header h2 {
+    margin: 0;
+    font-size: 1.05rem;
+}
+.merge-suggestions-count {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-right: auto;
+}
+.merge-suggestions-loading {
+    padding: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+.merge-suggestions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.merge-suggestion {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+.merge-suggestion-pair {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex: 1;
+}
+.merge-suggestion-person {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    text-decoration: none;
+    color: inherit;
+    width: 110px;
+}
+.merge-suggestion-person .person-thumb {
+    width: 64px;
+    height: 64px;
+    margin: 0;
+}
+.merge-suggestion-person .person-thumb-placeholder {
+    width: 64px;
+    height: 64px;
+    font-size: 32px;
+}
+.merge-suggestion-person .person-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-align: center;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.merge-suggestion-person .person-count {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+.merge-suggestion-middle {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 80px;
+}
+.merge-suggestion-sim {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+.merge-suggestion-arrow {
+    font-size: 1.8rem;
+    color: var(--primary);
+    line-height: 1;
+}
+.merge-suggestion-swap {
+    padding: 2px 8px;
+    font-size: 0.8rem;
+}
+.merge-suggestion-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
 /* Client-side people filter */
 .people-filter {
     display: flex;

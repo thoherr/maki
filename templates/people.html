@@ -17,6 +17,20 @@
 <p class="empty-state">No people found. Detect faces first with <code>maki faces detect</code>, then cluster them with the button above or <code>maki faces cluster --apply</code>.</p>
 {% else %}
 
+<!-- Merge suggestions — lazy-loaded via /api/people/merge-suggestions.
+     Surfaces pairs of people whose mean face embeddings are similar enough
+     to likely be the same person (typical cause: clustering leaves small
+     splinter clusters alongside a main cluster). Click Merge to fold the
+     source into the target in one step. -->
+<div class="merge-suggestions" id="merge-suggestions" hidden>
+    <div class="merge-suggestions-header">
+        <h2>Merge suggestions</h2>
+        <span class="merge-suggestions-count" id="merge-suggestions-count"></span>
+        <button class="btn btn-small" id="merge-suggestions-refresh" title="Re-scan for similar clusters">&#8635; Refresh</button>
+    </div>
+    <div class="merge-suggestions-list" id="merge-suggestions-list"></div>
+</div>
+
 <!-- Filter input — client-side substring match against names (incl. "Unknown (…)" synthesized labels) -->
 <div class="people-filter">
     <input
@@ -138,6 +152,165 @@
                 .catch(function(err) { alert('Delete failed: ' + err.message); });
         });
     });
+
+    // ── Merge suggestions: lazy-load + render ──
+    // Server-side scan pairs of people by centroid similarity and returns
+    // rich suggestions. Users can dismiss individual pairs (sessionStorage)
+    // or merge with one click (reuses the batch merge endpoint).
+    var suggestionsWrap = document.getElementById('merge-suggestions');
+    var suggestionsList = document.getElementById('merge-suggestions-list');
+    var suggestionsCount = document.getElementById('merge-suggestions-count');
+    var refreshBtn = document.getElementById('merge-suggestions-refresh');
+
+    // Dismissed pairs are kept in sessionStorage keyed by sorted "a|b"
+    // so the order of the IDs in the API response doesn't matter.
+    function dismissKey(a, b) {
+        return (a < b) ? (a + '|' + b) : (b + '|' + a);
+    }
+    function isDismissed(a, b) {
+        try {
+            var raw = sessionStorage.getItem('maki-merge-dismissed') || '[]';
+            return JSON.parse(raw).indexOf(dismissKey(a, b)) !== -1;
+        } catch (e) { return false; }
+    }
+    function dismissPair(a, b) {
+        try {
+            var raw = sessionStorage.getItem('maki-merge-dismissed') || '[]';
+            var arr = JSON.parse(raw);
+            arr.push(dismissKey(a, b));
+            sessionStorage.setItem('maki-merge-dismissed', JSON.stringify(arr));
+        } catch (e) { /* ignore */ }
+    }
+
+    function renderSuggestion(s) {
+        var card = document.createElement('div');
+        card.className = 'merge-suggestion';
+        card.dataset.a = s.a.id;
+        card.dataset.b = s.b.id;
+
+        function sideHtml(side) {
+            var thumb = side.crop_url
+                ? '<img src="' + side.crop_url + '" class="person-thumb" alt="">'
+                : '<div class="person-thumb person-thumb-placeholder">&#128100;</div>';
+            return '<a class="merge-suggestion-person" href="/?person=' + encodeURIComponent(side.id) + '">' +
+                   thumb +
+                   '<div class="person-name">' + escapeHtml(side.name) + '</div>' +
+                   '<div class="person-count">' + side.face_count + ' face' + (side.face_count === 1 ? '' : 's') + '</div>' +
+                   '</a>';
+        }
+
+        // Default target = whichever side is named, else whichever has more faces.
+        // This matches what a user would almost always pick anyway.
+        var defaultTargetIsA = s.a.named && !s.b.named
+            ? true
+            : (!s.a.named && s.b.named ? false : s.a.face_count >= s.b.face_count);
+
+        card.innerHTML =
+            '<div class="merge-suggestion-pair">' +
+                sideHtml(s.a) +
+                '<div class="merge-suggestion-middle">' +
+                    '<div class="merge-suggestion-sim">' + Math.round(s.similarity * 100) + '% match</div>' +
+                    '<div class="merge-suggestion-arrow" id="arrow-' + s.a.id + '-' + s.b.id + '">' +
+                        (defaultTargetIsA ? '&larr;' : '&rarr;') +
+                    '</div>' +
+                    '<button class="btn btn-small merge-suggestion-swap" title="Swap merge direction">&#8646;</button>' +
+                '</div>' +
+                sideHtml(s.b) +
+            '</div>' +
+            '<div class="merge-suggestion-actions">' +
+                '<button class="btn btn-primary merge-suggestion-merge">Merge</button>' +
+                '<button class="btn merge-suggestion-dismiss">Not the same person</button>' +
+            '</div>';
+
+        var targetIsA = defaultTargetIsA;
+        var arrow = card.querySelector('.merge-suggestion-arrow');
+        card.querySelector('.merge-suggestion-swap').addEventListener('click', function() {
+            targetIsA = !targetIsA;
+            arrow.innerHTML = targetIsA ? '&larr;' : '&rarr;';
+        });
+        card.querySelector('.merge-suggestion-dismiss').addEventListener('click', function() {
+            dismissPair(s.a.id, s.b.id);
+            card.remove();
+            updateSuggestionCount();
+        });
+        card.querySelector('.merge-suggestion-merge').addEventListener('click', function() {
+            var target = targetIsA ? s.a.id : s.b.id;
+            var source = targetIsA ? s.b.id : s.a.id;
+            var btn = this;
+            btn.disabled = true;
+            btn.textContent = 'Merging…';
+            fetch('/api/people/' + target + '/merge', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({source_ids: [source]})
+            })
+            .then(function(r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function() { window.location.reload(); })
+            .catch(function(err) {
+                alert('Merge failed: ' + err.message);
+                btn.disabled = false;
+                btn.textContent = 'Merge';
+            });
+        });
+
+        return card;
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, function(c) {
+            return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+        });
+    }
+
+    function updateSuggestionCount() {
+        var visible = suggestionsList.querySelectorAll('.merge-suggestion').length;
+        if (visible === 0) {
+            suggestionsWrap.hidden = true;
+        } else {
+            suggestionsCount.textContent = visible + (visible === 1 ? ' pair' : ' pairs');
+        }
+    }
+
+    function loadSuggestions() {
+        suggestionsList.innerHTML = '<div class="merge-suggestions-loading">Scanning for similar clusters…</div>';
+        suggestionsWrap.hidden = false;
+        fetch('/api/people/merge-suggestions?threshold=0.4&limit=20')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                suggestionsList.innerHTML = '';
+                var kept = (data.suggestions || []).filter(function(s) {
+                    return !isDismissed(s.a.id, s.b.id);
+                });
+                if (kept.length === 0) {
+                    suggestionsWrap.hidden = true;
+                    return;
+                }
+                kept.forEach(function(s) {
+                    suggestionsList.appendChild(renderSuggestion(s));
+                });
+                suggestionsCount.textContent = kept.length + (kept.length === 1 ? ' pair' : ' pairs');
+            })
+            .catch(function() {
+                suggestionsWrap.hidden = true;
+            });
+    }
+
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', function() {
+            // Clear dismissals so a refresh actually re-shows anything that
+            // was hidden during this session.
+            sessionStorage.removeItem('maki-merge-dismissed');
+            loadSuggestions();
+        });
+    }
+
+    // Fire the scan asynchronously so the people grid renders first.
+    if (document.querySelectorAll('.person-card').length >= 2) {
+        setTimeout(loadSuggestions, 50);
+    }
 
     // ── Filter: client-side substring match against person name ──
     // No backend round-trip — we already have every card rendered; just

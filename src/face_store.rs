@@ -369,6 +369,72 @@ impl<'a> FaceStore<'a> {
         Ok(count)
     }
 
+    /// Suggest pairs of people that are visually similar enough to likely be
+    /// the same person. Computes each person's centroid (mean L2-normalized
+    /// embedding over their assigned faces, restricted to the current
+    /// recognition model to avoid mixing vector spaces) and returns pairs with
+    /// centroid cosine similarity ≥ `threshold`, sorted by similarity desc and
+    /// capped at `limit` entries.
+    ///
+    /// Use case: clustering often leaves small "splinter" clusters of the
+    /// same person alongside a big main cluster. This command surfaces those
+    /// candidates so the user can merge them in one click from the people page.
+    pub fn suggest_person_merges(&self, threshold: f32, limit: usize) -> Result<Vec<(String, String, f32)>> {
+        let current_model = crate::face::RECOGNITION_MODEL.id;
+        // Fetch (person_id, embedding) for every face with a person assignment
+        // AND a current-model embedding. Build per-person running-mean embeddings.
+        let mut stmt = self.conn.prepare(
+            "SELECT person_id, embedding FROM faces \
+             WHERE person_id IS NOT NULL AND recognition_model = ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![current_model], |row| {
+            let pid: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((pid, blob))
+        })?;
+
+        // person_id → (sum of embeddings, count).
+        let mut sums: std::collections::HashMap<String, (Vec<f32>, u32)> = std::collections::HashMap::new();
+        for row in rows {
+            let (pid, blob) = row?;
+            let emb = blob_to_embedding(&blob);
+            if emb.is_empty() { continue; }
+            let entry = sums.entry(pid).or_insert_with(|| (vec![0.0f32; emb.len()], 0));
+            for (i, v) in emb.iter().enumerate() {
+                entry.0[i] += v;
+            }
+            entry.1 += 1;
+        }
+
+        // Convert sums → L2-normalized mean embeddings.
+        let centroids: Vec<(String, Vec<f32>)> = sums.into_iter().map(|(pid, (sum, count))| {
+            let n = count as f32;
+            let mut mean: Vec<f32> = sum.iter().map(|v| v / n).collect();
+            let norm: f32 = mean.iter().map(|v| v * v).sum::<f32>().sqrt();
+            if norm > 1e-12 {
+                for v in mean.iter_mut() { *v /= norm; }
+            }
+            (pid, mean)
+        }).collect();
+
+        // Pairwise cosine similarity. Cap the centroid count to keep this from
+        // going quadratic on pathological catalogs — at 2000 people that's 2M
+        // comparisons, still sub-second on a 512-dim dot product.
+        let n = centroids.len();
+        let mut out: Vec<(String, String, f32)> = Vec::new();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let sim = crate::ai::cosine_similarity(&centroids[i].1, &centroids[j].1);
+                if sim >= threshold {
+                    out.push((centroids[i].0.clone(), centroids[j].0.clone(), sim));
+                }
+            }
+        }
+        out.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        if out.len() > limit { out.truncate(limit); }
+        Ok(out)
+    }
+
     /// Merge multiple source people into a single target in one transaction.
     ///
     /// Any `source_ids` entry equal to `target_id` is skipped (a person can't
@@ -1512,6 +1578,66 @@ mod tests {
 
         let (_, unassigned) = store.cluster_faces(0.5, 0.0, None).unwrap();
         assert_eq!(unassigned, 1, "only the unassigned face should be considered");
+    }
+
+    #[test]
+    fn suggest_merges_surfaces_similar_clusters() {
+        let conn = setup_db();
+        let store = FaceStore::new(&conn);
+
+        // Person A: two tightly-clustered faces.
+        let emb_a1 = synth_embedding(0, 0.01);
+        let emb_a2 = synth_embedding(0, 0.02);
+        // Person B (splinter of A): one face that's near-identical to A's centroid.
+        let emb_b = synth_embedding(0, 0.03);
+        // Person C (distinct): different axis.
+        let emb_c1 = synth_embedding(200, 0.01);
+        let emb_c2 = synth_embedding(200, 0.02);
+
+        let model = crate::face::RECOGNITION_MODEL.id;
+        store.store_face("a1", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb_a1, 0.95, model).unwrap();
+        store.store_face("a2", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb_a2, 0.95, model).unwrap();
+        store.store_face("b1", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb_b,  0.95, model).unwrap();
+        store.store_face("c1", "asset-2", 0.0, 0.0, 0.1, 0.1, &emb_c1, 0.95, model).unwrap();
+        store.store_face("c2", "asset-2", 0.0, 0.0, 0.1, 0.1, &emb_c2, 0.95, model).unwrap();
+
+        let pa = store.create_person(Some("Alice")).unwrap();
+        let pb = store.create_person(None).unwrap();
+        let pc = store.create_person(Some("Carol")).unwrap();
+        store.assign_face_to_person("a1", &pa).unwrap();
+        store.assign_face_to_person("a2", &pa).unwrap();
+        store.assign_face_to_person("b1", &pb).unwrap();
+        store.assign_face_to_person("c1", &pc).unwrap();
+        store.assign_face_to_person("c2", &pc).unwrap();
+
+        let pairs = store.suggest_person_merges(0.5, 10).unwrap();
+        // A–B should be surfaced (high similarity); A–C and B–C should not.
+        assert_eq!(pairs.len(), 1, "expected one suggestion");
+        let (p1, p2, sim) = &pairs[0];
+        let ids: std::collections::HashSet<&str> = [p1.as_str(), p2.as_str()].iter().copied().collect();
+        assert!(ids.contains(pa.as_str()), "suggestion should include Alice");
+        assert!(ids.contains(pb.as_str()), "suggestion should include the unnamed splinter");
+        assert!(*sim > 0.9, "Alice↔splinter similarity should be high, got {sim}");
+    }
+
+    #[test]
+    fn suggest_merges_skips_pairs_below_threshold() {
+        let conn = setup_db();
+        let store = FaceStore::new(&conn);
+
+        let emb_a = synth_embedding(0, 0.0);
+        let emb_b = synth_embedding(200, 0.0);
+        let model = crate::face::RECOGNITION_MODEL.id;
+        store.store_face("a", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb_a, 0.95, model).unwrap();
+        store.store_face("b", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb_b, 0.95, model).unwrap();
+        let pa = store.create_person(Some("A")).unwrap();
+        let pb = store.create_person(Some("B")).unwrap();
+        store.assign_face_to_person("a", &pa).unwrap();
+        store.assign_face_to_person("b", &pb).unwrap();
+
+        // At a high threshold these unrelated people should NOT appear.
+        let pairs = store.suggest_person_merges(0.5, 10).unwrap();
+        assert!(pairs.is_empty(), "unrelated people should not be suggested, got {pairs:?}");
     }
 
     #[test]

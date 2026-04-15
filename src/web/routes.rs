@@ -5561,6 +5561,69 @@ pub async fn delete_person_api(
     }
 }
 
+/// GET /api/people/merge-suggestions — find pairs of people likely to be the same person.
+///
+/// Query params:
+/// - `threshold` (default 0.4): minimum centroid cosine similarity to surface.
+/// - `limit` (default 20): max suggestions returned.
+#[cfg(feature = "ai")]
+pub async fn merge_suggestions_api(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let threshold: f32 = params.get("threshold").and_then(|s| s.parse().ok()).unwrap_or(0.4);
+    let limit: usize = params.get("limit").and_then(|s| s.parse().ok()).unwrap_or(20);
+
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+        let face_store = crate::face_store::FaceStore::new(catalog.conn());
+        let pairs = face_store.suggest_person_merges(threshold, limit)?;
+
+        // Enrich with name/count/crop info so the UI can render rich cards
+        // without a second round-trip per person.
+        let people = face_store.list_people()?;
+        let lookup: std::collections::HashMap<String, (Option<String>, usize, Option<String>)> =
+            people.into_iter().map(|(p, count)| (p.id.clone(), (p.name, count, p.representative_face_id))).collect();
+
+        let items: Vec<serde_json::Value> = pairs.into_iter().filter_map(|(a, b, sim)| {
+            let info_a = lookup.get(&a)?;
+            let info_b = lookup.get(&b)?;
+            let crop_for = |fid: &Option<String>| -> Option<String> {
+                fid.as_ref().and_then(|f| {
+                    if crate::face::face_crop_exists(f, &state.catalog_root) {
+                        Some(format!("/face/{}/{}.jpg", &f[..2.min(f.len())], f))
+                    } else { None }
+                })
+            };
+            Some(serde_json::json!({
+                "similarity": sim,
+                "a": {
+                    "id": a,
+                    "name": info_a.0.clone().unwrap_or_else(|| format!("Unknown ({})", &a[..8.min(a.len())])),
+                    "face_count": info_a.1,
+                    "crop_url": crop_for(&info_a.2),
+                    "named": info_a.0.is_some(),
+                },
+                "b": {
+                    "id": b,
+                    "name": info_b.0.clone().unwrap_or_else(|| format!("Unknown ({})", &b[..8.min(b.len())])),
+                    "face_count": info_b.1,
+                    "crop_url": crop_for(&info_b.2),
+                    "named": info_b.0.is_some(),
+                },
+            }))
+        }).collect();
+
+        Ok::<_, anyhow::Error>(items)
+    }).await;
+
+    match result {
+        Ok(Ok(items)) => Json(serde_json::json!({"suggestions": items})).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
 /// POST /api/faces/cluster — run auto-clustering.
 #[cfg(feature = "ai")]
 pub async fn cluster_faces_api(

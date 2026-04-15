@@ -581,6 +581,10 @@ fn build_router(state: Arc<AppState>) -> Router {
                 axum::routing::post(routes::merge_person_api),
             )
             .route(
+                "/api/people/merge-suggestions",
+                axum::routing::get(routes::merge_suggestions_api),
+            )
+            .route(
                 "/api/people/{id}",
                 axum::routing::delete(routes::delete_person_api),
             )
