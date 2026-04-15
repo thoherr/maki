@@ -2,6 +2,37 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.4.2 (2026-04-15)
+
+Filter bar UX polish — picking up where v4.4.1 left off after live-testing the new face workflow.
+
+### People picker in the filter bar
+
+The browse filter bar's person picker is now a **chip-based multi-select**, sitting on the same line as the tag chip input. Layout: `[tags] [people] [path]` — three wide chip/text inputs of the same shape.
+
+Interactions match the tag chip UX:
+- Type to filter, ↑/↓/Enter to add a chip
+- Backspace in the empty input removes the last chip
+- × on a chip removes just that one
+- Esc clears the typing buffer
+
+People chips are tinted teal to visually distinguish from the salmon tag chips — same shape, clearly a different filter dimension.
+
+URL stays backward-compatible: `?person=Alice` (single, from people-page click) still works; chip selection now uses `?person=Alice,Bob` (comma-separated).
+
+### Multiple chips are now AND, not OR
+
+Multiple tag chips and multiple people chips both behaved as OR ("any of these"), which contradicts the natural expectation that "select X and Y in the filter" means "show photos containing **both** X and Y". The bug came from the URL transport collapsing chip values into one comma-separated entry, and the catalog interpreting comma as OR.
+
+Now:
+- Two **tag chips** → asset must have **both** tags
+- Two **person chips** → asset must contain **both** people
+- The documented `tag:a,b` / `person:a,b` syntax in the q field still means OR (escape hatch for power users)
+
+### Internals
+
+- `intersect_name_groups()` helper deduplicates the seven copies of the person-resolver loop and computes intersection-across-entries with OR-within-entry, matching the established tag semantics.
+
 ## v4.4.1 (2026-04-15)
 
 Follow-up to v4.4.0's face recognition rewrite — everything in this release is UX polish for the people workflow the new pipeline unlocked. Clustering produces good clusters but often leaves small splinter clusters of the same person alongside a main cluster, and the `/people` page and face-assign dropdown needed to scale beyond a handful of named people.
