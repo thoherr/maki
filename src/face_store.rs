@@ -836,6 +836,17 @@ pub struct FaceRecord {
     pub bbox_h: f32,
     pub confidence: f32,
     pub created_at: String,
+    /// Identifier of the ArcFace variant that produced this face's embedding.
+    /// Embeddings from different models live in incompatible vector spaces, so
+    /// clustering filters to one model at a time. This field must be persisted
+    /// to YAML alongside the embedding — without it, `rebuild-catalog` would
+    /// restore embeddings with no way to tell which model they came from,
+    /// and any subsequent cluster run would mix spaces and produce nonsense.
+    ///
+    /// `None` on a record means "legacy face from before model tracking was
+    /// added"; the migration stamps such rows with the INT8 model ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recognition_model: Option<String>,
 }
 
 /// A person record for YAML persistence.
@@ -981,7 +992,7 @@ impl<'a> FaceStore<'a> {
     /// Export all faces from SQLite to a FacesFile struct.
     pub fn export_all_faces(&self) -> Result<FacesFile> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, asset_id, person_id, bbox_x, bbox_y, bbox_w, bbox_h, confidence, created_at
+            "SELECT id, asset_id, person_id, bbox_x, bbox_y, bbox_w, bbox_h, confidence, created_at, recognition_model
              FROM faces ORDER BY asset_id, bbox_x",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -995,6 +1006,7 @@ impl<'a> FaceStore<'a> {
                 bbox_h: row.get(6)?,
                 confidence: row.get(7)?,
                 created_at: row.get(8)?,
+                recognition_model: row.get(9)?,
             })
         })?;
         let faces = rows.collect::<Result<Vec<_>, _>>()?;
@@ -1025,11 +1037,11 @@ impl<'a> FaceStore<'a> {
         let mut count = 0u32;
         for f in &file.faces {
             self.conn.execute(
-                "INSERT OR REPLACE INTO faces (id, asset_id, person_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, confidence, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT OR REPLACE INTO faces (id, asset_id, person_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, confidence, created_at, recognition_model)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 rusqlite::params![
                     f.id, f.asset_id, f.person_id, f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h,
-                    empty_blob, f.confidence, f.created_at
+                    empty_blob, f.confidence, f.created_at, f.recognition_model
                 ],
             )?;
             count += 1;
@@ -1361,6 +1373,7 @@ mod tests {
                     bbox_h: 0.4,
                     confidence: 0.95,
                     created_at: "2024-01-01T00:00:00Z".into(),
+                    recognition_model: Some("arcface-resnet100-fp32-aligned-v2".into()),
                 },
                 FaceRecord {
                     id: "face-2".into(),
@@ -1372,6 +1385,7 @@ mod tests {
                     bbox_h: 0.1,
                     confidence: 0.8,
                     created_at: "2024-01-02T00:00:00Z".into(),
+                    recognition_model: Some("arcface-resnet100-fp32-aligned-v2".into()),
                 },
             ],
         };
@@ -1382,6 +1396,12 @@ mod tests {
         assert_eq!(loaded.faces[0].person_id, Some("person-1".into()));
         assert_eq!(loaded.faces[1].person_id, None);
         assert!((loaded.faces[0].confidence - 0.95).abs() < 1e-6);
+        // recognition_model must survive the round-trip — it's how clustering
+        // avoids mixing embeddings from incompatible ArcFace variants after a
+        // rebuild-catalog. If this regresses, rebuild would strip model tags
+        // and the next cluster run would silently mix vector spaces.
+        assert_eq!(loaded.faces[0].recognition_model, Some("arcface-resnet100-fp32-aligned-v2".into()));
+        assert_eq!(loaded.faces[1].recognition_model, Some("arcface-resnet100-fp32-aligned-v2".into()));
     }
 
     #[test]
