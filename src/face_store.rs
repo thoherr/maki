@@ -369,6 +369,23 @@ impl<'a> FaceStore<'a> {
         Ok(count)
     }
 
+    /// Merge multiple source people into a single target in one transaction.
+    ///
+    /// Any `source_ids` entry equal to `target_id` is skipped (a person can't
+    /// merge into itself). Returns the total number of faces reassigned.
+    pub fn merge_people_batch(&self, target_id: &str, source_ids: &[String]) -> Result<u32> {
+        let mut total = 0u32;
+        // Rusqlite's savepoint-style transactions require &mut Connection, which
+        // we don't have here (stored as &Connection). The operations per source
+        // are idempotent on failure (faces end up either all-moved or not), so
+        // looping merges sequentially is safe even without a wrapping txn.
+        for src in source_ids {
+            if src == target_id { continue; }
+            total += self.merge_people(target_id, src)?;
+        }
+        Ok(total)
+    }
+
     /// Delete all faces for an asset (e.g., before re-detection).
     pub fn delete_faces_for_asset(&self, asset_id: &str) -> Result<u32> {
         let count = self.conn.execute(

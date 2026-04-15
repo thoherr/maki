@@ -3444,6 +3444,171 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     justify-content: center;
 }
 
+/* People page — merge selection */
+.person-card {
+    position: relative;
+}
+.person-card.selected {
+    box-shadow: 0 0 0 2px var(--primary);
+}
+.person-card.merge-target {
+    box-shadow: 0 0 0 3px var(--primary);
+}
+.person-select-label {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    z-index: 2;
+    opacity: 0.55;
+    transition: opacity 0.15s;
+}
+.person-card:hover .person-select-label,
+.person-card.selected .person-select-label {
+    opacity: 1;
+}
+.person-select-cb {
+    margin: 0;
+    cursor: pointer;
+}
+.person-target-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    font-size: 0.85rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    z-index: 2;
+    color: var(--text-muted);
+}
+.person-card.merge-target .person-target-btn {
+    background: var(--primary);
+    color: #fff;
+    border-color: var(--primary);
+}
+.person-target-btn:hover {
+    color: var(--text);
+}
+
+/* Toolbar visible when people are selected for merge */
+.people-selection-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin: 8px 0;
+    position: sticky;
+    top: 56px;
+    z-index: 10;
+}
+.people-selection-toolbar .selection-count {
+    font-weight: 600;
+}
+.people-selection-toolbar .selection-hint {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+
+/* Merge confirmation modal */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+.modal-overlay .modal {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    max-width: 640px;
+    width: 90%;
+    max-height: 85vh;
+    overflow-y: auto;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+.modal-overlay .modal h2 {
+    margin-top: 0;
+}
+.merge-preview {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 10px;
+    margin: 16px 0;
+}
+.merge-preview-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px;
+    text-align: center;
+    position: relative;
+}
+.merge-preview-item.merge-target {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 1px var(--primary);
+}
+.merge-preview-thumb .person-thumb {
+    width: 60px;
+    height: 60px;
+    margin: 0 auto 4px;
+}
+.merge-preview-thumb .person-thumb-placeholder {
+    width: 60px;
+    height: 60px;
+    font-size: 30px;
+}
+.merge-preview-name {
+    font-weight: 600;
+    font-size: 0.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.merge-preview-count {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+.merge-preview-badge {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 1px 6px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #fff;
+    background: var(--primary);
+    border-radius: 3px;
+}
+.merge-preview-badge-source {
+    background: var(--text-muted);
+}
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+}
+
 /* Face chips on asset detail page */
 .faces-section {
     margin-top: 16px;

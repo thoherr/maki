@@ -5500,29 +5500,40 @@ pub async fn name_person_api(
     }
 }
 
-/// POST /api/people/{id}/merge — merge source into target.
+/// POST /api/people/{id}/merge — merge one or more sources into a target person.
+///
+/// Request body accepts either:
+/// - `{"source_id": "<uuid>"}` (single, kept for backward compatibility)
+/// - `{"source_ids": ["<uuid>", "<uuid>", ...]}` (batch, used by the people-page merge UI)
 #[cfg(feature = "ai")]
 pub async fn merge_person_api(
     State(state): State<Arc<AppState>>,
     Path(target_id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    let source_id: String = match body.get("source_id").and_then(|v| v.as_str()) {
-        Some(s) => s.to_string(),
-        None => return (StatusCode::BAD_REQUEST, "Missing source_id").into_response(),
+    // Accept either source_ids (plural) or source_id (singular).
+    let source_ids: Vec<String> = if let Some(arr) = body.get("source_ids").and_then(|v| v.as_array()) {
+        arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+    } else if let Some(s) = body.get("source_id").and_then(|v| v.as_str()) {
+        vec![s.to_string()]
+    } else {
+        return (StatusCode::BAD_REQUEST, "Missing source_id or source_ids").into_response();
     };
+    if source_ids.is_empty() {
+        return (StatusCode::BAD_REQUEST, "Empty source_ids").into_response();
+    }
 
     let result = tokio::task::spawn_blocking(move || {
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
-        let moved = face_store.merge_people(&target_id, &source_id)?;
+        let moved = face_store.merge_people_batch(&target_id, &source_ids)?;
         let _ = face_store.save_all_yaml(&state.catalog_root);
         state.dropdown_cache.invalidate_people();
-        Ok::<_, anyhow::Error>(moved)
+        Ok::<_, anyhow::Error>((moved, source_ids.len()))
     }).await;
 
     match result {
-        Ok(Ok(moved)) => Json(serde_json::json!({"ok": true, "faces_moved": moved})).into_response(),
+        Ok(Ok((moved, n))) => Json(serde_json::json!({"ok": true, "faces_moved": moved, "people_merged": n})).into_response(),
         Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
     }

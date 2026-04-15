@@ -14,12 +14,25 @@
 </div>
 
 {% if people.is_empty() %}
-<p class="empty-state">No people found. Detect faces first with <code>dam faces detect</code>, then cluster them with the button above or <code>dam faces cluster --apply</code>.</p>
+<p class="empty-state">No people found. Detect faces first with <code>maki faces detect</code>, then cluster them with the button above or <code>maki faces cluster --apply</code>.</p>
 {% else %}
+
+<!-- Selection toolbar — visible when 2+ person cards are selected (merge requires at least two) -->
+<div class="people-selection-toolbar" id="people-toolbar" hidden>
+    <span class="selection-count"><span id="selection-count">0</span> selected</span>
+    <button class="btn btn-primary" id="merge-selected" disabled>Merge&hellip;</button>
+    <button class="btn" id="clear-selection">Clear</button>
+    <span class="selection-hint">Click the <strong>+</strong> badge on a card to pick the merge target; others will be merged into it.</span>
+</div>
+
 <div class="people-grid">
     {% for p in people %}
-    <div class="person-card" data-id="{{ p.id }}">
-        <a href="/?person={{ p.id }}">
+    <div class="person-card" data-id="{{ p.id }}" data-name="{{ p.name }}">
+        <label class="person-select-label" title="Select for merge">
+            <input type="checkbox" class="person-select-cb" data-id="{{ p.id }}">
+        </label>
+        <button class="person-target-btn" data-id="{{ p.id }}" title="Make this the merge target" hidden>&#10013;</button>
+        <a href="/?person={{ p.id }}" class="person-link">
             {% if let Some(url) = p.crop_url %}
             <img src="{{ url }}" class="person-thumb" alt="{{ p.name }}">
             {% else %}
@@ -37,28 +50,50 @@
     </div>
     {% endfor %}
 </div>
+
+<!-- Merge confirmation modal -->
+<div class="modal-overlay" id="merge-modal" hidden>
+    <div class="modal">
+        <h2>Merge people</h2>
+        <p>
+            The following people will be merged. All their faces will be reassigned to the
+            target — the source people themselves are deleted.
+        </p>
+        <div class="merge-preview" id="merge-preview">
+            <!-- filled in by JS -->
+        </div>
+        <div class="modal-actions">
+            <button class="btn" id="merge-cancel">Cancel</button>
+            <button class="btn btn-primary" id="merge-confirm">Merge</button>
+        </div>
+    </div>
+</div>
 {% endif %}
 
 <script>
 (function() {
-    document.getElementById('cluster-btn').addEventListener('click', function() {
-        if (!confirm('Auto-cluster unassigned faces into groups? This will create unnamed people from similar face embeddings.')) return;
-        this.disabled = true;
-        this.textContent = 'Clustering...';
-        fetch('/api/faces/cluster', {method: 'POST'})
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                alert(data.people_created + ' people created, ' + data.faces_assigned + ' faces assigned, ' + data.singletons_skipped + ' singletons skipped.');
-                window.location.reload();
-            })
-            .catch(function(err) {
-                alert('Clustering failed: ' + err.message);
-                window.location.reload();
-            });
-    });
+    var clusterBtn = document.getElementById('cluster-btn');
+    if (clusterBtn) {
+        clusterBtn.addEventListener('click', function() {
+            if (!confirm('Auto-cluster unassigned faces into groups? This will create unnamed people from similar face embeddings.')) return;
+            this.disabled = true;
+            this.textContent = 'Clustering...';
+            fetch('/api/faces/cluster', {method: 'POST'})
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    alert(data.people_created + ' people created, ' + data.faces_assigned + ' faces assigned, ' + data.singletons_skipped + ' singletons skipped.');
+                    window.location.reload();
+                })
+                .catch(function(err) {
+                    alert('Clustering failed: ' + err.message);
+                    window.location.reload();
+                });
+        });
+    }
 
     document.querySelectorAll('.person-rename').forEach(function(btn) {
-        btn.addEventListener('click', function() {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
             var id = this.dataset.id;
             var nameEl = this.closest('.person-card').querySelector('.person-name');
             var newName = prompt('Enter new name:', nameEl.textContent);
@@ -69,13 +104,17 @@
                 body: JSON.stringify({name: newName})
             })
             .then(function(r) { return r.json(); })
-            .then(function() { nameEl.textContent = newName; })
+            .then(function() {
+                nameEl.textContent = newName;
+                nameEl.closest('.person-card').dataset.name = newName;
+            })
             .catch(function(err) { alert('Rename failed: ' + err.message); });
         });
     });
 
     document.querySelectorAll('.person-delete').forEach(function(btn) {
-        btn.addEventListener('click', function() {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
             var id = this.dataset.id;
             var card = this.closest('.person-card');
             var name = card.querySelector('.person-name').textContent;
@@ -84,6 +123,117 @@
                 .then(function(r) { return r.json(); })
                 .then(function() { card.remove(); })
                 .catch(function(err) { alert('Delete failed: ' + err.message); });
+        });
+    });
+
+    // ── Merge UI: selection, target picking, modal, confirm ──
+    var selected = new Set();       // person IDs currently selected
+    var targetId = null;            // which selected person becomes the merge target
+    var toolbar = document.getElementById('people-toolbar');
+    var countEl = document.getElementById('selection-count');
+    var mergeBtn = document.getElementById('merge-selected');
+    var clearBtn = document.getElementById('clear-selection');
+    var modal = document.getElementById('merge-modal');
+    var preview = document.getElementById('merge-preview');
+    var confirmBtn = document.getElementById('merge-confirm');
+    var cancelBtn = document.getElementById('merge-cancel');
+
+    function updateToolbar() {
+        var n = selected.size;
+        countEl.textContent = n;
+        toolbar.hidden = n === 0;
+        mergeBtn.disabled = n < 2;
+        // If the current target is no longer selected, clear it.
+        if (targetId && !selected.has(targetId)) targetId = null;
+        // If no target and we have selections, default to the first.
+        if (!targetId && n > 0) targetId = Array.from(selected)[0];
+        // Sync visual markers.
+        document.querySelectorAll('.person-card').forEach(function(card) {
+            var id = card.dataset.id;
+            var isSelected = selected.has(id);
+            card.classList.toggle('selected', isSelected);
+            card.classList.toggle('merge-target', isSelected && id === targetId);
+            var targetBtn = card.querySelector('.person-target-btn');
+            if (targetBtn) targetBtn.hidden = !isSelected || n < 2;
+        });
+    }
+
+    document.querySelectorAll('.person-select-cb').forEach(function(cb) {
+        cb.addEventListener('change', function() {
+            var id = this.dataset.id;
+            if (this.checked) selected.add(id); else selected.delete(id);
+            updateToolbar();
+        });
+        // Don't let the label/checkbox click propagate to the card's <a>.
+        cb.addEventListener('click', function(e) { e.stopPropagation(); });
+    });
+
+    document.querySelectorAll('.person-target-btn').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var id = this.dataset.id;
+            if (selected.has(id)) { targetId = id; updateToolbar(); }
+        });
+    });
+
+    clearBtn.addEventListener('click', function() {
+        selected.clear();
+        targetId = null;
+        document.querySelectorAll('.person-select-cb').forEach(function(cb) { cb.checked = false; });
+        updateToolbar();
+    });
+
+    mergeBtn.addEventListener('click', function() {
+        if (selected.size < 2 || !targetId) return;
+        var sources = Array.from(selected).filter(function(id) { return id !== targetId; });
+        // Build a preview showing target first, then sources.
+        preview.innerHTML = '';
+        [targetId].concat(sources).forEach(function(id, idx) {
+            var card = document.querySelector('.person-card[data-id="' + id + '"]');
+            if (!card) return;
+            var name = card.dataset.name || card.querySelector('.person-name').textContent;
+            var count = card.querySelector('.person-count').textContent;
+            var thumb = card.querySelector('.person-thumb');
+            var clone = document.createElement('div');
+            clone.className = 'merge-preview-item' + (idx === 0 ? ' merge-target' : '');
+            clone.innerHTML = '<div class="merge-preview-thumb">' + thumb.outerHTML + '</div>' +
+                              '<div class="merge-preview-name">' + name + '</div>' +
+                              '<div class="merge-preview-count">' + count + '</div>' +
+                              (idx === 0 ? '<div class="merge-preview-badge">Target</div>' : '<div class="merge-preview-badge merge-preview-badge-source">Source</div>');
+            preview.appendChild(clone);
+        });
+        modal.hidden = false;
+    });
+
+    cancelBtn.addEventListener('click', function() { modal.hidden = true; });
+    modal.addEventListener('click', function(e) {
+        // Click on the dim overlay (not the dialog) closes the modal.
+        if (e.target === modal) modal.hidden = true;
+    });
+
+    confirmBtn.addEventListener('click', function() {
+        if (!targetId || selected.size < 2) { modal.hidden = true; return; }
+        var sources = Array.from(selected).filter(function(id) { return id !== targetId; });
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Merging…';
+        fetch('/api/people/' + targetId + '/merge', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({source_ids: sources})
+        })
+        .then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        })
+        .then(function(data) {
+            // Easy path: reload to show updated people list and counts.
+            window.location.reload();
+        })
+        .catch(function(err) {
+            alert('Merge failed: ' + err.message);
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Merge';
         });
     });
 })();
