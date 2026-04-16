@@ -53,9 +53,9 @@ maki shell
 
 ## Commands
 
-39 commands covering setup, import, search, editing, maintenance, and more:
+44 commands covering setup, import, search, editing, maintenance, and more:
 
-`init` · `volume add/list/combine/remove` · `import` · `delete` · `export` · `contact-sheet` · `describe` · `search` · `show` · `preview` · `edit` · `tag` · `group` · `split` · `auto-group` · `auto-tag` · `embed` · `faces` · `stack` · `duplicates` · `dedup` · `generate-previews` · `relocate` · `verify` · `sync` · `sync-metadata` · `refresh` · `cleanup` · `writeback` · `stats` · `backup-status` · `fix-roles` · `fix-dates` · `rebuild-catalog` · `migrate` · `saved-search` · `collection` · `serve` · `shell`
+`init` · `volume add/list/combine/split/rename/remove/set-purpose` · `import` · `delete` · `export` · `contact-sheet` · `describe` · `search` · `show` · `preview` · `edit` · `tag` · `group` · `split` · `auto-group` · `auto-tag` · `embed` · `faces` · `stack` · `duplicates` · `dedup` · `generate-previews` · `create-sidecars` · `relocate` · `update-location` · `verify` · `sync` · `sync-metadata` · `refresh` · `cleanup` · `writeback` · `stats` · `backup-status` · `fix-roles` · `fix-dates` · `fix-recipes` · `rebuild-catalog` · `migrate` · `saved-search` · `collection` · `serve` · `doc` · `licenses` · `shell`
 
 **Global flags**: `--json`, `--log`, `--verbose`, `--debug`, `--time`. Run `maki --help` or `maki <command> --help` for usage.
 
