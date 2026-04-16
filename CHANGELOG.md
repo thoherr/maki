@@ -2,6 +2,50 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.4.4 (2026-04-16)
+
+Tag search gets a new disambiguation marker — and the existing one swaps semantics to match the user's natural reading. Targeted fix for a real gap, with a deliberate breaking change while the change is still cheap.
+
+### Whole-path tag match (`tag:=…`) — **breaking change to `=` semantics**
+
+If the catalog contains the same tag at multiple hierarchy levels — e.g. `Legoland` at root, `location|Denmark|Legoland`, and `location|Germany|Legoland` — there was previously no way to select only one of them. `tag:Legoland` matches all three, and the old `tag:=Legoland` (leaf-only-at-any-level) also matched all three since each is a leaf in its own branch.
+
+**New mapping**:
+
+| Marker | Meaning |
+|---|---|
+| `tag:=Legoland` | **Whole path: full tag value equals "Legoland"** — matches only the root-level standalone tag |
+| `tag:/Legoland` | Leaf only at any level — matches all three (each is a leaf) |
+| `tag:^Legoland` | Case-sensitive (unchanged) |
+| `tag:|Legoland` | Prefix anchor (unchanged) |
+
+Works at any depth: `tag:=location|Denmark|Legoland` matches exactly that path and nothing else.
+
+**Why swap the markers**: `=` reads naturally as "equals" / exact value match, which is what most users instinctively expect. The previous mapping (introduced in v4.3.20) stretched `=` to mean "leaf-only at any level," which fought the intuition. Now `=` matches its visual meaning, and the niche leaf-only semantic moves to `/`.
+
+**Migration**: users with saved searches or scripts using `=foo` for leaf-only-at-any-level should swap to `/foo`. For root-level tags without same-named leaves elsewhere, both old and new `=foo` give identical results — the divergence only appears when the catalog has the same tag at multiple hierarchy levels (the case where disambiguation matters anyway).
+
+### Web UI: tri-state mode toggle on tag chips
+
+The mode badge on each tag chip now cycles through three states instead of two:
+
+```
+▼   default — match at any hierarchy level (broadest)
+=   whole path — exact tag value only (disambiguates root-level tags)
+/   leaf only — match at any level but only as a leaf
+```
+
+Cycle order puts `=` first (the more useful narrow mode) so two clicks gets you what you usually want. Tooltips spell out each mode's behavior.
+
+### `tag rename` accepts both markers
+
+In rename, both `=` and `/` collapse to the same behavior: rename only assets where the tag value equals the given path exactly, and skip assets where that tag has descendants. The underlying SQL (`je.value = ?` on `json_each(tags)`) is whole-path equality by construction, so the two markers naturally converge there. The descendant-skip logic on top makes `=Foo` behave correctly as "rename this exact tag, don't touch its children."
+
+### Internals
+
+- `tag_like_parts` in `catalog.rs` parses both markers, runs a single `LIKE '%"stored"%'` for `=` (whole-path) and the existing four-pattern leaf check for `/`. Conflict resolution: `=` wins over `/` (stricter); `|` wins over both.
+- New unit tests cover whole-path disambiguation (`search_tag_whole_path_match`) and leaf-only-with-ancestor-expansion behaviour with the swapped marker (`search_tag_exact_with_ancestor_expansion`).
+
 ## v4.4.3 (2026-04-15)
 
 User-visible UX win plus a round of data-integrity fixes prompted by living with the v4.4.x face workflow.
