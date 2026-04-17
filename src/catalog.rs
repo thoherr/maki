@@ -3193,83 +3193,11 @@ impl Catalog {
         }
 
         // Location health filters
-        if opts.orphan {
-            clauses.push(
-                "NOT EXISTS (SELECT 1 FROM file_locations fl2 JOIN variants v2 ON fl2.content_hash = v2.content_hash WHERE v2.asset_id = a.id)"
-                    .to_string(),
-            );
-        }
-        if opts.orphan_false {
-            clauses.push(
-                "EXISTS (SELECT 1 FROM file_locations fl2 JOIN variants v2 ON fl2.content_hash = v2.content_hash WHERE v2.asset_id = a.id)"
-                    .to_string(),
-            );
-        }
-        if let Some(ref f) = opts.stale_days {
-            // stale: uses exact value as number of days (only Exact/Min make sense)
-            let days = match f {
-                NumericFilter::Exact(v) | NumericFilter::Min(v) => *v as u64,
-                NumericFilter::Range(v, _) => *v as u64,
-                NumericFilter::Values(v) => v.first().copied().unwrap_or(30.0) as u64,
-                NumericFilter::ValuesOrMin { min, .. } => *min as u64,
-            };
-            clauses.push(format!(
-                "EXISTS (SELECT 1 FROM file_locations fl2 \
-                 JOIN variants v2 ON fl2.content_hash = v2.content_hash \
-                 WHERE v2.asset_id = a.id AND \
-                 (fl2.verified_at IS NULL OR fl2.verified_at < datetime('now', '-{} days')))",
-                days
-            ));
-        }
-        if let Some(ids) = opts.missing_asset_ids {
-            if ids.is_empty() {
-                clauses.push("0".to_string());
-            } else {
-                let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
-                clauses.push(format!("a.id IN ({})", placeholders.join(",")));
-                for id in ids {
-                    params.push(Box::new(id.clone()));
-                }
-            }
-        }
-        if let Some(online_ids) = opts.no_online_locations {
-            if !online_ids.is_empty() {
-                let placeholders: Vec<&str> = online_ids.iter().map(|_| "?").collect();
-                clauses.push(format!(
-                    "NOT EXISTS (SELECT 1 FROM file_locations fl2 \
-                     JOIN variants v2 ON fl2.content_hash = v2.content_hash \
-                     WHERE v2.asset_id = a.id AND fl2.volume_id IN ({}))",
-                    placeholders.join(",")
-                ));
-                for id in online_ids {
-                    params.push(Box::new(id.clone()));
-                }
-            }
-        }
+        Self::add_location_health_filters(&mut clauses, &mut params, opts);
 
         // Collection filter: restrict to a pre-computed set of asset IDs
-        if let Some(ids) = opts.collection_asset_ids {
-            if ids.is_empty() {
-                clauses.push("0".to_string());
-            } else {
-                let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
-                clauses.push(format!("a.id IN ({})", placeholders.join(",")));
-                for id in ids {
-                    params.push(Box::new(id.clone()));
-                }
-            }
-        }
-
-        // Collection exclude: exclude a pre-computed set of asset IDs
-        if let Some(ids) = opts.collection_exclude_ids {
-            if !ids.is_empty() {
-                let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
-                clauses.push(format!("a.id NOT IN ({})", placeholders.join(",")));
-                for id in ids {
-                    params.push(Box::new(id.clone()));
-                }
-            }
-        }
+        Self::add_id_list_filter(&mut clauses, &mut params, opts.collection_asset_ids, false);
+        Self::add_id_list_filter(&mut clauses, &mut params, opts.collection_exclude_ids, true);
 
         // Copies filter — count DISTINCT volumes where this asset has file
         // locations. This matches the backup-status semantics: copies:1 means
@@ -3384,55 +3312,11 @@ impl Catalog {
             }
         }
 
-        // Person filter: restrict to pre-computed asset IDs
-        if let Some(ids) = opts.person_asset_ids {
-            if ids.is_empty() {
-                clauses.push("0".to_string());
-            } else {
-                let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
-                clauses.push(format!("a.id IN ({})", placeholders.join(",")));
-                for id in ids {
-                    params.push(Box::new(id.clone()));
-                }
-            }
-        }
-
-        // Person exclude filter
-        if let Some(ids) = opts.person_exclude_ids {
-            if !ids.is_empty() {
-                let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
-                clauses.push(format!("a.id NOT IN ({})", placeholders.join(",")));
-                for id in ids {
-                    params.push(Box::new(id.clone()));
-                }
-            }
-        }
-
-        // Similar assets filter (pre-computed from embedding similarity search)
-        if let Some(ids) = opts.similar_asset_ids {
-            if ids.is_empty() {
-                clauses.push("0".to_string());
-            } else {
-                let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
-                clauses.push(format!("a.id IN ({})", placeholders.join(",")));
-                for id in ids {
-                    params.push(Box::new(id.clone()));
-                }
-            }
-        }
-
-        // Text search filter (pre-computed from text-to-image embedding similarity)
-        if let Some(ids) = opts.text_search_ids {
-            if ids.is_empty() {
-                clauses.push("0".to_string());
-            } else {
-                let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
-                clauses.push(format!("a.id IN ({})", placeholders.join(",")));
-                for id in ids {
-                    params.push(Box::new(id.clone()));
-                }
-            }
-        }
+        // Pre-computed asset ID filters — all use the same IN/NOT IN pattern
+        Self::add_id_list_filter(&mut clauses, &mut params, opts.person_asset_ids, false);
+        Self::add_id_list_filter(&mut clauses, &mut params, opts.person_exclude_ids, true);
+        Self::add_id_list_filter(&mut clauses, &mut params, opts.similar_asset_ids, false);
+        Self::add_id_list_filter(&mut clauses, &mut params, opts.text_search_ids, false);
 
         let where_clause = if clauses.is_empty() {
             " WHERE 1=1".to_string()
@@ -3671,6 +3555,90 @@ impl Catalog {
             for v in &exclude {
                 params.push(Box::new(v.to_string()));
             }
+        }
+    }
+
+    /// Helper: add orphan/stale/missing/no-online-locations clauses.
+    fn add_location_health_filters(
+        clauses: &mut Vec<String>,
+        params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+        opts: &SearchOptions,
+    ) {
+        if opts.orphan {
+            clauses.push(
+                "NOT EXISTS (SELECT 1 FROM file_locations fl2 JOIN variants v2 ON fl2.content_hash = v2.content_hash WHERE v2.asset_id = a.id)"
+                    .to_string(),
+            );
+        }
+        if opts.orphan_false {
+            clauses.push(
+                "EXISTS (SELECT 1 FROM file_locations fl2 JOIN variants v2 ON fl2.content_hash = v2.content_hash WHERE v2.asset_id = a.id)"
+                    .to_string(),
+            );
+        }
+        if let Some(ref f) = opts.stale_days {
+            let days = match f {
+                NumericFilter::Exact(v) | NumericFilter::Min(v) => *v as u64,
+                NumericFilter::Range(v, _) => *v as u64,
+                NumericFilter::Values(v) => v.first().copied().unwrap_or(30.0) as u64,
+                NumericFilter::ValuesOrMin { min, .. } => *min as u64,
+            };
+            clauses.push(format!(
+                "EXISTS (SELECT 1 FROM file_locations fl2 \
+                 JOIN variants v2 ON fl2.content_hash = v2.content_hash \
+                 WHERE v2.asset_id = a.id AND \
+                 (fl2.verified_at IS NULL OR fl2.verified_at < datetime('now', '-{} days')))",
+                days
+            ));
+        }
+        Self::add_id_list_filter(clauses, params, opts.missing_asset_ids, false);
+        if let Some(online_ids) = opts.no_online_locations {
+            if !online_ids.is_empty() {
+                let placeholders: Vec<&str> = online_ids.iter().map(|_| "?").collect();
+                clauses.push(format!(
+                    "NOT EXISTS (SELECT 1 FROM file_locations fl2 \
+                     JOIN variants v2 ON fl2.content_hash = v2.content_hash \
+                     WHERE v2.asset_id = a.id AND fl2.volume_id IN ({}))",
+                    placeholders.join(",")
+                ));
+                for id in online_ids {
+                    params.push(Box::new(id.clone()));
+                }
+            }
+        }
+    }
+
+    /// Helper: add an `a.id IN (...)` or `a.id NOT IN (...)` clause from a
+    /// pre-computed list of asset IDs. Used by collection, person, similar,
+    /// and text-search filters — all pre-resolve to an ID list before the
+    /// search query runs.
+    ///
+    /// When `exclude` is false: empty list → `0` (no matches); None → no clause.
+    /// When `exclude` is true: empty list → no clause; None → no clause.
+    fn add_id_list_filter(
+        clauses: &mut Vec<String>,
+        params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+        ids: Option<&[String]>,
+        exclude: bool,
+    ) {
+        let ids = match ids {
+            Some(ids) => ids,
+            None => return,
+        };
+        if exclude {
+            if ids.is_empty() { return; }
+            let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
+            clauses.push(format!("a.id NOT IN ({})", placeholders.join(",")));
+        } else {
+            if ids.is_empty() {
+                clauses.push("0".to_string());
+                return;
+            }
+            let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
+            clauses.push(format!("a.id IN ({})", placeholders.join(",")));
+        }
+        for id in ids {
+            params.push(Box::new(id.clone()));
         }
     }
 
