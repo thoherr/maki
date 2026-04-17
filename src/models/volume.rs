@@ -78,6 +78,18 @@ impl Volume {
             is_online: false,
         }
     }
+
+    /// Build a map of online volumes keyed by their string ID.
+    ///
+    /// Used throughout the codebase wherever file-path resolution needs to
+    /// check which volumes are currently accessible. Returns references into
+    /// the input slice to avoid cloning Volume structs.
+    pub fn online_map(volumes: &[Volume]) -> std::collections::HashMap<String, &Volume> {
+        volumes.iter()
+            .filter(|v| v.is_online)
+            .map(|v| (v.id.to_string(), v))
+            .collect()
+    }
 }
 
 /// A physical location of a variant on a specific volume.

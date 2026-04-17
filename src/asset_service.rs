@@ -5472,11 +5472,7 @@ impl AssetService {
 
         // Load volumes for resolving online mount points
         let volumes = registry.list()?;
-        let online_volumes: std::collections::HashMap<String, &crate::models::Volume> = volumes
-            .iter()
-            .filter(|v| v.is_online)
-            .map(|v| (v.id.to_string(), v))
-            .collect();
+        let online_volumes = crate::models::Volume::online_map(&volumes);
 
         let mut involved_volume_ids: HashSet<String> = HashSet::new();
         let mut plan: Vec<ExportFilePlan> = Vec::new();
@@ -5932,11 +5928,7 @@ impl AssetService {
         let preview_gen = PreviewGenerator::new(&self.catalog_root, self.verbosity, &self.preview_config);
         let registry = DeviceRegistry::new(&self.catalog_root);
         let volumes = registry.list()?;
-        let online_volumes: std::collections::HashMap<String, &crate::models::Volume> = volumes
-            .iter()
-            .filter(|v| v.is_online)
-            .map(|v| (v.id.to_string(), v))
-            .collect();
+        let online_volumes = crate::models::Volume::online_map(&volumes);
 
         // Load model
         let mut model = SigLipModel::load_with_provider(model_dir, model_id, self.verbosity, execution_provider)?;
@@ -6219,11 +6211,7 @@ impl AssetService {
         let preview_gen = crate::preview::PreviewGenerator::new(&self.catalog_root, crate::Verbosity::quiet(), &self.preview_config);
         let registry = crate::device_registry::DeviceRegistry::new(&self.catalog_root);
         let volumes = registry.list()?;
-        let online_volumes: std::collections::HashMap<String, &crate::models::Volume> = volumes
-            .iter()
-            .filter(|v| v.is_online)
-            .map(|v| (v.id.to_string(), v))
-            .collect();
+        let online_volumes = crate::models::Volume::online_map(&volumes);
 
         let mut result = DetectFacesResult {
             assets_processed: 0,

@@ -2365,12 +2365,7 @@ faces/\n\
 
                     let registry = DeviceRegistry::new(&catalog_root);
                     let volumes_list = registry.list()?;
-                    let online_volumes: std::collections::HashMap<String, &maki::models::Volume> =
-                        volumes_list
-                            .iter()
-                            .filter(|v| v.is_online)
-                            .map(|v| (v.id.to_string(), v))
-                            .collect();
+                    let online_volumes = maki::models::Volume::online_map(&volumes_list);
 
                     let mut ai_model = maki::ai::SigLipModel::load_with_provider(&model_dir, model_id, verbosity, &config.ai.execution_provider)?;
 
@@ -3813,12 +3808,7 @@ faces/\n\
                         let mut ai_model = maki::ai::SigLipModel::load_with_provider(&model_dir, model_id, verbosity, &config.ai.execution_provider)?;
                         let registry = DeviceRegistry::new(&catalog_root);
                         let volumes = registry.list()?;
-                        let online_volumes: std::collections::HashMap<String, &maki::models::Volume> =
-                            volumes
-                                .iter()
-                                .filter(|v| v.is_online)
-                                .map(|v| (v.id.to_string(), v))
-                                .collect();
+                        let online_volumes = maki::models::Volume::online_map(&volumes);
                         let preview_gen = maki::preview::PreviewGenerator::new(
                             &catalog_root,
                             verbosity,
@@ -4078,12 +4068,7 @@ faces/\n\
 
             let registry = DeviceRegistry::new(&catalog_root);
             let volumes_list = registry.list()?;
-            let online_volumes: std::collections::HashMap<String, &maki::models::Volume> =
-                volumes_list
-                    .iter()
-                    .filter(|v| v.is_online)
-                    .map(|v| (v.id.to_string(), v))
-                    .collect();
+            let online_volumes = maki::models::Volume::online_map(&volumes_list);
 
             let service = AssetService::new(&catalog_root, verbosity, &config.preview);
             let preview_gen = maki::preview::PreviewGenerator::new(
@@ -4562,8 +4547,7 @@ faces/\n\
                     // computed so the aligned crops we save reflect what the
                     // model actually sees.
                     let volumes = maki::device_registry::DeviceRegistry::new(&catalog_root).list()?;
-                    let online_volumes: std::collections::HashMap<String, &maki::models::Volume> =
-                        volumes.iter().filter(|v| v.is_online).map(|v| (v.id.to_string(), v)).collect();
+                    let online_volumes = maki::models::Volume::online_map(&volumes);
                     let preview_config = config.preview.clone();
                     let preview_gen = maki::preview::PreviewGenerator::new(
                         &catalog_root, maki::Verbosity::default(), &preview_config,
