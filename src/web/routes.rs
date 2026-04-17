@@ -161,32 +161,14 @@ pub async fn browse_page(
         // Resolve collection filter to asset IDs
         let collection_ids;
         if !parsed.collections.is_empty() {
-            let col_store = crate::collection::CollectionStore::new(catalog.conn());
-            let mut all_ids = std::collections::HashSet::new();
-            for col_entry in parsed.collections.iter() {
-                for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
-                        all_ids.extend(ids);
-                    }
-                }
-            }
-            collection_ids = all_ids.into_iter().collect::<Vec<_>>();
+            collection_ids = resolve_collection_ids(&parsed.collections, catalog.conn());
             opts.collection_asset_ids = Some(&collection_ids);
         }
 
         // Resolve collection exclude IDs
         let collection_exclude_ids;
         if !parsed.collections_exclude.is_empty() {
-            let col_store = crate::collection::CollectionStore::new(catalog.conn());
-            let mut all_ids = std::collections::HashSet::new();
-            for col_entry in parsed.collections_exclude.iter() {
-                for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
-                        all_ids.extend(ids);
-                    }
-                }
-            }
-            collection_exclude_ids = all_ids.into_iter().collect::<Vec<_>>();
+            collection_exclude_ids = resolve_collection_ids(&parsed.collections_exclude, catalog.conn());
             opts.collection_exclude_ids = Some(&collection_exclude_ids);
         }
 
@@ -477,32 +459,14 @@ pub async fn search_api(
         // Resolve collection filter to asset IDs
         let collection_ids;
         if !parsed.collections.is_empty() {
-            let col_store = crate::collection::CollectionStore::new(catalog.conn());
-            let mut all_ids = std::collections::HashSet::new();
-            for col_entry in parsed.collections.iter() {
-                for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
-                        all_ids.extend(ids);
-                    }
-                }
-            }
-            collection_ids = all_ids.into_iter().collect::<Vec<_>>();
+            collection_ids = resolve_collection_ids(&parsed.collections, catalog.conn());
             opts.collection_asset_ids = Some(&collection_ids);
         }
 
         // Resolve collection exclude IDs
         let collection_exclude_ids;
         if !parsed.collections_exclude.is_empty() {
-            let col_store = crate::collection::CollectionStore::new(catalog.conn());
-            let mut all_ids = std::collections::HashSet::new();
-            for col_entry in parsed.collections_exclude.iter() {
-                for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
-                        all_ids.extend(ids);
-                    }
-                }
-            }
-            collection_exclude_ids = all_ids.into_iter().collect::<Vec<_>>();
+            collection_exclude_ids = resolve_collection_ids(&parsed.collections_exclude, catalog.conn());
             opts.collection_exclude_ids = Some(&collection_exclude_ids);
         }
 
@@ -686,32 +650,14 @@ pub async fn page_ids_api(
         // Resolve collection filter to asset IDs
         let collection_ids;
         if !parsed.collections.is_empty() {
-            let col_store = crate::collection::CollectionStore::new(catalog.conn());
-            let mut all_ids = std::collections::HashSet::new();
-            for col_entry in parsed.collections.iter() {
-                for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
-                        all_ids.extend(ids);
-                    }
-                }
-            }
-            collection_ids = all_ids.into_iter().collect::<Vec<_>>();
+            collection_ids = resolve_collection_ids(&parsed.collections, catalog.conn());
             opts.collection_asset_ids = Some(&collection_ids);
         }
 
         // Resolve collection exclude IDs
         let collection_exclude_ids;
         if !parsed.collections_exclude.is_empty() {
-            let col_store = crate::collection::CollectionStore::new(catalog.conn());
-            let mut all_ids = std::collections::HashSet::new();
-            for col_entry in parsed.collections_exclude.iter() {
-                for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
-                        all_ids.extend(ids);
-                    }
-                }
-            }
-            collection_exclude_ids = all_ids.into_iter().collect::<Vec<_>>();
+            collection_exclude_ids = resolve_collection_ids(&parsed.collections_exclude, catalog.conn());
             opts.collection_exclude_ids = Some(&collection_exclude_ids);
         }
 
@@ -1427,6 +1373,24 @@ where
         };
     }
     current.unwrap_or_default().into_iter().collect()
+}
+
+/// Resolve a list of comma-OR'd collection name entries to asset IDs.
+///
+/// Each entry may be a comma-separated list (OR within entry). Multiple calls
+/// are union'd (OR across entries) — collections don't AND like tags/persons.
+/// Returns a Vec of distinct asset IDs. Returns empty Vec on no matches.
+fn resolve_collection_ids(entries: &[String], conn: &rusqlite::Connection) -> Vec<String> {
+    let col_store = crate::collection::CollectionStore::new(conn);
+    let mut all_ids = std::collections::HashSet::new();
+    for col_entry in entries {
+        for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
+                all_ids.extend(ids);
+            }
+        }
+    }
+    all_ids.into_iter().collect()
 }
 
 fn build_parsed_search(params: &SearchParams, state: &AppState) -> BrowseFilters {
@@ -3118,32 +3082,14 @@ pub async fn calendar_api(
         // Resolve collection filter to asset IDs
         let collection_ids;
         if !parsed.collections.is_empty() {
-            let col_store = crate::collection::CollectionStore::new(catalog.conn());
-            let mut all_ids = std::collections::HashSet::new();
-            for col_entry in parsed.collections.iter() {
-                for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
-                        all_ids.extend(ids);
-                    }
-                }
-            }
-            collection_ids = all_ids.into_iter().collect::<Vec<_>>();
+            collection_ids = resolve_collection_ids(&parsed.collections, catalog.conn());
             opts.collection_asset_ids = Some(&collection_ids);
         }
 
         // Resolve collection exclude IDs
         let collection_exclude_ids;
         if !parsed.collections_exclude.is_empty() {
-            let col_store = crate::collection::CollectionStore::new(catalog.conn());
-            let mut all_ids = std::collections::HashSet::new();
-            for col_entry in parsed.collections_exclude.iter() {
-                for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
-                        all_ids.extend(ids);
-                    }
-                }
-            }
-            collection_exclude_ids = all_ids.into_iter().collect::<Vec<_>>();
+            collection_exclude_ids = resolve_collection_ids(&parsed.collections_exclude, catalog.conn());
             opts.collection_exclude_ids = Some(&collection_exclude_ids);
         }
 
@@ -3253,32 +3199,14 @@ pub async fn map_api(
         // Resolve collection filter to asset IDs
         let collection_ids;
         if !parsed.collections.is_empty() {
-            let col_store = crate::collection::CollectionStore::new(catalog.conn());
-            let mut all_ids = std::collections::HashSet::new();
-            for col_entry in parsed.collections.iter() {
-                for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
-                        all_ids.extend(ids);
-                    }
-                }
-            }
-            collection_ids = all_ids.into_iter().collect::<Vec<_>>();
+            collection_ids = resolve_collection_ids(&parsed.collections, catalog.conn());
             opts.collection_asset_ids = Some(&collection_ids);
         }
 
         // Resolve collection exclude IDs
         let collection_exclude_ids;
         if !parsed.collections_exclude.is_empty() {
-            let col_store = crate::collection::CollectionStore::new(catalog.conn());
-            let mut all_ids = std::collections::HashSet::new();
-            for col_entry in parsed.collections_exclude.iter() {
-                for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
-                        all_ids.extend(ids);
-                    }
-                }
-            }
-            collection_exclude_ids = all_ids.into_iter().collect::<Vec<_>>();
+            collection_exclude_ids = resolve_collection_ids(&parsed.collections_exclude, catalog.conn());
             opts.collection_exclude_ids = Some(&collection_exclude_ids);
         }
 
@@ -3401,32 +3329,14 @@ pub async fn facets_api(
         // Resolve collection filter to asset IDs
         let collection_ids;
         if !parsed.collections.is_empty() {
-            let col_store = crate::collection::CollectionStore::new(catalog.conn());
-            let mut all_ids = std::collections::HashSet::new();
-            for col_entry in parsed.collections.iter() {
-                for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
-                        all_ids.extend(ids);
-                    }
-                }
-            }
-            collection_ids = all_ids.into_iter().collect::<Vec<_>>();
+            collection_ids = resolve_collection_ids(&parsed.collections, catalog.conn());
             opts.collection_asset_ids = Some(&collection_ids);
         }
 
         // Resolve collection exclude IDs
         let collection_exclude_ids;
         if !parsed.collections_exclude.is_empty() {
-            let col_store = crate::collection::CollectionStore::new(catalog.conn());
-            let mut all_ids = std::collections::HashSet::new();
-            for col_entry in parsed.collections_exclude.iter() {
-                for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
-                        all_ids.extend(ids);
-                    }
-                }
-            }
-            collection_exclude_ids = all_ids.into_iter().collect::<Vec<_>>();
+            collection_exclude_ids = resolve_collection_ids(&parsed.collections_exclude, catalog.conn());
             opts.collection_exclude_ids = Some(&collection_exclude_ids);
         }
 
@@ -6577,16 +6487,7 @@ pub async fn export_zip(
             // Resolve collection filter to asset IDs
             let collection_ids;
             if !parsed.collections.is_empty() {
-                let col_store = crate::collection::CollectionStore::new(catalog.conn());
-                let mut all_ids = std::collections::HashSet::new();
-                for col_entry in parsed.collections.iter() {
-                    for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                        if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
-                            all_ids.extend(ids);
-                        }
-                    }
-                }
-                collection_ids = all_ids.into_iter().collect::<Vec<_>>();
+                collection_ids = resolve_collection_ids(&parsed.collections, catalog.conn());
                 opts.collection_asset_ids = Some(&collection_ids);
             }
 
