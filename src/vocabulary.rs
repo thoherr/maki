@@ -133,14 +133,18 @@ subject:
     - theatre
     - dance
   event:
-    - festival
-    - exhibition
+    # Generic ceremony / gathering scene types — NOT performances.
+    # Concerts / theatre / dance go under subject|performing arts.
+    # Specific dated occasions (Jane's Wedding 2025) go under top-level event|.
     - wedding
+    - exhibition
     - workshop
     - sports event
+    - festival
   object:
     - food
     - instrument
+    - other
   concept:
     - travel
     - fashion
@@ -217,9 +221,37 @@ technique:
     - motion blur
     - silhouette
     - reflection
+    - lens flare
 
 project:
   # Project entries are personal — add your projects here
+
+event:
+  # Specific occasions: weddings, trips, workshops, named concerts, etc.
+  # Name them however you'll remember them — e.g. event|wedding-jane-2025
+  # or event|2025|wedding-jane for year-grouped browsing.
+  # Separate from subject|event (generic scene types) and
+  # subject|performing arts (performance scene types).
+
+color:
+  # Dominant image color — opt-in facet. Keep flat, low-cardinality.
+  # Note: MAKI also has a 5-value color_label field for editorial workflow;
+  # content-color tagging here is for finer distinctions and catalog filtering.
+  - red
+  - orange
+  - yellow
+  - green
+  - blue
+  - purple
+  - pink
+  - brown
+  - black
+  - white
+  - grey
+  - monochrome
+  - pastel
+  - warm
+  - cold
 "#
 }
 
@@ -342,6 +374,25 @@ technique:
         assert!(tags.contains(&"technique|lighting|stage lighting".to_string()));
         assert!(tags.contains(&"person|artist|musician".to_string()));
         assert!(tags.len() > 50, "default vocabulary should have many entries, got {}", tags.len());
+    }
+
+    #[test]
+    fn default_vocabulary_includes_all_top_level_facets() {
+        let tags = parse_vocabulary(default_vocabulary());
+        for facet in ["subject", "location", "person", "technique", "project", "event", "color"] {
+            assert!(
+                tags.contains(&facet.to_string()),
+                "default vocabulary missing top-level facet `{facet}`",
+            );
+        }
+    }
+
+    #[test]
+    fn default_vocabulary_includes_color_leaves() {
+        let tags = parse_vocabulary(default_vocabulary());
+        for leaf in ["color|red", "color|monochrome", "color|warm"] {
+            assert!(tags.contains(&leaf.to_string()), "missing {leaf}");
+        }
     }
 
     #[test]

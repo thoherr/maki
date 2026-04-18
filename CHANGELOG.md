@@ -2,6 +2,74 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.4.5 (2026-04-18)
+
+Maintenance release: internal refactoring of the largest files plus a substantial expansion of the tagging guide. No user-visible behaviour changes; all tests pass on both standard and `ai` feature builds.
+
+### Tagging guide: new "Thinking in facets" framework
+
+New subsection in the tagging guide (chapter 11) walks through the *orthogonal-axes* mental model with two worked examples, giving readers the reasoning behind facet decisions rather than just the recommended taxonomy:
+
+- **Events** — specific instances (`event|wedding-jane-2025`) belong in a top-level `event|` facet, not nested under `subject|event`. Date-driven instances pollute the stable subject taxonomy; a specific wedding is not a *kind* of thing photos can depict, it's an *occasion*. Generic ceremony/gathering scene types (wedding, exhibition, workshop, sports event, non-music festival) stay under `subject|event` — they answer a different question. A Jane's-wedding photo typically carries both `subject|event|wedding` (scene type) and `event|wedding-jane-2025` (specific occasion).
+- **Color** — dominant color is an independent axis, neither subject nor technique. Recommendation: top-level `color|red`, `color|monochrome`, etc. Includes a caveat about not duplicating MAKI's editorial color-label field if you only ever tag the five standard colors.
+
+Structural updates to the recommended vocabulary:
+
+- `event` and `color` added as opt-in facets alongside the five core ones (subject, location, person, technique, project).
+- New `event hierarchy` section with flat-vs-year-grouped naming advice and a three-layer explanation (`subject|performing arts|concert` for performances, `subject|event|wedding` for non-performance gathering scene types, `event|wedding-jane-2025` for specific occasions).
+- New `color (optional)` section with a ~15-term starter vocabulary.
+- Per-image tag counts and total-vocabulary table updated.
+- **Built-in default vocabulary synced to the guide**: `maki init` and `maki tag export-vocabulary --default` now include the top-level `event` and `color` facets, the reordered `subject|event` subtree with a clarifying comment, `subject|object|other`, and `technique|effect|lens flare`. Two new unit tests pin the top-level facet set and the `color|*` leaves so future drift is caught automatically.
+
+### Internal refactoring: largest files broken up
+
+Two refactoring passes (P1+P2 and P3) targeted the four biggest files identified in a fresh QA pass of the codebase after the v4.4.4 release:
+
+**`main.rs` — run_command + build_search_where**:
+
+- `run_faces_command` extracted from `run_command` — 617 lines lifted out into its own function. `run_command`'s Faces arm shrinks from 617 lines to a 5-line delegation.
+- Two helpers extracted from `build_search_where`: `add_id_list_filter` (replaces 6 copies of the "id IN (...) from precomputed list" pattern) and `add_location_health_filters` (extracts the ~50-line orphan/stale/missing block). `build_search_where` drops from 467 to 350 lines.
+
+**`web/routes.rs` split into 13 submodules (6,599 → 348 LOC in `mod.rs`, 95% reduction)**:
+
+| Module | LOC | Contents |
+|---|---:|---|
+| `ai.rs` | 1310 | all `#[cfg(feature="ai")]` handlers |
+| `media.rs` | 1056 | compare, serve previews/video, writeback, VLM, export |
+| `browse.rs` | 832 | browse/search/asset-page/facets |
+| `assets.rs` | 634 | per-asset mutations and batch variants |
+| `stacks.rs` | 342 | stack/group/batch-delete handlers |
+| `tags.rs` | 334 | tag CRUD + batch_tags |
+| `import.rs` | 286 | web import job + SSE progress |
+| `duplicates.rs` | 266 | duplicates_page + dedup APIs |
+| `calendar_map.rs` | 252 | calendar and map APIs |
+| `volumes.rs` | 222 | volume CRUD |
+| `saved_search.rs` | 218 | saved-search CRUD |
+| `collections.rs` | 217 | collections + batch_group/auto_group |
+| `stats.rs` | 172 | stats/analytics/backup + format-groups helper |
+
+`mod.rs` now holds only cross-submodule shared helpers (`resolve_best_variant_idx`, `build_parsed_search`, `merge_search_params`, `resolve_collection_ids`, `intersect_name_groups`, etc.). `web/mod.rs` (the axum router wiring) is unchanged — every handler is still reachable as `routes::handler_name` via `pub use` re-exports.
+
+**Deduplication (P2)**:
+
+- `Volume::online_map(&[Volume])` extracted — 7 identical `HashMap<String, &Volume>` construction sites across `main.rs` and `asset_service.rs` collapsed to one-liners.
+- `resolve_collection_ids()` extracted — 13 copies (7 include + 6 exclude) of the collection-name → asset-ID resolution loop across 7 route handlers, factored out following the `intersect_name_groups` pattern.
+
+**CLI output helpers (P3b)**: new `src/cli_output.rs` module holding `format_duration`, `format_size` (consolidating 3 independent implementations that had drifted to different GB precisions), and an `item_status(id, verb, elapsed)` helper for the dominant `"  {id} — {verb} ({duration})"` progress pattern. ~16 call sites in `main.rs` migrated to the new helper, unifying the format across all bulk-operation progress output.
+
+### QA: stale doc references corrected
+
+A pre-release audit surfaced three drifted references:
+
+- `README.md`: command count 39 → 44, added 5 missing commands (`create-sidecars`, `fix-recipes`, `doc`, `licenses`, `update-location`).
+- `roadmap.md`: version reference brought up to v4.4.4; v4.4.3 and v4.4.4 milestones added.
+- `specification.md`: schema reference v6 → v7; added `face_scan_status` column and `faces.yaml` `recognition_model` persistence note.
+
+### Internals
+
+- New `doc/qa-report.md` — the codebase analysis that drove the refactoring priorities in this release. Identifies top-level LOC distribution (`catalog.rs`, `asset_service.rs`, `main.rs`, `web/routes.rs` were the four largest; last of those is now 13 files), largest functions, duplication hotspots, and prioritised cleanup proposals.
+- No schema migration in this release (SCHEMA_VERSION stays at 7).
+
 ## v4.4.4 (2026-04-16)
 
 Tag search gets a new disambiguation marker — and the existing one swaps semantics to match the user's natural reading. Targeted fix for a real gap, with a deliberate breaking change while the change is still cheap.
