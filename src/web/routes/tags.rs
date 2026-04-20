@@ -157,6 +157,52 @@ pub async fn rename_tag_api(
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct SplitTagRequest {
+    pub old_tag: String,
+    pub new_tags: Vec<String>,
+    #[serde(default)]
+    pub keep: bool,
+    #[serde(default)]
+    pub apply: bool,
+}
+
+/// POST /api/tag/split — split one tag into multiple tags across all assets.
+pub async fn split_tag_api(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SplitTagRequest>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let old_storage = crate::tag_util::tag_input_to_storage(&req.old_tag);
+        let new_storage: Vec<String> = req.new_tags.iter()
+            .map(|t| crate::tag_util::tag_input_to_storage(t))
+            .filter(|t| !t.is_empty())
+            .collect();
+        if new_storage.is_empty() {
+            anyhow::bail!("at least one target tag is required");
+        }
+        let engine = state.query_engine();
+        let result = engine.tag_split(&old_storage, &new_storage, req.keep, req.apply, |_, _| {})?;
+        if req.apply {
+            state.dropdown_cache.invalidate_tags();
+        }
+        Ok::<_, anyhow::Error>(serde_json::json!({
+            "matched": result.matched,
+            "split": result.split,
+            "skipped": result.skipped,
+            "dry_run": result.dry_run,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
 /// GET /api/tags — all tags as JSON (for autocomplete).
 pub async fn tags_api(State(state): State<Arc<AppState>>) -> Response {
     let state = state.clone();

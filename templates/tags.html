@@ -41,8 +41,40 @@
             {% endif %}
         </span>
         <button class="tag-rename-btn" title="Rename tag" data-tag="{{ t.name }}">&#9998;</button>
+        {% if !t.has_children %}
+        <button class="tag-split-btn" title="Replace this tag with two or more (or add alongside with Keep)" data-tag="{{ t.name }}">&#9638;</button>
+        {% else %}
+        <span class="tag-split-placeholder"></span>
+        {% endif %}
     </div>
     {% endfor %}
+</div>
+
+<!-- Split tag modal — replace one leaf tag with two or more, or add alongside with Keep -->
+<div class="import-overlay" id="split-overlay" style="display:none">
+    <div class="import-modal" style="max-width:500px;">
+        <h2 id="split-modal-title">Replace Tag with Multiple</h2>
+        <div style="margin-bottom:0.75rem;">
+            <label style="font-size:0.82rem;color:var(--text-muted);display:block;margin-bottom:0.2rem;">From</label>
+            <code id="split-old" style="font-size:0.9rem;"></code>
+        </div>
+        <label style="font-size:0.82rem;color:var(--text-muted);display:block;margin-bottom:0.2rem;">To (one tag per line, at least one)</label>
+        <div id="split-targets"></div>
+        <button type="button" class="batch-btn" id="split-add-target" style="margin-top:0.4rem;font-size:0.82rem;padding:0.25rem 0.6rem;">+ Add another target</button>
+        <div style="margin-top:0.75rem;">
+            <label style="font-size:0.88rem;cursor:pointer;user-select:none;">
+                <input type="checkbox" id="split-keep" style="vertical-align:middle;margin-right:0.4em;">
+                Keep source tag (add alongside instead of replacing)
+            </label>
+        </div>
+        <div style="height:0.75rem;"></div>
+        <div style="display:flex;gap:0.5rem;">
+            <button class="batch-btn" id="split-preview">Preview</button>
+            <button class="batch-btn batch-btn-primary" id="split-apply" disabled>Apply</button>
+            <button class="batch-btn" id="split-cancel">Cancel</button>
+        </div>
+        <div id="split-result" style="margin-top:0.75rem;font-size:0.88rem;color:var(--text-muted);min-height:1.2em;"></div>
+    </div>
 </div>
 
 <!-- Rename tag modal (must be in DOM before the script block) -->
@@ -390,6 +422,162 @@
             doRename(!renameApplyBtn.disabled);
         }
     });
+
+    // ── Tag split modal ──────────────────────────────────────────
+    var splitOverlay = document.getElementById('split-overlay');
+    var splitOldEl = document.getElementById('split-old');
+    var splitTargetsEl = document.getElementById('split-targets');
+    var splitAddBtn = document.getElementById('split-add-target');
+    var splitPreviewBtn = document.getElementById('split-preview');
+    var splitApplyBtn = document.getElementById('split-apply');
+    var splitCancelBtn = document.getElementById('split-cancel');
+    var splitResultEl = document.getElementById('split-result');
+    var splitKeepEl = document.getElementById('split-keep');
+    var splitModalTitle = document.getElementById('split-modal-title');
+
+    function splitTargetRow(value) {
+        var row = document.createElement('div');
+        row.className = 'split-target-row';
+        row.style.cssText = 'display:flex;gap:0.3rem;align-items:center;margin-bottom:0.3rem;';
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'form-input split-target-input';
+        input.style.cssText = 'flex:1;box-sizing:border-box;';
+        input.placeholder = 'target|tag|name';
+        input.autocomplete = 'off';
+        if (value) input.value = value;
+        input.addEventListener('input', function() {
+            splitApplyBtn.disabled = true;
+            splitResultEl.textContent = '';
+        });
+        var remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'batch-btn';
+        remove.style.cssText = 'padding:0.2rem 0.5rem;font-size:1rem;';
+        remove.innerHTML = '&times;';
+        remove.title = 'Remove this target';
+        remove.addEventListener('click', function() {
+            // Keep at least one row so the dialog always has something to type into.
+            if (splitTargetsEl.children.length > 1) {
+                row.remove();
+                splitApplyBtn.disabled = true;
+                splitResultEl.textContent = '';
+            } else {
+                input.value = '';
+                input.focus();
+            }
+        });
+        row.appendChild(input);
+        row.appendChild(remove);
+        return row;
+    }
+
+    splitAddBtn.addEventListener('click', function() {
+        splitTargetsEl.appendChild(splitTargetRow(''));
+        splitTargetsEl.lastChild.querySelector('input').focus();
+        splitApplyBtn.disabled = true;
+        splitResultEl.textContent = '';
+    });
+
+    splitKeepEl.addEventListener('change', function() {
+        splitModalTitle.textContent = this.checked ? 'Add Tags Alongside' : 'Replace Tag with Multiple';
+        splitApplyBtn.disabled = true;
+        splitResultEl.textContent = '';
+    });
+
+    document.querySelectorAll('.tag-split-btn').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var tag = this.getAttribute('data-tag');
+            splitOldEl.textContent = tag;
+            splitOldEl.setAttribute('data-tag', tag);
+            // Start with two empty target rows — the common case is 1→2.
+            splitTargetsEl.innerHTML = '';
+            splitTargetsEl.appendChild(splitTargetRow(''));
+            splitTargetsEl.appendChild(splitTargetRow(''));
+            splitKeepEl.checked = false;
+            splitModalTitle.textContent = 'Replace Tag with Multiple';
+            splitResultEl.textContent = '';
+            splitApplyBtn.disabled = true;
+            splitOverlay.style.display = 'flex';
+            splitTargetsEl.firstChild.querySelector('input').focus();
+        });
+    });
+
+    function closeSplitModal() {
+        splitOverlay.style.display = 'none';
+    }
+
+    splitCancelBtn.addEventListener('click', closeSplitModal);
+    splitOverlay.addEventListener('click', function(e) {
+        if (e.target === splitOverlay) closeSplitModal();
+    });
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && splitOverlay.style.display !== 'none') closeSplitModal();
+    });
+
+    function collectSplitTargets() {
+        var inputs = splitTargetsEl.querySelectorAll('.split-target-input');
+        var result = [];
+        for (var i = 0; i < inputs.length; i++) {
+            var v = inputs[i].value.trim();
+            if (v) result.push(v);
+        }
+        return result;
+    }
+
+    function doSplit(apply) {
+        var oldTag = splitOldEl.getAttribute('data-tag');
+        var targets = collectSplitTargets();
+        if (targets.length === 0) {
+            splitResultEl.textContent = 'Enter at least one target tag.';
+            return;
+        }
+
+        var btn = apply ? splitApplyBtn : splitPreviewBtn;
+        btn.disabled = true;
+        btn.textContent = apply ? 'Applying...' : 'Checking...';
+
+        fetch('/api/tag/split', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                old_tag: oldTag,
+                new_tags: targets,
+                keep: splitKeepEl.checked,
+                apply: apply,
+            })
+        })
+        .then(function(r) {
+            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            return r.json();
+        })
+        .then(function(data) {
+            var parts = [];
+            var verb = splitKeepEl.checked ? 'augmented' : 'split';
+            if (data.split > 0) parts.push(data.split + ' ' + verb);
+            if (data.skipped > 0) parts.push(data.skipped + ' skipped');
+            if (parts.length === 0) parts.push('no matching assets');
+            var prefix = apply ? 'Done: ' : 'Preview: ';
+            splitResultEl.textContent = prefix + parts.join(', ') + ' (of ' + data.matched + ' matched)';
+            if (!apply && data.split > 0) {
+                splitApplyBtn.disabled = false;
+            }
+            if (apply) {
+                setTimeout(function() { window.location.reload(); }, 800);
+            }
+        })
+        .catch(function(err) {
+            splitResultEl.textContent = 'Error: ' + err.message;
+        })
+        .finally(function() {
+            btn.disabled = false;
+            btn.textContent = apply ? 'Apply' : 'Preview';
+        });
+    }
+
+    splitPreviewBtn.addEventListener('click', function() { doSplit(false); });
+    splitApplyBtn.addEventListener('click', function() { doSplit(true); });
 })();
 </script>
 {% endif %}
