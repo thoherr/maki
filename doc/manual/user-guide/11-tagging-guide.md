@@ -113,7 +113,7 @@ The cleaner choice is a top-level `event` facet.
 - Event cardinality grows unboundedly (one new entry per wedding, per trip, per festival). Isolating it prevents the subject tree from getting skewed.
 - Event names become their own namespace — easy to keep consistent (`event|wedding-jane-2025`, or grouped by year: `event|2025|wedding-jane`).
 - Queries read clearly: `event:wedding-jane-2025 person:Alice` intersects two independent axes.
-- Migration is cheap — `maki tag rename "subject|event|wedding-jane-2025" "event|wedding-jane-2025" --apply` handles it per-event.
+- Migration is cheap — `maki tag rename "subject|event|wedding-jane-2025" "event|wedding-jane-2025" --apply` handles the pure rename case. For the common situation where an old `subject|event|xxx` tag should become *both* the specific-occasion tag AND the generic scene-type tag, use `maki tag split "subject|event|wedding-jane-2025" "event|wedding-jane-2025" "subject|event|wedding" --apply` to replace one tag with both in a single pass.
 
 **Cons:**
 

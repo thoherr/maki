@@ -245,6 +245,157 @@ fn tag_add_and_remove() {
 }
 
 #[test]
+fn tag_split_replaces_one_tag_with_multiple() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "concert.jpg", b"concert data");
+
+    maki()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = maki()
+        .current_dir(&root)
+        .args(["search", "concert"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let short_id = stdout.split_whitespace().next().unwrap();
+
+    // Seed with one tag we'll split.
+    maki()
+        .current_dir(&root)
+        .args(["tag", short_id, "concert-jane-2024"])
+        .assert()
+        .success();
+
+    // Split it into the canonical pair.
+    maki()
+        .current_dir(&root)
+        .args([
+            "tag", "split", "concert-jane-2024",
+            "subject|performing arts|concert",
+            "event|concert-jane-2024",
+            "--apply",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 split"));
+
+    // Verify the split landed: source gone, both targets present, ancestors expanded.
+    // Tags are rendered comma-separated on a "Tags:" line; bare source tag would
+    // appear as either `: concert-jane-2024,` or `, concert-jane-2024,` / EOL.
+    maki()
+        .current_dir(&root)
+        .args(["show", short_id])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("subject|performing arts|concert")
+                .and(predicate::str::contains("event|concert-jane-2024"))
+                .and(predicate::str::contains("subject|performing arts"))
+                .and(predicate::str::contains(": concert-jane-2024,").not())
+                .and(predicate::str::contains(", concert-jane-2024,").not()),
+        );
+}
+
+#[test]
+fn tag_split_keep_preserves_source() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "sunset.jpg", b"sunset data");
+
+    maki()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = maki()
+        .current_dir(&root)
+        .args(["search", "sunset"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let short_id = stdout.split_whitespace().next().unwrap();
+
+    maki()
+        .current_dir(&root)
+        .args(["tag", short_id, "sunset"])
+        .assert()
+        .success();
+
+    // --keep: source stays, target added.
+    maki()
+        .current_dir(&root)
+        .args(["tag", "split", "sunset", "color|warm", "--keep", "--apply"])
+        .assert()
+        .success();
+
+    maki()
+        .current_dir(&root)
+        .args(["show", short_id])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("sunset")
+                .and(predicate::str::contains("color|warm"))
+                .and(predicate::str::contains("color")),
+        );
+}
+
+#[test]
+fn tag_split_dry_run_does_not_mutate() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "photo.jpg", b"photo data");
+
+    maki()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = maki()
+        .current_dir(&root)
+        .args(["search", "photo"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let short_id = stdout.split_whitespace().next().unwrap();
+
+    maki()
+        .current_dir(&root)
+        .args(["tag", short_id, "foo"])
+        .assert()
+        .success();
+
+    // No --apply: should report what would happen but leave state alone.
+    // Stdout carries the "Run with --apply" hint; "Dry run —" prefix goes to stderr
+    // (matches tag rename's convention).
+    maki()
+        .current_dir(&root)
+        .args(["tag", "split", "foo", "bar", "baz"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--apply"))
+        .stderr(predicate::str::contains("Dry run"));
+
+    maki()
+        .current_dir(&root)
+        .args(["show", short_id])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("foo")
+                .and(predicate::str::contains("bar").not())
+                .and(predicate::str::contains("baz").not()),
+        );
+}
+
+#[test]
 fn duplicates_shows_multi_location_files() {
     let dir = tempdir().unwrap();
     let root = init_catalog(dir.path());

@@ -906,6 +906,25 @@ pub struct TagRenameResult {
     pub skipped: usize,
 }
 
+/// Action taken for a single asset during tag split.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagSplitAction {
+    /// Old tag replaced (or augmented in --keep mode) with the new tags.
+    Split,
+    /// No change needed (asset already has all targets, and the source was
+    /// either absent or `--keep` was set). Always a no-op.
+    Skipped,
+}
+
+/// Result of a `maki tag split` operation.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct TagSplitResult {
+    pub dry_run: bool,
+    pub matched: usize,
+    pub split: usize,
+    pub skipped: usize,
+}
+
 /// Result of a `maki writeback` operation.
 #[derive(Debug, Default, serde::Serialize)]
 pub struct WritebackResult {
@@ -2300,6 +2319,150 @@ impl QueryEngine {
                 TagRenameAction::Renamed => result.renamed += 1,
                 TagRenameAction::Removed => result.removed += 1,
                 TagRenameAction::Skipped => result.skipped += 1,
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Split a tag into multiple tags across all assets.
+    ///
+    /// For each asset carrying `old_tag` as a leaf (no descendants), add every
+    /// tag in `new_tags` (with ancestor expansion). Unless `keep` is true, the
+    /// `old_tag` is also removed — so `tag_split("A", &["B", "C"], false)`
+    /// replaces A with B+C, while the same call with `keep=true` keeps A and
+    /// adds B+C alongside.
+    ///
+    /// Split only acts on the exact tag, never on descendants. Assets where
+    /// `old_tag` has descendants (e.g. `old_tag|foo`) are skipped — "splitting"
+    /// a non-leaf tag has ambiguous semantics. Use `tag rename` for structural
+    /// renames that should cascade.
+    ///
+    /// `old_tag` accepts the same optional markers as `tag_rename`:
+    /// - `=old` / `/old` — explicit exact (redundant here; already the default).
+    /// - `^old` — case-sensitive.
+    /// - `|old` — rejected (split acts on one tag at a time).
+    pub fn tag_split(
+        &self,
+        old_tag: &str,
+        new_tags: &[String],
+        keep: bool,
+        apply: bool,
+        mut on_asset: impl FnMut(&str, TagSplitAction),
+    ) -> Result<TagSplitResult> {
+        if new_tags.is_empty() {
+            anyhow::bail!("at least one target tag is required for `tag split`");
+        }
+
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let store = MetadataStore::new(&self.catalog_root);
+        let online = Self::load_online_volumes(&self.catalog_root);
+        let content_store = ContentStore::new(&self.catalog_root);
+
+        // Parse markers on old_tag. Split is always exact-tag-only; the
+        // `=` and `/` markers are accepted as explicit no-ops, `^` enables
+        // case sensitivity, `|` is rejected (same reasoning as rename).
+        let mut rest = old_tag;
+        let mut case_sensitive = false;
+        loop {
+            if let Some(s) = rest.strip_prefix('=') { rest = s; }
+            else if let Some(s) = rest.strip_prefix('/') { rest = s; }
+            else if let Some(s) = rest.strip_prefix('^') { case_sensitive = true; rest = s; }
+            else if rest.starts_with('|') {
+                anyhow::bail!(
+                    "The | prefix-anchor marker is not supported for `tag split`. \
+                     Split one tag at a time.",
+                );
+            }
+            else { break; }
+        }
+        let old_tag = rest;
+
+        let cmp_eq = |a: &str, b: &str| -> bool {
+            if case_sensitive { a == b } else { a.to_lowercase() == b.to_lowercase() }
+        };
+        let old_prefix = format!("{old_tag}|");
+        let old_prefix_lower = old_prefix.to_lowercase();
+        let starts_with_old_prefix = |t: &str| -> bool {
+            if case_sensitive { t.starts_with(&old_prefix) } else { t.to_lowercase().starts_with(&old_prefix_lower) }
+        };
+
+        // Always exact-only: descendants of old_tag are never touched by split.
+        let matches = catalog.assets_with_tag_or_prefix(old_tag, case_sensitive, /*exact_only=*/true)?;
+        let mut result = TagSplitResult { dry_run: !apply, matched: matches.len(), ..Default::default() };
+
+        // Pre-expand targets once — ancestor expansion is identical across
+        // all assets.
+        let expanded_targets = crate::tag_util::expand_all_ancestors(new_tags);
+
+        for (asset_id, _stack_id) in &matches {
+            let uuid: uuid::Uuid = asset_id.parse()?;
+            let mut asset = store.load(uuid)?;
+
+            let has_exact = asset.tags.iter().any(|t| cmp_eq(t, old_tag));
+            let has_descendants = asset.tags.iter().any(|t| starts_with_old_prefix(t));
+
+            // Require exact leaf — skip if old_tag isn't present, or if it
+            // has descendants on this asset (non-leaf split is unclear).
+            if !has_exact || has_descendants {
+                result.skipped += 1;
+                on_asset(&asset_id[..8.min(asset_id.len())], TagSplitAction::Skipped);
+                continue;
+            }
+
+            // Which of the expanded targets are genuinely new to this asset?
+            let actually_new: Vec<String> = expanded_targets.iter()
+                .filter(|t| !asset.tags.iter().any(|existing| cmp_eq(existing, t)))
+                .cloned()
+                .collect();
+
+            // Build tags_to_remove: old_tag (unless --keep), plus any existing
+            // standalone ancestors that are now redundant (case-normalized) with
+            // the expanded targets. Matches tag_rename's canonicalization pass.
+            let mut tags_to_remove: Vec<String> = Vec::new();
+            if !keep {
+                for tag in &asset.tags {
+                    if cmp_eq(tag, old_tag) {
+                        tags_to_remove.push(tag.clone());
+                    }
+                }
+            }
+            for existing_tag in &asset.tags {
+                if tags_to_remove.contains(existing_tag) {
+                    continue;
+                }
+                let covered = expanded_targets.iter().any(|a| cmp_eq(a, existing_tag));
+                if covered && !expanded_targets.iter().any(|a| a == existing_tag) {
+                    tags_to_remove.push(existing_tag.clone());
+                }
+            }
+
+            if actually_new.is_empty() && tags_to_remove.is_empty() {
+                result.skipped += 1;
+                on_asset(&asset_id[..8.min(asset_id.len())], TagSplitAction::Skipped);
+                continue;
+            }
+
+            let name = asset.name.clone().unwrap_or_else(|| asset_id[..8.min(asset_id.len())].to_string());
+            on_asset(&name, TagSplitAction::Split);
+            result.split += 1;
+
+            if apply {
+                asset.tags.retain(|t| !tags_to_remove.iter().any(|r| r == t));
+                for add in &actually_new {
+                    if !asset.tags.iter().any(|t| cmp_eq(t, add)) {
+                        asset.tags.push(add.clone());
+                    }
+                }
+                store.save(&asset)?;
+                catalog.insert_asset(&asset)?;
+
+                if self.is_writeback_enabled() {
+                    self.write_back_tags_to_xmp_inner(
+                        &mut asset, &actually_new, &tags_to_remove,
+                        &catalog, &store, &online, &content_store,
+                    );
+                }
             }
         }
 
@@ -5757,6 +5920,122 @@ mod tests {
         let result = engine.tag_rename("concert", "concert", true, |_, _| {}).unwrap();
         assert_eq!(result.skipped, 1);
         assert_eq!(result.renamed, 0);
+    }
+
+    #[test]
+    fn tag_split_replaces_old_with_multiple_new() {
+        let (dir, asset_id) = setup_tag_rename_catalog(&["A & B", "unrelated"]);
+        let engine = QueryEngine::new(dir.path());
+        let result = engine.tag_split(
+            "A & B",
+            &["A".to_string(), "B".to_string()],
+            /*keep=*/false, /*apply=*/true,
+            |_, _| {},
+        ).unwrap();
+        assert_eq!(result.split, 1);
+        assert_eq!(result.skipped, 0);
+
+        let store = crate::metadata_store::MetadataStore::new(dir.path());
+        let asset: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
+        assert!(asset.tags.contains(&"A".to_string()));
+        assert!(asset.tags.contains(&"B".to_string()));
+        assert!(asset.tags.contains(&"unrelated".to_string()));
+        assert!(!asset.tags.contains(&"A & B".to_string()));
+    }
+
+    #[test]
+    fn tag_split_with_keep_preserves_source() {
+        let (dir, asset_id) = setup_tag_rename_catalog(&["concert-jane-2024"]);
+        let engine = QueryEngine::new(dir.path());
+        let result = engine.tag_split(
+            "concert-jane-2024",
+            &["subject|performing arts|concert".to_string()],
+            /*keep=*/true, /*apply=*/true,
+            |_, _| {},
+        ).unwrap();
+        assert_eq!(result.split, 1);
+
+        let store = crate::metadata_store::MetadataStore::new(dir.path());
+        let asset: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
+        assert!(asset.tags.contains(&"concert-jane-2024".to_string()), "source tag preserved with --keep");
+        assert!(asset.tags.contains(&"subject|performing arts|concert".to_string()));
+        assert!(asset.tags.contains(&"subject|performing arts".to_string()), "ancestor expanded");
+        assert!(asset.tags.contains(&"subject".to_string()), "root ancestor expanded");
+    }
+
+    #[test]
+    fn tag_split_dry_run_does_not_persist() {
+        let (dir, asset_id) = setup_tag_rename_catalog(&["foo"]);
+        let engine = QueryEngine::new(dir.path());
+        let result = engine.tag_split(
+            "foo",
+            &["bar".to_string(), "baz".to_string()],
+            false, /*apply=*/false,
+            |_, _| {},
+        ).unwrap();
+        assert!(result.dry_run);
+        assert_eq!(result.split, 1);
+
+        let store = crate::metadata_store::MetadataStore::new(dir.path());
+        let asset: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
+        assert_eq!(asset.tags, vec!["foo".to_string()], "dry-run must not mutate");
+    }
+
+    #[test]
+    fn tag_split_skips_non_leaf_assets() {
+        // Asset has the exact tag AND a descendant — we refuse to guess
+        // the semantics and skip it.
+        let (dir, asset_id) = setup_tag_rename_catalog(&["A", "A|child"]);
+        let engine = QueryEngine::new(dir.path());
+        let result = engine.tag_split(
+            "A",
+            &["B".to_string()],
+            false, true,
+            |_, _| {},
+        ).unwrap();
+        assert_eq!(result.skipped, 1);
+        assert_eq!(result.split, 0);
+
+        let store = crate::metadata_store::MetadataStore::new(dir.path());
+        let asset: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
+        assert!(asset.tags.contains(&"A".to_string()), "unchanged");
+        assert!(asset.tags.contains(&"A|child".to_string()), "unchanged");
+    }
+
+    #[test]
+    fn tag_split_dedups_when_target_already_present() {
+        let (dir, asset_id) = setup_tag_rename_catalog(&["A", "B"]);
+        let engine = QueryEngine::new(dir.path());
+        let result = engine.tag_split(
+            "A",
+            &["B".to_string(), "C".to_string()],
+            false, true,
+            |_, _| {},
+        ).unwrap();
+        assert_eq!(result.split, 1);
+
+        let store = crate::metadata_store::MetadataStore::new(dir.path());
+        let asset: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
+        let b_count = asset.tags.iter().filter(|t| *t == "B").count();
+        assert_eq!(b_count, 1, "B should not be duplicated");
+        assert!(asset.tags.contains(&"C".to_string()));
+        assert!(!asset.tags.contains(&"A".to_string()));
+    }
+
+    #[test]
+    fn tag_split_rejects_empty_targets() {
+        let (dir, _) = setup_tag_rename_catalog(&["A"]);
+        let engine = QueryEngine::new(dir.path());
+        let err = engine.tag_split("A", &[], false, true, |_, _| {}).unwrap_err();
+        assert!(err.to_string().contains("at least one"));
+    }
+
+    #[test]
+    fn tag_split_rejects_pipe_prefix_marker() {
+        let (dir, _) = setup_tag_rename_catalog(&["foo"]);
+        let engine = QueryEngine::new(dir.path());
+        let err = engine.tag_split("|foo", &["bar".to_string()], false, true, |_, _| {}).unwrap_err();
+        assert!(err.to_string().contains("prefix-anchor"));
     }
 
     #[test]

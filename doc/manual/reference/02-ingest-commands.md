@@ -8,6 +8,7 @@ Commands for importing files, applying metadata, and merging asset variants. Imp
 | [delete](#maki-delete) | Remove assets from the catalog |
 | [tag](#maki-tag) | Add or remove tags |
 | [tag rename](#maki-tag-rename) | Rename a tag across all assets |
+| [tag split](#maki-tag-split) | Split one tag into multiple tags across all assets |
 | [tag clear](#maki-tag-clear) | Remove all tags from an asset |
 | [tag expand-ancestors](#maki-tag-expand-ancestors) | Expand hierarchical tags to include ancestor paths |
 | [tag export-vocabulary](#maki-tag-export-vocabulary) | Export tag tree as a vocabulary.yaml file |
@@ -468,8 +469,84 @@ maki tag rename "old-tag" "new-tag" --log
 ### SEE ALSO
 
 [tag](#maki-tag) -- add or remove tags on a single asset.
+[tag split](#maki-tag-split) -- replace one tag with multiple tags (or add alongside with `--keep`).
 [tag clear](#maki-tag-clear) -- remove all tags from an asset.
 [search](04-retrieve-commands.md#maki-search) -- `tag:` filter for finding tagged assets, with the same `=` and `^` prefix markers.
+
+---
+
+## maki tag split {#maki-tag-split}
+
+### NAME
+
+maki-tag-split -- split one tag into multiple tags across all assets
+
+### SYNOPSIS
+
+    maki [GLOBAL FLAGS] tag split <OLD_TAG> <NEW_TAG>... [--keep] [--apply]
+
+### DESCRIPTION
+
+Replaces OLD_TAG with every tag in NEW_TAG... across all matching assets. Useful for structural restructuring (`"concert-jane-2024"` → both `"subject|performing arts|concert"` and `"event|concert-jane-2024"`) and for separating combined tags (`"A & B"` → `"A"` and `"B"`).
+
+Split is **exact-tag-only**: it acts on assets where OLD_TAG appears as a leaf (no descendants on that asset). Assets where OLD_TAG has descendants (e.g. the asset also carries `OLD_TAG|foo`) are skipped — splitting a non-leaf tag has ambiguous semantics. Use [`tag rename`](#maki-tag-rename) for structural renames that should cascade into descendants.
+
+New tags are expanded to include all ancestor paths (same as regular `tag`), so `tag split foo subject|nature|landscape` automatically adds `subject` and `subject|nature` alongside the leaf.
+
+With **`--keep`**, OLD_TAG is preserved and the new tags are added alongside — an additive / copy operation rather than a replace. This is the right tool when you want to supplement existing tags rather than replace them.
+
+If writeback is enabled, all tag changes are also written back to XMP recipe files on disk.
+
+### ARGUMENTS
+
+**OLD_TAG** (required)
+: Source tag name. Accepts the same optional markers as `tag rename`: `=foo` / `/foo` (redundant no-ops — split is already exact-only), `^foo` (case-sensitive). The `|foo` prefix-anchor marker is rejected (split operates on one tag at a time).
+
+**NEW_TAG...** (required, one or more)
+: Target tag names. Always taken literally (no prefix parsing). `|` denotes hierarchy as usual.
+
+### OPTIONS
+
+**--keep**
+: Keep OLD_TAG in place and add the new tags alongside. Without this flag, OLD_TAG is removed (the replace / split semantics).
+
+**--apply**
+: Apply changes (default: report-only dry run).
+
+### EXAMPLES
+
+Split a combined tag into its parts:
+
+```bash
+maki tag split "A & B" "A" "B" --apply
+```
+
+Restructure an event tag into the canonical pair (scene-type + specific-occasion):
+
+```bash
+maki tag split "concert-jane-2024" \
+    "subject|performing arts|concert" \
+    "event|concert-jane-2024" \
+    --apply
+```
+
+Add a broader tag to everything currently carrying a specific tag (additive — keeps the source):
+
+```bash
+maki tag split "sunset" "color|warm" --keep --apply
+```
+
+Preview what a split would do (dry run, no `--apply`):
+
+```bash
+maki tag split "A & B" "A" "B"
+```
+
+### SEE ALSO
+
+[tag](#maki-tag) -- add or remove tags on a single asset.
+[tag rename](#maki-tag-rename) -- rename a single tag (cascades to descendants).
+[tag expand-ancestors](#maki-tag-expand-ancestors) -- add ancestor paths for existing hierarchical tags.
 
 ---
 

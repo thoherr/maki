@@ -1078,6 +1078,38 @@ enum TagCommands {
         apply: bool,
     },
 
+    /// Split one tag into two or more across all assets
+    ///
+    /// Replaces OLD_TAG with every tag in NEW_TAGS (two or more). Acts only on
+    /// assets where OLD_TAG is a leaf — assets where OLD_TAG has descendants
+    /// are skipped (use `tag rename` for cascading renames). Use `--keep` to
+    /// keep OLD_TAG in place and add the new tags alongside (a pure
+    /// "duplicate" / "copy" operation).
+    ///
+    /// Examples:
+    ///   maki tag split "A & B" A B --apply
+    ///   maki tag split "concert-jane-2024" "subject|performing arts|concert" "event|concert-jane-2024" --apply
+    ///   maki tag split sunset "color|warm" --keep --apply
+    Split {
+        /// Current tag name. Accepts the same optional markers as `tag rename`
+        /// (`=`, `/`, `^`). Split is always exact-tag-only, so `=` and `/`
+        /// are redundant no-ops; `^` enables case-sensitive matching.
+        old_tag: String,
+
+        /// Target tag names (one or more). Always taken literally.
+        #[arg(required = true, num_args = 1..)]
+        new_tags: Vec<String>,
+
+        /// Keep the source tag in place and only add the targets
+        /// (additive / copy semantics instead of replace).
+        #[arg(long)]
+        keep: bool,
+
+        /// Apply changes (default: report-only)
+        #[arg(long)]
+        apply: bool,
+    },
+
     /// Remove all tags from an asset
     Clear {
         /// Asset ID (or unique prefix)
@@ -3563,6 +3595,62 @@ faces/\n\
                             );
                             if !apply && (result.renamed > 0 || result.removed > 0) {
                                 println!("  Run with --apply to rename tags.");
+                            }
+                        }
+                    }
+                    Ok(())
+                }
+                Some(TagCommands::Split { old_tag, new_tags, keep, apply }) => {
+                    let catalog_root = maki::config::find_catalog_root()?;
+                    let engine = QueryEngine::new(&catalog_root);
+                    let old_storage = maki::tag_util::tag_input_to_storage(&old_tag);
+                    let new_storage: Vec<String> = new_tags.iter()
+                        .map(|t| maki::tag_util::tag_input_to_storage(t))
+                        .collect();
+                    let show_log = cli.log;
+
+                    use maki::query::TagSplitAction;
+                    let result = engine.tag_split(&old_storage, &new_storage, keep, apply, |name, action| {
+                        if show_log {
+                            let verb = match (action, apply, keep) {
+                                (TagSplitAction::Split, true, false) => "split",
+                                (TagSplitAction::Split, false, false) => "would split",
+                                (TagSplitAction::Split, true, true) => "added targets",
+                                (TagSplitAction::Split, false, true) => "would add targets",
+                                (TagSplitAction::Skipped, _, _) => "skipped (no change needed)",
+                            };
+                            eprintln!("  {} — {}", name, verb);
+                        }
+                    })?;
+
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&result)?);
+                    } else {
+                        let old_display = maki::tag_util::tag_storage_to_display(&old_storage);
+                        let targets_display = new_storage.iter()
+                            .map(|t| format!("\"{}\"", maki::tag_util::tag_storage_to_display(t)))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        if result.matched == 0 {
+                            println!("No assets found with tag \"{}\".", old_display);
+                        } else {
+                            if !apply && result.split > 0 {
+                                eprint!("Dry run — ");
+                            }
+                            let verb = if keep { "add" } else { "split" };
+                            let mut parts = Vec::new();
+                            if result.split > 0 {
+                                parts.push(format!("{} {}", result.split, if keep { "augmented" } else { "split" }));
+                            }
+                            if result.skipped > 0 {
+                                parts.push(format!("{} skipped", result.skipped));
+                            }
+                            println!(
+                                "Tag {}: \"{}\" → [{}]: {}",
+                                verb, old_display, targets_display, parts.join(", "),
+                            );
+                            if !apply && result.split > 0 {
+                                println!("  Run with --apply to {} tags.", verb);
                             }
                         }
                     }
