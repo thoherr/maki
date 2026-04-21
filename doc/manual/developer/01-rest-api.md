@@ -1296,6 +1296,43 @@ Returns all tags with their usage counts as a JSON array of `[name, count]` tupl
 curl http://localhost:8080/api/tags
 ```
 
+### `GET /api/paths` -- Path Autocomplete
+
+Hierarchical path completion for the filter bar's Path input. Given a prefix `q`, returns the distinct set of next-segment completions found in `file_locations.relative_path`. Directory completions carry a trailing `/` (more to drill into), file completions don't (leaf).
+
+**Query parameters**:
+
+- `q` (optional, string): prefix the user has typed so far. Empty / missing returns top-level directory segments.
+- `volume` (optional, UUID): scope completions to a single volume. If `q` is an absolute path matching a registered volume mount, the volume is inferred automatically and the mount prefix is stripped.
+- `limit` (optional, integer): maximum completions to return. Default 20, clamped to 100.
+
+**Response**: `application/json` — array of strings, sorted lexicographically.
+
+```json
+["Capture/2024/", "Capture/2025/"]
+```
+
+```bash
+# Top-level directories across all volumes:
+curl 'http://localhost:8080/api/paths'
+
+# Next level after a typed prefix:
+curl 'http://localhost:8080/api/paths?q=Capture/2024/'
+
+# Narrow to a specific volume:
+curl 'http://localhost:8080/api/paths?q=Capture/&volume=68ddc72a-aa3e-4306-b2d2-c726dfedb1df'
+
+# Absolute path — mount prefix stripped automatically, volume inferred:
+curl 'http://localhost:8080/api/paths?q=/Volumes/NIKON%20Z9/Capture/'
+```
+
+**Behaviour notes**:
+
+- Wildcard patterns (`*` anywhere in `q`) short-circuit to an empty array. The filter already understands `*`, and offering completions for a pattern would be misleading.
+- LIKE metacharacters (`%`, `_`) in the prefix are escaped so paths containing those characters match literally.
+- An absolute path that doesn't match any registered volume mount returns an empty array rather than leaking false positives from an unanchored search.
+- Ordering is alphabetical; directories and files intermix at the same level.
+
 ### `GET /api/stats` -- Catalog Stats
 
 Returns a JSON object with catalog overview statistics.
