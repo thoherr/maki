@@ -54,6 +54,13 @@
   \textcolor{maki-stone}{\footnotesize\itshape #2}\\[2pt]%
   {\color{maki-salmon!40}\hrule height 0.4pt}\vspace{6pt}%
 }
+% Variant that puts the subtitle on its own line. Useful for headings
+% whose title+subtitle would otherwise wrap awkwardly in a narrow column.
+\newcommand{\sectheadbreak}[2]{%
+  \textcolor{maki-salmon}{\bfseries\normalsize #1}\\%
+  \textcolor{maki-stone}{\footnotesize\itshape #2}\\[2pt]%
+  {\color{maki-salmon!40}\hrule height 0.4pt}\vspace{6pt}%
+}
 
 % Facet card — a compact tcolorbox with a coloured header stripe
 % and a short hierarchy example list. `equal height group` makes
@@ -128,8 +135,8 @@
     \cmd{event|wedding-jane-2025}\\
     \cmd{event|fuji-trip-2023}\\
     \cmd{event|workshop-la-2019}\\[2pt]
-    {\color{maki-stone} Date-driven, grows unboundedly.
-    Flat naming or \cmd{event|2025|...}.
+    {\color{maki-stone} Date-driven, grows unboundedly.\\
+    Flat naming or \cmd{event|2025|...}.\\
     Separate from \cmd{subject|event|*},
     which is the generic scene type.}
   \end{facetcard}\end{minipage}\hfill
@@ -177,8 +184,8 @@
     \cmd{project|365 pictures 2018}\\
     \cmd{project|Bricking Bavaria}\\
     \cmd{project|Workshop LA 2019}\\[2pt]
-    {\color{maki-stone} Purely personal. Names are proper
-    nouns; keep original case.}
+    {\color{maki-stone} Purely personal.\\
+    Names are proper nouns; keep original case.}
   \end{facetcard}\end{minipage}\hfill
   \begin{minipage}[t]{0.244\textwidth}\begin{facetcard}{fc-color}{\texttt{color|}\,* \ \scriptsize(optional)}
     \textit{\small Dominant content colour?}\\[3pt]
@@ -187,8 +194,8 @@
     \cmd{color|warm} \quad \cmd{color|cold}\\
     \cmd{color|monochrome}\\
     \cmd{color|pastel} \quad \cmd{color|muted}\\[2pt]
-    {\color{maki-stone} Keep flat. Content colour is
-    different from MAKI's editorial
+    {\color{maki-stone} Keep flat.\\
+    Content colour is different from MAKI's editorial
     color-label field (5 fixed values).}
   \end{facetcard}\end{minipage}\hfill
   \begin{minipage}[t]{0.244\textwidth}\begin{facetcard}{maki-stone}{When to promote to top-level}
@@ -214,6 +221,7 @@
 
   \begin{tcolorbox}[colback=maki-cream, colframe=maki-nori, boxrule=0.6pt, arc=3pt,
       left=8pt, right=8pt, top=6pt, bottom=6pt]
+    \raggedright
     \small\bfseries\color{maki-nori}
     A single photo can intersect every facet. Each tag answers a
     different question about the same image:\\[4pt]
@@ -238,7 +246,7 @@
 
   \vspace{6pt}
 
-  \secthead{Three places for event-related tags}{three different questions, three different tags — they coexist on the same photo}
+  \sectheadbreak{Three places for event-related tags}{three different questions, three different tags — they coexist on the same photo}
 
   \scriptsize
   \renewcommand{\arraystretch}{1.35}
