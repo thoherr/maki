@@ -27,7 +27,10 @@
         <input type="hidden" name="person" value="{{ person }}" id="person-filter-id">
         <script id="person-filter-data" type="application/json">[{% for p in all_people %}{"id":"{{ p.id }}","name":"{{ p.name|js_string|safe }}"}{% if !loop.last %},{% endif %}{% endfor %}]</script>
         {% endif %}
-        <input type="text" name="path" placeholder="Path (e.g. Pictures/2026 or */2026/*/party)" value="{{ path }}" class="path-filter-input" autocomplete="off" title="Use * as wildcard. Patterns with leading * trigger a full table scan and are slower.">
+        <div class="path-filter" id="path-filter">
+            <input type="text" name="path" placeholder="Path (e.g. Pictures/2026 or */2026/*/party)" value="{{ path }}" class="path-filter-input" id="path-input" autocomplete="off" title="Use * as wildcard. Patterns with leading * trigger a full table scan and are slower.">
+            <div class="tag-autocomplete" id="path-autocomplete"></div>
+        </div>
     </div>
     <div class="filter-row-bottom">
         <div class="filter-row-left">

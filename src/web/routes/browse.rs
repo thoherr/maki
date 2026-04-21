@@ -830,3 +830,257 @@ pub async fn facets_api(
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
     }
 }
+
+// ─── Path autocomplete ──────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+pub struct PathsParams {
+    /// Prefix the user has typed so far. Matches against
+    /// `file_locations.relative_path`. Empty or missing returns top-level
+    /// segments across the catalogue.
+    pub q: Option<String>,
+    /// Optional volume ID to scope completions (string UUID).
+    pub volume: Option<String>,
+    /// Max number of completions to return (default 20, max 100).
+    pub limit: Option<u32>,
+}
+
+/// GET /api/paths — hierarchical path completion for the filter bar.
+///
+/// Given a prefix `q`, returns the distinct set of next-segment completions
+/// found in `file_locations.relative_path`. Directory completions carry a
+/// trailing `/`, file completions don't — so the client can keep typing
+/// after accepting a directory and have the next query fetch the next
+/// level naturally.
+///
+/// Wildcard patterns (`*` in `q`) short-circuit to an empty list: the
+/// filter already understands wildcards, so offering completions for a
+/// pattern would be misleading.
+pub async fn paths_api(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<PathsParams>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let raw_prefix = params.q.unwrap_or_default();
+        // Wildcard short-circuit: the filter handles `*` patterns on the
+        // server, and autocomplete would be nonsensical for them.
+        if raw_prefix.contains('*') {
+            return Ok::<_, anyhow::Error>(serde_json::json!([] as [String; 0]));
+        }
+
+        let limit = params.limit.unwrap_or(20).clamp(1, 100) as usize;
+        let catalog = state.catalog()?;
+
+        // Handle absolute paths: if the user typed a path starting with `/`
+        // (or a Windows drive letter), try to match it against a volume
+        // mount point. On match, strip the mount prefix and pin the
+        // autocomplete to that volume. Mirrors what `normalize_path_for_search`
+        // does for the search filter itself.
+        let registry = crate::device_registry::DeviceRegistry::new(&state.catalog_root);
+        let volumes = registry.list().unwrap_or_default();
+        let (normalized_prefix, inferred_volume) =
+            crate::query::normalize_path_for_search(&raw_prefix, &volumes, None);
+        let volume_id = params
+            .volume
+            .filter(|s| !s.is_empty())
+            .or(inferred_volume);
+
+        // If the user typed an absolute path that didn't match any volume
+        // mount, we'd only get false-positive matches from the LIKE query.
+        // Short-circuit to empty.
+        if raw_prefix != normalized_prefix
+            && std::path::Path::new(&normalized_prefix).is_absolute()
+        {
+            return Ok(serde_json::json!([] as [String; 0]));
+        }
+
+        // Escape LIKE metacharacters so a path with `%` or `_` in it is
+        // matched literally rather than as a pattern.
+        let escaped = normalized_prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let like_pattern = format!("{escaped}%");
+
+        // Query far more rows than `limit` so we have enough raw paths
+        // to find `limit` *unique* next-segment completions after the
+        // prefix. 500 rows is a reasonable ceiling.
+        let query_limit: i64 = (limit as i64).saturating_mul(50).max(500);
+
+        let rows: Vec<String> = if let Some(ref vol) = volume_id {
+            fetch_paths_volume(catalog.conn(), &like_pattern, vol, query_limit)?
+        } else {
+            fetch_paths_all(catalog.conn(), &like_pattern, query_limit)?
+        };
+
+        Ok(serde_json::json!(
+            extract_path_completions(&rows, &normalized_prefix, limit)
+        ))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+fn fetch_paths_all(
+    conn: &rusqlite::Connection,
+    like_pattern: &str,
+    query_limit: i64,
+) -> anyhow::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT relative_path FROM file_locations \
+         WHERE relative_path LIKE ?1 ESCAPE '\\' LIMIT ?2",
+    )?;
+    let rows: Vec<String> = stmt
+        .query_map(rusqlite::params![like_pattern, query_limit], |r| {
+            r.get::<_, String>(0)
+        })?
+        .filter_map(Result::ok)
+        .collect();
+    Ok(rows)
+}
+
+fn fetch_paths_volume(
+    conn: &rusqlite::Connection,
+    like_pattern: &str,
+    volume_id: &str,
+    query_limit: i64,
+) -> anyhow::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT relative_path FROM file_locations \
+         WHERE relative_path LIKE ?1 ESCAPE '\\' AND volume_id = ?2 LIMIT ?3",
+    )?;
+    let rows: Vec<String> = stmt
+        .query_map(
+            rusqlite::params![like_pattern, volume_id, query_limit],
+            |r| r.get::<_, String>(0),
+        )?
+        .filter_map(Result::ok)
+        .collect();
+    Ok(rows)
+}
+
+/// Given a set of full paths matching `prefix`, return the distinct
+/// "next-segment" completions. A completion ending in `/` is a directory
+/// (has more siblings/children in the catalogue). A completion without a
+/// trailing `/` is a file leaf.
+pub(super) fn extract_path_completions(
+    paths: &[String],
+    prefix: &str,
+    limit: usize,
+) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for path in paths {
+        if !path.starts_with(prefix) {
+            continue;
+        }
+        let rest = &path[prefix.len()..];
+        if rest.is_empty() {
+            continue;
+        }
+        // Slice up to and including the next `/`, if any. If there's no
+        // slash, the whole rest is a file leaf.
+        let end = rest.find('/').map(|i| i + 1).unwrap_or(rest.len());
+        let completion = format!("{}{}", prefix, &rest[..end]);
+        seen.insert(completion);
+    }
+    seen.into_iter().take(limit).collect()
+}
+
+#[cfg(test)]
+mod path_completion_tests {
+    use super::extract_path_completions;
+
+    #[test]
+    fn extracts_unique_next_segments() {
+        let paths = vec![
+            "Capture/2024/a.jpg".to_string(),
+            "Capture/2024/b.jpg".to_string(),
+            "Capture/2025/x.jpg".to_string(),
+            "Other/y.jpg".to_string(),
+        ];
+        let got = extract_path_completions(&paths, "Capture/", 10);
+        assert_eq!(got, vec!["Capture/2024/", "Capture/2025/"]);
+    }
+
+    #[test]
+    fn empty_prefix_returns_top_level() {
+        let paths = vec![
+            "Capture/a.jpg".to_string(),
+            "Other/b.jpg".to_string(),
+        ];
+        let got = extract_path_completions(&paths, "", 10);
+        assert_eq!(got, vec!["Capture/", "Other/"]);
+    }
+
+    #[test]
+    fn leaf_files_have_no_trailing_slash() {
+        let paths = vec![
+            "Capture/2024/a.jpg".to_string(),
+            "Capture/2024/b.jpg".to_string(),
+        ];
+        let got = extract_path_completions(&paths, "Capture/2024/", 10);
+        assert_eq!(got, vec!["Capture/2024/a.jpg", "Capture/2024/b.jpg"]);
+    }
+
+    #[test]
+    fn dedups_identical_next_segments() {
+        // Hundreds of files under the same dir collapse to one dir entry.
+        let paths: Vec<String> = (0..50)
+            .map(|i| format!("Capture/2024/file{i}.jpg"))
+            .collect();
+        let got = extract_path_completions(&paths, "Capture/", 10);
+        assert_eq!(got, vec!["Capture/2024/"]);
+    }
+
+    #[test]
+    fn limit_truncates_results() {
+        let paths: Vec<String> = (0..50)
+            .map(|i| format!("Capture/dir{i:03}/x.jpg"))
+            .collect();
+        let got = extract_path_completions(&paths, "Capture/", 5);
+        assert_eq!(got.len(), 5);
+        // BTreeSet gives sorted output — the first 5 are dir000..dir004.
+        assert_eq!(got[0], "Capture/dir000/");
+        assert_eq!(got[4], "Capture/dir004/");
+    }
+
+    #[test]
+    fn non_matching_paths_are_ignored() {
+        let paths = vec![
+            "Capture/a.jpg".to_string(),
+            "Capture2/b.jpg".to_string(),  // prefix collision — shares "Capture"
+        ];
+        // With prefix "Capture/" only the first matches.
+        let got = extract_path_completions(&paths, "Capture/", 10);
+        assert_eq!(got, vec!["Capture/a.jpg"]);
+    }
+
+    #[test]
+    fn mixed_dirs_and_files_at_same_level() {
+        let paths = vec![
+            "root/index.md".to_string(),
+            "root/assets/x.jpg".to_string(),
+            "root/assets/y.jpg".to_string(),
+            "root/readme.txt".to_string(),
+        ];
+        let got = extract_path_completions(&paths, "root/", 10);
+        assert_eq!(got, vec!["root/assets/", "root/index.md", "root/readme.txt"]);
+    }
+
+    #[test]
+    fn paths_not_starting_with_prefix_ignored() {
+        let paths = vec![
+            "foo/bar".to_string(),
+            "other/baz".to_string(),
+        ];
+        let got = extract_path_completions(&paths, "foo/", 10);
+        assert_eq!(got, vec!["foo/bar"]);
+    }
+}

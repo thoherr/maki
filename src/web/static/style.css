@@ -362,12 +362,17 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
 .format-option:hover { background: var(--badge-bg); }
 .format-count { color: var(--text-muted); font-size: 0.8em; }
 
+.path-filter {
+    position: relative;
+    display: flex;
+}
 .path-filter-input {
     padding: 0.5rem 0.75rem;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     font-size: 0.9rem;
     background: var(--bg-input);
+    flex: 1;
 }
 
 /* Saved searches row */

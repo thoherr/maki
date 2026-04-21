@@ -808,5 +808,159 @@
         }
         return parts.join(' ');
     };
+
+    // ─── Path autocomplete ──────────────────────────────────────────
+    // Hierarchical completion on the path filter. Each accepted segment
+    // ends in `/` so the next keystroke triggers a query for the next
+    // level. Wildcard patterns (`*` anywhere in the value) suppress
+    // autocomplete — the filter already understands wildcards, and
+    // offering completions for a pattern would be noise.
+    (function() {
+        var pathInput = document.getElementById('path-input');
+        var pathAc = document.getElementById('path-autocomplete');
+        if (!pathInput || !pathAc) return;
+
+        var pathAcIndex = -1;
+        var debounceTimer = null;
+        var lastQuery = null;
+
+        function selectedVolumeId() {
+            // The volume dropdown is a <select name="volume"> whose value
+            // is a volume UUID (or "" for "all volumes"). Narrowing the
+            // query by volume keeps suggestions focused and the dropdown
+            // short — much more useful when a catalogue spans multiple
+            // disks with overlapping folder names.
+            var volEl = document.querySelector('.filter-row [name=volume]');
+            return volEl && volEl.value ? volEl.value : '';
+        }
+
+        function hidePathAc() {
+            pathAc.style.display = 'none';
+            pathAcIndex = -1;
+        }
+
+        function renderPathSuggestions(items) {
+            pathAc.innerHTML = '';
+            pathAcIndex = -1;
+            if (!items || items.length === 0) { hidePathAc(); return; }
+            items.forEach(function(p) {
+                var div = document.createElement('div');
+                div.className = 'tag-suggestion';
+                div.setAttribute('data-path', p);
+                // Dim the prefix part (matches the tag autocomplete pattern)
+                // so the eye lands on the distinguishing suffix.
+                var prefix = pathInput.value;
+                if (p.indexOf(prefix) === 0 && prefix.length > 0) {
+                    div.innerHTML = '<span class="tag-path-prefix">' +
+                        prefix.replace(/&/g,'&amp;').replace(/</g,'&lt;') +
+                        '</span>' +
+                        p.substring(prefix.length).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+                } else {
+                    div.textContent = p;
+                }
+                div.onmousedown = function(e) {
+                    e.preventDefault();
+                    acceptPathSuggestion(p);
+                };
+                pathAc.appendChild(div);
+            });
+            pathAc.style.display = 'block';
+        }
+
+        function highlightPathAc(idx) {
+            var items = pathAc.querySelectorAll('.tag-suggestion');
+            items.forEach(function(el, i) { el.classList.toggle('active', i === idx); });
+            if (idx >= 0 && items[idx]) items[idx].scrollIntoView({block: 'nearest'});
+        }
+
+        function acceptPathSuggestion(p) {
+            pathInput.value = p;
+            hidePathAc();
+            // If accepted value ends in `/`, leave the cursor at the end
+            // so the user's next keystroke continues at the next level.
+            // If it's a file leaf (no trailing slash), dismiss and commit.
+            if (p.slice(-1) === '/') {
+                pathInput.focus();
+                // Fire an input event to query the next level immediately.
+                fetchPathSuggestions(p);
+            } else {
+                onFilterChange();
+            }
+        }
+
+        function fetchPathSuggestions(prefix) {
+            // Suppress autocomplete when the user is using a wildcard
+            // pattern — the filter will interpret `*` itself, and
+            // completions for a pattern would be misleading.
+            if (prefix.indexOf('*') !== -1) { hidePathAc(); return; }
+            // Tiny de-dupe: a rapid sequence of the same query (e.g. from
+            // a spurious input event) shouldn't re-fetch.
+            if (prefix === lastQuery) return;
+            lastQuery = prefix;
+            var url = '/api/paths?limit=20&q=' + encodeURIComponent(prefix);
+            var vol = selectedVolumeId();
+            if (vol) url += '&volume=' + encodeURIComponent(vol);
+            fetch(url)
+                .then(function(r) { return r.ok ? r.json() : []; })
+                .then(function(items) {
+                    // Only render if the input still matches what we asked
+                    // for — avoids late responses overwriting fresher ones.
+                    if (pathInput.value !== prefix) return;
+                    renderPathSuggestions(items);
+                })
+                .catch(function() { hidePathAc(); });
+        }
+
+        function schedulePathFetch(prefix) {
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(function() {
+                fetchPathSuggestions(prefix);
+            }, 120);
+        }
+
+        pathInput.addEventListener('input', function() {
+            schedulePathFetch(this.value);
+        });
+
+        pathInput.addEventListener('focus', function() {
+            // Show suggestions immediately on focus (even with an empty
+            // value) so users can browse the path tree from scratch.
+            lastQuery = null;
+            fetchPathSuggestions(this.value);
+        });
+
+        pathInput.addEventListener('blur', function() {
+            // Delay hide so an onmousedown on a suggestion can still fire.
+            setTimeout(hidePathAc, 150);
+        });
+
+        pathInput.addEventListener('keydown', function(e) {
+            var items = pathAc.querySelectorAll('.tag-suggestion');
+            var open = pathAc.style.display === 'block' && items.length > 0;
+            if (e.key === 'ArrowDown' && open) {
+                e.preventDefault();
+                pathAcIndex = Math.min(pathAcIndex + 1, items.length - 1);
+                highlightPathAc(pathAcIndex);
+            } else if (e.key === 'ArrowUp' && open) {
+                e.preventDefault();
+                pathAcIndex = Math.max(pathAcIndex - 1, 0);
+                highlightPathAc(pathAcIndex);
+            } else if ((e.key === 'Tab' || e.key === 'Enter') && open && pathAcIndex >= 0) {
+                // Tab = accept current highlight, stay in field (shell-style).
+                // Enter = accept current highlight too; if it's a directory
+                // completion, the `/` is already in place for the next level.
+                e.preventDefault();
+                acceptPathSuggestion(items[pathAcIndex].getAttribute('data-path'));
+            } else if (e.key === 'Enter' && !open) {
+                // No open suggestions — let Enter commit the filter change.
+                onFilterChange();
+            } else if (e.key === 'Escape' && open) {
+                e.preventDefault();
+                hidePathAc();
+            }
+            e.stopPropagation();
+        });
+        pathInput.addEventListener('keyup', function(e) { e.stopPropagation(); });
+    })();
 })();
 </script>
