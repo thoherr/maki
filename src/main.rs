@@ -9,6 +9,80 @@ use maki::device_registry::DeviceRegistry;
 use maki::metadata_store::MetadataStore;
 use maki::query::QueryEngine;
 
+/// Long help text for the `maki search QUERY` argument. Shown on
+/// `maki search --help` and `maki help search`. Short help (shown on
+/// `-h`) stays compact; this expands into a categorised reference
+/// sized to fit one terminal screen. Full details in
+/// doc/manual/reference/06-search-filters.md and the printable PDF
+/// at `maki doc filters`.
+const SEARCH_QUERY_LONG_HELP: &str = "\
+Free-text keywords and filter expressions.
+
+Combining: space = AND (repeat a filter to AND), comma = OR within one filter.
+Prefix `-` on any filter to exclude (e.g. `-tag:rejected`).
+
+TEXT & METADATA
+  tag:landscape           tag match at any level
+  tag:=Foo                whole-path match (exact tag value)
+  tag:/Foo                leaf only at any level
+  tag:^Foo                case-sensitive
+  tag:|wed                prefix anchor (wedding, wedding-2024, ...)
+  type:image              asset type (image, video, audio, document)
+  format:nef              file format (e.g. format:jpg,jpeg)
+  label:Red / label:none  colour label (or \"unlabeled\")
+  camera:fuji             camera (substring match on EXIF)
+  lens:56mm               lens (substring)
+  description:cat         description substring (alias: desc:)
+  collection:Fav          collection membership
+  path:Pictures/2026      path prefix (* wildcards supported)
+  id:72a0                 asset ID prefix
+  meta:key=val            raw source-metadata field match
+
+NUMERIC (all support: N exact / N+ min / A-B range / A,B OR-list)
+  rating:3+               rating (0 = unrated)
+  tagcount:0              number of intentional (leaf) tags on the asset
+  iso:100-800             ISO range
+  focal:35-70             focal length (mm)
+  f:1.4-2.8               aperture
+  width:4000+             minimum pixel width
+  height:2000+            minimum pixel height
+  copies:2+               number of file copies across volumes
+  variants:2+             number of variants on the asset
+  scattered:2+            distinct directories (add `/N` for depth)
+  duration:30+            video duration (seconds)
+
+DATE
+  date:2026               year prefix (also 2026-03, 2026-03-15)
+  dateFrom:2026-01        from (inclusive)
+  dateUntil:2026-12       until (inclusive)
+
+STATUS
+  orphan:true / orphan:false    with/without file locations
+  missing:true                  files missing on disk
+  stale:30                      unverified for N days
+  stacked:true / stacked:false  in a stack (collapsed in browse)
+  volume:Archive                on specific volume (or volume:none)
+  geo:any / geo:none            has / lacks GPS coordinates
+  geo:<S,W,N,E>                 GPS bounding box
+  codec:h264                    video codec (substring)
+
+PRO (require --features pro)
+  faces:2+ / faces:any    face count or any-faces filter
+  person:Alice            named person (repeat to AND, comma to OR)
+  similar:<id>            visually similar to an asset
+  min_sim:90              similarity threshold (0-100%)
+  text:sunset             CLIP text-to-image search
+  embed:any / embed:none  has / lacks SigLIP embedding
+
+COMBINING
+  tag:a,b                 a OR b (comma within one filter)
+  tag:a tag:b             a AND b (repeat the filter)
+  -tag:rejected           NOT
+
+Full reference: doc/manual/reference/06-search-filters.md
+Printable 2-page PDF: `maki doc filters`
+";
+
 #[derive(Parser)]
 #[command(name = "maki", about = "Media Asset Keeper & Indexer",
     version = if cfg!(feature = "pro") {
@@ -419,11 +493,8 @@ enum Commands {
     /// Search assets
     #[command(display_order = 30)]
     Search {
-        /// Free-text keywords and filters. See 'maki help search' or the manual for the
-        /// full list. Common filters: type:, tag:, format:, rating:, label:, camera:, lens:,
-        /// iso:, focal:, f:, width:, height:, path:, collection:, date:, volume:, copies:,
-        /// variants:, scattered:, duration:, codec:, stacked:, geo:, faces: (Pro), person: (Pro), similar: (Pro),
-        /// text: (Pro), embed: (Pro)
+        /// Free-text keywords and filter expressions. Run with --help for the full filter list.
+        #[arg(long_help = SEARCH_QUERY_LONG_HELP)]
         query: String,
 
         /// Output format: ids, short, full, json, or a custom template (e.g. '{id}\t{name}')
