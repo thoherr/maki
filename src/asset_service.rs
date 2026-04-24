@@ -339,6 +339,12 @@ pub struct CleanupResult {
     pub orphaned_face_files: usize,
     pub removed_face_files: usize,
     pub errors: Vec<String>,
+    /// `true` if the caller passed `--volume` or `--path`, causing the global
+    /// orphan passes (previews, smart previews, embeddings, face files) to be
+    /// skipped. The CLI uses this to print a note suggesting a scope-free run
+    /// to catch those.
+    #[serde(default)]
+    pub skipped_global_passes: bool,
 }
 
 /// Result of a volume remove operation.
@@ -2688,6 +2694,25 @@ impl AssetService {
                     // Recipe is missing from disk
                     result.missing += 1;
                     let full_path = volume.mount_point.join(cat_path);
+                    if apply && remove_stale {
+                        if let Err(e) = catalog.delete_recipe(recipe_id) {
+                            result.errors.push(format!(
+                                "Failed to delete stale recipe {cat_path}: {e}"
+                            ));
+                        } else if let Err(e) = self.remove_sidecar_recipe(
+                            &metadata_store,
+                            &catalog,
+                            variant_hash,
+                            volume.id,
+                            cat_path,
+                        ) {
+                            result.errors.push(format!(
+                                "Failed to remove recipe from sidecar for {cat_path}: {e}"
+                            ));
+                        } else {
+                            result.stale_removed += 1;
+                        }
+                    }
                     on_file(&full_path, SyncStatus::Missing, file_start.elapsed());
                 }
             }
@@ -2937,6 +2962,7 @@ impl AssetService {
             orphaned_face_files: 0,
             removed_face_files: 0,
             errors: Vec::new(),
+            skipped_global_passes: false,
         };
 
         let volumes = if let Some(label) = volume_filter {
@@ -3208,6 +3234,18 @@ impl AssetService {
                 result.removed_assets += 1;
                 on_file(&asset_id_path, CleanupStatus::OrphanedAsset, file_start.elapsed());
             }
+        }
+
+        // Passes 4-7 scan all files under `<catalog_root>/{previews,smart-previews,
+        // embeddings,faces}` against the entire catalog — they cannot be meaningfully
+        // restricted to a single volume or path prefix, since orphaned derived files
+        // live in shared catalog directories, not under a specific volume mount.
+        // When the user scoped the run with `--volume` or `--path`, skip the global
+        // passes so counts in the summary don't mix path-scoped and catalog-wide numbers.
+        let scope_restricted = volume_filter.is_some() || path_prefix.is_some();
+        if scope_restricted {
+            result.skipped_global_passes = true;
+            return Ok(result);
         }
 
         // Pass 4: Orphaned previews (preview files with no matching variant)

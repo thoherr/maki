@@ -5892,6 +5892,18 @@ faces/\n\
                         println!("  Run with --apply to remove stale records and orphaned files.");
                     }
                 }
+
+                if result.skipped_global_passes {
+                    println!(
+                        "  Note: --volume/--path limits the scan to catalog records under that scope;"
+                    );
+                    println!(
+                        "        orphaned previews, embeddings, and face files are catalog-wide —"
+                    );
+                    println!(
+                        "        run `maki cleanup` without --volume/--path to check for those."
+                    );
+                }
             }
 
             Ok(())
