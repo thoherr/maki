@@ -2,6 +2,46 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.4.8 (2026-04-24)
+
+Tag vocabulary interchange with Lightroom / Capture One, plus two long-standing bugs in scoped maintenance commands.
+
+### Export your MAKI vocabulary to Lightroom and Capture One
+
+```
+maki tag export-vocabulary --format text \
+    --prune --output ~/Desktop/maki-keywords.txt
+```
+
+New `--format text` produces a **tab-indented keyword file** — the format both Lightroom (`Metadata → Import Keywords…`) and Capture One (`Image → Keywords → Import Keywords → Keyword Text File`) accept. Hierarchy is preserved, so `location|Germany|Bayern|München` becomes a nested keyword tree inside the target tool. The curation work you do in MAKI (vocabulary.yaml, `tag rename`, `tag split`) now travels with you into culling sessions in your RAW processor. Default format remains `yaml` for MAKI's own use; existing `--prune`, `--default`, `--output` flags work with both formats.
+
+Output is normalized for the target tools (both LR and C1 silently reject keywords containing certain characters, which aborts the entire import):
+
+- XML entities (`&amp;`, `&lt;`, `&quot;`, numeric `&#NN;`) are decoded to their literal characters. Legacy XMP data occasionally leaks entity escapes into tag names; Capture One's "Invalid character at line N" error on import often points straight at one of these.
+- `,` and `;` are replaced with spaces. Both tools treat them as keyword delimiters on import, and they're delimiter-like in MAKI's own tag-input syntax too.
+- Whitespace runs collapse; leading/trailing whitespace is trimmed; control chars stripped; tags empty after sanitization are skipped.
+- Any sanitized tags are listed to stderr with their before/after form, so you can `maki tag rename` the originals if you want.
+
+### Auto-split on ingest stops comma-tags at the source
+
+The most common source of comma-containing tags — AI auto-tag pulling label strings like `"red, gold, white"` whole from the label file — is now blocked at the single tag-write chokepoint (`QueryEngine::tag`). Tag inputs on **add** run through `normalize_tag_inputs()`: splits on `,` and `;`, collapses whitespace, strips control characters, drops empty segments. Every ingest path shares this chokepoint (CLI `maki tag`, the web UI's add-tags panel, `maki auto-tag --apply`, web-API tag add), so it plugs all of them in one place. Splits emit a one-line `note:` to stderr so the user sees what MAKI turned a single input into. Removes preserve the literal string so existing offending tags can still be cleaned up by their exact catalog name.
+
+### Fix: `maki sync --apply --remove-stale --path <dir>` actually removes missing XMP files now
+
+The sync loop has parallel branches for missing media files and missing recipe (XMP) files. The media-file branch correctly `catalog.delete_file_location()` + updates the sidecar under `apply && remove_stale`; the recipe branch only bumped a counter and moved on. So a catalog with 5 missing XMP files showed the same 5 after `--apply --remove-stale`. The recipe branch now mirrors the media branch: `catalog.delete_recipe(recipe_id) + self.remove_sidecar_recipe(...)` under the same gate. The existing orphaned-asset cleanup at the end of `sync()` then picks up assets whose last location went away.
+
+### Fix: `maki cleanup --path <dir>` no longer mixes path-scoped and whole-catalog counts
+
+`cleanup` runs seven passes — three path-scoped (stale locations, locationless variants, orphaned assets), four catalog-wide (orphaned previews, smart previews, embeddings, face files). The catalog-wide passes compare files under `<catalog_root>/{previews,embeddings,faces}` against the entire catalog — those directories aren't partitioned by volume or path, so restricting the scan to a subset is meaningless. But running them alongside path-scoped passes produced confusing output (e.g. `42 checked, 16 orphaned assets, 5991 orphaned embeddings, 2343 orphaned face files` on a `--path` that only held a handful of recipes). Passes 4-7 now skip entirely when `--volume` or `--path` is set, and the CLI prints a note pointing users at a scope-free `maki cleanup` to catch global orphans.
+
+### Polish
+
+- Cheat sheet: `export-vocabulary --format yaml|text` row added.
+- Tagging quick guide: `export-vocabulary --format text` row added.
+- Tagging Guide chapter: new "Sharing your vocabulary with Lightroom and Capture One" subsection under *The Vocabulary File*.
+
+Tests: 745 unit + 249 CLI integration + 7 doc (standard). 11 new `tag_util` tests for `normalize_tag_for_storage` / `normalize_tag_inputs`; 8 new `vocabulary` tests for `tags_to_keyword_text` (flat / nested / deduplicated branches / deep hierarchy / empty / no-comments / entity decode / comma+semicolon sanitize / skip-empty).
+
 ## v4.4.7 (2026-04-22)
 
 Small feature pack: `tagcount:` search filter, path autocomplete on the filter bar, and a proper in-CLI search filter reference via `--help`.
