@@ -1176,6 +1176,58 @@ select.badge {
     font-size: 0.85em;
 }
 
+/* Wrapper that positions an autocomplete dropdown beneath a path input. */
+.path-input-wrap {
+    position: relative;
+}
+/* File/folder icon badge inside a path-suggestion item. */
+.path-entry-icon {
+    display: inline-block;
+    width: 1.1em;
+    color: var(--text-muted);
+    margin-right: 0.3em;
+}
+
+/* Nav: Import link + running-job status badge (base.html). */
+a.nav-action { cursor: pointer; }
+.nav-import-badge {
+    display: inline-block;
+    margin-left: 0.3em;
+    color: var(--accent, #d76d4e);
+    animation: maki-pulse 1.4s ease-in-out infinite;
+    font-size: 0.8em;
+    line-height: 1;
+}
+@keyframes maki-pulse {
+    0%, 100% { opacity: 0.4; }
+    50%      { opacity: 1; }
+}
+
+/* Volume picker phase inside the import dialog. */
+.import-hint {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin: 0.3em 0 0.8em;
+}
+.import-volume-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4em;
+    margin-bottom: 0.8em;
+}
+.import-volume-pick-btn {
+    text-align: left;
+    padding: 0.5em 0.75em;
+}
+.import-volume-mount {
+    color: var(--text-muted);
+    font-size: 0.85em;
+    margin-left: 0.6em;
+}
+.import-loading {
+    color: var(--text-muted);
+}
+
 /* Rating filter (browse page) */
 .rating-filter-stars {
     display: inline-flex;

@@ -1,0 +1,389 @@
+<script>
+// Global import dialog controller.
+//
+// Mounted from base.html (so reachable from every page) but also driven by
+// the per-volume "Import" buttons on /volumes via the same entry point.
+// Exposes one global: `window.makiImport.openDialog(volId?, volLabel?)`.
+// When called without arguments, the dialog asks the user to pick an online
+// volume first.
+(function() {
+    var overlay = document.getElementById('import-overlay');
+    if (!overlay) return; // safety: partial not included on this page
+
+    var pickPhase = document.getElementById('import-pick-phase');
+    var formPhase = document.getElementById('import-form-phase');
+    var progressPhase = document.getElementById('import-progress-phase');
+    var resultPhase = document.getElementById('import-result-phase');
+    var eventSource = null;
+    var profilesLoaded = false;
+
+    function showPhase(which) {
+        pickPhase.style.display = which === 'pick' ? 'block' : 'none';
+        formPhase.style.display = which === 'form' ? 'block' : 'none';
+        progressPhase.style.display = which === 'progress' ? 'block' : 'none';
+        resultPhase.style.display = which === 'result' ? 'block' : 'none';
+    }
+
+    function loadProfiles() {
+        if (profilesLoaded) return Promise.resolve();
+        return fetch('/api/import/profiles')
+            .then(function(r) { return r.ok ? r.json() : { profiles: [] }; })
+            .then(function(data) {
+                var profiles = data.profiles || [];
+                if (profiles.length > 0) {
+                    var sel = document.getElementById('import-profile');
+                    profiles.forEach(function(p) {
+                        var opt = document.createElement('option');
+                        opt.value = p;
+                        opt.textContent = p;
+                        sel.appendChild(opt);
+                    });
+                    document.getElementById('import-profile-label').style.display = '';
+                }
+                profilesLoaded = true;
+            })
+            .catch(function() { profilesLoaded = true; });
+    }
+
+    function loadVolumesIntoPicker() {
+        var listEl = document.getElementById('import-volume-list');
+        listEl.innerHTML = '<em class="import-loading">Loading volumes…</em>';
+        fetch('/api/volumes')
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(vols) {
+                var online = (vols || []).filter(function(v) { return v.is_online; });
+                if (online.length === 0) {
+                    listEl.innerHTML = '<em>No online volumes. Mount a volume or visit <a href="/volumes">Volumes</a> to register one.</em>';
+                    return;
+                }
+                listEl.innerHTML = '';
+                online.forEach(function(v) {
+                    var btn = document.createElement('button');
+                    btn.className = 'batch-btn import-volume-pick-btn';
+                    btn.innerHTML = '<strong>' + escHtml(v.label) + '</strong> ' +
+                        '<span class="import-volume-mount">' + escHtml(v.mount_point) + '</span>';
+                    btn.addEventListener('click', function() {
+                        showFormPhase(v.id, v.label);
+                    });
+                    listEl.appendChild(btn);
+                });
+            })
+            .catch(function() {
+                listEl.innerHTML = '<em>Failed to load volumes.</em>';
+            });
+    }
+
+    function escHtml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    }
+
+    function openDialog(volId, volLabel) {
+        // Reset form state
+        document.getElementById('import-subfolder').value = '';
+        document.getElementById('import-tags').value = '';
+        document.getElementById('import-dry-result').style.display = 'none';
+
+        loadProfiles();
+
+        if (volId && volLabel) {
+            showFormPhase(volId, volLabel);
+        } else {
+            showPhase('pick');
+            overlay.style.display = 'flex';
+            loadVolumesIntoPicker();
+        }
+    }
+
+    function showFormPhase(volId, volLabel) {
+        document.getElementById('import-vol-id').value = volId;
+        document.getElementById('import-vol-label').textContent = volLabel;
+        showPhase('form');
+        overlay.style.display = 'flex';
+    }
+
+    function closeDialog() {
+        overlay.style.display = 'none';
+        if (eventSource) { eventSource.close(); eventSource = null; }
+    }
+
+    function getImportParams(dryRun) {
+        var tags = document.getElementById('import-tags').value.trim();
+        var tagList = tags ? tags.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
+        var profileEl = document.getElementById('import-profile');
+        return {
+            volume_id: document.getElementById('import-vol-id').value,
+            subfolder: document.getElementById('import-subfolder').value.trim() || null,
+            profile: profileEl ? (profileEl.value || null) : null,
+            tags: tagList.length > 0 ? tagList : null,
+            auto_group: document.getElementById('import-auto-group').checked,
+            smart: document.getElementById('import-smart').checked,
+            dry_run: dryRun
+        };
+    }
+
+    function showResult(data) {
+        showPhase('result');
+        var parts = [];
+        if (data.imported) parts.push(data.imported + ' imported');
+        if (data.locations_added) parts.push(data.locations_added + ' locations added');
+        if (data.skipped) parts.push(data.skipped + ' skipped');
+        if (data.recipes_attached) parts.push(data.recipes_attached + ' recipes');
+        if (data.previews_generated) parts.push(data.previews_generated + ' previews');
+        document.getElementById('import-result-text').textContent =
+            parts.join(', ') || 'Nothing to import.';
+        document.getElementById('import-browse-link').href = '/?sort=date_desc';
+        // Refresh status badge so the "Importing…" indicator clears.
+        if (window.makiImportStatus && window.makiImportStatus.refresh) {
+            window.makiImportStatus.refresh();
+        }
+    }
+
+    // ── Subfolder autocomplete ──────────────────────────────
+    // Hierarchical filesystem completion via /api/volumes/{id}/browse.
+    // Same pattern as filter-bar path autocomplete: debounced fetch,
+    // ↑/↓/Tab/Enter/Esc, drill on directory, commit on file.
+    (function() {
+        var input = document.getElementById('import-subfolder');
+        var ac = document.getElementById('import-subfolder-autocomplete');
+        if (!input || !ac) return;
+
+        var acIndex = -1;
+        var debounceTimer = null;
+        var lastQuery = null;
+
+        function hide() { ac.style.display = 'none'; acIndex = -1; }
+
+        function splitPath(p) {
+            var i = p.lastIndexOf('/');
+            if (i < 0) return { dir: '', leaf: p };
+            return { dir: p.substring(0, i + 1), leaf: p.substring(i + 1) };
+        }
+
+        function render(entries, leafFilter) {
+            ac.innerHTML = '';
+            acIndex = -1;
+            var leafLc = leafFilter.toLowerCase();
+            var matches = entries.filter(function(e) {
+                return e.name.toLowerCase().indexOf(leafLc) === 0;
+            });
+            if (matches.length === 0) { hide(); return; }
+            matches.forEach(function(e) {
+                var div = document.createElement('div');
+                div.className = 'tag-suggestion';
+                var display = e.is_dir ? e.relative_path + '/' : e.relative_path;
+                div.setAttribute('data-path', display);
+                div.setAttribute('data-is-dir', e.is_dir ? '1' : '0');
+                var icon = e.is_dir ? '📁' : '📄';
+                div.innerHTML = '<span class="path-entry-icon">' + icon + '</span>' +
+                    escHtml(e.name) + (e.is_dir ? '/' : '');
+                div.onmousedown = function(ev) {
+                    ev.preventDefault();
+                    accept(display, e.is_dir);
+                };
+                ac.appendChild(div);
+            });
+            ac.style.display = 'block';
+        }
+
+        function highlight(idx) {
+            var items = ac.querySelectorAll('.tag-suggestion');
+            items.forEach(function(el, i) { el.classList.toggle('active', i === idx); });
+            if (idx >= 0 && items[idx]) items[idx].scrollIntoView({block: 'nearest'});
+        }
+
+        function accept(path, isDir) {
+            input.value = path;
+            hide();
+            if (isDir) {
+                input.focus();
+                fetchEntries(path);
+            }
+        }
+
+        function fetchEntries(currentValue) {
+            var volId = document.getElementById('import-vol-id').value;
+            if (!volId) { hide(); return; }
+            var split = splitPath(currentValue);
+            var prefix = split.dir.replace(/\/+$/, '');
+            var key = volId + '|' + prefix + '|' + split.leaf;
+            if (key === lastQuery) return;
+            lastQuery = key;
+            var url = '/api/volumes/' + encodeURIComponent(volId) +
+                '/browse?limit=50&prefix=' + encodeURIComponent(prefix);
+            fetch(url)
+                .then(function(r) { return r.ok ? r.json() : { entries: [] }; })
+                .then(function(data) {
+                    if (input.value !== currentValue) return;
+                    render(data.entries || [], split.leaf);
+                })
+                .catch(function() { hide(); });
+        }
+
+        function schedule(value) {
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(function() { fetchEntries(value); }, 120);
+        }
+
+        input.addEventListener('input', function() { schedule(this.value); });
+        input.addEventListener('focus', function() {
+            lastQuery = null;
+            fetchEntries(this.value);
+        });
+        input.addEventListener('blur', function() { setTimeout(hide, 150); });
+
+        input.addEventListener('keydown', function(e) {
+            var items = ac.querySelectorAll('.tag-suggestion');
+            var open = ac.style.display === 'block' && items.length > 0;
+            if (e.key === 'ArrowDown' && open) {
+                e.preventDefault();
+                acIndex = Math.min(acIndex + 1, items.length - 1);
+                highlight(acIndex);
+            } else if (e.key === 'ArrowUp' && open) {
+                e.preventDefault();
+                acIndex = Math.max(acIndex - 1, 0);
+                highlight(acIndex);
+            } else if ((e.key === 'Tab' || e.key === 'Enter') && open && acIndex >= 0) {
+                e.preventDefault();
+                var el = items[acIndex];
+                accept(el.getAttribute('data-path'), el.getAttribute('data-is-dir') === '1');
+            } else if (e.key === 'Escape' && open) {
+                e.preventDefault();
+                hide();
+            }
+        });
+    })();
+
+    // ── Wire phase buttons ─────────────────────────────
+    document.getElementById('import-pick-cancel').addEventListener('click', closeDialog);
+    document.getElementById('import-cancel').addEventListener('click', closeDialog);
+    document.getElementById('import-close').addEventListener('click', function() {
+        closeDialog();
+        // Reload only when on the volumes page so existing rows refresh.
+        // From any other page, just close — the user keeps their context.
+        if (window.location.pathname === '/volumes') window.location.reload();
+    });
+
+    // Dry run
+    document.getElementById('import-dry-run').addEventListener('click', function() {
+        var params = getImportParams(true);
+        var btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Scanning…';
+        fetch('/api/import', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(params)
+        })
+        .then(function(r) {
+            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            return r.json();
+        })
+        .then(function(data) {
+            var el = document.getElementById('import-dry-result');
+            el.textContent = 'Would import ' + (data.imported || 0) + ' file(s), ' +
+                (data.skipped || 0) + ' skipped, ' +
+                (data.recipes_attached || 0) + ' recipe(s).';
+            el.style.display = 'block';
+        })
+        .catch(function(err) { alert('Dry run failed: ' + err.message); })
+        .finally(function() { btn.disabled = false; btn.textContent = 'Dry Run'; });
+    });
+
+    // Start import
+    document.getElementById('import-start').addEventListener('click', function() {
+        var params = getImportParams(false);
+        var btn = this;
+        btn.disabled = true;
+
+        fetch('/api/import', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(params)
+        })
+        .then(function(r) {
+            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            return r.json();
+        })
+        .then(function(data) {
+            if (data.dry_run) { showResult(data); return; }
+            showPhase('progress');
+            document.getElementById('import-log').innerHTML = '';
+            document.getElementById('import-fill').style.width = '0%';
+            document.getElementById('import-status-text').textContent = 'Starting import…';
+            // Refresh status badge so it picks up the running job immediately.
+            if (window.makiImportStatus && window.makiImportStatus.refresh) {
+                window.makiImportStatus.refresh();
+            }
+            attachProgressStream();
+        })
+        .catch(function(err) {
+            alert('Import failed: ' + err.message);
+            btn.disabled = false;
+        });
+    });
+
+    function attachProgressStream() {
+        eventSource = new EventSource('/api/import/progress');
+        eventSource.onmessage = function(e) {
+            var evt;
+            try { evt = JSON.parse(e.data); } catch (_) { return; }
+            if (evt.done) {
+                eventSource.close();
+                eventSource = null;
+                if (evt.error) {
+                    document.getElementById('import-status-text').textContent = 'Failed: ' + evt.error;
+                } else {
+                    showResult(evt);
+                }
+                return;
+            }
+            document.getElementById('import-status-text').textContent =
+                evt.imported + ' imported, ' + evt.skipped + ' skipped';
+            var log = document.getElementById('import-log');
+            var line = document.createElement('div');
+            line.textContent = evt.status + ' ' + evt.file;
+            log.appendChild(line);
+            if (log.children.length > 50) log.removeChild(log.firstChild);
+            log.scrollTop = log.scrollHeight;
+        };
+        eventSource.onerror = function() {
+            if (eventSource) { eventSource.close(); eventSource = null; }
+            document.getElementById('import-status-text').textContent =
+                'Connection lost. The import may still be running on the server.';
+        };
+    }
+
+    // Close on overlay click + Escape
+    overlay.addEventListener('click', function(e) {
+        if (e.target === overlay) closeDialog();
+    });
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && overlay.style.display !== 'none') closeDialog();
+    });
+
+    // Re-attach to a running job when reopening the dialog.
+    function reattachIfRunning() {
+        return fetch('/api/import/status')
+            .then(function(r) { return r.ok ? r.json() : { running: false }; })
+            .then(function(s) {
+                if (s.running) {
+                    showPhase('progress');
+                    overlay.style.display = 'flex';
+                    document.getElementById('import-status-text').textContent =
+                        'Importing… (re-attached to running job)';
+                    document.getElementById('import-log').innerHTML = '';
+                    attachProgressStream();
+                    return true;
+                }
+                return false;
+            })
+            .catch(function() { return false; });
+    }
+
+    window.makiImport = {
+        openDialog: openDialog,
+        reattachIfRunning: reattachIfRunning,
+        close: closeDialog
+    };
+})();
+</script>

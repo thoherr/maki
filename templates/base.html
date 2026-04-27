@@ -27,6 +27,10 @@
             <a href="/backup">Backup</a>
             <a href="/volumes">Volumes</a>
             <a href="/duplicates">Duplicates</a>
+            <span class="nav-sep"></span>
+            <a href="#" id="nav-import-link" class="nav-action">
+                Import<span id="nav-import-badge" class="nav-import-badge" style="display:none" title="Import in progress">●</span>
+            </a>
         </div>
         <button class="theme-toggle" id="help-toggle" title="Keyboard shortcuts (?)">?</button>
         <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">
@@ -128,6 +132,49 @@
     <div class="container">
         {% block content %}{% endblock %}
     </div>
+{% include "import_dialog.html" %}
+{% include "import_dialog_js.html" %}
+<script>
+// ── Nav: Import link + running-job status badge ──────────────────────────
+// The badge polls /api/import/status. While a job is running it pulses and the
+// link's click handler re-attaches to the live SSE feed instead of opening the
+// volume picker — so a page reload during a long import doesn't lose the feed.
+(function() {
+    var link = document.getElementById('nav-import-link');
+    var badge = document.getElementById('nav-import-badge');
+    if (!link || !badge) return;
+
+    var running = false;
+    function refresh() {
+        return fetch('/api/import/status')
+            .then(function(r) { return r.ok ? r.json() : { running: false }; })
+            .then(function(s) {
+                running = !!s.running;
+                badge.style.display = running ? 'inline-block' : 'none';
+            })
+            .catch(function() {});
+    }
+
+    link.addEventListener('click', function(e) {
+        e.preventDefault();
+        if (running && window.makiImport && window.makiImport.reattachIfRunning) {
+            window.makiImport.reattachIfRunning().then(function(reattached) {
+                if (!reattached && window.makiImport) window.makiImport.openDialog();
+            });
+        } else if (window.makiImport) {
+            window.makiImport.openDialog();
+        }
+    });
+
+    window.makiImportStatus = { refresh: refresh, isRunning: function() { return running; } };
+
+    refresh();
+    // Poll every 4s. Cheap (single SQL-free query, just a Mutex peek), and
+    // means status updates within a few seconds of a job starting/finishing
+    // even on pages the user leaves open in a background tab.
+    setInterval(refresh, 4000);
+})();
+</script>
 <script>
 (function(){
     var btn = document.getElementById('theme-toggle');

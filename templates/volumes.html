@@ -80,67 +80,8 @@
 </table>
 {% endif %}
 
-<!-- Import modal -->
-<div class="import-overlay" id="import-overlay" style="display:none">
-    <div class="import-modal">
-        <!-- Form phase -->
-        <div id="import-form-phase">
-            <h2>Import from <span id="import-vol-label"></span></h2>
-            <input type="hidden" id="import-vol-id">
-
-            <label>Subfolder (optional)
-                <input type="text" id="import-subfolder" placeholder="e.g. DCIM" class="form-input">
-            </label>
-
-            {% if !profile_names.is_empty() %}
-            <label>Profile
-                <select id="import-profile" class="form-input">
-                    <option value="">(default)</option>
-                    {% for p in profile_names %}
-                    <option value="{{ p }}">{{ p }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-            {% endif %}
-
-            <label>Additional tags
-                <input type="text" id="import-tags" placeholder="Comma-separated tags" class="form-input">
-            </label>
-
-            <div class="import-checkboxes">
-                <label><input type="checkbox" id="import-auto-group" checked> Auto-group variants</label>
-                <label><input type="checkbox" id="import-smart"> Smart previews</label>
-            </div>
-
-            <div class="import-form-actions">
-                <button class="batch-btn" id="import-dry-run">Dry Run</button>
-                <button class="batch-btn batch-btn-primary" id="import-start">Import</button>
-                <button class="batch-btn" id="import-cancel">Cancel</button>
-            </div>
-            <div id="import-dry-result" style="display:none" class="import-dry-result"></div>
-        </div>
-
-        <!-- Progress phase -->
-        <div id="import-progress-phase" style="display:none">
-            <h2>Importing...</h2>
-            <div class="import-progress-bar">
-                <div class="import-progress-fill" id="import-fill"></div>
-            </div>
-            <div id="import-status-text" class="import-status-text">Starting...</div>
-            <div id="import-log" class="import-log"></div>
-        </div>
-
-        <!-- Result phase -->
-        <div id="import-result-phase" style="display:none">
-            <h2>Import Complete</h2>
-            <div id="import-result-text" class="import-result-text"></div>
-            <div class="import-form-actions">
-                <a id="import-browse-link" href="/" class="batch-btn batch-btn-primary">Browse imported</a>
-                <button class="batch-btn" id="import-close">Close</button>
-            </div>
-        </div>
-    </div>
-</div>
+<!-- Import dialog is now globally available via base.html;
+     per-volume "Import" buttons trigger window.makiImport.openDialog(...) below. -->
 
 <script>
 // ── Register volume ──────────────────────────────────────
@@ -237,163 +178,18 @@ document.querySelectorAll('.vol-remove').forEach(function(btn) {
     });
 });
 
-// ── Import modal ─────────────────────────────────────────
-var overlay = document.getElementById('import-overlay');
-var formPhase = document.getElementById('import-form-phase');
-var progressPhase = document.getElementById('import-progress-phase');
-var resultPhase = document.getElementById('import-result-phase');
-var eventSource = null;
-
+// ── Import button → global dialog ────────────────────────
+// The dialog itself lives in import_dialog{,_js}.html, included from base.html
+// so the same component is reachable from the global nav and from per-volume
+// "Import" buttons here.
 function showImportModal(volId, volLabel) {
-    document.getElementById('import-vol-id').value = volId;
-    document.getElementById('import-vol-label').textContent = volLabel;
-    document.getElementById('import-subfolder').value = '';
-    document.getElementById('import-tags').value = '';
-    document.getElementById('import-dry-result').style.display = 'none';
-    formPhase.style.display = 'block';
-    progressPhase.style.display = 'none';
-    resultPhase.style.display = 'none';
-    overlay.style.display = 'flex';
-}
-
-function closeImportModal() {
-    overlay.style.display = 'none';
-    if (eventSource) { eventSource.close(); eventSource = null; }
-}
-
-function getImportParams(dryRun) {
-    var tags = document.getElementById('import-tags').value.trim();
-    var tagList = tags ? tags.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
-    var profileEl = document.getElementById('import-profile');
-    return {
-        volume_id: document.getElementById('import-vol-id').value,
-        subfolder: document.getElementById('import-subfolder').value.trim() || null,
-        profile: profileEl ? (profileEl.value || null) : null,
-        tags: tagList.length > 0 ? tagList : null,
-        auto_group: document.getElementById('import-auto-group').checked,
-        smart: document.getElementById('import-smart').checked,
-        dry_run: dryRun
-    };
+    if (window.makiImport) window.makiImport.openDialog(volId, volLabel);
 }
 
 document.querySelectorAll('.vol-import').forEach(function(btn) {
     btn.addEventListener('click', function() {
         showImportModal(this.dataset.id, this.dataset.label);
     });
-});
-
-document.getElementById('import-cancel').addEventListener('click', closeImportModal);
-document.getElementById('import-close').addEventListener('click', function() {
-    closeImportModal();
-    window.location.reload();
-});
-
-// Dry run
-document.getElementById('import-dry-run').addEventListener('click', function() {
-    var params = getImportParams(true);
-    var btn = this;
-    btn.disabled = true;
-    btn.textContent = 'Scanning...';
-    fetch('/api/import', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(params)
-    })
-    .then(function(r) {
-        if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-        return r.json();
-    })
-    .then(function(data) {
-        var el = document.getElementById('import-dry-result');
-        el.textContent = 'Would import ' + (data.imported || 0) + ' file(s), ' +
-            (data.skipped || 0) + ' skipped, ' +
-            (data.recipes_attached || 0) + ' recipe(s).';
-        el.style.display = 'block';
-    })
-    .catch(function(err) { alert('Dry run failed: ' + err.message); })
-    .finally(function() { btn.disabled = false; btn.textContent = 'Dry Run'; });
-});
-
-// Start import
-document.getElementById('import-start').addEventListener('click', function() {
-    var params = getImportParams(false);
-    var btn = this;
-    btn.disabled = true;
-
-    fetch('/api/import', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(params)
-    })
-    .then(function(r) {
-        if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-        return r.json();
-    })
-    .then(function(data) {
-        if (data.dry_run) {
-            // Dry-run response returned directly
-            showImportResult(data);
-            return;
-        }
-        // Switch to progress phase and connect SSE
-        formPhase.style.display = 'none';
-        progressPhase.style.display = 'block';
-        document.getElementById('import-log').innerHTML = '';
-        document.getElementById('import-fill').style.width = '0%';
-        document.getElementById('import-status-text').textContent = 'Starting import...';
-
-        eventSource = new EventSource('/api/import/progress');
-        eventSource.onmessage = function(e) {
-            var evt = JSON.parse(e.data);
-            if (evt.done) {
-                eventSource.close();
-                eventSource = null;
-                showImportResult(evt);
-                return;
-            }
-            var total = evt.imported + evt.skipped + evt.locations_added + evt.recipes;
-            document.getElementById('import-status-text').textContent =
-                evt.imported + ' imported, ' + evt.skipped + ' skipped';
-            // Append to log (keep last 50 lines)
-            var log = document.getElementById('import-log');
-            var line = document.createElement('div');
-            line.textContent = evt.status + ' ' + evt.file;
-            log.appendChild(line);
-            if (log.children.length > 50) log.removeChild(log.firstChild);
-            log.scrollTop = log.scrollHeight;
-        };
-        eventSource.onerror = function() {
-            if (eventSource) { eventSource.close(); eventSource = null; }
-            document.getElementById('import-status-text').textContent = 'Connection lost. Check terminal for import status.';
-        };
-    })
-    .catch(function(err) {
-        alert('Import failed: ' + err.message);
-        btn.disabled = false;
-    });
-});
-
-function showImportResult(data) {
-    progressPhase.style.display = 'none';
-    resultPhase.style.display = 'block';
-    var parts = [];
-    if (data.imported) parts.push(data.imported + ' imported');
-    if (data.locations_added) parts.push(data.locations_added + ' locations added');
-    if (data.skipped) parts.push(data.skipped + ' skipped');
-    if (data.recipes_attached) parts.push(data.recipes_attached + ' recipes');
-    if (data.previews_generated) parts.push(data.previews_generated + ' previews');
-    document.getElementById('import-result-text').textContent = parts.join(', ') || 'Nothing to import.';
-    // Link to browse recently imported
-    document.getElementById('import-browse-link').href = '/?sort=date_desc';
-}
-
-// Close on overlay click
-overlay.addEventListener('click', function(e) {
-    if (e.target === overlay) closeImportModal();
-});
-// Close on Escape
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape' && overlay.style.display !== 'none') closeImportModal();
 });
 </script>
 {% endblock %}

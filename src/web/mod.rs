@@ -251,10 +251,37 @@ pub struct AppState {
 }
 
 /// Tracks a running import job for SSE progress.
+///
+/// Allows clients to **re-attach** to an in-flight import after a page reload:
+/// the SSE handler replays `recent_events` (last ~100 emitted events) before
+/// switching to the live broadcast, and `/api/import/status` reports the
+/// running totals so the nav badge can show progress.
 pub struct ImportJob {
     pub job_id: String,
     pub sender: tokio::sync::broadcast::Sender<String>,
+    /// UTC timestamp when the job started — included in `/api/import/status`.
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    /// Ring buffer of the last ~100 emitted events. Replayed on SSE re-connect.
+    pub recent_events: std::sync::Mutex<std::collections::VecDeque<String>>,
+    /// Running totals updated by the import callback. Reported via
+    /// `/api/import/status` so badge / re-attached UI shows current progress
+    /// without waiting for the next event tick.
+    pub summary: ImportJobSummary,
 }
+
+/// Atomic counters tracking a running import's progress.
+#[derive(Default)]
+pub struct ImportJobSummary {
+    pub imported: std::sync::atomic::AtomicUsize,
+    pub skipped: std::sync::atomic::AtomicUsize,
+    pub locations_added: std::sync::atomic::AtomicUsize,
+    pub recipes: std::sync::atomic::AtomicUsize,
+}
+
+/// Maximum number of recent events kept in the ring buffer for re-attachment.
+/// Sized so a UI re-connecting mid-import sees the last few seconds of activity
+/// (typical import emits ~10-100 events/sec depending on hardware and file size).
+pub const IMPORT_RECENT_EVENTS_CAP: usize = 100;
 
 impl AppState {
     #[cfg(feature = "ai")]
@@ -500,10 +527,12 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/volumes", axum::routing::get(routes::list_volumes_api).post(routes::register_volume_api))
         .route("/api/volumes/{id}/rename", axum::routing::put(routes::rename_volume_api))
         .route("/api/volumes/{id}/purpose", axum::routing::put(routes::set_volume_purpose_api))
+        .route("/api/volumes/{id}/browse", axum::routing::get(routes::browse_volume_api))
         .route("/api/volumes/{id}", axum::routing::delete(routes::remove_volume_api))
         .route("/api/import", axum::routing::post(routes::start_import_api))
         .route("/api/import/progress", axum::routing::get(routes::import_progress_sse))
         .route("/api/import/status", axum::routing::get(routes::import_status_api))
+        .route("/api/import/profiles", axum::routing::get(routes::import_profiles_api))
         .route("/api/calendar", axum::routing::get(routes::calendar_api))
         .route("/api/map", axum::routing::get(routes::map_api))
         .route("/api/facets", axum::routing::get(routes::facets_api))

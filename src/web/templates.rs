@@ -717,7 +717,6 @@ pub struct VolumeRow {
 #[template(path = "volumes.html")]
 pub struct VolumesPage {
     pub volumes: Vec<VolumeRow>,
-    pub profile_names: Vec<String>,
     pub ai_enabled: bool,
     pub vlm_enabled: bool,
 }

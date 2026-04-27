@@ -1,0 +1,87 @@
+<!--
+    Global import dialog.
+
+    Included from base.html so it's reachable from every page (the nav has an
+    "Import" link, and individual `.vol-import` buttons on /volumes still open
+    the same dialog with the volume preselected).
+
+    Phases (controlled by JS at runtime):
+      pick    — choose which online volume to import to. Skipped when the
+                caller passes a volume id (e.g. from the volumes page).
+      form    — subfolder / profile / tags / options.
+      progress — live SSE feed during the import.
+      result  — final counts + close.
+
+    No Askama variables here: `profile_names` and the volume list are fetched
+    via JS at open time, so this partial works from any rendering context.
+-->
+<div class="import-overlay" id="import-overlay" style="display:none">
+    <div class="import-modal">
+        <!-- Phase: pick volume (shown when no volume preselected) -->
+        <div id="import-pick-phase" style="display:none">
+            <h2>Import — choose volume</h2>
+            <p class="import-hint">Imports run on the server. Pick which mounted volume the files live on.</p>
+            <div id="import-volume-list" class="import-volume-list">
+                <em class="import-loading">Loading volumes…</em>
+            </div>
+            <div class="import-form-actions">
+                <button class="batch-btn" id="import-pick-cancel">Cancel</button>
+            </div>
+        </div>
+
+        <!-- Phase: form (subfolder, options) -->
+        <div id="import-form-phase" style="display:none">
+            <h2>Import from <span id="import-vol-label"></span></h2>
+            <input type="hidden" id="import-vol-id">
+
+            <label>Subfolder (optional)
+                <div class="path-input-wrap">
+                    <input type="text" id="import-subfolder" placeholder="e.g. DCIM" class="form-input" autocomplete="off">
+                    <div id="import-subfolder-autocomplete" class="tag-autocomplete" style="display:none"></div>
+                </div>
+            </label>
+
+            <label id="import-profile-label" style="display:none">Profile
+                <select id="import-profile" class="form-input">
+                    <option value="">(default)</option>
+                </select>
+            </label>
+
+            <label>Additional tags
+                <input type="text" id="import-tags" placeholder="Comma-separated tags" class="form-input">
+            </label>
+
+            <div class="import-checkboxes">
+                <label><input type="checkbox" id="import-auto-group" checked> Auto-group variants</label>
+                <label><input type="checkbox" id="import-smart"> Smart previews</label>
+            </div>
+
+            <div class="import-form-actions">
+                <button class="batch-btn" id="import-dry-run">Dry Run</button>
+                <button class="batch-btn batch-btn-primary" id="import-start">Import</button>
+                <button class="batch-btn" id="import-cancel">Cancel</button>
+            </div>
+            <div id="import-dry-result" style="display:none" class="import-dry-result"></div>
+        </div>
+
+        <!-- Phase: progress -->
+        <div id="import-progress-phase" style="display:none">
+            <h2>Importing…</h2>
+            <div class="import-progress-bar">
+                <div class="import-progress-fill" id="import-fill"></div>
+            </div>
+            <div id="import-status-text" class="import-status-text">Starting…</div>
+            <div id="import-log" class="import-log"></div>
+        </div>
+
+        <!-- Phase: result -->
+        <div id="import-result-phase" style="display:none">
+            <h2>Import Complete</h2>
+            <div id="import-result-text" class="import-result-text"></div>
+            <div class="import-form-actions">
+                <a id="import-browse-link" href="/" class="batch-btn batch-btn-primary">Browse imported</a>
+                <button class="batch-btn" id="import-close">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
