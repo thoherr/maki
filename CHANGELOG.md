@@ -2,6 +2,48 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.4.9 (2026-04-27)
+
+Two themes: web import is now reachable from anywhere and survives page reloads; the CLI is more talkative about follow-up commands so users don't get stuck mid-workflow.
+
+### Global import dialog
+
+The import dialog used to live only on `/volumes` and lost its progress feed on page reload. It now:
+
+- Has a **global "Import" nav entry** with a pulsing-dot **status badge** whenever a job is running. Click while a job is in flight and the dialog re-attaches to the live SSE feed instead of opening the volume picker.
+- Picks a volume up front: when invoked from the global nav (no volume preselected), the dialog asks which mounted volume to import from. The per-volume buttons on `/volumes` skip this step.
+- **Re-attaches to running jobs**: SSE handler subscribes first, replays a 100-event ring buffer of recent events, then chains live broadcast — a page reload mid-import doesn't lose the activity log.
+- **Path autocomplete on the subfolder field**: shell-style hierarchical completion. Type to see directory entries from disk, `↑`/`↓`/`Tab`/`Enter`/`Esc`, drill on directory, commit on file. Backed by a new `GET /api/volumes/{id}/browse?prefix=&limit=&filter=&hidden=` endpoint with a `canonicalize().starts_with(mount_canon)` security clamp — `..` traversal and inside-the-mount symlinks pointing outward are rejected with 403. 8 unit tests cover the security boundary including the symlink-escape case.
+- **Chip-based tag picker** for "Additional tags", matching the filter-bar UX: autocomplete from `/api/tags`, Enter/comma/click to add, Backspace on empty input removes the last chip. Half-typed text auto-commits on Import / Dry Run so it doesn't get silently dropped. No mode (`=`/`/`) or case (`cc`/`Cc`) toggles — those are search-time concepts irrelevant when applying tags.
+- **Subfolder input** stretches full form width like the other fields.
+- **"Browse imported" link** actually scopes the result: exact `id:` filter for ≤80 imported assets, falling back to volume + subfolder + `sort=date_desc` for larger batches. Previously it pointed at the unfiltered browse page.
+- New `GET /api/import/profiles` endpoint feeds the dialog's profile dropdown, so the partial template carries no template-variable dependencies and works as an include from any page.
+- New `GET /api/import/status` reports running totals (`imported`, `skipped`, `locations_added`, `recipes`, `started_at`) in addition to `running` / `job_id`. The nav badge polls this every 4 s.
+
+### Workflow hints
+
+A new pattern — `Tip:` lines at the end of state-changing commands — closes UX gaps where one command leaves the catalog needing a follow-up but doesn't say so. Same shape everywhere: count + action + command:
+
+- **`sync --apply --remove-stale`** → hints `cleanup` when locationless variants linger after stale-location removal. This is the real-world case that prompted the feature: deleting jpgs on disk, running sync, and then being surprised that the variants (often the *selected* preview pick) lingered until the next manual `cleanup --apply`.
+- **`dedup --apply`** → same trap; same hint.
+- **`fix-roles --apply`** → hints `generate-previews --upgrade` when the best-preview variant changed for some assets (cached previews still reflect the old best).
+- **`auto-group --apply`** (standalone) → same: merging donors into a target reorders variants.
+- **`generate-previews`** → lists *which volumes were offline* when variants were skipped, instead of silently producing a low file count.
+- **`import`** *(ai/pro)* → hints `embed` / `describe` when neither flag was passed and `[import]` config didn't enable them.
+- **`rebuild-catalog`** *(ai)* → counts assets without an embedding row and assets with NULL `face_scan_status`; hints `embed` / `faces detect` for each non-zero count. Embeddings restored only if their binary files were on disk; the rest must be regenerated.
+
+### CI fix
+
+`cargo install cargo-about --locked` started silently skipping the `cargo about` binary when 0.9.0 gated it behind a non-default `cli` feature. The Release workflow now passes `--features cli` so license generation works again.
+
+### Polish
+
+- User guide: Web UI chapter rewritten for the global Import nav and the new dialog behaviour. Maintenance chapter notes the post-sync cleanup hint.
+- Reference: REST API doc gains a "Volume Management" section (list/register/rename/purpose/remove/browse) and an "Import API" section (start/progress/status/profiles), neither documented before.
+- Cheat sheet, tagging poster, search filters card: version bumped to v4.4.9; no content changes (workflow hints don't fit the format).
+
+Tests: 753 unit + 249 CLI integration + 14 doc on standard build. Path-resolution security boundary covered by 8 new tests in `web::routes::volumes`.
+
 ## v4.4.8 (2026-04-24)
 
 Tag vocabulary interchange with Lightroom / Capture One, plus two long-standing bugs in scoped maintenance commands.

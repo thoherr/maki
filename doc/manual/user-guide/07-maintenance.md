@@ -187,7 +187,7 @@ With `--apply`, sync updates the catalog and sidecar files:
 maki sync /Volumes/PhotosDrive/Photos/ --apply --remove-stale
 ```
 
-`--remove-stale` (which requires `--apply`) removes catalog location records for files that are confirmed missing. Use this when you intentionally deleted files and want the catalog to reflect that.
+`--remove-stale` (which requires `--apply`) removes catalog location records for files that are confirmed missing. Use this when you intentionally deleted files and want the catalog to reflect that. If removing those locations leaves variants with no remaining locations (often the asset's *selected* preview variant), `sync` prints a follow-up tip pointing at `maki cleanup --apply` to remove the dangling variants and their orphaned previews/embeddings/face files.
 
 ### Scoping to a volume
 

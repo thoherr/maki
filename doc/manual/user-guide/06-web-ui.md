@@ -801,18 +801,25 @@ A **Register Volume** button at the top opens an inline form: enter the path, th
 
 ### Importing from a volume
 
-Click **Import** on any online volume row to open the import dialog. The dialog lets you:
+The import dialog is reachable from two places:
 
-- Specify an optional **subfolder** within the volume (e.g. `DCIM/100CANON` for a memory card)
-- Choose an **import profile** from `[import.profiles.*]` in `maki.toml` (or default)
-- Add **tags** to apply to every imported asset
-- Toggle **auto-group variants** and **smart previews**
-- Run a **dry run** first to see how many files would be imported
-- Click **Import** to start the actual import
+- **Global "Import" entry** in the top navigation (every page). Opens the dialog with a volume-picker step first — pick which mounted volume to import from, then proceed to the form.
+- **Per-volume "Import" button** on `/volumes`. Skips the picker and goes straight to the form for that volume.
 
-While importing, the dialog switches to a live progress view: a progress bar, running counts of imported/skipped/locations/recipes, and a scrolling log of the most recent files. Progress is streamed via Server-Sent Events, so you can keep the page open and watch in real time. You can also navigate away and come back — only one import runs at a time, and the import continues in the background.
+Both routes share the same dialog. The form lets you:
 
-When the import finishes, the dialog shows a summary and a **Browse imported** link to view the new assets in the browse grid. This is the web equivalent of `maki import` for the most common workflow: plug in a card, register it (if needed), import to your media volume.
+- Specify an optional **subfolder** within the volume (e.g. `DCIM/100CANON` for a memory card). The field has **shell-style path autocomplete**: type to see directory entries under the volume's mount point, `↑`/`↓` to navigate, `Tab` or `Enter` on a directory drills in for the next level, on a file commits the value. `Esc` dismisses the dropdown. Server-side path resolution is clamped to the volume mount, so symlinks or `..` segments that would escape the mount are rejected.
+- Choose an **import profile** from `[import.profiles.*]` in `maki.toml` (or default).
+- Add **tags** to apply to every imported asset, via a chip picker matching the filter bar's tag UX. Type to autocomplete from existing tags, `Enter` or `,` adds a chip, `Backspace` on the empty input removes the last chip.
+- Toggle **auto-group variants** and **smart previews**.
+- Run a **dry run** first to see how many files would be imported.
+- Click **Import** to start the actual import.
+
+While importing, the dialog switches to a live progress view: a progress bar, running counts of imported/skipped/locations/recipes, and a scrolling log of the most recent files. Progress is streamed via Server-Sent Events, so you can keep the page open and watch in real time.
+
+A **pulsing red dot** next to the "Import" entry in the navigation indicates that a job is running anywhere in the catalog. Click the entry while a job is in flight and the dialog **re-attaches to the running job**: it replays the last ~100 events and continues with the live stream, so a page reload during a long import doesn't lose the activity feed. Only one import runs at a time, server-side.
+
+When the import finishes, the dialog shows a summary and a **Browse imported** link that scopes the browse view to the newly imported assets — exact `id:` filter for small batches (up to 80 assets), or the volume + subfolder filter sorted by date for larger ones. This is the web equivalent of `maki import` for the most common workflow: plug in a card, register it (if needed), import to your media volume.
 
 ---
 

@@ -1477,6 +1477,185 @@ curl -X DELETE http://localhost:8080/api/saved-searches/5-star%20landscapes
 
 ---
 
+## Volume Management
+
+The `/volumes` page and the global import dialog talk to these endpoints to register, edit, and remove volumes, and to browse their filesystem for the import flow.
+
+### `GET /api/volumes` -- List Volumes
+
+Returns the registered volumes (online and offline). Used by the global import dialog's volume picker and the volumes page table.
+
+**Response**:
+```json
+[
+  {
+    "id": "f3a1b...",
+    "label": "Pictures",
+    "mount_point": "/Volumes/Pictures",
+    "volume_type": "external",
+    "purpose": "media",
+    "is_online": true
+  }
+]
+```
+
+### `POST /api/volumes` -- Register a Volume
+
+Registers a new volume. Equivalent to `maki volume add`.
+
+**Request body**:
+```json
+{
+  "path": "/Volumes/PHOTO-2026",
+  "label": "Photo 2026",
+  "purpose": "archive"
+}
+```
+
+`label` is required (UI auto-derives it from the path basename); `purpose` is optional (`media`, `working`, `archive`, `backup`, `cloud`). Returns 409 if a volume with the same label or path is already registered, 400 on invalid input.
+
+### `PUT /api/volumes/{id}/rename` -- Rename a Volume
+
+```json
+{ "label": "New label" }
+```
+
+### `PUT /api/volumes/{id}/purpose` -- Set Volume Purpose
+
+```json
+{ "purpose": "archive" }
+```
+
+`purpose` may be `null` to clear.
+
+### `DELETE /api/volumes/{id}` -- Remove a Volume
+
+Removes the volume registration and any orphaned assets/locations/recipes/derived files left behind. Equivalent to `maki volume remove --apply`.
+
+**Response**:
+```json
+{
+  "label": "Pictures",
+  "locations_removed": 1234,
+  "recipes_removed": 56,
+  "assets_removed": 789
+}
+```
+
+### `GET /api/volumes/{id}/browse` -- Browse Filesystem
+
+Lists directory entries directly from disk under the volume's mount point. Distinct from `/api/paths` (which queries indexed catalog paths) — this returns paths not yet imported, used by the import dialog's subfolder autocomplete.
+
+| Parameter | Type    | Description |
+|-----------|---------|-------------|
+| `prefix`  | string  | Volume-relative path prefix (forward-slash separated). Empty = mount root. |
+| `limit`   | number  | Max entries returned (default 50, capped at 500). |
+| `hidden`  | string  | Set to `"1"` to include dotfiles. Default off. |
+| `filter`  | string  | `"all"` (default), `"dirs"`, or `"files"`. |
+
+**Response**:
+```json
+{
+  "prefix": "2026/04",
+  "entries": [
+    { "name": "2026-04-22-paris", "is_dir": true,  "relative_path": "2026/04/2026-04-22-paris" },
+    { "name": "2026-04-25.cr3",   "is_dir": false, "relative_path": "2026/04/2026-04-25.cr3" }
+  ]
+}
+```
+
+Sorted directories-first, alphabetical within each. Resolved paths are canonicalized and asserted to start with the canonical mount point — `..` traversal that escapes the mount, and symlinks pointing outside, return **403**. Returns **404** if the prefix doesn't exist or isn't a directory; **400** if the volume is offline.
+
+---
+
+## Import API
+
+A single import job runs at a time on the server. Clients start it via `POST /api/import`, observe via the SSE stream and the status endpoint, and re-attach to a running job by reconnecting the SSE stream.
+
+### `POST /api/import` -- Start Import
+
+Starts an import job (or runs a dry-run synchronously). Returns 409 if a job is already running.
+
+**Request body**:
+```json
+{
+  "volume_id": "f3a1b...",
+  "subfolder": "2026/04/2026-04-25-paris",
+  "profile": "weekly",
+  "tags": ["paris", "spring-2026"],
+  "auto_group": true,
+  "smart": false,
+  "dry_run": false
+}
+```
+
+All fields except `volume_id` are optional. `subfolder` is volume-relative (no leading `/`).
+
+**Response (live)**:
+```json
+{ "job_id": "uuid-...", "status": "started" }
+```
+
+**Response (dry_run = true)**:
+```json
+{
+  "dry_run": true,
+  "imported": 142,
+  "locations_added": 3,
+  "skipped": 8,
+  "recipes_attached": 142,
+  "recipes_updated": 0,
+  "previews_generated": 0,
+  "new_asset_ids": ["uuid", "..."]
+}
+```
+
+### `GET /api/import/progress` -- SSE Progress Stream
+
+Server-Sent Events stream of per-file events while a job runs. On connect: replays a ring buffer of up to 100 recent events first, then continues with the live broadcast — so a page reload mid-import doesn't lose the activity feed. Returns **404** if no job is running.
+
+Each event payload is JSON:
+
+```json
+{ "done": false, "file": "IMG_1234.jpg", "status": "imported",
+  "imported": 17, "skipped": 0, "locations_added": 0, "recipes": 0 }
+```
+
+The terminal event has `"done": true` plus the final summary fields (or `"error"` on failure).
+
+### `GET /api/import/status` -- Job Status
+
+Cheap poll endpoint. Used by the nav badge to show whether a job is running.
+
+**Response (running)**:
+```json
+{
+  "running": true,
+  "job_id": "uuid-...",
+  "started_at": "2026-04-27T14:31:08Z",
+  "imported": 17,
+  "skipped": 0,
+  "locations_added": 0,
+  "recipes": 0
+}
+```
+
+**Response (idle)**:
+```json
+{ "running": false }
+```
+
+### `GET /api/import/profiles` -- Named Import Profiles
+
+Lists named import profiles from `[import.profiles.*]` in `maki.toml`. The global import dialog populates its profile dropdown from this so the partial template carries no template-variable dependencies.
+
+**Response**:
+```json
+{ "profiles": ["weekly", "video"] }
+```
+
+---
+
 ## Static Assets
 
 ### `GET /static/htmx.min.js`
