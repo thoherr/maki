@@ -7635,6 +7635,14 @@ faces/\n\
             let catalog_root = maki::config::find_catalog_root()?;
             let config = CatalogConfig::load(&catalog_root)?;
             let ai_enabled = cfg!(feature = "ai");
+            // The orphan-on-disk scan (cleanup passes 4-7) dominates runtime
+            // on real catalogs — easily 30s+ on tens of thousands of files.
+            // Emit a one-line "still alive" marker to stderr so the user
+            // doesn't wonder whether the command crashed. Suppressed under
+            // --json so scripted output stays clean.
+            if !cli.json {
+                eprintln!("Gathering catalog status (scanning derived files; may take a moment)...");
+            }
             let report = maki::status::gather(
                 &catalog_root,
                 verbosity,
