@@ -131,6 +131,7 @@ function onFilterChange() {
     if (form) htmx.trigger(form, 'submit');
 }
 window.triggerSearch = onFilterChange;
+window.onFilterChange = onFilterChange;
 </script>
 {% include "filter_bar_js.html" %}
 <script>
@@ -2523,11 +2524,12 @@ window.damFacets = (function() {
         document.getElementById('sidebar-close').addEventListener('click', toggle);
         // Click-to-narrow on facet rows. Event delegation on the content
         // container so re-renders (which replace innerHTML) don't drop the
-        // listener. Tags are the only clickable facet for now.
+        // listener. Each facet type maps to a different filter-bar setter
+        // for consistency with the existing widgets.
         content.addEventListener('click', handleFacetClick);
         content.addEventListener('keydown', function(e) {
             if (e.key === 'Enter' || e.key === ' ') {
-                if (e.target.closest && e.target.closest('[data-facet-tag]')) {
+                if (e.target.closest && e.target.closest('[data-facet-type]')) {
                     e.preventDefault();
                     handleFacetClick(e);
                 }
@@ -2538,11 +2540,42 @@ window.damFacets = (function() {
     }
 
     function handleFacetClick(e) {
-        var row = e.target.closest('[data-facet-tag]');
+        var row = e.target.closest('[data-facet-type]');
         if (!row) return;
-        var tag = row.getAttribute('data-facet-tag');
-        if (tag && window.damTags && window.damTags.addTagAndSearch) {
-            window.damTags.addTagAndSearch(tag);
+        var type = row.getAttribute('data-facet-type');
+        var value = row.getAttribute('data-facet-value');
+        switch (type) {
+            case 'tag':
+                if (window.damTags && window.damTags.addTagAndSearch) {
+                    window.damTags.addTagAndSearch(value);
+                }
+                break;
+            case 'rating':
+                if (window.setRatingFilter) {
+                    // Star widget uses '+' for "≥N", but a row click sets
+                    // the exact value. Empty string clears.
+                    window.setRatingFilter(value);
+                    if (window.onFilterChange) window.onFilterChange();
+                }
+                break;
+            case 'label':
+                if (window.setLabelFilter) {
+                    window.setLabelFilter(value);
+                    if (window.onFilterChange) window.onFilterChange();
+                }
+                break;
+            case 'format':
+                if (window.toggleFormatFilter) window.toggleFormatFilter(value);
+                break;
+            case 'volume':
+                if (window.setVolumeFilterById) window.setVolumeFilterById(value);
+                break;
+            case 'year':
+                if (window.addQueryTerm) window.addQueryTerm('date:' + value);
+                break;
+            case 'geotagged':
+                if (window.addQueryTerm) window.addQueryTerm('geotagged:1');
+                break;
         }
     }
 
@@ -2592,13 +2625,81 @@ window.damFacets = (function() {
         'Green': '#27ae60', 'Blue': '#3498db', 'Pink': '#e91e8e', 'Purple': '#9b59b6'
     };
 
+    function escAttr(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    }
+    function escHtml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    }
+
+    // Build a tree from the catalog's flat (auto-expanded) tag list.
+    // Input: [["event", 47], ["event|festival", 47], ["event|festival|H...|2024", 12], ...]
+    // Output: nested {name, fullPath, count, children: []} ordered alphabetically
+    // at each depth. Auto-expansion guarantees every parent path is present in
+    // the input, so we can rely on lookup-or-create to wire children to parents.
+    function buildTagTree(flat) {
+        var root = { children: {}, _order: [] };
+        flat.forEach(function(entry) {
+            var path = entry[0];
+            var count = entry[1];
+            var parts = path.split('|');
+            var node = root;
+            var acc = '';
+            for (var i = 0; i < parts.length; i++) {
+                acc = i === 0 ? parts[i] : (acc + '|' + parts[i]);
+                if (!node.children[parts[i]]) {
+                    node.children[parts[i]] = {
+                        name: parts[i],
+                        fullPath: acc,
+                        count: 0,
+                        children: {},
+                        _order: [],
+                    };
+                    node._order.push(parts[i]);
+                }
+                node = node.children[parts[i]];
+            }
+            node.count = count;
+        });
+        function sortRec(n) {
+            n._order.sort(function(a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
+            n._order.forEach(function(k) { sortRec(n.children[k]); });
+        }
+        sortRec(root);
+        return root;
+    }
+
+    function renderTagTree(root) {
+        var h = '';
+        function walk(node, depth) {
+            node._order.forEach(function(k) {
+                var c = node.children[k];
+                h += '<div class="facet-item facet-clickable facet-tag-row" ' +
+                     'data-facet-type="tag" ' +
+                     'data-facet-value="' + escAttr(c.fullPath) + '" ' +
+                     'style="--depth: ' + depth + '" ' +
+                     'role="button" tabindex="0" ' +
+                     'title="' + escAttr(c.fullPath) + ' — click to narrow">';
+                h += '<span class="facet-label">' + escHtml(c.name) + '</span>';
+                h += '<span class="facet-count">' + c.count + '</span>';
+                h += '</div>';
+                walk(c, depth + 1);
+            });
+        }
+        walk(root, 0);
+        return h;
+    }
+
+    // Section ordering reflects how often the user filters by each axis:
+    // tags (the curated taxonomy) above formats/volumes (which most users
+    // touch rarely after initial setup). Ratings/labels stay near the top
+    // because the star/dot UI in the filter row makes them headline filters.
     function render(data) {
         var html = '';
 
-        // Rating section
+        // Rating section — clicking a row mirrors the star widget.
         html += facetSection('ratings', 'Ratings', function() {
             var h = '';
-            // Sort: 5 down to 1, then unrated (null)
             var sorted = (data.ratings || []).slice().sort(function(a, b) {
                 if (a[0] === null) return 1;
                 if (b[0] === null) return -1;
@@ -2615,7 +2716,12 @@ window.damFacets = (function() {
                     stars = 'Unrated';
                 }
                 var pct = Math.round((cnt / maxCount) * 100);
-                h += '<div class="facet-item">';
+                var ratingValue = val === null ? '0' : String(val);
+                h += '<div class="facet-item facet-clickable" ' +
+                     'data-facet-type="rating" ' +
+                     'data-facet-value="' + ratingValue + '" ' +
+                     'role="button" tabindex="0" ' +
+                     'title="Click to filter by this rating">';
                 h += '<span class="facet-label">' + stars + '</span>';
                 h += '<span class="facet-bar-wrap"><span class="facet-bar" style="width:' + pct + '%"></span></span>';
                 h += '<span class="facet-count">' + cnt + '</span>';
@@ -2624,79 +2730,39 @@ window.damFacets = (function() {
             return h;
         });
 
-        // Label section
+        // Label section — clicking a row mirrors the label-dot widget.
         html += facetSection('labels', 'Labels', function() {
             var h = '';
             var sorted = (data.labels || []).slice().sort(function(a, b) { return b[1] - a[1]; });
             for (var i = 0; i < sorted.length; i++) {
                 var val = sorted[i][0];
                 var cnt = sorted[i][1];
+                var labelValue = val === null ? 'none' : val;
                 var dot = val && labelColors[val] ? '<span class="facet-label-dot" style="background:' + labelColors[val] + '"></span>' : '';
-                h += '<div class="facet-item">';
-                h += '<span class="facet-label">' + dot + (val || 'No label') + '</span>';
+                h += '<div class="facet-item facet-clickable" ' +
+                     'data-facet-type="label" ' +
+                     'data-facet-value="' + escAttr(labelValue) + '" ' +
+                     'role="button" tabindex="0" ' +
+                     'title="Click to filter by this label">';
+                h += '<span class="facet-label">' + dot + escHtml(val || 'No label') + '</span>';
                 h += '<span class="facet-count">' + cnt + '</span>';
                 h += '</div>';
             }
             return h;
         });
 
-        // Format section
-        html += facetSection('formats', 'Formats', function() {
-            var h = '';
-            for (var i = 0; i < (data.formats || []).length; i++) {
-                var val = data.formats[i][0];
-                var cnt = data.formats[i][1];
-                h += '<div class="facet-item">';
-                h += '<span class="facet-label">' + val + '</span>';
-                h += '<span class="facet-count">' + cnt + '</span>';
-                h += '</div>';
-            }
-            return h;
-        });
-
-        // Volume section
-        if (data.volumes && data.volumes.length > 0) {
-            html += facetSection('volumes', 'Volumes', function() {
-                var h = '';
-                for (var i = 0; i < data.volumes.length; i++) {
-                    var vlabel = data.volumes[i][1];
-                    var cnt = data.volumes[i][2];
-                    h += '<div class="facet-item">';
-                    h += '<span class="facet-label">' + vlabel + '</span>';
-                    h += '<span class="facet-count">' + cnt + '</span>';
-                    h += '</div>';
-                }
-                return h;
-            });
-        }
-
-        // Tags section. Each row is click-to-narrow: clicking a tag adds it
-        // as a filter chip and refreshes the result set (and the panel),
-        // turning the panel into a "tag strolling" UI — start broad, click
-        // co-occurring tags to drill in. Tags already present in the
-        // current filter are de-duplicated by addTagAndSearch.
+        // Tags section — hierarchical render. Auto-expansion on storage means
+        // every ancestor path is already in the flat list with its own count,
+        // so we can simply reshape into a tree and indent. Click-to-narrow
+        // applies the FULL path (so picking "2024" under "Holzkirchner..."
+        // adds the disambiguated tag, not the bare leaf).
         if (data.tags && data.tags.length > 0) {
             html += facetSection('tags', 'Tags', function() {
-                var h = '';
-                for (var i = 0; i < data.tags.length; i++) {
-                    var val = data.tags[i][0];
-                    var cnt = data.tags[i][1];
-                    var safeVal = val.replace(/&/g, '&amp;')
-                                     .replace(/</g, '&lt;')
-                                     .replace(/"/g, '&quot;');
-                    h += '<div class="facet-item facet-clickable" ' +
-                         'data-facet-tag="' + safeVal + '" ' +
-                         'role="button" tabindex="0" ' +
-                         'title="Click to narrow by this tag">';
-                    h += '<span class="facet-label">' + safeVal + '</span>';
-                    h += '<span class="facet-count">' + cnt + '</span>';
-                    h += '</div>';
-                }
-                return h;
+                return renderTagTree(buildTagTree(data.tags));
             });
         }
 
-        // Years section
+        // Years section — clicking appends `date:YYYY` to the q box.
         if (data.years && data.years.length > 0) {
             html += facetSection('years', 'Years', function() {
                 var h = '';
@@ -2705,8 +2771,12 @@ window.damFacets = (function() {
                     var val = data.years[i][0];
                     var cnt = data.years[i][1];
                     var pct = Math.round((cnt / maxCount) * 100);
-                    h += '<div class="facet-item">';
-                    h += '<span class="facet-label">' + val + '</span>';
+                    h += '<div class="facet-item facet-clickable" ' +
+                         'data-facet-type="year" ' +
+                         'data-facet-value="' + escAttr(val) + '" ' +
+                         'role="button" tabindex="0" ' +
+                         'title="Click to filter by this year">';
+                    h += '<span class="facet-label">' + escHtml(val) + '</span>';
                     h += '<span class="facet-bar-wrap"><span class="facet-bar" style="width:' + pct + '%"></span></span>';
                     h += '<span class="facet-count">' + cnt + '</span>';
                     h += '</div>';
@@ -2715,10 +2785,53 @@ window.damFacets = (function() {
             });
         }
 
-        // Geotagged
+        // Format section — clicking toggles the format checkbox.
+        html += facetSection('formats', 'Formats', function() {
+            var h = '';
+            for (var i = 0; i < (data.formats || []).length; i++) {
+                var val = data.formats[i][0];
+                var cnt = data.formats[i][1];
+                h += '<div class="facet-item facet-clickable" ' +
+                     'data-facet-type="format" ' +
+                     'data-facet-value="' + escAttr(val) + '" ' +
+                     'role="button" tabindex="0" ' +
+                     'title="Click to toggle this format">';
+                h += '<span class="facet-label">' + escHtml(val) + '</span>';
+                h += '<span class="facet-count">' + cnt + '</span>';
+                h += '</div>';
+            }
+            return h;
+        });
+
+        // Volume section — clicking sets the volume select (single-select).
+        if (data.volumes && data.volumes.length > 0) {
+            html += facetSection('volumes', 'Volumes', function() {
+                var h = '';
+                for (var i = 0; i < data.volumes.length; i++) {
+                    var vid = data.volumes[i][0];
+                    var vlabel = data.volumes[i][1];
+                    var cnt = data.volumes[i][2];
+                    h += '<div class="facet-item facet-clickable" ' +
+                         'data-facet-type="volume" ' +
+                         'data-facet-value="' + escAttr(vid) + '" ' +
+                         'role="button" tabindex="0" ' +
+                         'title="Click to filter by this volume">';
+                    h += '<span class="facet-label">' + escHtml(vlabel) + '</span>';
+                    h += '<span class="facet-count">' + cnt + '</span>';
+                    h += '</div>';
+                }
+                return h;
+            });
+        }
+
+        // Geotagged — clicking appends `geotagged:1` to the q box.
         if (data.geotagged > 0) {
             html += '<div class="facet-section facet-geo">';
-            html += '<div class="facet-item">';
+            html += '<div class="facet-item facet-clickable" ' +
+                 'data-facet-type="geotagged" ' +
+                 'data-facet-value="1" ' +
+                 'role="button" tabindex="0" ' +
+                 'title="Click to filter to geotagged assets">';
             html += '<span class="facet-label">\uD83D\uDCCD Geotagged</span>';
             html += '<span class="facet-count">' + data.geotagged + '</span>';
             html += '</div></div>';

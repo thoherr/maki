@@ -401,6 +401,42 @@
     window.getFilterLabel = getFilterLabel;
     window.setLabelFilter = setLabelFilter;
 
+    // Helper exposed for the facet panel: toggle a single format checkbox
+    // and trigger a filter refresh. Treats the click as additive (multi-
+    // select), matching the panel UI's own group-toggle semantics.
+    window.toggleFormatFilter = function(fmt) {
+        var panel = document.getElementById('format-panel');
+        if (!panel) return;
+        var cb = panel.querySelector('.format-cb[value="' + fmt + '"]');
+        if (!cb) return;
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    // Helper exposed for the facet panel: set the volume select to the
+    // given volume id (or "" to clear) and trigger a filter refresh.
+    window.setVolumeFilterById = function(volId) {
+        var sel = document.querySelector('.filter-row [name=volume]');
+        if (!sel) return;
+        sel.value = volId || '';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    // Helper exposed for the facet panel: append a `date:YYYY` (or
+    // `geotagged:1`) free-text term to the search box without dropping
+    // existing terms, then trigger a refresh. De-duplicates so repeated
+    // clicks are no-ops.
+    window.addQueryTerm = function(term) {
+        var input = document.querySelector('.search-row input[name=q]');
+        if (!input) return;
+        var current = input.value.trim();
+        var tokens = current.split(/\s+/).filter(Boolean);
+        if (tokens.indexOf(term) !== -1) return;
+        tokens.push(term);
+        input.value = tokens.join(' ');
+        onFilterChange();
+    };
+
     // --- Format multi-select filter ---
     var fmtTrigger = document.getElementById('format-trigger');
     var fmtPanel = document.getElementById('format-panel');

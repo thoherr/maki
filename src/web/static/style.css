@@ -3458,9 +3458,9 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     border-radius: 3px;
     color: var(--text);
 }
-/* Click-to-narrow rows in the facet panel (currently: tags). The hover
-   tint matches `.tag-suggestion:hover` so the affordance reads as the
-   same kind of "click-to-add" action used elsewhere. */
+/* Click-to-narrow rows in the facet panel. Hover tint matches
+   `.tag-suggestion:hover` so the affordance reads as the same kind of
+   "click-to-add" action used elsewhere. */
 .facet-item.facet-clickable {
     cursor: pointer;
     user-select: none;
@@ -3469,6 +3469,13 @@ body.has-batch-toolbar { padding-bottom: 60px; }
 .facet-item.facet-clickable:focus-visible {
     background: var(--badge-bg);
     outline: none;
+}
+/* Tag rows in the facet panel render as an indented hierarchy. Each row
+   carries a `--depth` CSS variable set inline (0 for root, +1 per nest),
+   driving padding-left so children stack visually under their parents
+   without needing nested DOM. */
+.facet-item.facet-tag-row {
+    padding-left: calc(0.3rem + var(--depth, 0) * 0.85rem);
 }
 .facet-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .facet-count {
