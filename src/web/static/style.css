@@ -3458,6 +3458,18 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     border-radius: 3px;
     color: var(--text);
 }
+/* Click-to-narrow rows in the facet panel (currently: tags). The hover
+   tint matches `.tag-suggestion:hover` so the affordance reads as the
+   same kind of "click-to-add" action used elsewhere. */
+.facet-item.facet-clickable {
+    cursor: pointer;
+    user-select: none;
+}
+.facet-item.facet-clickable:hover,
+.facet-item.facet-clickable:focus-visible {
+    background: var(--badge-bg);
+    outline: none;
+}
 .facet-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .facet-count {
     color: var(--text-muted);

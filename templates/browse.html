@@ -2521,8 +2521,29 @@ window.damFacets = (function() {
             fetchFacets();
         }
         document.getElementById('sidebar-close').addEventListener('click', toggle);
+        // Click-to-narrow on facet rows. Event delegation on the content
+        // container so re-renders (which replace innerHTML) don't drop the
+        // listener. Tags are the only clickable facet for now.
+        content.addEventListener('click', handleFacetClick);
+        content.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+                if (e.target.closest && e.target.closest('[data-facet-tag]')) {
+                    e.preventDefault();
+                    handleFacetClick(e);
+                }
+            }
+        });
         // Restore section collapse states
         restoreCollapseStates();
+    }
+
+    function handleFacetClick(e) {
+        var row = e.target.closest('[data-facet-tag]');
+        if (!row) return;
+        var tag = row.getAttribute('data-facet-tag');
+        if (tag && window.damTags && window.damTags.addTagAndSearch) {
+            window.damTags.addTagAndSearch(tag);
+        }
     }
 
     function toggle() {
@@ -2649,15 +2670,25 @@ window.damFacets = (function() {
             });
         }
 
-        // Tags section
+        // Tags section. Each row is click-to-narrow: clicking a tag adds it
+        // as a filter chip and refreshes the result set (and the panel),
+        // turning the panel into a "tag strolling" UI — start broad, click
+        // co-occurring tags to drill in. Tags already present in the
+        // current filter are de-duplicated by addTagAndSearch.
         if (data.tags && data.tags.length > 0) {
             html += facetSection('tags', 'Tags', function() {
                 var h = '';
                 for (var i = 0; i < data.tags.length; i++) {
                     var val = data.tags[i][0];
                     var cnt = data.tags[i][1];
-                    h += '<div class="facet-item">';
-                    h += '<span class="facet-label">' + val + '</span>';
+                    var safeVal = val.replace(/&/g, '&amp;')
+                                     .replace(/</g, '&lt;')
+                                     .replace(/"/g, '&quot;');
+                    h += '<div class="facet-item facet-clickable" ' +
+                         'data-facet-tag="' + safeVal + '" ' +
+                         'role="button" tabindex="0" ' +
+                         'title="Click to narrow by this tag">';
+                    h += '<span class="facet-label">' + safeVal + '</span>';
                     h += '<span class="facet-count">' + cnt + '</span>';
                     h += '</div>';
                 }

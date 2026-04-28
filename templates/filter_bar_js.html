@@ -301,7 +301,11 @@
         allTags: function() { return allTags; },
         fetchTags: fetchTags,
         tagToDisplay: tagToDisplay,
-        tagToStorage: tagToStorage
+        tagToStorage: tagToStorage,
+        // Exposed so external UIs (facet panel, in-grid badges, …) can
+        // append a tag to the current filter and trigger a refresh
+        // without duplicating the chip-build + search-rerun dance.
+        addTagAndSearch: addTagAndSearch,
     };
     window.getSelectedTags = getSelectedTags;
 
