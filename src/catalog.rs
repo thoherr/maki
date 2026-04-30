@@ -4117,13 +4117,23 @@ impl Catalog {
             }
         }
 
-        // 6. Tag distribution (JSON expansion of a.tags)
+        // 6. Tag distribution (JSON expansion of a.tags). Returns every tag
+        // present in the matching set, not just a top-N: the facet sidebar
+        // renders these as a hierarchy, and an arbitrary cap chops off
+        // lower-frequency siblings — with a knock-on effect of leaving
+        // descendants without their parent rows (the JS tree-build then
+        // synthesises a count=0 parent, which is visually wrong). The data
+        // volume is bounded by the user's actual tag vocabulary; the 5000-
+        // row cap is generous (real catalogues we've seen mid-restructure
+        // were at ~4500 distinct tags total — far more than would appear
+        // in any single filtered result set), but cheap: short strings,
+        // SQLite GROUP BY on a denormalised JSON expansion.
         let mut tags = Vec::new();
         {
             let sql = format!(
                 "SELECT je.value, COUNT(DISTINCT a.id) AS cnt \
                  {base_from}, json_each(a.tags) AS je{where_clause} \
-                 GROUP BY je.value ORDER BY cnt DESC LIMIT 30"
+                 GROUP BY je.value ORDER BY cnt DESC LIMIT 5000"
             );
             let mut stmt = self.conn.prepare(&sql)?;
             let rows = stmt.query_map(prefs!(params).as_slice(), |row| {
