@@ -113,7 +113,7 @@ fn resolve_similar_filter(
     Ok((Vec::new(), std::collections::HashMap::new()))
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct SearchParams {
     pub q: Option<String>,
     #[serde(rename = "type")]

@@ -1416,9 +1416,20 @@ window.onFilterChange = onFilterChange;
         if (form) htmx.trigger(form, 'submit');
     });
 
-    // Sync button state after htmx swaps
+    // Sync button state after htmx swaps. Read the source of truth from
+    // the URL (htmx with hx-push-url updates window.location.search), not
+    // from the in-memory `stackCollapse` variable — that variable is only
+    // touched by the toggle button itself, so links that change stacks=
+    // independently (e.g. the "X more in stacks" hint next to the result
+    // count) would otherwise leave the button stuck at the old state, and
+    // the user's first click on it would be a no-op as the toggle handler
+    // overwrites the URL with the variable's stale value.
     document.body.addEventListener('htmx:afterSwap', function(e) {
         if (e.detail.target && e.detail.target.id === 'results') {
+            var urlStacks = new URLSearchParams(window.location.search).get('stacks');
+            if (urlStacks !== null && urlStacks !== window.getStackCollapse()) {
+                window.setStackCollapse(urlStacks);
+            }
             var btn = document.getElementById('stack-collapse-toggle');
             if (btn) {
                 if (window.getStackCollapse() === '1') {

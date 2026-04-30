@@ -259,6 +259,12 @@ pub struct BrowsePage {
     pub sort: String,
     pub cards: Vec<AssetCard>,
     pub total: u64,
+    /// Additional matches that would appear if `&stacks=0` were set.
+    /// `0` when not collapsing stacks or when no extra matches exist.
+    pub count_in_stacks: u64,
+    /// Additional matches that would appear if the configured default filter
+    /// were disabled (`&nodefault=1`). `0` when no default filter is active.
+    pub count_filtered_by_default: u64,
     pub page: u32,
     pub per_page: u32,
     pub total_pages: u32,
@@ -296,6 +302,10 @@ pub struct ResultsPartial {
     pub sort: String,
     pub cards: Vec<AssetCard>,
     pub total: u64,
+    /// Additional matches that would appear if `&stacks=0` were set.
+    pub count_in_stacks: u64,
+    /// Additional matches that would appear without the configured default filter.
+    pub count_filtered_by_default: u64,
     pub page: u32,
     pub per_page: u32,
     pub total_pages: u32,
