@@ -482,10 +482,24 @@
         var ac = document.createElement('div');
         ac.className = 'tag-autocomplete';
         ac.style.display = 'none';
-        attachTagAutocomplete(input, ac, function() {
-            splitApplyBtn.disabled = true;
-            splitResultEl.textContent = '';
-        });
+        attachTagAutocomplete(
+            input,
+            ac,
+            function() { splitApplyBtn.disabled = true; splitResultEl.textContent = ''; },
+            // Enter when autocomplete is closed:
+            //   - non-last row → advance focus to the next row's input,
+            //     mirroring how Tab moves through fields. Lets the user
+            //     fill targets sequentially without reaching for the mouse.
+            //   - last row → submit. If Apply is enabled, fire it; otherwise
+            //     fire Preview. Same Enter-twice rhythm as the rename modal.
+            function() {
+                if (row.nextElementSibling) {
+                    var nextInput = row.nextElementSibling.querySelector('input.split-target-input');
+                    if (nextInput) { nextInput.focus(); return; }
+                }
+                doSplit(!splitApplyBtn.disabled);
+            }
+        );
 
         inputWrap.appendChild(input);
         inputWrap.appendChild(ac);
