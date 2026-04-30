@@ -39,12 +39,16 @@
                descendant). Matches `tag:foo` (default ▼) browse semantic.
                Subtle parenthesised number = leaf_count: assets where the
                tag sits at the leaf on that asset (no descendant on the
-               same asset). Matches `tag:/foo` browse semantic. We only
-               render the second number when it differs from the first —
-               for true leaf tags (no children anywhere) the two are equal
-               and one number suffices. #}
+               same asset). Matches `tag:/foo` browse semantic.
+               Only show the parens when leaf_count is between 0 and
+               own_count exclusive — that's the *interesting* case
+               ("some assets are tagged at exactly this level when they
+               could be more specific"). For a true-leaf tag the two
+               numbers are equal (one number suffices); for a properly-
+               tagged parent leaf_count is 0 and "(0 as leaf)" would just
+               be visual noise on every parent row. #}
             {{ t.own_count }}
-            {% if t.leaf_count != t.own_count %}
+            {% if t.leaf_count > 0 && t.leaf_count != t.own_count %}
             <span class="tag-total-count" title="{{ t.leaf_count }} asset(s) tagged at this exact level (no deeper child); the headline includes assets where this is auto-expanded from a descendant">({{ t.leaf_count }} as leaf)</span>
             {% endif %}
         </span>
