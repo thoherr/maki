@@ -3120,71 +3120,29 @@ faces/\n\
                 let mgr = ModelManager::new(&model_dir, model_id)?;
 
                 if mgr.model_exists() {
-                    let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-                    let _ = maki::embedding_store::EmbeddingStore::initialize(catalog.conn());
-                    let emb_store = maki::embedding_store::EmbeddingStore::new(catalog.conn());
-
                     let service = AssetService::new(&catalog_root, verbosity, &config.preview);
-                    let preview_gen = maki::preview::PreviewGenerator::new(
-                        &catalog_root,
-                        verbosity,
-                        &config.preview,
-                    );
-
-                    let registry = DeviceRegistry::new(&catalog_root);
-                    let volumes_list = registry.list()?;
-                    let online_volumes = maki::models::Volume::online_map(&volumes_list);
-
-                    let mut ai_model = maki::ai::SigLipModel::load_with_provider(&model_dir, model_id, verbosity, &config.ai.execution_provider)?;
-
-                    let mut embedded = 0u32;
-                    let mut embed_skipped = 0u32;
-                    for aid in &result.new_asset_ids {
-                        let short_id = &aid[..8_usize.min(aid.len())];
-
-                        if emb_store.has_embedding(aid, model_id) {
-                            embed_skipped += 1;
-                            continue;
-                        }
-
-                        let details = match catalog.load_asset_details(aid)? {
-                            Some(d) => d,
-                            None => continue,
-                        };
-
-                        let image_path = match service.find_image_for_ai(&details, &preview_gen, &online_volumes) {
-                            Some(p) => p,
-                            None => { embed_skipped += 1; continue; }
-                        };
-
-                        let ext = image_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                        if !maki::ai::is_supported_image(ext) {
-                            embed_skipped += 1;
-                            continue;
-                        }
-
-                        match ai_model.encode_image(&image_path) {
-                            Ok(emb) => {
-                                if let Err(e) = emb_store.store(aid, &emb, model_id) {
-                                    if cli.log {
-                                        eprintln!("  {short_id} — embed error: {e}");
-                                    }
-                                    continue;
+                    let log = cli.log;
+                    let r = service.embed_assets(
+                        &result.new_asset_ids,
+                        &model_dir,
+                        model_id,
+                        &config.ai.execution_provider,
+                        false,
+                        |aid, status, _elapsed| {
+                            if !log { return; }
+                            let short = &aid[..8.min(aid.len())];
+                            match status {
+                                maki::asset_service::EmbedStatus::Embedded => {
+                                    eprintln!("  {short} — embedded");
                                 }
-                                let _ = maki::embedding_store::write_embedding_binary(&catalog_root, model_id, aid, &emb);
-                                embedded += 1;
-                                if cli.log {
-                                    eprintln!("  {short_id} — embedded");
+                                maki::asset_service::EmbedStatus::Error(msg) => {
+                                    eprintln!("  {short} — embed error: {msg}");
                                 }
+                                maki::asset_service::EmbedStatus::Skipped(_) => {}
                             }
-                            Err(e) => {
-                                if cli.log {
-                                    eprintln!("  {short_id} — embed error: {e:#}");
-                                }
-                            }
-                        }
-                    }
-                    Some((embedded, embed_skipped))
+                        },
+                    )?;
+                    Some((r.embedded, r.skipped))
                 } else {
                     if cli.log {
                         eprintln!("  Skipping embeddings: model not downloaded. Run 'maki auto-tag --download' first.");
@@ -5032,111 +4990,49 @@ faces/\n\
                 results.into_iter().map(|r| r.asset_id).collect()
             };
 
-            let _ = maki::embedding_store::EmbeddingStore::initialize(catalog.conn());
-            let emb_store = maki::embedding_store::EmbeddingStore::new(catalog.conn());
-
-            let registry = DeviceRegistry::new(&catalog_root);
-            let volumes_list = registry.list()?;
-            let online_volumes = maki::models::Volume::online_map(&volumes_list);
-
             let service = AssetService::new(&catalog_root, verbosity, &config.preview);
-            let preview_gen = maki::preview::PreviewGenerator::new(
-                &catalog_root,
-                verbosity,
-                &config.preview,
-            );
-
-            let mut ai_model = maki::ai::SigLipModel::load_with_provider(&model_dir, model_id, verbosity, &config.ai.execution_provider)?;
-
-            let mut embedded: u32 = 0;
-            let mut skipped: u32 = 0;
-            let mut errors: Vec<String> = Vec::new();
-
-            for aid in &asset_ids {
-                let short_id = &aid[..8_usize.min(aid.len())];
-                let asset_start = std::time::Instant::now();
-
-                // Skip if embedding already exists (unless --force)
-                if !force && emb_store.has_embedding(aid, model_id) {
-                    skipped += 1;
-                    if cli.log {
-                        item_status(short_id, "skipped: already exists", Some(asset_start.elapsed()));
-                    }
-                    continue;
-                }
-
-                let details = match catalog.load_asset_details(aid)? {
-                    Some(d) => d,
-                    None => {
-                        errors.push(format!("{short_id}: asset not found"));
-                        continue;
-                    }
-                };
-
-                let image_path = match service.find_image_for_ai(&details, &preview_gen, &online_volumes) {
-                    Some(p) => p,
-                    None => {
-                        skipped += 1;
-                        if cli.log {
-                            eprintln!("  {short_id} — skipped: no processable image");
+            let log = cli.log;
+            let result = service.embed_assets(
+                &asset_ids,
+                &model_dir,
+                model_id,
+                &config.ai.execution_provider,
+                force,
+                |aid, status, elapsed| {
+                    if !log { return; }
+                    let short = &aid[..8.min(aid.len())];
+                    match status {
+                        maki::asset_service::EmbedStatus::Embedded => {
+                            item_status(short, "embedded", Some(elapsed));
                         }
-                        continue;
-                    }
-                };
-
-                let ext = image_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("");
-                if !maki::ai::is_supported_image(ext) {
-                    skipped += 1;
-                    if cli.log {
-                        eprintln!("  {short_id} — skipped: unsupported format '{ext}'");
-                    }
-                    continue;
-                }
-
-                match ai_model.encode_image(&image_path) {
-                    Ok(emb) => {
-                        if let Err(e) = emb_store.store(aid, &emb, model_id) {
-                            errors.push(format!("{short_id}: failed to store: {e}"));
-                            continue;
+                        maki::asset_service::EmbedStatus::Skipped(reason) => {
+                            item_status(short, &format!("skipped: {reason}"), Some(elapsed));
                         }
-                        // Write SigLIP embedding binary
-                        if let Err(e) = maki::embedding_store::write_embedding_binary(&catalog_root, model_id, aid, &emb) {
-                            if verbosity.debug {
-                                eprintln!("  {short_id}: embedding binary error: {e:#}");
-                            }
-                        }
-                        embedded += 1;
-                        if cli.log {
-                            item_status(short_id, "embedded", Some(asset_start.elapsed()));
+                        maki::asset_service::EmbedStatus::Error(msg) => {
+                            eprintln!("  {short} — error: {msg}");
                         }
                     }
-                    Err(e) => {
-                        errors.push(format!("{short_id}: {e:#}"));
-                    }
-                }
-            }
+                },
+            )?;
 
             if cli.json {
                 println!("{}", serde_json::json!({
-                    "embedded": embedded,
-                    "skipped": skipped,
-                    "errors": errors,
+                    "embedded": result.embedded,
+                    "skipped": result.skipped,
+                    "errors": result.errors,
                     "model": model_id,
                     "force": force,
                 }));
             } else {
-                for err in &errors {
+                for err in &result.errors {
                     eprintln!("  {err}");
                 }
                 let mut parts = vec![
-                    format!("{embedded} embedded"),
-                    format!("{skipped} skipped"),
+                    format!("{} embedded", result.embedded),
+                    format!("{} skipped", result.skipped),
                 ];
-                if !errors.is_empty() {
-                    parts.push(format!("{} errors", errors.len()));
+                if !result.errors.is_empty() {
+                    parts.push(format!("{} errors", result.errors.len()));
                 }
                 println!("Embed: {}", parts.join(", "));
             }

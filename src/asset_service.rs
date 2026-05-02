@@ -406,6 +406,23 @@ pub struct VolumeSplitResult {
     pub errors: Vec<String>,
 }
 
+/// Result of generating SigLIP embeddings for a batch of assets.
+#[cfg(feature = "ai")]
+#[derive(Debug, serde::Serialize)]
+pub struct EmbedAssetsResult {
+    pub embedded: u32,
+    pub skipped: u32,
+    pub errors: Vec<String>,
+}
+
+/// Per-asset status during embedding.
+#[cfg(feature = "ai")]
+pub enum EmbedStatus {
+    Embedded,
+    Skipped(&'static str),
+    Error(String),
+}
+
 /// Result of face detection on a batch of assets.
 #[cfg(feature = "ai")]
 #[derive(Debug, serde::Serialize)]
@@ -6158,6 +6175,110 @@ impl AssetService {
                 AutoTagStatus::Suggested(new_suggestions)
             };
             on_asset(aid, &status, asset_start.elapsed());
+        }
+
+        Ok(result)
+    }
+
+    /// Generate SigLIP embeddings for the given asset IDs.
+    ///
+    /// Reused by `maki embed` and the post-import embedding phase (CLI + web).
+    /// Skips assets that already have an embedding for `model_id` unless `force`.
+    /// `on_asset` reports per-asset progress: status enum + elapsed time.
+    #[cfg(feature = "ai")]
+    pub fn embed_assets(
+        &self,
+        asset_ids: &[String],
+        model_dir: &std::path::Path,
+        model_id: &str,
+        execution_provider: &str,
+        force: bool,
+        on_asset: impl Fn(&str, &EmbedStatus, std::time::Duration),
+    ) -> Result<EmbedAssetsResult> {
+        use crate::ai::SigLipModel;
+        use crate::catalog::Catalog;
+        use crate::embedding_store::EmbeddingStore;
+        use crate::preview::PreviewGenerator;
+
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let _ = EmbeddingStore::initialize(catalog.conn());
+        let emb_store = EmbeddingStore::new(catalog.conn());
+        let preview_gen = PreviewGenerator::new(&self.catalog_root, self.verbosity, &self.preview_config);
+        let registry = DeviceRegistry::new(&self.catalog_root);
+        let volumes = registry.list()?;
+        let online_volumes = crate::models::Volume::online_map(&volumes);
+
+        let mut model = SigLipModel::load_with_provider(
+            model_dir,
+            model_id,
+            self.verbosity,
+            execution_provider,
+        )?;
+
+        let mut result = EmbedAssetsResult {
+            embedded: 0,
+            skipped: 0,
+            errors: Vec::new(),
+        };
+
+        for aid in asset_ids {
+            let asset_start = Instant::now();
+
+            if !force && emb_store.has_embedding(aid, model_id) {
+                result.skipped += 1;
+                on_asset(aid, &EmbedStatus::Skipped("already exists"), asset_start.elapsed());
+                continue;
+            }
+
+            let details = match catalog.load_asset_details(aid)? {
+                Some(d) => d,
+                None => {
+                    let msg = "asset not found";
+                    result.errors.push(format!("{}: {msg}", &aid[..8.min(aid.len())]));
+                    on_asset(aid, &EmbedStatus::Error(msg.to_string()), asset_start.elapsed());
+                    continue;
+                }
+            };
+
+            let image_path = match self.find_image_for_ai(&details, &preview_gen, &online_volumes) {
+                Some(p) => p,
+                None => {
+                    result.skipped += 1;
+                    on_asset(aid, &EmbedStatus::Skipped("no processable image"), asset_start.elapsed());
+                    continue;
+                }
+            };
+
+            let ext = image_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if !crate::ai::is_supported_image(ext) {
+                result.skipped += 1;
+                on_asset(aid, &EmbedStatus::Skipped("unsupported format"), asset_start.elapsed());
+                continue;
+            }
+
+            match model.encode_image(&image_path) {
+                Ok(emb) => {
+                    if let Err(e) = emb_store.store(aid, &emb, model_id) {
+                        let msg = format!("failed to store: {e}");
+                        result.errors.push(format!("{}: {msg}", &aid[..8.min(aid.len())]));
+                        on_asset(aid, &EmbedStatus::Error(msg), asset_start.elapsed());
+                        continue;
+                    }
+                    let _ = crate::embedding_store::write_embedding_binary(
+                        &self.catalog_root,
+                        model_id,
+                        aid,
+                        &emb,
+                    );
+                    result.embedded += 1;
+                    on_asset(aid, &EmbedStatus::Embedded, asset_start.elapsed());
+                }
+                Err(e) => {
+                    let msg = format!("{e:#}");
+                    result.errors.push(format!("{}: {msg}", &aid[..8.min(aid.len())]));
+                    on_asset(aid, &EmbedStatus::Error(msg), asset_start.elapsed());
+                }
+            }
         }
 
         Ok(result)
