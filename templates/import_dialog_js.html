@@ -623,6 +623,46 @@
         };
     }
 
+    // Minimize: hand the running import off to the global progress toast and
+    // close the dialog overlay. The import keeps running on the server (it's
+    // already a registered job); the toast subscribes to the same SSE feed
+    // so the user sees "X imported, Y skipped" in the corner instead of a
+    // full-screen modal. Reopening the import link while still running
+    // re-attaches via reattachIfRunning().
+    var minBtn = document.getElementById('import-minimize');
+    if (minBtn) {
+        minBtn.addEventListener('click', function() {
+            if (!activeJobId) {
+                // Nothing to minimize — just close.
+                closeDialog();
+                return;
+            }
+            var jobId = activeJobId;
+            // Tear down the dialog's own SSE connection BEFORE handing the
+            // job off, so we don't have two listeners on the same broadcast
+            // racing on the done event.
+            if (eventSource) { eventSource.close(); eventSource = null; }
+            overlay.style.display = 'none';
+            activeJobId = null;
+            window.makiJob.watch(jobId, 'Import', {
+                onDone: function(evt) {
+                    // Refresh the current page if it's a search/browse view so
+                    // newly-imported assets appear; otherwise the badge alone
+                    // is enough feedback.
+                    if (window.location.pathname === '/' && !evt.error) {
+                        // Defer slightly so the toast's summary line is visible
+                        // before the grid reloads.
+                        setTimeout(function() {
+                            if (window.htmx) {
+                                htmx.ajax('GET', window.location.href, {target: '#results', swap: 'innerHTML'});
+                            }
+                        }, 500);
+                    }
+                }
+            });
+        });
+    }
+
     // Close on overlay click + Escape
     overlay.addEventListener('click', function(e) {
         if (e.target === overlay) closeDialog();
