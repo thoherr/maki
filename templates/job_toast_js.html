@@ -1,0 +1,106 @@
+<script>
+// Reusable progress toast for background jobs.
+//
+// API:
+//   window.makiJob.watch(jobId, label, options?)
+//     options.onDone(terminalEvent) — called with the final SSE event so the
+//                                     caller can refresh the page, show
+//                                     follow-up alerts, etc.
+//     options.autoCloseMs (default 4000) — ms before auto-dismiss on success.
+//                                          Pass 0 to require manual close.
+//
+// Single-instance: a second watch() call cancels the first.
+(function() {
+    var toast = document.getElementById('job-toast');
+    if (!toast) return;
+    var labelEl = document.getElementById('job-toast-label');
+    var statusEl = document.getElementById('job-toast-status');
+    var closeBtn = document.getElementById('job-toast-close');
+
+    var es = null;
+    var autoCloseTimer = null;
+
+    function close() {
+        if (es) { es.close(); es = null; }
+        if (autoCloseTimer) { clearTimeout(autoCloseTimer); autoCloseTimer = null; }
+        toast.style.display = 'none';
+    }
+
+    closeBtn.addEventListener('click', close);
+
+    // Build a human progress line from the per-asset event. Different job
+    // kinds carry different counters; we look at the common ones in priority
+    // order. Uniform shape keeps the toast caller-agnostic.
+    function progressLine(evt) {
+        if (typeof evt.processed === 'number') {
+            var line = evt.processed + (typeof evt.total === 'number' ? ' / ' + evt.total : '') + ' done';
+            if (evt.status && evt.status !== 'starting') line += ' — ' + evt.status;
+            if (evt.asset) line += ' (' + evt.asset + ')';
+            return line;
+        }
+        return evt.status || 'Working…';
+    }
+
+    // Build the final summary line from the terminal `done: true` event.
+    // Pulls whatever counters are present — the routes emit different sets.
+    function summaryLine(evt) {
+        if (evt.error) return 'Failed: ' + evt.error;
+        var parts = [];
+        if (typeof evt.embedded === 'number')        parts.push(evt.embedded + ' embedded');
+        if (typeof evt.succeeded === 'number')       parts.push(evt.succeeded + ' processed');
+        if (typeof evt.tags_applied === 'number' && evt.tags_applied > 0)
+                                                     parts.push(evt.tags_applied + ' tags applied');
+        if (typeof evt.faces_detected === 'number')  parts.push(evt.faces_detected + ' faces');
+        if (typeof evt.skipped === 'number' && evt.skipped > 0)
+                                                     parts.push(evt.skipped + ' skipped');
+        if (typeof evt.failed === 'number' && evt.failed > 0)
+                                                     parts.push(evt.failed + ' failed');
+        if (evt.errors && evt.errors.length > 0)     parts.push(evt.errors.length + ' error(s)');
+        return parts.length > 0 ? parts.join(', ') : 'Done';
+    }
+
+    function watch(jobId, label, options) {
+        options = options || {};
+        // Cancel any prior watch — only one toast at a time.
+        close();
+
+        labelEl.textContent = label || 'Processing…';
+        statusEl.textContent = 'Starting…';
+        toast.style.display = 'block';
+
+        es = new EventSource('/api/jobs/' + encodeURIComponent(jobId) + '/progress');
+        es.onmessage = function(e) {
+            var evt;
+            try { evt = JSON.parse(e.data); } catch (_) { return; }
+            if (evt.done) {
+                if (es) { es.close(); es = null; }
+                statusEl.textContent = summaryLine(evt);
+                if (typeof options.onDone === 'function') {
+                    try { options.onDone(evt); } catch (_) {}
+                }
+                var autoCloseMs = options.autoCloseMs == null ? 4000 : options.autoCloseMs;
+                if (autoCloseMs > 0 && !evt.error) {
+                    autoCloseTimer = setTimeout(close, autoCloseMs);
+                }
+                // Refresh the nav badge so it stops pulsing.
+                if (window.makiImportStatus && window.makiImportStatus.refresh) {
+                    window.makiImportStatus.refresh();
+                }
+                return;
+            }
+            statusEl.textContent = progressLine(evt);
+        };
+        es.onerror = function() {
+            if (es) { es.close(); es = null; }
+            statusEl.textContent = 'Connection lost. Job may still be running on the server.';
+        };
+
+        // Refresh nav badge so it pulses immediately for this job.
+        if (window.makiImportStatus && window.makiImportStatus.refresh) {
+            window.makiImportStatus.refresh();
+        }
+    }
+
+    window.makiJob = { watch: watch, close: close };
+})();
+</script>

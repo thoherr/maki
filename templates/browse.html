@@ -1128,22 +1128,28 @@ window.onFilterChange = onFilterChange;
         autotagBtn.addEventListener('click', function() {
             if (selected.size === 0 || batchBusy) return;
             if (!confirm('Auto-tag ' + selected.size + ' selected asset(s)? Tags above the configured confidence threshold will be applied.')) return;
-            setButtonsBusy(true);
+            var ids = Array.from(selected);
+            // Async via job registry: POST returns a job_id, the toast shows
+            // live progress and the final summary, then we refresh the grid
+            // on done so the new tags surface in the UI.
             fetch('/api/batch/auto-tag', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({asset_ids: Array.from(selected)})
+                body: JSON.stringify({asset_ids: ids})
             })
-            .then(function(r) { return r.json(); })
+            .then(function(r) {
+                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+                return r.json();
+            })
             .then(function(data) {
-                setButtonsBusy(false);
-                alert(data.tags_applied + ' tag(s) applied to ' + data.succeeded + ' asset(s).' +
-                    (data.failed > 0 ? ' ' + data.failed + ' failed.' : ''));
                 clearSelection();
-                htmx.ajax('GET', window.location.href, {target: '#results', swap: 'innerHTML'});
+                window.makiJob.watch(data.job_id, 'Auto-tag (' + ids.length + ')', {
+                    onDone: function() {
+                        htmx.ajax('GET', window.location.href, {target: '#results', swap: 'innerHTML'});
+                    }
+                });
             })
             .catch(function(err) {
-                setButtonsBusy(false);
                 alert('Auto-tag failed: ' + err.message);
             });
         });
@@ -1154,22 +1160,21 @@ window.onFilterChange = onFilterChange;
         embedBtn.addEventListener('click', function() {
             if (selected.size === 0 || batchBusy) return;
             if (!confirm('Generate embeddings for ' + selected.size + ' selected asset(s)?\n\nNo tags will be applied — this only builds the visual-similarity index.')) return;
-            setButtonsBusy(true);
+            var ids = Array.from(selected);
             fetch('/api/batch/embed', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({asset_ids: Array.from(selected)})
+                body: JSON.stringify({asset_ids: ids})
             })
-            .then(function(r) { return r.json(); })
+            .then(function(r) {
+                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+                return r.json();
+            })
             .then(function(data) {
-                setButtonsBusy(false);
-                var msg = data.embedded + ' embedded, ' + data.skipped + ' skipped';
-                if (data.errors && data.errors.length > 0) msg += ', ' + data.errors.length + ' error(s)';
-                alert(msg);
                 clearSelection();
+                window.makiJob.watch(data.job_id, 'Embed (' + ids.length + ')');
             })
             .catch(function(err) {
-                setButtonsBusy(false);
                 alert('Embed failed: ' + err.message);
             });
         });
@@ -1180,22 +1185,25 @@ window.onFilterChange = onFilterChange;
         detectFacesBtn.addEventListener('click', function() {
             if (selected.size === 0 || batchBusy) return;
             if (!confirm('Detect faces in ' + selected.size + ' selected asset(s)?')) return;
-            setButtonsBusy(true);
+            var ids = Array.from(selected);
             fetch('/api/batch/detect-faces', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({asset_ids: Array.from(selected)})
+                body: JSON.stringify({asset_ids: ids})
             })
-            .then(function(r) { return r.json(); })
+            .then(function(r) {
+                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+                return r.json();
+            })
             .then(function(data) {
-                setButtonsBusy(false);
-                alert(data.faces_detected + ' face(s) detected in ' + data.succeeded + ' asset(s).' +
-                    (data.errors && data.errors.length > 0 ? ' ' + data.errors.length + ' error(s).' : ''));
                 clearSelection();
-                htmx.ajax('GET', window.location.href, {target: '#results', swap: 'innerHTML'});
+                window.makiJob.watch(data.job_id, 'Detect faces (' + ids.length + ')', {
+                    onDone: function() {
+                        htmx.ajax('GET', window.location.href, {target: '#results', swap: 'innerHTML'});
+                    }
+                });
             })
             .catch(function(err) {
-                setButtonsBusy(false);
                 alert('Detect faces failed: ' + err.message);
             });
         });

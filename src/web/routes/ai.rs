@@ -192,40 +192,72 @@ pub struct BatchAutoTagResponse {
     pub errors: Vec<String>,
 }
 
-/// POST /api/batch/auto-tag — auto-tag selected assets.
+/// POST /api/batch/auto-tag — start an auto-tag job for selected assets.
+///
+/// Returns `{job_id}` immediately. Progress flows through `/api/jobs/{id}/progress`;
+/// the terminal event carries `{succeeded, failed, tags_applied, errors, done: true}`.
 pub async fn batch_auto_tag(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchAutoTagRequest>,
 ) -> Response {
-    let log = state.log_requests;
-    let count = req.asset_ids.len();
-    let state2 = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        batch_auto_tag_inner(&state2, req.asset_ids)
-    })
-    .await;
+    use crate::web::jobs::JobKind;
 
-    match result {
-        Ok(Ok(resp)) => {
-            if log {
-                eprintln!(
-                    "batch_auto_tag: {} assets ({} ok, {} err, {} tags)",
-                    count, resp.succeeded, resp.failed, resp.tags_applied
-                );
+    let job = state.jobs.start(JobKind::AutoTag);
+    let job_id = job.id.clone();
+    let total = req.asset_ids.len();
+    job.emit(&serde_json::json!({
+        "phase": "auto_tag",
+        "done": false,
+        "processed": 0,
+        "total": total,
+        "status": "starting",
+    }));
+
+    let state2 = state.clone();
+    let job_for_task = job.clone();
+    tokio::spawn(async move {
+        let log = state2.log_requests;
+        let job_inner = job_for_task.clone();
+        let state_for_blocking = state2.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            batch_auto_tag_inner(&state_for_blocking, req.asset_ids, &job_inner, total)
+        })
+        .await;
+
+        let terminal = match result {
+            Ok(Ok(resp)) => {
+                if log {
+                    eprintln!(
+                        "batch_auto_tag: {} assets ({} ok, {} err, {} tags)",
+                        total, resp.succeeded, resp.failed, resp.tags_applied
+                    );
+                }
+                if resp.succeeded > 0 {
+                    state2.dropdown_cache.invalidate_tags();
+                }
+                serde_json::json!({
+                    "phase": "auto_tag",
+                    "succeeded": resp.succeeded,
+                    "failed": resp.failed,
+                    "tags_applied": resp.tags_applied,
+                    "errors": resp.errors,
+                })
             }
-            if resp.succeeded > 0 {
-                state.dropdown_cache.invalidate_tags();
-            }
-            Json(resp).into_response()
-        }
-        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+            Ok(Err(msg)) => serde_json::json!({"phase": "auto_tag", "error": msg}),
+            Err(e) => serde_json::json!({"phase": "auto_tag", "error": format!("{e}")}),
+        };
+        job_for_task.finish(terminal);
+        state2.jobs.mark_done(&job_for_task.id);
+    });
+
+    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
 }
 
 fn batch_auto_tag_inner(
     state: &AppState,
     asset_ids: Vec<String>,
+    job: &std::sync::Arc<crate::web::jobs::Job>,
+    total: usize,
 ) -> Result<BatchAutoTagResponse, String> {
     use crate::ai;
     use crate::device_registry::DeviceRegistry;
@@ -282,19 +314,38 @@ fn batch_auto_tag_inner(
         errors: Vec::new(),
     };
 
+    let mut processed: usize = 0;
+    let emit_progress = |processed: usize, aid: &str, status: &str, tags_applied: u32| {
+        let short = &aid[..8.min(aid.len())];
+        job.emit(&serde_json::json!({
+            "phase": "auto_tag",
+            "done": false,
+            "processed": processed,
+            "total": total,
+            "asset": short,
+            "status": status,
+            "tags_applied": tags_applied,
+        }));
+    };
+
     for aid in &asset_ids {
+        processed += 1;
         let details = match engine.show(aid) {
             Ok(d) => d,
             Err(e) => {
                 resp.failed += 1;
                 resp.errors.push(format!("{}: {e:#}", &aid[..8.min(aid.len())]));
+                emit_progress(processed, aid, "error", resp.tags_applied);
                 continue;
             }
         };
 
         let image_path = match service.find_image_for_ai(&details, &preview_gen, &online_volumes) {
             Some(p) => p,
-            None => continue,
+            None => {
+                emit_progress(processed, aid, "skipped", resp.tags_applied);
+                continue;
+            }
         };
 
         let ext = image_path
@@ -302,6 +353,7 @@ fn batch_auto_tag_inner(
             .and_then(|e| e.to_str())
             .unwrap_or("");
         if !ai::is_supported_image(ext) {
+            emit_progress(processed, aid, "skipped", resp.tags_applied);
             continue;
         }
 
@@ -310,6 +362,7 @@ fn batch_auto_tag_inner(
             Err(e) => {
                 resp.failed += 1;
                 resp.errors.push(format!("{}: {e:#}", &aid[..8.min(aid.len())]));
+                emit_progress(processed, aid, "error", resp.tags_applied);
                 continue;
             }
         };
@@ -345,6 +398,7 @@ fn batch_auto_tag_inner(
 
         if new_tags.is_empty() {
             resp.succeeded += 1;
+            emit_progress(processed, aid, "no-new-tags", resp.tags_applied);
             continue;
         }
 
@@ -352,10 +406,12 @@ fn batch_auto_tag_inner(
             Ok(_) => {
                 resp.tags_applied += new_tags.len() as u32;
                 resp.succeeded += 1;
+                emit_progress(processed, aid, "tagged", resp.tags_applied);
             }
             Err(e) => {
                 resp.failed += 1;
                 resp.errors.push(format!("{}: {e:#}", &aid[..8.min(aid.len())]));
+                emit_progress(processed, aid, "error", resp.tags_applied);
             }
         }
     }
@@ -375,87 +431,162 @@ pub struct BatchEmbedRequest {
     pub asset_ids: Vec<String>,
 }
 
-#[derive(Debug, serde::Serialize)]
-pub struct BatchEmbedResponse {
-    pub embedded: u32,
-    pub skipped: u32,
-    pub errors: Vec<String>,
-}
 
-/// POST /api/batch/embed — generate SigLIP embeddings for selected assets.
+/// POST /api/batch/embed — start an embedding job for selected assets.
+///
+/// Returns `{job_id}` immediately. Progress flows through the generic
+/// `/api/jobs/{id}/progress` SSE stream; the final terminal event carries
+/// `{embedded, skipped, errors, done: true}`.
 pub async fn batch_embed(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchEmbedRequest>,
 ) -> Response {
-    let log = state.log_requests;
-    let count = req.asset_ids.len();
-    let state2 = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        embed_inner(&state2, &req.asset_ids)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(resp)) => {
-            if log {
-                eprintln!(
-                    "batch_embed: {} assets ({} embedded, {} skipped, {} errors)",
-                    count, resp.embedded, resp.skipped, resp.errors.len()
-                );
-            }
-            Json(resp).into_response()
-        }
-        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    spawn_embed_job(state, req.asset_ids).await
 }
 
 /// POST /api/asset/{id}/embed — generate the SigLIP embedding for one asset.
+///
+/// Synchronous: a single image is fast (a few hundred ms) and the asset
+/// detail UI expects inline counts in the response. Batch operations go
+/// through the job registry instead.
 pub async fn embed_asset(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
 ) -> Response {
+    let model_dir = resolve_model_dir(&state.ai_config);
+    let model_id = state.ai_config.model.clone();
+    let exec = state.ai_config.execution_provider.clone();
+    let mgr = match crate::model_manager::ModelManager::new(&model_dir, &model_id) {
+        Ok(m) => m,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    };
+    if !mgr.model_exists() {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Model '{model_id}' is not downloaded."),
+        )
+            .into_response();
+    }
+
     let state2 = state.clone();
     let result = tokio::task::spawn_blocking(move || {
-        embed_inner(&state2, &[asset_id])
+        let service = state2.asset_service();
+        service.embed_assets(
+            &[asset_id],
+            &model_dir,
+            &model_id,
+            &exec,
+            false,
+            |_, _, _| {},
+        )
     })
     .await;
 
     match result {
-        Ok(Ok(resp)) => Json(resp).into_response(),
-        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+        Ok(Ok(r)) => Json(serde_json::json!({
+            "embedded": r.embedded,
+            "skipped": r.skipped,
+            "errors": r.errors,
+        }))
+        .into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
     }
 }
 
-fn embed_inner(state: &AppState, asset_ids: &[String]) -> Result<BatchEmbedResponse, String> {
+async fn spawn_embed_job(state: Arc<AppState>, asset_ids: Vec<String>) -> Response {
+    use crate::web::jobs::JobKind;
+
+    // Pre-flight: bail early if the model isn't on disk. The HTTP client gets
+    // a 500 with a clear message rather than a job that immediately fails.
     let model_dir = resolve_model_dir(&state.ai_config);
-    let model_id = &state.ai_config.model;
-    let mgr = crate::model_manager::ModelManager::new(&model_dir, model_id)
-        .map_err(|e| format!("{e:#}"))?;
+    let model_id = state.ai_config.model.clone();
+    let exec_provider = state.ai_config.execution_provider.clone();
+    let mgr = match crate::model_manager::ModelManager::new(&model_dir, &model_id) {
+        Ok(m) => m,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    };
     if !mgr.model_exists() {
-        return Err(format!(
-            "Model '{model_id}' is not downloaded. Run 'maki auto-tag --download' first."
-        ));
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Model '{model_id}' is not downloaded. Run 'maki auto-tag --download' first."),
+        )
+            .into_response();
     }
 
-    let service = state.asset_service();
-    let r = service
-        .embed_assets(
-            asset_ids,
-            &model_dir,
-            model_id,
-            &state.ai_config.execution_provider,
-            false,
-            |_, _, _| {},
-        )
-        .map_err(|e| format!("{e:#}"))?;
+    let job = state.jobs.start(JobKind::Embed);
+    let job_id = job.id.clone();
+    let total = asset_ids.len();
+    job.emit(&serde_json::json!({
+        "phase": "embed",
+        "done": false,
+        "processed": 0,
+        "total": total,
+        "status": "starting",
+    }));
 
-    Ok(BatchEmbedResponse {
-        embedded: r.embedded,
-        skipped: r.skipped,
-        errors: r.errors,
-    })
+    let state2 = state.clone();
+    let job_for_task = job.clone();
+    tokio::spawn(async move {
+        let job_inner = job_for_task.clone();
+        let service = state2.asset_service();
+        let log = state2.log_requests;
+        let processed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let processed_for_cb = processed.clone();
+        let job_for_cb = job_inner.clone();
+
+        let result = tokio::task::spawn_blocking(move || {
+            service.embed_assets(
+                &asset_ids,
+                &model_dir,
+                &model_id,
+                &exec_provider,
+                false,
+                move |aid, status, _elapsed| {
+                    use std::sync::atomic::Ordering::Relaxed;
+                    let n = processed_for_cb.fetch_add(1, Relaxed) + 1;
+                    let label = match status {
+                        crate::asset_service::EmbedStatus::Embedded => "embedded",
+                        crate::asset_service::EmbedStatus::Skipped(_) => "skipped",
+                        crate::asset_service::EmbedStatus::Error(_) => "error",
+                    };
+                    let short = &aid[..8.min(aid.len())];
+                    job_for_cb.emit(&serde_json::json!({
+                        "phase": "embed",
+                        "done": false,
+                        "processed": n,
+                        "total": total,
+                        "status": label,
+                        "asset": short,
+                    }));
+                },
+            )
+        })
+        .await;
+
+        let terminal = match result {
+            Ok(Ok(r)) => {
+                if log {
+                    eprintln!(
+                        "batch_embed: {} assets ({} embedded, {} skipped, {} errors)",
+                        total, r.embedded, r.skipped, r.errors.len()
+                    );
+                }
+                serde_json::json!({
+                    "phase": "embed",
+                    "embedded": r.embedded,
+                    "skipped": r.skipped,
+                    "errors": r.errors,
+                })
+            }
+            Ok(Err(e)) => serde_json::json!({"phase": "embed", "error": format!("{e:#}")}),
+            Err(e) => serde_json::json!({"phase": "embed", "error": format!("{e}")}),
+        };
+        job_for_task.finish(terminal);
+        state2.jobs.mark_done(&job_for_task.id);
+    });
+
+    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
 }
 
 // --- Visual similarity search endpoint ---
@@ -685,25 +816,103 @@ pub async fn detect_faces_for_asset(
     }
 }
 
-/// POST /api/batch/detect-faces — batch detect faces for selected assets.
+/// POST /api/batch/detect-faces — start a face-detection job for selected assets.
+///
+/// Returns `{job_id}` immediately. Progress flows through `/api/jobs/{id}/progress`;
+/// the terminal event carries `{succeeded, faces_detected, errors, done: true}`.
 pub async fn batch_detect_faces(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
+    use crate::web::jobs::JobKind;
+
     let asset_ids: Vec<String> = body.get("asset_ids")
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    let state2 = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        detect_faces_inner(&state2, &asset_ids)
-    }).await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": msg}))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e}")}))).into_response(),
+    // Pre-flight: face models present?
+    let face_model_dir = crate::face::resolve_face_model_dir(&state.ai_config);
+    if !crate::face::FaceDetector::models_exist(&face_model_dir) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Face models not downloaded. Run 'maki faces download' first.",
+        )
+            .into_response();
     }
+
+    let job = state.jobs.start(JobKind::DetectFaces);
+    let job_id = job.id.clone();
+    let total = asset_ids.len();
+    job.emit(&serde_json::json!({
+        "phase": "detect_faces",
+        "done": false,
+        "processed": 0,
+        "total": total,
+        "status": "starting",
+    }));
+
+    let state2 = state.clone();
+    let job_for_task = job.clone();
+    let exec_provider = state.ai_config.execution_provider.clone();
+    let min_conf = state.ai_config.face_min_confidence;
+
+    tokio::spawn(async move {
+        let job_inner = job_for_task.clone();
+        let processed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let processed_for_cb = processed.clone();
+        let job_for_cb = job_inner.clone();
+        let state_for_blocking = state2.clone();
+
+        let result = tokio::task::spawn_blocking(move || {
+            let mut detector = match crate::face::FaceDetector::load_with_provider(
+                &face_model_dir,
+                state_for_blocking.verbosity,
+                &exec_provider,
+            ) {
+                Ok(d) => d,
+                Err(e) => return Err(format!("Failed to load face detector: {e:#}")),
+            };
+            let service = state_for_blocking.asset_service();
+            service
+                .detect_faces(
+                    &asset_ids,
+                    &mut detector,
+                    min_conf,
+                    true,
+                    true,
+                    move |aid, faces, _elapsed| {
+                        use std::sync::atomic::Ordering::Relaxed;
+                        let n = processed_for_cb.fetch_add(1, Relaxed) + 1;
+                        let short = &aid[..8.min(aid.len())];
+                        job_for_cb.emit(&serde_json::json!({
+                            "phase": "detect_faces",
+                            "done": false,
+                            "processed": n,
+                            "total": total,
+                            "asset": short,
+                            "faces": faces,
+                        }));
+                    },
+                )
+                .map_err(|e| format!("{e:#}"))
+        })
+        .await;
+
+        let terminal = match result {
+            Ok(Ok(r)) => serde_json::json!({
+                "phase": "detect_faces",
+                "succeeded": r.assets_processed,
+                "faces_detected": r.faces_detected,
+                "errors": r.errors,
+            }),
+            Ok(Err(e)) => serde_json::json!({"phase": "detect_faces", "error": e}),
+            Err(e) => serde_json::json!({"phase": "detect_faces", "error": format!("{e}")}),
+        };
+        job_for_task.finish(terminal);
+        state2.jobs.mark_done(&job_for_task.id);
+    });
+
+    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
 }
 
 fn detect_faces_inner(state: &AppState, asset_ids: &[String]) -> Result<serde_json::Value, String> {

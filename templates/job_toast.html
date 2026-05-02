@@ -1,0 +1,21 @@
+<!--
+    Reusable progress toast for background jobs (embed, auto-tag, detect-faces).
+    Mounted from base.html so any page can call window.makiJob.watch(jobId, label)
+    without per-page wiring.
+
+    Visual: small floating panel bottom-right with the job kind, a progress
+    line, and a close button. Auto-dismisses on success after a brief delay so
+    short jobs don't clutter the screen; sticks around on error so the user
+    can read what went wrong.
+
+    Single-instance — second `watch()` call cancels the first. Long-running
+    operations stack via the nav badge (which counts running jobs), not by
+    showing multiple toasts at once.
+-->
+<div id="job-toast" class="job-toast" style="display:none">
+    <div class="job-toast-row">
+        <span class="job-toast-label" id="job-toast-label">Processing…</span>
+        <button type="button" class="job-toast-close" id="job-toast-close" title="Dismiss">&times;</button>
+    </div>
+    <div class="job-toast-status" id="job-toast-status">Starting…</div>
+</div>
