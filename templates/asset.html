@@ -81,7 +81,8 @@
         {% if ai_enabled %}
         <details>
             <summary>Similar images</summary>
-            <button id="find-similar-btn" class="btn btn-sm" onclick="findSimilar()">Find similar</button>
+            <button id="embed-btn" class="btn btn-sm" onclick="generateEmbedding()" title="Build the visual-similarity embedding for this asset (no tags applied)">Embed</button>
+            <button id="find-similar-btn" class="btn btn-sm" style="margin-left:4px;" onclick="findSimilar()">Find similar</button>
             <a href="/?q=similar:{{ asset_id }}" class="btn btn-sm" style="margin-left:4px;">Browse similar</a>
             {% if stack_members.is_empty() %}
             <button id="stack-similar-btn" class="btn btn-sm" style="margin-left:4px;" onclick="stackSimilar()">Stack similar</button>
@@ -1312,6 +1313,41 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
     };
 
     // --- Find similar images ---
+    window.generateEmbedding = function() {
+        var btn = document.getElementById('embed-btn');
+        var container = document.getElementById('similar-results');
+        if (!btn) return;
+        btn.textContent = 'Embedding...';
+        btn.disabled = true;
+        fetch('/api/asset/' + assetId + '/embed', { method: 'POST' })
+        .then(function(r) {
+            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            return r.json();
+        })
+        .then(function(data) {
+            btn.textContent = 'Embed';
+            btn.disabled = false;
+            if (data.embedded > 0) {
+                if (container) {
+                    container.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem;">Embedding generated. Click Find similar to search.</span>';
+                    container.style.display = 'block';
+                }
+            } else if (data.skipped > 0) {
+                if (container) {
+                    container.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem;">Embedding already exists for this asset.</span>';
+                    container.style.display = 'block';
+                }
+            } else if (data.errors && data.errors.length > 0) {
+                alert('Embed failed: ' + data.errors.join(', '));
+            }
+        })
+        .catch(function(err) {
+            btn.textContent = 'Embed';
+            btn.disabled = false;
+            alert('Embed failed: ' + err.message);
+        });
+    };
+
     window.findSimilar = function() {
         var btn = document.getElementById('find-similar-btn');
         var container = document.getElementById('similar-results');
@@ -1329,7 +1365,7 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
             btn.textContent = 'Find similar';
             btn.disabled = false;
             if (!results || results.length === 0) {
-                container.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem;">No similar images found. Run auto-tag on more assets to build embeddings.</span>';
+                container.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem;">No similar images found. Click Embed on more assets (or run auto-tag) to build embeddings.</span>';
                 container.style.display = 'block';
                 return;
             }

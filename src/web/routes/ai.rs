@@ -363,6 +363,101 @@ fn batch_auto_tag_inner(
     Ok(resp)
 }
 
+// --- Standalone embed endpoints ---
+//
+// Auto-tag generates embeddings as a side-effect of classification, but users
+// who only want similarity search (without tag suggestions) need a way to
+// build the embedding without applying any tags. These endpoints expose
+// `AssetService::embed_assets` directly for one asset or a batch.
+
+#[derive(Debug, serde::Deserialize)]
+pub struct BatchEmbedRequest {
+    pub asset_ids: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct BatchEmbedResponse {
+    pub embedded: u32,
+    pub skipped: u32,
+    pub errors: Vec<String>,
+}
+
+/// POST /api/batch/embed — generate SigLIP embeddings for selected assets.
+pub async fn batch_embed(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BatchEmbedRequest>,
+) -> Response {
+    let log = state.log_requests;
+    let count = req.asset_ids.len();
+    let state2 = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        embed_inner(&state2, &req.asset_ids)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(resp)) => {
+            if log {
+                eprintln!(
+                    "batch_embed: {} assets ({} embedded, {} skipped, {} errors)",
+                    count, resp.embedded, resp.skipped, resp.errors.len()
+                );
+            }
+            Json(resp).into_response()
+        }
+        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+/// POST /api/asset/{id}/embed — generate the SigLIP embedding for one asset.
+pub async fn embed_asset(
+    State(state): State<Arc<AppState>>,
+    Path(asset_id): Path<String>,
+) -> Response {
+    let state2 = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        embed_inner(&state2, &[asset_id])
+    })
+    .await;
+
+    match result {
+        Ok(Ok(resp)) => Json(resp).into_response(),
+        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
+fn embed_inner(state: &AppState, asset_ids: &[String]) -> Result<BatchEmbedResponse, String> {
+    let model_dir = resolve_model_dir(&state.ai_config);
+    let model_id = &state.ai_config.model;
+    let mgr = crate::model_manager::ModelManager::new(&model_dir, model_id)
+        .map_err(|e| format!("{e:#}"))?;
+    if !mgr.model_exists() {
+        return Err(format!(
+            "Model '{model_id}' is not downloaded. Run 'maki auto-tag --download' first."
+        ));
+    }
+
+    let service = state.asset_service();
+    let r = service
+        .embed_assets(
+            asset_ids,
+            &model_dir,
+            model_id,
+            &state.ai_config.execution_provider,
+            false,
+            |_, _, _| {},
+        )
+        .map_err(|e| format!("{e:#}"))?;
+
+    Ok(BatchEmbedResponse {
+        embedded: r.embedded,
+        skipped: r.skipped,
+        errors: r.errors,
+    })
+}
+
 // --- Visual similarity search endpoint ---
 
 #[derive(Debug, serde::Serialize)]

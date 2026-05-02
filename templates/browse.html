@@ -117,6 +117,7 @@
         {% if ai_enabled %}
         <span class="batch-sep"></span>
         <button class="batch-btn" id="batch-autotag">Auto-tag</button>
+        <button class="batch-btn" id="batch-embed" title="Generate visual-similarity embeddings (no tags applied)">Embed</button>
         <button class="batch-btn" id="batch-detect-faces">Detect faces</button>
         {% endif %}
         <span class="batch-sep"></span>
@@ -1144,6 +1145,32 @@ window.onFilterChange = onFilterChange;
             .catch(function(err) {
                 setButtonsBusy(false);
                 alert('Auto-tag failed: ' + err.message);
+            });
+        });
+    }
+
+    var embedBtn = document.getElementById('batch-embed');
+    if (embedBtn) {
+        embedBtn.addEventListener('click', function() {
+            if (selected.size === 0 || batchBusy) return;
+            if (!confirm('Generate embeddings for ' + selected.size + ' selected asset(s)?\n\nNo tags will be applied — this only builds the visual-similarity index.')) return;
+            setButtonsBusy(true);
+            fetch('/api/batch/embed', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({asset_ids: Array.from(selected)})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                setButtonsBusy(false);
+                var msg = data.embedded + ' embedded, ' + data.skipped + ' skipped';
+                if (data.errors && data.errors.length > 0) msg += ', ' + data.errors.length + ' error(s)';
+                alert(msg);
+                clearSelection();
+            })
+            .catch(function(err) {
+                setButtonsBusy(false);
+                alert('Embed failed: ' + err.message);
             });
         });
     }

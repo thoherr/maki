@@ -582,6 +582,14 @@ fn build_router(state: Arc<AppState>) -> Router {
                 axum::routing::post(routes::batch_auto_tag),
             )
             .route(
+                "/api/asset/{id}/embed",
+                axum::routing::post(routes::embed_asset),
+            )
+            .route(
+                "/api/batch/embed",
+                axum::routing::post(routes::batch_embed),
+            )
+            .route(
                 "/api/asset/{id}/faces",
                 axum::routing::get(routes::asset_faces),
             )
