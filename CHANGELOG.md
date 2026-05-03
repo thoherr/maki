@@ -2,6 +2,78 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.4.14 (2026-05-03)
+
+A maintenance + UX release. The headline change is **live progress for every long-running web operation** — import, embed, auto-tag, detect-faces, and describe all flow through a new generic `JobRegistry` and a reusable progress toast, replacing the per-route bespoke plumbing (and the silent multi-minute "click and pray" UX on large batches). Plus a Unicode-NFC normalisation pass that fixes duplicate-tag bugs caused by NFC/NFD encoding drift, the missing standalone embed surfaces in the web UI, and the post-import embed/describe phases that were specified in CLI but never wired into the web import dialog.
+
+### `maki tag fix-unicode` — collapse NFC/NFD duplicate tags
+
+The user-reported symptom: a tag `Ö-HA` showing up twice on the tags page, once between O and P, once after Z, with neither matching the other in search. Diagnosis: NFC vs NFD encoding drift. macOS path APIs lean **NFD** (`O` + combining diaeresis, two code points), most XMP writers and the W3C/IETF stack produce **NFC** (precomposed `Ö`, single code point). The two render identically but compare as different byte strings, so a single logical tag ends up as two distinct catalog entries.
+
+Two-part fix:
+
+1. **Write-path canonicalisation**: `tag_input_to_storage` now applies NFC normalisation at the existing input chokepoint, so every new or edited tag is stored canonically regardless of source. After this, no new mismatches can appear.
+2. **Migration command**: new **`maki tag fix-unicode [--apply]`** — same dry-run-by-default rhythm as `fix-dates` / `fix-roles` / `expand-ancestors`. Walks every asset, NFC-normalises its tag list, deduplicates per-asset (so an asset that had both forms ends up with one), and saves through the standard sidecar + catalog write path. XMP writeback (when enabled) replays the deduplications. Idempotent — running it again on a normalised catalog reports `0 fixed`.
+
+```bash
+maki tag fix-unicode                # dry-run preview
+maki tag fix-unicode --apply
+maki tag fix-unicode --apply --log  # per-asset progress
+```
+
+8 new tests (4 in tag_util for NFC at the chokepoint, 4 in query for the migration's dedup/skip/dry-run paths).
+
+A **NOTES ON SORT ORDER** section in the reference page documents the trade-off: NFC stores `Ö` as U+00D6 which sorts after Z under SQLite's default byte collation; NFD's "near base letter" ordering is accidental, not deliberate (Swedish/Finnish dictionaries put Ö after Z; German DIN 5007-1 puts it next to O — there's no single right answer at the byte level). NFC is still the right storage form because it matches every external system MAKI rounds-trips through (Lightroom, Capture One, XMP, modern filesystems).
+
+### Web import: post-import embed and describe phases
+
+The CLI's `maki import` has run post-import embed and VLM describe phases for ages, gated by `[import] embeddings = true` / `[import] descriptions = true` config or per-invocation `--embed` / `--describe` flags. The web import dialog skipped both — anything kicked off through the browser stopped after the basic import + auto-group, leaving the embeddings the user expected to find missing.
+
+Now wired up:
+
+- **Embeddings checkbox** (visible on `ai` builds) and **Descriptions checkbox** (visible on `pro` builds) on the dialog form, hidden when the running binary doesn't support the feature (detected via new `GET /api/build-info` returning `{ai, pro}`).
+- Same precedence semantics as CLI: explicit checkbox wins, otherwise falls back to config.
+- Per-asset progress flows through the existing SSE stream as phase-tagged events (`{phase: "embed", asset, embedded}` / `{phase: "describe", asset, described}`); the dialog's status line and log render those distinctly.
+- Sub-helper extracted: `AssetService::embed_assets` lifts the SigLIP loop out of `maki embed` and the post-import phase into a single service method (~150 LOC deduplicated). Same dedup, same image fallback (smart preview > regular preview > original on online volume), same skip-already-embedded guard.
+
+### Standalone embed surfaces in the web UI
+
+Auto-tag generates embeddings as a side-effect of classification, but a user who only wants similarity coverage without applying any tags had no path. Three new surfaces, all reusing `AssetService::embed_assets`:
+
+- **Browse toolbar**: new `Embed` button between Auto-tag and Detect faces (ai-gated). Confirms count, posts to `/api/batch/embed`, watches via the new toast.
+- **Asset detail**: `Embed` button inside the *Similar images* details, before *Find similar*. Updates the inline status with "Embedding generated" / "already exists". The "no similar images" hint now points at this button instead of telling users to run auto-tag.
+- **Endpoints**: `POST /api/batch/embed` and `POST /api/asset/{id}/embed`, both ai-gated.
+
+### Generic `JobRegistry` and live-progress toast
+
+Up to v4.4.13, only `maki import` had live SSE progress + re-attach in the web UI. Every other long-running batch (auto-tag, detect-faces, describe, the new embed) ran synchronously via `spawn_blocking` and held the HTTP request open until done — fine for 5 assets, painful for 5000 (no feedback, request timeouts, broken if the user reloads).
+
+The shape of "broadcast channel + ring buffer + atomic counters + status endpoint + re-attach" is the same for every job kind. Duplicating it five times would have been ~600 LOC of boilerplate, so it's lifted once into a generic abstraction:
+
+- **`src/web/jobs.rs`**: `JobRegistry { jobs: HashMap<JobId, Arc<Job>> }`. Each `Job` carries id, kind (Import / Embed / AutoTag / DetectFaces / Describe), started_at, broadcast sender, ring buffer of recent events, JSON progress snapshot, completed flag. `Job::emit` centralises "broadcast + push to ring + update snapshot"; `Job::finish` sets the flag and emits a terminal `done: true`. Recently-finished jobs stay in the registry briefly (16-job history) so re-attach after page reload still shows the final state.
+- **Generic endpoints**: `GET /api/jobs` (snapshot of running + recent), `GET /api/jobs/{id}` (single status), `GET /api/jobs/{id}/progress` (SSE stream). Replaces the import-specific `/api/import/status` and `/api/import/progress` (the dialog and nav badge moved to the generic endpoints in lockstep).
+- **8 new unit tests** covering ID uniqueness, ring eviction at capacity, completed history eviction, finish semantics, latest-by-kind lookup, and snapshot counts.
+
+All four batch endpoints migrated to the new pattern in one pass. POST returns `{job_id}` immediately; per-asset events emit `{processed, total, status, asset, ...}`; terminal events carry kind-specific counts. A reusable **progress toast** (`templates/job_toast.{html,js_html}`, mounted from base.html) provides `window.makiJob.watch(jobId, label, {onDone})` — a small floating bottom-right widget that subscribes to the job's SSE stream, shows live "X / Y done — status (asset)" lines, and on done swaps to a summary line built from whatever counters the terminal event carries (`embedded` / `succeeded` / `tags_applied` / `faces_detected` / `descriptions_set` / etc.). Auto-dismisses after 4s on success; sticks on error.
+
+For 5 assets this is a ~2-second toast flash. For 5000 assets the HTTP request no longer holds open and the user gets real progress.
+
+### Import dialog: minimize-to-toast
+
+A "Minimize to toast" button on the import-progress phase hands the running import off to the same global toast and closes the modal. The job keeps running on the server unchanged (it was already a registered Job), but the user gets their screen back and sees a small floating progress line in the corner instead of a full-screen modal blocking work. Re-opening the import link while still running re-attaches via the existing `/api/jobs` flow — the dialog's progress phase reappears and takes over from the toast.
+
+Tear-down ordering matters: close the dialog's own EventSource *before* handing the job to the toast, otherwise both listeners race on the same broadcast and the done event lands twice. On non-error done, refresh the browse grid via htmx if the user is on `/` so newly-imported assets appear.
+
+### Single-asset endpoints stay synchronous
+
+Per-asset endpoints (`POST /api/asset/{id}/embed`, `POST /api/asset/{id}/detect-faces`) deliberately *don't* go through the registry — a single image is fast (a few hundred ms), the existing inline-result UI works fine, and adding a brief progress flash for a one-asset operation would be more friction than feedback.
+
+### Tests + miscellany
+
+- Tests: 779 unit + 249 CLI + 14 doc on standard build (was 764 + 249 + 14 in v4.4.13). Pro: 886 + 273 + 14 (was 871 + 273 + 14).
+- One additional crate: `unicode-normalization = "0.1"` (small, zero-deps beyond `tinyvec`).
+- 90 subcommands total (was 89) — `tag fix-unicode` is the new addition.
+
 ## v4.4.13 (2026-04-30)
 
 A tag-management feature pack: a new `tag delete` command and matching web UI, the tags-page count semantics rewritten so the numbers actually mean something, and a handful of UX fixes around tag editing.
