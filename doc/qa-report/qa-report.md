@@ -9,7 +9,7 @@ Previous QA reports are archived under `doc/qa-report/archive/`.
 ## Status
 
 - **Batch 1 (small DRY wins)**: ✅ landed in commit `6889825` (2026-05-03). Tests still 779/249/886/273. See per-item status below.
-- **Batch 2 (structural splits)**: pending.
+- **Batch 2 (structural splits)**: 🟡 partial — afternoon scope (M1 + H1 + M2) done across `85984f8`, `7ce8d11`, `9d24d8f` (2026-05-03). Tests still 779/249/886/273. **H3, H2, M3+M4 remain** — sized for separate focused sessions per the original plan.
 - **Batch 3 (documentation polish)**: pending.
 
 ---
@@ -20,7 +20,7 @@ Previous QA reports are archived under `doc/qa-report/archive/`.
 
 | # | Finding | Citation | Notes |
 |---|---------|----------|-------|
-| H1 | `run_command` is **5 921 lines** in one match | `src/main.rs:2474-8395` | 45+ command arms inline. Longest still-inline handlers: Import (~457 LOC), AutoTag (~338), Edit (~124), Describe (~199). The `run_faces_command` extraction in v4.4.5 set the pattern; uniformly applying it would shrink main.rs by ~3 000 LOC. |
+| H1 | 🟡 **PARTIAL** (`7ce8d11`, 2026-05-03) — extracted the five longest arms (Import, Tag, AutoTag, RebuildCatalog, Volume); `run_command` shrank 5921 → 4062 LOC. Remaining big arms (GeneratePreviews 281, Collection 206, Describe 197, Cleanup 193, SavedSearch 165) follow the same mechanical pattern; left for opportunistic cleanup as touched. | `src/main.rs` | — |
 | H2 | `catalog.rs` 9 200 LOC god-module | `src/catalog.rs` | Mixes asset CRUD, variant CRUD, location CRUD, recipe storage, schema migrations, denormalised-column maintenance, duplicates queries, rebuild logic. Natural cleavage planes: `catalog/{assets,variants,recipes,migrations,denorm}.rs` re-exporting through one `Catalog` impl. |
 | H3 | `asset_service.rs` 8 886 LOC mixing service workflows | `src/asset_service.rs` | Section comment headers (`// ═══ X ═══`) already mark cleavage planes. Splits: `asset_service/{import,verify,sync,dedup,refresh,export,ai}.rs`. Each section is ~700–1 500 LOC. |
 | H4 | ✅ **DONE** (`6889825`) — `resolve_asset_id` boilerplate lifted into `web::routes::resolve_asset_id_or_err`; 7 sites migrated, message format unified. | `web/routes/{browse,ai,media,stacks,assets,collections}.rs` | — |
@@ -31,8 +31,8 @@ Previous QA reports are archived under `doc/qa-report/archive/`.
 
 | # | Finding | Citation | Notes |
 |---|---------|----------|-------|
-| M1 | `web/routes/ai.rs` 1 614 LOC | `src/web/routes/ai.rs` | Mixes suggest-tags, batch auto-tag, embed, find-similar, faces/people, stroll. Other route modules already split this way (browse.rs, media.rs are big but single-domain). Split into `ai/{tags,similarity,faces,stroll}.rs`. |
-| M2 | `query.rs` 6 820 LOC | `src/query.rs` | Two distinct concerns: search/filter parsing (read path) vs tag/edit/auto-group/writeback (write path). Extract `query/{search.rs, write.rs}` or two newtype wrappers. |
+| M1 | ✅ **DONE** (`85984f8`, 2026-05-03) — split into `web/routes/ai/{mod,tags,embed,similarity,faces,stroll}.rs`. Shared `resolve_model_dir` / `resolve_labels` helpers stay in `mod.rs`. | `src/web/routes/ai/` | — |
+| M2 | ✅ **DONE** (`9d24d8f`, 2026-05-03) — extracted the parsing layer into `query/parse.rs` (date parser, ParsedSearch + impls, query tokenizer, parse_search_query 245-LOC dispatcher, NumericFilter, normalize_path_for_search). Public API unchanged via `pub use parse::*;`. query.rs went 6820 → 6028 LOC. The further search-impl/write-impl split the report originally suggested can follow if the file grows again. | `src/query/parse.rs` | — |
 | M3 | `build_search_where` still 356 LOC after v4.4.5 decomposition | `src/catalog.rs:3017-3373` | Further per-filter-type extraction: text, tags, dates, numeric, custom. Each becomes a private helper returning `(clause, params, needs_join_*)`. |
 | M4 | `parse_search_query` is a 241-line tokenizer with 40+ `strip_prefix` branches | `src/query.rs:404-645` | Replace the if-chain with table-driven dispatch (HashMap or const slice of `(prefix, parser)` tuples). Easier to add filter types and easier to test individual parsers. |
 | M5 | ❌ **WITHDRAWN** (`6889825`) — re-inspection showed the flagged site builds a `Vec<&Volume>` for sequential iteration, not a `HashMap`; `online_map()` returns the wrong shape. The original code is correct as-is. | `src/asset_service.rs:4753` | — |
@@ -73,14 +73,14 @@ Net diff: +153 / −142 LOC across 9 files.
 
 Each item is its own PR — they're independent of each other. Order by pain-relief: `main.rs` first because every code review touches it.
 
-1. **H1** — Extract `main.rs` command handlers, one `fn run_X_command(...)` per arm. (~2–3h, mechanical, very low risk because each handler is self-contained.) Pattern is already in the codebase from `run_faces_command`. Start with the longest five (Import, AutoTag, Edit, Describe, Embed) — those alone shrink `main.rs` by ~1 500 LOC. Continue in a follow-up if energy allows.
-2. **M1** — Split `web/routes/ai.rs` 1 614 LOC into `ai/{tags,similarity,faces,stroll}.rs` plus `ai/mod.rs` re-exporting. (~1h, mostly file moves and `mod.rs` edits.)
-3. **H3** — Split `asset_service.rs` along its existing `// ═══ X ═══` section markers into `asset_service/{import,verify,sync,dedup,refresh,export,ai}.rs`. (~4–6h, more disruption because shared private helpers will need to be lifted to a module-internal `mod common` or be kept on the main impl.) Recommended approach: create the submodules as `impl AssetService { ... }` blocks across files, no struct split — Rust supports multi-file `impl`. This minimises the code churn and keeps the public API identical.
-4. **H2** — Split `catalog.rs` along the same plan as H3. (~4–6h.) Same multi-file-`impl` strategy.
-5. **M2** — Split `query.rs` into `query/{search,write}.rs`. (~2h.) Tighter cleavage than catalog/service: search and write paths share little.
-6. **M3 + M4** — Further decomposition of `build_search_where` and `parse_search_query`. (~2h together.) Best done after M2 so the work happens inside the new `query/search.rs`.
+1. ✅ **H1** (PARTIAL, `7ce8d11`) — extracted Import, Tag, AutoTag, RebuildCatalog, Volume; `run_command` 5921 → 4062 LOC. Remaining big arms left for opportunistic cleanup.
+2. ✅ **M1** (`85984f8`) — `web/routes/ai/` directory module: tags, embed, similarity, faces, stroll.
+3. ⏳ **H3** — Split `asset_service.rs` along its existing `// ═══ X ═══` section markers into `asset_service/{import,verify,sync,dedup,refresh,export,ai}.rs`. (~4–6h, more disruption because shared private helpers will need to be lifted to a module-internal `mod common` or be kept on the main impl.) Recommended approach: create the submodules as `impl AssetService { ... }` blocks across files, no struct split — Rust supports multi-file `impl`. This minimises the code churn and keeps the public API identical.
+4. ⏳ **H2** — Split `catalog.rs` along the same plan as H3. (~4–6h.) Same multi-file-`impl` strategy.
+5. ✅ **M2** (`9d24d8f`) — extracted the parsing layer into `query/parse.rs` (~800 LOC). The original plan suggested search/write split on the impl block; the cleaner cleavage turned out to be parsing (DB-free) vs everything else (DB-bound). Public API unchanged via `pub use parse::*;`. Search-impl/write-impl split can follow if query.rs grows again.
+6. ⏳ **M3 + M4** — Further decomposition of `build_search_where` (still 356 LOC in catalog.rs) and `parse_search_query` (245 LOC, table-driven dispatch in query/parse.rs). (~2h together.)
 
-H1, M1, M2 are good candidates for a single afternoon (each ~1–2h, all mechanical). H3 and H2 should each be their own focused session.
+**Afternoon scope (M1 + H1 + M2) landed 2026-05-03.** H3 and H2 should each be their own focused session per the original plan.
 
 ### Batch 3 — Documentation polish (~2h, low priority)
 
