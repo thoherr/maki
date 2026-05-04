@@ -268,9 +268,21 @@ pub async fn browse_page(
         opts.per_page = per_page;
         opts.collapse_stacks = collapse_stacks;
 
-        let (rows, total) = catalog.search_paginated_with_count(&opts)?;
+        let (mut rows, total) = catalog.search_paginated_with_count(&opts)?;
         let display_per_page = state.per_page;
         let total_pages = if has_similarity { 1 } else { ((total as f64) / display_per_page as f64).ceil() as u32 };
+
+        // Clamp page: if the user is on page N but a delete / group / dedup
+        // shrunk the result set so total_pages < N, redo the query at the
+        // last available page. Otherwise the user gets an empty grid where
+        // they'd expect to land on the new last page.
+        let page = if !has_similarity && total_pages > 0 && page > total_pages {
+            opts.page = total_pages;
+            rows = catalog.search_paginated_with_count(&opts)?.0;
+            total_pages
+        } else {
+            page
+        };
 
         // Count-delta hints: surface "more matches exist behind this view"
         // so the rendered count isn't silently smaller than what the tags
@@ -577,9 +589,20 @@ pub async fn search_api(
         opts.per_page = per_page;
         opts.collapse_stacks = collapse_stacks;
 
-        let (rows, total) = catalog.search_paginated_with_count(&opts)?;
+        let (mut rows, total) = catalog.search_paginated_with_count(&opts)?;
         let display_per_page = state.per_page;
         let total_pages = if has_similarity { 1 } else { ((total as f64) / display_per_page as f64).ceil() as u32 };
+
+        // Clamp page: if a delete/group/dedup shrank total_pages below the
+        // requested page, re-issue the search at the new last page so the
+        // user doesn't land on an empty grid.
+        let page = if !has_similarity && total_pages > 0 && page > total_pages {
+            opts.page = total_pages;
+            rows = catalog.search_paginated_with_count(&opts)?.0;
+            total_pages
+        } else {
+            page
+        };
 
         let deltas = compute_count_deltas(&catalog, &mut opts, &DeltaContext {
             state: &state,
@@ -718,6 +741,10 @@ pub async fn page_ids_api(
 
         let total = catalog.search_count(&opts)?;
         let total_pages = ((total as f64) / per_page as f64).ceil() as u32;
+        // Clamp page to the last available so callers (lightbox / browse-imported
+        // links / external bookmarks) don't get an empty page after deletions.
+        let page = if total_pages > 0 && page > total_pages { total_pages } else { page };
+        opts.page = page;
         let rows = catalog.search_paginated(&opts)?;
         let ids: Vec<String> = rows.iter().map(|r| r.asset_id.clone()).collect();
 
