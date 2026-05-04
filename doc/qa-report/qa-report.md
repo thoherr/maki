@@ -9,7 +9,7 @@ Previous QA reports are archived under `doc/qa-report/archive/`.
 ## Status
 
 - **Batch 1 (small DRY wins)**: ✅ landed in commit `6889825` (2026-05-03). Tests still 779/249/886/273. See per-item status below.
-- **Batch 2 (structural splits)**: 🟡 mostly done — M1, H1 (partial), M2, **H3, H2 done** across `85984f8`, `7ce8d11`, `9d24d8f`, `6262a39`, `ae3bd4d` (2026-05-03 / 2026-05-04). Tests still 779/249/886/273. **M3+M4 remain** (~2h together).
+- **Batch 2 (structural splits)**: ✅ done — M1, H1 (partial), M2, H3, H2, M3+M4 across `85984f8`, `7ce8d11`, `9d24d8f`, `6262a39`, `ae3bd4d`, `6f74dec` (2026-05-03 / 2026-05-04). Tests still 779/249/886/273. Only **H1 remaining-arms** (opportunistic) and **H5 remaining-sites** (opportunistic) deferred from earlier batches.
 - **Batch 3 (documentation polish)**: pending.
 
 ---
@@ -33,8 +33,8 @@ Previous QA reports are archived under `doc/qa-report/archive/`.
 |---|---------|----------|-------|
 | M1 | ✅ **DONE** (`85984f8`, 2026-05-03) — split into `web/routes/ai/{mod,tags,embed,similarity,faces,stroll}.rs`. Shared `resolve_model_dir` / `resolve_labels` helpers stay in `mod.rs`. | `src/web/routes/ai/` | — |
 | M2 | ✅ **DONE** (`9d24d8f`, 2026-05-03) — extracted the parsing layer into `query/parse.rs` (date parser, ParsedSearch + impls, query tokenizer, parse_search_query 245-LOC dispatcher, NumericFilter, normalize_path_for_search). Public API unchanged via `pub use parse::*;`. query.rs went 6820 → 6028 LOC. The further search-impl/write-impl split the report originally suggested can follow if the file grows again. | `src/query/parse.rs` | — |
-| M3 | `build_search_where` still 356 LOC after v4.4.5 decomposition | `src/catalog.rs:3017-3373` | Further per-filter-type extraction: text, tags, dates, numeric, custom. Each becomes a private helper returning `(clause, params, needs_join_*)`. |
-| M4 | `parse_search_query` is a 241-line tokenizer with 40+ `strip_prefix` branches | `src/query.rs:404-645` | Replace the if-chain with table-driven dispatch (HashMap or const slice of `(prefix, parser)` tuples). Easier to add filter types and easier to test individual parsers. |
+| M3 | ✅ **DONE** (`6f74dec`, 2026-05-04) — extracted 6 per-filter helpers (`add_text_filters`, `add_format_filter`, `add_volume_filter`, `add_path_filter`, `add_date_filters`, `add_geo_filters`) following the existing `add_like_filter` shape. `build_search_where` shrank 357 → 205 LOC (-43%). | `src/catalog/search_builder.rs` | — |
+| M4 | ✅ **DONE** (`6f74dec`, 2026-05-04) — replaced 30 of 40+ if/else branches with four lookup tables: `SIMPLE_FILTERS`, `NUMERIC_FILTERS`, `STRING_FILTERS`, `BOOLEAN_TOKENS`. parse_search_query shrank 242 → 186 LOC (-23%). New filter of those shapes is one table line. | `src/query/parse.rs` | — |
 | M5 | ❌ **WITHDRAWN** (`6889825`) — re-inspection showed the flagged site builds a `Vec<&Volume>` for sequential iteration, not a `HashMap`; `online_map()` returns the wrong shape. The original code is correct as-is. | `src/asset_service.rs:4753` | — |
 | M6 | ✅ **DONE** (`6889825`) — `classify_impl` renamed to `classify_inner` (4 refs in `ai.rs`). Codebase now uniformly uses `_inner` for private helpers. | `src/ai.rs` | — |
 | M7 | 20 of 33 `src/` files lack `//!` module docs | incl. `main.rs`, `catalog.rs`, `asset_service.rs`, `query.rs`, `xmp_reader.rs`, `face_store.rs`, `preview.rs`, `config.rs` | One-or-two-sentence summary per file. Unblocks `cargo doc` legibility and makes onboarding less archaeology. |
@@ -78,9 +78,9 @@ Each item is its own PR — they're independent of each other. Order by pain-rel
 3. ✅ **H3** (`6262a39`) — split into 12 submodules along the existing `// ═══ X ═══` markers via multi-file `impl AssetService` blocks. asset_service.rs 8886 → 2759 LOC. Three cross-section helpers lifted to `pub(super)`.
 4. ✅ **H2** (`ae3bd4d`) — split into 17 submodules along the existing `// ═══` markers, same multi-file `impl Catalog` pattern as H3. catalog.rs 9200 → 4524 LOC (≈3.6 kLOC of that is tests). Six cross-section helpers lifted to `pub(super)`.
 5. ✅ **M2** (`9d24d8f`) — extracted the parsing layer into `query/parse.rs` (~800 LOC). The original plan suggested search/write split on the impl block; the cleaner cleavage turned out to be parsing (DB-free) vs everything else (DB-bound). Public API unchanged via `pub use parse::*;`. Search-impl/write-impl split can follow if query.rs grows again.
-6. ⏳ **M3 + M4** — Further decomposition of `build_search_where` (still 356 LOC in catalog.rs) and `parse_search_query` (245 LOC, table-driven dispatch in query/parse.rs). (~2h together.)
+6. ✅ **M3 + M4** (`6f74dec`) — `build_search_where` 357 → 205 LOC via 6 new per-filter helpers; `parse_search_query` 242 → 186 LOC via four lookup tables (SIMPLE_FILTERS / NUMERIC_FILTERS / STRING_FILTERS / BOOLEAN_TOKENS).
 
-**Afternoon scope (M1 + H1 + M2) landed 2026-05-03.** H3 and H2 should each be their own focused session per the original plan.
+**Batch 2 fully landed across 2026-05-03 / 2026-05-04.** Only opportunistic carryovers remain: H1's smaller match arms (Describe, GeneratePreviews, Cleanup, Collection, SavedSearch, etc.) and H5's remaining ~100 `spawn_blocking` sites.
 
 ### Batch 3 — Documentation polish (~2h, low priority)
 
