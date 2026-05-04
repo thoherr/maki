@@ -6,10 +6,48 @@
 
 use super::*;
 
+/// Merge tag rows that differ only in letter case. Catalog storage preserves
+/// case (so e.g. a person tag "Peter Schneider" stays Title Case), but
+/// `tag:` searches in browse use SQLite `LIKE` which folds ASCII case. That
+/// asymmetry makes the tags-page count smaller than the browse count when
+/// any asset has a stray `Color` alongside the dominant `color`. Fold
+/// variants together for the count, picking the dominant case form for
+/// display: highest individual count wins; on ties, the lexicographically
+/// first form (which puts capitalised proper-noun forms ahead of all-lower).
+fn case_fold_tag_counts(raw: Vec<(String, u64)>) -> Vec<(String, u64)> {
+    use std::collections::HashMap;
+    let mut by_key: HashMap<String, Vec<(String, u64)>> = HashMap::new();
+    for (name, count) in raw {
+        by_key.entry(name.to_lowercase()).or_default().push((name, count));
+    }
+    let mut merged: Vec<(String, u64)> = by_key
+        .into_iter()
+        .map(|(_, variants)| {
+            let total: u64 = variants.iter().map(|(_, c)| c).sum();
+            // Tie-break: lex-first wins. `b.0.cmp(&a.0)` makes the lex-first
+            // element compare Greater in `max_by`'s eyes (which picks the
+            // Greater).
+            let dominant = variants
+                .iter()
+                .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+                .unwrap()
+                .0
+                .clone();
+            (dominant, total)
+        })
+        .collect();
+    merged.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    merged
+}
+
 impl Catalog {
     // ═══ TAG & FORMAT QUERIES ═══
 
     /// List all unique tags with their usage counts, sorted by count descending.
+    ///
+    /// Case variants of the same tag (e.g. `color` and `Color`) are merged
+    /// — see [`case_fold_tag_counts`] for the merge rule. This makes the
+    /// tags page consistent with browse's case-insensitive `tag:` LIKE.
     pub fn list_all_tags(&self) -> Result<Vec<(String, u64)>> {
         // Use json_each() for SQL-side aggregation — avoids loading all 150k+ tag JSON blobs
         let mut stmt = self.conn.prepare(
@@ -22,7 +60,8 @@ impl Catalog {
         let rows = stmt.query_map([], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, u64>(1)?))
         })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+        let raw: Vec<(String, u64)> = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(case_fold_tag_counts(raw))
     }
 
     /// For each tag value present in the catalogue, count assets where that
@@ -38,7 +77,9 @@ impl Catalog {
     ///
     /// Pure SQL via the same `json_each` engine `list_all_tags` uses,
     /// with a NOT EXISTS subquery checking for any descendant on the same
-    /// asset's tag list.
+    /// asset's tag list. Case variants are folded with the same rule as
+    /// `list_all_tags` so a lookup `leaf_counts.get(name)` using the
+    /// dominant case form from `list_all_tags` finds the merged count.
     pub fn list_leaf_tag_counts(&self) -> Result<std::collections::HashMap<String, u64>> {
         let mut stmt = self.conn.prepare(
             "SELECT je.value, COUNT(*) as cnt \
@@ -53,12 +94,8 @@ impl Catalog {
         let rows = stmt.query_map([], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, u64>(1)?))
         })?;
-        let mut map = std::collections::HashMap::new();
-        for row in rows {
-            let (k, v) = row?;
-            map.insert(k, v);
-        }
-        Ok(map)
+        let raw: Vec<(String, u64)> = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(case_fold_tag_counts(raw).into_iter().collect())
     }
 
     /// Find assets with a specific exact tag, returning (asset_id, stack_id) pairs.
@@ -563,4 +600,56 @@ impl Catalog {
         })
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::case_fold_tag_counts;
+
+    #[test]
+    fn case_fold_merges_variants_summing_counts() {
+        let raw = vec![
+            ("color".to_string(), 174),
+            ("Color".to_string(), 1),
+            ("blue".to_string(), 54),
+            ("Peter Schneider".to_string(), 50),
+            ("peter schneider".to_string(), 1),
+        ];
+        let folded = case_fold_tag_counts(raw);
+        let map: std::collections::HashMap<String, u64> = folded.iter().cloned().collect();
+        // Counts merge.
+        assert_eq!(map.get("color"), Some(&175), "color+Color → 175 under dominant case");
+        assert_eq!(map.get("blue"), Some(&54));
+        // Dominant case form for proper-noun ties (174 vs 1, 50 vs 1) is the
+        // higher-count variant. The all-lower stray gets folded in.
+        assert!(folded.iter().any(|(n, _)| n == "Peter Schneider"));
+        assert!(!folded.iter().any(|(n, _)| n == "peter schneider"));
+        assert_eq!(map.get("Peter Schneider"), Some(&51));
+    }
+
+    #[test]
+    fn case_fold_tie_break_prefers_lex_first() {
+        // Equal counts: the lex-first variant wins. ASCII puts 'C' < 'c',
+        // so "Color" sorts before "color" → "Color" is the dominant.
+        let raw = vec![
+            ("Color".to_string(), 5),
+            ("color".to_string(), 5),
+        ];
+        let folded = case_fold_tag_counts(raw);
+        assert_eq!(folded, vec![("Color".to_string(), 10)]);
+    }
+
+    #[test]
+    fn case_fold_no_op_when_no_duplicates() {
+        let raw = vec![
+            ("subject|nature".to_string(), 100),
+            ("blue".to_string(), 54),
+            ("red".to_string(), 102),
+        ];
+        let folded = case_fold_tag_counts(raw);
+        // Same items, sorted by count desc.
+        assert_eq!(folded[0], ("red".to_string(), 102));
+        assert_eq!(folded[1], ("subject|nature".to_string(), 100));
+        assert_eq!(folded[2], ("blue".to_string(), 54));
+    }
 }
