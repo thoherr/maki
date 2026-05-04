@@ -1,3 +1,7 @@
+//! CLI output formatting helpers — JSON serialisation, table rendering,
+//! the `search --format` template language (`{id}\t{name}` etc.), and the
+//! `ids` / `short` / `full` / `json` presets.
+
 use std::collections::HashMap;
 
 /// Output format for listing commands (search, duplicates, volume list).

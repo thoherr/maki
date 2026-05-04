@@ -1,3 +1,14 @@
+//! SQLite catalog — derived cache of asset/variant/recipe/location state.
+//!
+//! The 9.2-kLOC monolith split (2026-05) keeps this file as the module root
+//! (types, struct, ctor, helpers, tests) and farms each section out to
+//! `catalog/<section>.rs` as a multi-file `impl Catalog { ... }` block:
+//! schema migrations, asset/variant/recipe CRUD, lookups, search builder,
+//! duplicates, rebuild, stats, facets, tags, analytics, backup, cleanup.
+//!
+//! The catalog is rebuilt from YAML sidecars via `maki rebuild-catalog`;
+//! everything in here is derived state.
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // catalog.rs — SQLite catalog (derived cache of sidecar data)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -438,6 +449,8 @@ impl SearchSort {
         }
     }
 
+    /// Parse a sort key from its URL/query-param string form (`date_desc`,
+    /// `name_asc`, etc.). Unknown values fall back to `DateDesc`.
     pub fn from_str(s: &str) -> Self {
         match s {
             "date_asc" => SearchSort::DateAsc,
@@ -685,6 +698,10 @@ pub struct Catalog {
 }
 
 impl Catalog {
+    /// Open the catalog at `<catalog_root>/catalog.db`, applying connection
+    /// pragmas and running pending schema migrations. Use `open_fast` instead
+    /// when migrations should be skipped (per-request connections in the
+    /// web server pool).
     pub fn open(catalog_root: &Path) -> Result<Self> {
         let db_path = catalog_root.join("catalog.db");
         let conn = Connection::open(&db_path)?;

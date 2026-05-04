@@ -1,3 +1,7 @@
+//! `Asset` — the core unit of the catalog. An asset has a stable ID,
+//! metadata (tags, rating, label, description), and one or more variants
+//! (different renditions of the same logical content).
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

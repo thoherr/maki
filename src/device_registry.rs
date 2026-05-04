@@ -1,3 +1,6 @@
+//! Volume registry — tracks the storage volumes the catalog knows about
+//! and resolves their current online/offline status by probing mount points.
+
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;

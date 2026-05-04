@@ -1,3 +1,11 @@
+<!--
+    Full-screen lightbox controller — included once from `base.html`.
+
+    Powers the lightbox overlay opened by clicking an asset card. Handles
+    arrow-key navigation across the current result set, mouse-wheel zoom,
+    drag-to-pan, and the prev/next preloading. Exposes
+    `window.openLightbox(assetId, index)` for callers.
+-->
 // --- Shared Lightbox ---
 // Items-based lightbox. Each page calls setItems() with its data and open() to display.
 // Item shape: { id, preview, name, type, format, date, rating, label, variants }

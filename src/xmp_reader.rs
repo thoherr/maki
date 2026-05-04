@@ -1,3 +1,10 @@
+//! XMP read/write — parses Adobe XMP packets (sidecar files and embedded
+//! in JPEG/TIFF) for tags, rating, description, color label.
+//!
+//! Also handles writeback: when `[writeback] enabled = true`, edits
+//! in MAKI flow back into the original XMP file on disk so other tools
+//! (Lightroom, Capture One) see them.
+
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 

@@ -1,3 +1,12 @@
+//! Service layer for write-side workflows on the catalog: import, relocate,
+//! verify, sync, cleanup, dedup, refresh, fix-commands, export, AI batch ops,
+//! video metadata.
+//!
+//! The 8.9-kLOC monolith split (2026-05) keeps this file as the module root
+//! (types, struct, ctor, free helpers, tests) and farms each section out to
+//! `asset_service/<section>.rs` as a multi-file `impl AssetService { ... }`
+//! block. Public API unchanged.
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // asset_service.rs — Core asset lifecycle operations
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -177,9 +186,9 @@ impl Default for FileTypeFilter {
     }
 }
 
-/// Status of a single file during import.
 // ═══ RESULT TYPES ═══
 
+/// Status of a single file during import.
 pub enum FileStatus {
     Imported,
     LocationAdded,
@@ -674,9 +683,14 @@ fn file_mtime(path: &Path) -> Option<chrono::DateTime<chrono::Utc>> {
     Some(chrono::DateTime::<chrono::Utc>::from(modified))
 }
 
-/// High-level operations that orchestrate the other components.
 // ═══ ASSET SERVICE STRUCT ═══
 
+/// Service-layer entrypoint for write-side workflows on the catalog.
+///
+/// Holds the bare minimum (catalog root, verbosity, preview config) and
+/// instantiates short-lived `Catalog`, `MetadataStore`, etc. handles per
+/// operation. Methods are split across `asset_service/<section>.rs` files
+/// as multi-file `impl` blocks; see the module-level doc.
 pub struct AssetService {
     catalog_root: PathBuf,
     verbosity: crate::Verbosity,
@@ -736,6 +750,9 @@ fn scan_orphaned_sharded_files(
 }
 
 impl AssetService {
+    /// Create an `AssetService` rooted at the given catalog directory.
+    /// Verbosity controls per-operation logging; the preview config is
+    /// cloned so the service owns its own copy.
     pub fn new(catalog_root: &Path, verbosity: crate::Verbosity, preview_config: &crate::config::PreviewConfig) -> Self {
         Self {
             catalog_root: catalog_root.to_path_buf(),

@@ -1,3 +1,12 @@
+//! Query engine — search execution and write-path operations on assets.
+//!
+//! The parsing layer (`ParsedSearch`, `parse_search_query`, `NumericFilter`,
+//! etc.) lives in the `parse` submodule and is re-exported here. The rest
+//! of this file is `impl QueryEngine` for: search/show, group/split,
+//! tag operations (rename/split/delete/fix-unicode), edit, XMP writeback,
+//! stack operations, and the batch helpers. ~6 kLOC — split candidate if
+//! it grows further.
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // query.rs — Search parsing, query engine, and asset mutation operations
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -311,12 +320,20 @@ pub struct BatchContext {
     pub content_store: ContentStore,
 }
 
+/// Query engine — search execution and write-path operations on assets.
+///
+/// Holds the catalog root and an optional default filter (e.g. the
+/// `[browse] default_filter` config) that's appended to every search query.
+/// Methods cover search/show, group/split, tag operations, edit, XMP
+/// writeback, and stack/batch helpers; see the module-level doc.
 pub struct QueryEngine {
     catalog_root: PathBuf,
     default_filter: Option<String>,
 }
 
 impl QueryEngine {
+    /// Create a `QueryEngine` rooted at the given catalog directory, with
+    /// no default filter applied.
     pub fn new(catalog_root: &Path) -> Self {
         Self {
             catalog_root: catalog_root.to_path_buf(),

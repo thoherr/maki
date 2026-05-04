@@ -1,3 +1,7 @@
+//! Askama template structs — typed view models for the HTML pages and
+//! fragments under `templates/`. Each `pub struct` here corresponds to a
+//! `templates/X.html` file via the `#[derive(Template)]` attribute.
+
 use askama::Template;
 
 use crate::catalog::{AnalyticsData, AssetDetails, BackupStatusResult, CatalogStats, SearchRow};

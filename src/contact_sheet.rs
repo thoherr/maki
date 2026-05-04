@@ -1,3 +1,9 @@
+//! PDF contact-sheet generation — renders a grid of asset thumbnails with
+//! configurable layout, paper size, and per-asset metadata fields.
+//!
+//! Layouts are config-driven via `[contact_sheet]` in `maki.toml`. Output
+//! uses `printpdf` for vector text and embedded JPEGs.
+
 use std::io::{BufWriter, Cursor};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

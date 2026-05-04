@@ -1,3 +1,7 @@
+//! `Volume` and `FileLocation` — registered storage volumes (drives,
+//! network shares, etc.) and the relative paths where variants live on
+//! them. `online_map` resolves which volumes are currently mounted.
+
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};

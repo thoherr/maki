@@ -1,3 +1,7 @@
+//! Interactive REPL — the `maki shell` command. Wraps `rustyline` for line
+//! editing and dispatches typed lines back through the same `clap` parser
+//! the binary uses, so any `maki <command>` works inside the shell.
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 

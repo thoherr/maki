@@ -1,3 +1,7 @@
+//! `Variant` — a specific rendition of an asset (a JPEG, a RAW, an edited
+//! TIFF, etc.). Each variant has a content hash, a format, source
+//! metadata, and zero or more `FileLocation`s pointing at on-disk copies.
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};

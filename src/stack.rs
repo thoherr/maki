@@ -1,3 +1,8 @@
+//! Stack store — groups independent assets so they collapse into a single
+//! tile in browse views (e.g. multiple shots of the same scene). Distinct
+//! from variant grouping (`group` / `auto-group`), which marks files as
+//! different renditions of the same asset.
+
 use std::path::Path;
 
 use anyhow::Result;

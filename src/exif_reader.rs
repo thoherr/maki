@@ -1,3 +1,7 @@
+//! EXIF parser — extracts camera, lens, ISO, focal length, aperture,
+//! GPS, capture date, and image dimensions from JPEG/RAW/TIFF files.
+//! Wraps the `kamadak-exif` crate with MAKI-specific extraction logic.
+
 use std::collections::HashMap;
 use std::io::BufReader;
 use std::path::Path;

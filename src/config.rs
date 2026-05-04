@@ -1,3 +1,11 @@
+//! Configuration loader for `maki.toml` and friends.
+//!
+//! Defines `CatalogConfig` (the parsed `maki.toml`), `AiConfig`, `VlmConfig`,
+//! `PreviewConfig`, `ImportConfig`, etc. — each with `Default` impls so a
+//! missing or partial config file works. `find_catalog_root` walks up the
+//! filesystem looking for `maki.toml`; `load_config` is the convenience
+//! helper most command handlers use.
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

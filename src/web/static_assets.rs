@@ -1,3 +1,7 @@
+//! Embedded static assets — CSS, JS, fonts, icons compiled into the
+//! binary via `include_bytes!` so `maki serve` works without an external
+//! asset directory.
+
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 

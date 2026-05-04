@@ -1,3 +1,9 @@
+//! Tag-string utilities — input normalisation (case, separator, NFC),
+//! ancestor expansion for hierarchical tags (`a|b|c` → `a`, `a|b`, `a|b|c`),
+//! leaf-tag counting (used by the `tagcount:` filter), and the various
+//! marker prefixes (`=` whole-path, `/` leaf-only, `^` case-sensitive,
+//! `|` prefix-anchored).
+
 /// Tag utility functions for hierarchical tag support.
 ///
 /// Internal storage convention:

@@ -1,3 +1,10 @@
+//! Preview generation — generates regular (max_edge px, default 1024) and
+//! smart (max_edge px, default 2560) JPEG thumbnails from imported media.
+//!
+//! Sharded under `previews/<hash-prefix>/<hash>.<ext>` and
+//! `smart-previews/...`. RAW files use dcraw/libraw; videos use ffmpeg;
+//! everything else goes through the `image` crate.
+
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::process::Command;

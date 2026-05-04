@@ -1,3 +1,9 @@
+//! `maki serve` web server — Axum + Askama templates.
+//!
+//! AppState holds the connection pool, AI model cache, dropdown caches,
+//! and the JobRegistry that tracks running long-operations (import,
+//! embed, auto-tag, …). Routes are split by domain under `routes/`.
+
 pub mod jobs;
 mod routes;
 mod static_assets;

@@ -1,3 +1,7 @@
+//! Embedded XMP extractor — pulls XMP packets out of JPEG, TIFF, RAW, and
+//! video container files (the `<x:xmpmeta>...</x:xmpmeta>` block embedded
+//! in the image data, not a separate sidecar).
+
 use std::path::Path;
 
 use crate::xmp_reader::{XmpData, parse_xmp};

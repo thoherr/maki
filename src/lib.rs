@@ -1,3 +1,17 @@
+//! Public library crate for MAKI — re-exports the modules the binary
+//! (`src/main.rs`) builds on, plus the embedded HTML templates.
+//!
+//! The crate is organised by domain:
+//! - `catalog` — SQLite cache of asset/variant/recipe state
+//! - `metadata_store` — YAML sidecars (source of truth)
+//! - `asset_service` — write-side workflows (import, sync, dedup, …)
+//! - `query` — search query parsing + write-path operations on assets
+//! - `web` — `maki serve` HTTP layer (Axum + Askama)
+//! - `models` — shared domain types (`Asset`, `Variant`, `Volume`, …)
+//!
+//! All public APIs are re-exported through the top-level `maki::` path so
+//! external callers don't depend on internal module structure.
+
 /// Controls the level of diagnostic output sent to stderr.
 ///
 /// - `verbose`: operational decisions and program flow

@@ -1,3 +1,8 @@
+//! VLM (vision-language model) integration — Ollama-compatible HTTP client
+//! for the `pro`-feature `describe` command. Sends image + prompt, parses
+//! the response into a description and tag list, supports per-model
+//! parameter overrides via `[vlm.model_config."name"]` in `maki.toml`.
+
 use std::io::Write;
 use std::process::{Command, Stdio};
 

@@ -1,3 +1,7 @@
+//! Collection store — named, manually-curated lists of assets persisted
+//! alongside the catalog. Distinct from saved searches (which are query
+//! definitions) and from tags (which are content metadata).
+
 use std::path::Path;
 
 use anyhow::Result;

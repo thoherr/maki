@@ -1,3 +1,7 @@
+//! Content-addressed storage — hashes incoming files (SHA-256), copies them
+//! into the catalog's content tree (sharded by hash prefix), and tracks
+//! dedup so identical bytes land at one path regardless of source filename.
+
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;

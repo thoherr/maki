@@ -1,3 +1,13 @@
+<!--
+    Browse filter bar JS — included once from `browse.html`.
+
+    Owns the chip-based tag picker, the path autocomplete, the multi-select
+    format dropdown, the rating/label widgets, and the dispatcher that
+    translates user actions back into URL query parameters. Exposes
+    `window.toggleFormatFilter`, `window.setVolumeFilterById`,
+    `window.addQueryTerm`, `window.triggerSearch` for the facet-sidebar
+    click handlers and other modules to call into.
+-->
 <script>
 // --- Shared filter bar logic ---
 // Requires: onFilterChange() defined before this script

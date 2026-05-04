@@ -1,3 +1,11 @@
+//! MAKI binary entrypoint — parses the CLI, dispatches to command handlers,
+//! and converts the result to a process exit code.
+//!
+//! Long match arms are extracted into standalone `run_X_command` functions
+//! (see `run_import_command`, `run_tag_command`, etc.). The remaining inline
+//! arms are the smaller commands; they get extracted opportunistically as
+//! they're touched.
+
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};

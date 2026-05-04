@@ -1,3 +1,6 @@
+//! Saved-search store — persists named search queries to a YAML file in
+//! the catalog root so users can re-run them with `maki saved-search run NAME`.
+
 use std::path::Path;
 
 use anyhow::Result;

@@ -1,3 +1,12 @@
+<!--
+    Browse — the main grid view at `GET /`.
+
+    Hosts the search bar, faceted sidebar, batch toolbar, and the asset
+    card grid. Updated via htmx swaps on `#results` (filter changes,
+    pagination, batch actions). Selection state, the saved-search dialog,
+    the export modal, and a chunk of keyboard handling all live in this
+    file's inline `<script>` block.
+-->
 {% extends "base.html" %}
 
 {% block title %}Browse - MAKI{% endblock %}

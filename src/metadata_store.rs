@@ -1,3 +1,10 @@
+//! YAML sidecar store — the source of truth for asset metadata.
+//!
+//! Each asset has a `metadata/<asset-id>.yaml` file containing tags,
+//! rating, color label, description, variants, file locations, recipes.
+//! The SQLite catalog is a derived cache rebuilt from these via
+//! `maki rebuild-catalog`. All write paths must update both stores.
+
 use std::path::Path;
 
 use anyhow::Result;

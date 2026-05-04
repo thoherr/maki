@@ -1,3 +1,7 @@
+//! `Recipe` — a sidecar edit file (XMP, .CR3 .xmp, etc.) attached to a
+//! variant. Tracks the file's content hash so MAKI can detect when a
+//! downstream editor (Lightroom / Capture One) modified it.
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

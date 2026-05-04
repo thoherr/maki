@@ -1,3 +1,9 @@
+<!--
+    Results fragment — htmx swap target for the browse grid.
+
+    Returned from `GET /` (and friends) when the request carries an
+    `HX-Request` header, so search/filter changes update the grid in place.
+-->
 {% macro page_url(p) %}/?q={{ query|urlencode }}&type={{ asset_type|urlencode }}&tag={{ tag|urlencode }}&format={{ format_filter|urlencode }}&volume={{ volume|urlencode }}&rating={{ rating|urlencode }}&label={{ label|urlencode }}&collection={{ collection|urlencode }}&person={{ person|urlencode }}&path={{ path|urlencode }}&sort={{ sort }}&page={{ p }}&stacks={% if collapse_stacks %}1{% else %}0{% endif %}{% endmacro %}
 {% macro sort_url(s) %}/?q={{ query|urlencode }}&type={{ asset_type|urlencode }}&tag={{ tag|urlencode }}&format={{ format_filter|urlencode }}&volume={{ volume|urlencode }}&rating={{ rating|urlencode }}&label={{ label|urlencode }}&collection={{ collection|urlencode }}&person={{ person|urlencode }}&path={{ path|urlencode }}&sort={{ s }}&page=1&stacks={% if collapse_stacks %}1{% else %}0{% endif %}{% endmacro %}
 {# Same URL as page_url(1) but with stacks=0, so the user can drill into the
