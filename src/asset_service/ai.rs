@@ -223,7 +223,7 @@ impl AssetService {
         model_id: &str,
         execution_provider: &str,
         force: bool,
-        on_asset: impl Fn(&str, &EmbedStatus, std::time::Duration),
+        mut on_asset: impl FnMut(&str, &EmbedStatus, std::time::Duration),
     ) -> Result<EmbedAssetsResult> {
         use crate::ai::SigLipModel;
         use crate::catalog::Catalog;

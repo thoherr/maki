@@ -6972,103 +6972,49 @@ fn run_import_command(
     log: bool,
     verbosity: maki::Verbosity,
 ) -> anyhow::Result<()> {
-    // Shadow `cli` with a lightweight struct so the extracted body keeps
-    // referencing `cli.json` / `cli.log` unchanged. Same trick as
-    // `run_faces_command`.
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
-    use maki::asset_service::FileTypeFilter;
+    use maki::asset_service::{ImportEvent, ImportPhase, ImportRequest};
 
     let (catalog_root, config) = maki::config::load_config()?;
 
-    // Resolve import profile: profile overrides base [import], CLI flags override both
-    let import_config = if let Some(ref profile_name) = profile {
-        config.import.resolve_profile(profile_name)
-            .ok_or_else(|| anyhow::anyhow!(
-                "Unknown import profile '{}'. Available profiles: {}",
-                profile_name,
-                if config.import.profiles.is_empty() {
-                    "(none configured)".to_string()
-                } else {
-                    config.import.profiles.keys().cloned().collect::<Vec<_>>().join(", ")
-                }
-            ))?
-    } else {
-        config.import.clone()
-    };
-
-    let smart = smart || import_config.smart_previews;
-    let registry = DeviceRegistry::new(&catalog_root);
-
-    // Build file type filter: merge profile include/skip with CLI flags
-    let mut filter = FileTypeFilter::default();
-
-    // Profile include/skip first (if a profile was selected)
-    let profile_ref = profile.as_deref().and_then(|name| config.import.profiles.get(name));
-    if let Some(p) = profile_ref {
-        for group in &p.include {
-            filter.include(group)?;
-        }
-        for group in &p.skip {
-            filter.skip(group)?;
-        }
-    }
-
-    // CLI flags override (check for conflicts)
-    for group in &include {
-        if skip.contains(group) {
-            anyhow::bail!(
-                "Group '{}' cannot be both included and skipped.",
-                group
-            );
-        }
-    }
-
-    for group in &include {
-        filter.include(group)?;
-    }
-    for group in &skip {
-        filter.skip(group)?;
-    }
-
-    // Canonicalize input paths
+    // Canonicalize input paths against the working directory. The workflow
+    // takes already-canonicalised paths so it can be called from contexts
+    // (like the web handler) that don't have a meaningful CWD.
     let canonical_paths: Vec<PathBuf> = paths
         .iter()
-        .map(|p| {
-            std::fs::canonicalize(p)
-                .unwrap_or_else(|_| PathBuf::from(p))
-        })
+        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p)))
         .collect();
 
-    if canonical_paths.is_empty() {
-        anyhow::bail!("no paths specified for import.");
-    }
-
-    // Resolve volume: explicit --volume flag, or auto-detect from path
-    let volume = if let Some(label) = &volume {
-        registry.resolve_volume(label)?
-    } else {
-        registry.find_volume_for_path(&canonical_paths[0])?
+    let req = ImportRequest {
+        paths: canonical_paths,
+        volume_label: volume,
+        profile: profile.clone(),
+        include,
+        skip,
+        add_tags,
+        dry_run,
+        smart,
+        auto_group,
+        #[cfg(feature = "ai")]
+        embed,
+        #[cfg(not(feature = "ai"))]
+        embed: false,
+        #[cfg(feature = "pro")]
+        describe,
+        #[cfg(not(feature = "pro"))]
+        describe: false,
     };
 
-    // Merge config auto_tags with CLI --add-tag values
-    let mut all_tags = import_config.auto_tags.clone();
-    for tag in &add_tags {
-        if !all_tags.contains(tag) {
-            all_tags.push(tag.clone());
-        }
-    }
-
     if verbosity.verbose {
-        eprintln!("  Import: {} file(s) on volume \"{}\"", canonical_paths.len(), volume.label);
+        eprintln!(
+            "  Import: {} file(s){}",
+            req.paths.len(),
+            req.volume_label.as_ref().map(|v| format!(" on volume \"{v}\"")).unwrap_or_default()
+        );
         if let Some(ref p) = profile {
             eprintln!("  Import: using profile \"{}\"", p);
         }
-        if !import_config.exclude.is_empty() {
-            eprintln!("  Import: exclude patterns: {:?}", import_config.exclude);
-        }
-        if !all_tags.is_empty() {
-            eprintln!("  Import: auto-tags: {}", all_tags.join(", "));
+        if !req.add_tags.is_empty() {
+            eprintln!("  Import: extra tags: {}", req.add_tags.join(", "));
         }
         if smart {
             eprintln!("  Import: smart previews enabled");
@@ -7076,240 +7022,92 @@ fn run_import_command(
     }
 
     let service = AssetService::new(&catalog_root, verbosity, &config.preview);
-    let result = if cli.log {
-        use maki::asset_service::FileStatus;
-        service.import_with_callback(&canonical_paths, &volume, &filter, &import_config.exclude, &all_tags, dry_run, smart, |path, status, elapsed| {
-            let label = match status {
-                FileStatus::Imported => "imported",
-                FileStatus::LocationAdded => "location added",
-                FileStatus::Skipped => "skipped",
-                FileStatus::RecipeAttached => "recipe",
-                FileStatus::RecipeLocationAdded => "recipe location added",
-                FileStatus::RecipeUpdated => "recipe updated",
-            };
-            let name = path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_else(|| path.to_str().unwrap_or("?"));
-            item_status(name, label, Some(elapsed));
-        })?
-    } else {
-        service.import_with_callback(&canonical_paths, &volume, &filter, &import_config.exclude, &all_tags, dry_run, smart, |_, _, _| {})?
-    };
-
-    // Post-import auto-group phase
-    let auto_group_result = if auto_group
-        && (result.imported > 0 || result.locations_added > 0)
-    {
-        use maki::catalog::Catalog;
-        use std::path::Path;
-
-        let catalog = Catalog::open(&catalog_root)?;
-        let volume_id = volume.id.to_string();
-
-        // Compute neighborhood prefixes: go up one level from each
-        // imported directory to get the "session root"
-        let session_roots: std::collections::HashSet<String> = result
-            .imported_directories
-            .iter()
-            .map(|dir| {
-                Path::new(dir)
-                    .parent()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default()
-            })
-            .collect();
-        let prefixes: Vec<String> = session_roots.into_iter().collect();
-
-        // Find all existing catalog assets in the neighborhood
-        let neighbor_ids = catalog
-            .find_asset_ids_by_volume_and_path_prefixes(&volume_id, &prefixes)?;
-
-        // Merge with newly imported asset IDs and deduplicate
-        let mut all_ids: Vec<String> = result.new_asset_ids.clone();
-        let existing: std::collections::HashSet<String> =
-            all_ids.iter().cloned().collect();
-        for id in neighbor_ids {
-            if !existing.contains(&id) {
-                all_ids.push(id);
+    let workflow_result = service.import_workflow(&req, &config, |evt| {
+        // Per-event progress: only emit per-item lines in --log mode. Phase
+        // boundaries print a one-line announcement when --log is on (or
+        // verbose); skipped phases always print so the user knows why a
+        // phase didn't run.
+        match evt {
+            ImportEvent::PhaseStarted(phase) => {
+                if log && phase != ImportPhase::Import {
+                    eprintln!("  Phase: {}", phase.label());
+                }
             }
-        }
-
-        if all_ids.len() > 1 {
-            let engine = QueryEngine::new(&catalog_root);
-            let ag_result = engine.auto_group(&all_ids, dry_run)?;
-            if !ag_result.groups.is_empty() {
-                // Upgrade previews for grouped assets (use Export/Processed variant)
-                if !dry_run {
-                    let grouped_ids: Vec<String> = ag_result.groups.iter()
-                        .map(|g| g.target_id.clone())
-                        .collect();
-                    let metadata_store = MetadataStore::new(&catalog_root);
-                    let preview_gen = maki::preview::PreviewGenerator::new(&catalog_root, verbosity, &config.preview);
-                    let volumes = registry.list()?;
-                    let mut upgraded = 0usize;
-                    for gid in &grouped_ids {
-                        if let Ok(uuid) = gid.parse::<uuid::Uuid>() {
-                            if let Ok(asset) = metadata_store.load(uuid) {
-                                if let Some(idx) = maki::models::variant::best_preview_index(&asset.variants) {
-                                    if idx > 0 {
-                                        // A better variant exists — upgrade the preview
-                                        let v = &asset.variants[idx];
-                                        if let Some(loc) = v.locations.first() {
-                                            if let Some(vol) = volumes.iter().find(|vl| vl.id == loc.volume_id && vl.is_online) {
-                                                let file_path = vol.mount_point.join(&loc.relative_path);
-                                                if file_path.exists() {
-                                                    let _ = preview_gen.generate(&v.content_hash, &file_path, &v.format);
-                                                    if smart {
-                                                        let _ = preview_gen.generate_smart(&v.content_hash, &file_path, &v.format);
-                                                    }
-                                                    upgraded += 1;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                // Update denormalized best_variant_hash
-                                if let Ok(cat) = Catalog::open(&catalog_root) {
-                                    let _ = cat.update_denormalized_variant_columns(&asset);
-                                }
-                            }
-                        }
+            ImportEvent::PhaseSkipped { phase, reason } => {
+                eprintln!("  Skipping {} phase: {reason}", phase.label());
+            }
+            ImportEvent::File { path, status, elapsed } => {
+                if !log { return; }
+                use maki::asset_service::FileStatus;
+                let label = match status {
+                    FileStatus::Imported => "imported",
+                    FileStatus::LocationAdded => "location added",
+                    FileStatus::Skipped => "skipped",
+                    FileStatus::RecipeAttached => "recipe",
+                    FileStatus::RecipeLocationAdded => "recipe location added",
+                    FileStatus::RecipeUpdated => "recipe updated",
+                };
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_else(|| path.to_str().unwrap_or("?"));
+                item_status(name, label, Some(elapsed));
+            }
+            #[cfg(feature = "ai")]
+            ImportEvent::Embed { asset_id, status } => {
+                if !log { return; }
+                let short = &asset_id[..8.min(asset_id.len())];
+                match status {
+                    maki::asset_service::EmbedStatus::Embedded => {
+                        eprintln!("  {short} — embedded");
                     }
-                    if upgraded > 0 && verbosity.verbose {
-                        eprintln!("  Auto-group: upgraded {} preview(s) from export variants", upgraded);
+                    maki::asset_service::EmbedStatus::Error(msg) => {
+                        eprintln!("  {short} — embed error: {msg}");
+                    }
+                    maki::asset_service::EmbedStatus::Skipped(_) => {}
+                }
+            }
+            #[cfg(feature = "pro")]
+            ImportEvent::Describe { asset_id, status, elapsed } => {
+                if !log { return; }
+                let short = &asset_id[..8.min(asset_id.len())];
+                match status {
+                    maki::vlm::DescribeStatus::Described => {
+                        item_status(short, "described", Some(elapsed));
+                    }
+                    maki::vlm::DescribeStatus::Skipped(msg) => {
+                        eprintln!("  {short} — skipped: {msg}");
+                    }
+                    maki::vlm::DescribeStatus::Error(msg) => {
+                        eprintln!("  {short} — error: {msg}");
                     }
                 }
-                Some(ag_result)
-            } else {
-                None
             }
-        } else {
-            None
         }
-    } else {
-        None
-    };
+    })?;
 
-    // Post-import embedding phase (AI feature)
+    // Format output. The workflow returns a single bundle; the CLI just
+    // unpacks it into JSON or human text. Frontend-specific concern only.
+    let result = &workflow_result.import;
+    let auto_group_result = workflow_result.auto_group.as_ref();
     #[cfg(feature = "ai")]
-    let embed_result = if !dry_run
-        && (embed || import_config.embeddings)
-        && !result.new_asset_ids.is_empty()
-    {
-        use maki::model_manager::ModelManager;
-
-        let model_id = &config.ai.model;
-        let model_dir = maki::config::resolve_model_dir(&config.ai.model_dir, model_id);
-        let mgr = ModelManager::new(&model_dir, model_id)?;
-
-        if mgr.model_exists() {
-            let service = AssetService::new(&catalog_root, verbosity, &config.preview);
-            let log = cli.log;
-            let r = service.embed_assets(
-                &result.new_asset_ids,
-                &model_dir,
-                model_id,
-                &config.ai.execution_provider,
-                false,
-                |aid, status, _elapsed| {
-                    if !log { return; }
-                    let short = &aid[..8.min(aid.len())];
-                    match status {
-                        maki::asset_service::EmbedStatus::Embedded => {
-                            eprintln!("  {short} — embedded");
-                        }
-                        maki::asset_service::EmbedStatus::Error(msg) => {
-                            eprintln!("  {short} — embed error: {msg}");
-                        }
-                        maki::asset_service::EmbedStatus::Skipped(_) => {}
-                    }
-                },
-            )?;
-            Some((r.embedded, r.skipped))
-        } else {
-            if cli.log {
-                eprintln!("  Skipping embeddings: model not downloaded. Run 'maki auto-tag --download' first.");
-            }
-            None
-        }
-    } else {
-        None
-    };
-
-    // Post-import VLM describe phase
+    let embed_result = workflow_result.embed.as_ref();
     #[cfg(feature = "pro")]
-    let describe_result = if !dry_run
-        && (describe || import_config.descriptions)
-        && !result.new_asset_ids.is_empty()
-    {
-        // Check VLM endpoint availability first
-        let endpoint = &config.vlm.endpoint;
-        let vlm_model = &config.vlm.model;
-        let vlm_available = maki::vlm::check_endpoint(endpoint, 5, verbosity).is_ok();
+    let describe_result = workflow_result.describe.as_ref();
 
-        if vlm_available {
-            let mode = maki::vlm::DescribeMode::from_str(&config.vlm.mode)
-                .unwrap_or(maki::vlm::DescribeMode::Describe);
-            let import_params = config.vlm.params_for_model(vlm_model);
-            let service = AssetService::new(&catalog_root, verbosity, &config.preview);
-            let log = cli.log;
-            match service.describe_assets(
-                &result.new_asset_ids,
-                endpoint,
-                vlm_model,
-                &import_params,
-                mode,
-                false, // force: don't overwrite existing descriptions
-                false, // dry_run
-                config.vlm.concurrency,
-                |aid, status, elapsed| {
-                    if log {
-                        let short = &aid[..8.min(aid.len())];
-                        match status {
-                            maki::vlm::DescribeStatus::Described => {
-                                item_status(short, "described", Some(elapsed));
-                            }
-                            maki::vlm::DescribeStatus::Skipped(msg) => {
-                                eprintln!("  {short} — skipped: {msg}");
-                            }
-                            maki::vlm::DescribeStatus::Error(msg) => {
-                                eprintln!("  {short} — error: {msg}");
-                            }
-                        }
-                    }
-                },
-            ) {
-                Ok(dr) => Some(dr),
-                Err(e) => {
-                    if cli.log {
-                        eprintln!("  Describe phase failed: {e:#}");
-                    }
-                    None
-                }
-            }
-        } else {
-            if cli.log {
-                eprintln!("  Skipping descriptions: VLM endpoint not available at {endpoint}");
-            }
-            None
-        }
-    } else {
-        None
-    };
-
-    if cli.json {
+    if json {
         #[allow(unused_mut)]
-        let mut json_val = serde_json::to_value(&result)?;
-        if let Some(ref ag) = auto_group_result {
+        let mut json_val = serde_json::to_value(result)?;
+        if let Some(ag) = auto_group_result {
             json_val["auto_group"] = serde_json::to_value(ag)?;
         }
         #[cfg(feature = "ai")]
-        if let Some((embedded, skipped_embed)) = embed_result {
-            json_val["embeddings_generated"] = serde_json::json!(embedded);
-            json_val["embeddings_skipped"] = serde_json::json!(skipped_embed);
+        if let Some(er) = embed_result {
+            json_val["embeddings_generated"] = serde_json::json!(er.embedded);
+            json_val["embeddings_skipped"] = serde_json::json!(er.skipped);
         }
         #[cfg(feature = "pro")]
-        if let Some(ref dr) = describe_result {
+        if let Some(dr) = describe_result {
             json_val["descriptions_generated"] = serde_json::json!(dr.described);
             json_val["descriptions_skipped"] = serde_json::json!(dr.skipped);
             if dr.tags_applied > 0 {
@@ -7319,41 +7117,21 @@ fn run_import_command(
         println!("{}", serde_json::to_string_pretty(&json_val)?);
     } else {
         let mut parts: Vec<String> = Vec::new();
-        if result.imported > 0 {
-            parts.push(format!("{} imported", result.imported));
-        }
-        if result.skipped > 0 {
-            parts.push(format!("{} skipped", result.skipped));
-        }
-        if result.locations_added > 0 {
-            parts.push(format!("{} location(s) added", result.locations_added));
-        }
-        if result.recipes_attached > 0 {
-            parts.push(format!("{} recipe(s) attached", result.recipes_attached));
-        }
-        if result.recipes_location_added > 0 {
-            parts.push(format!("{} recipe location(s) added", result.recipes_location_added));
-        }
-        if result.recipes_updated > 0 {
-            parts.push(format!("{} recipe(s) updated", result.recipes_updated));
-        }
-        if result.previews_generated > 0 {
-            parts.push(format!("{} preview(s) generated", result.previews_generated));
-        }
-        if result.smart_previews_generated > 0 {
-            parts.push(format!("{} smart preview(s) generated", result.smart_previews_generated));
-        }
+        if result.imported > 0          { parts.push(format!("{} imported", result.imported)); }
+        if result.skipped > 0           { parts.push(format!("{} skipped", result.skipped)); }
+        if result.locations_added > 0   { parts.push(format!("{} location(s) added", result.locations_added)); }
+        if result.recipes_attached > 0  { parts.push(format!("{} recipe(s) attached", result.recipes_attached)); }
+        if result.recipes_location_added > 0 { parts.push(format!("{} recipe location(s) added", result.recipes_location_added)); }
+        if result.recipes_updated > 0   { parts.push(format!("{} recipe(s) updated", result.recipes_updated)); }
+        if result.previews_generated > 0       { parts.push(format!("{} preview(s) generated", result.previews_generated)); }
+        if result.smart_previews_generated > 0 { parts.push(format!("{} smart preview(s) generated", result.smart_previews_generated)); }
         #[cfg(feature = "ai")]
-        if let Some((embedded, _)) = embed_result {
-            if embedded > 0 {
-                parts.push(format!("{} embedding(s) generated", embedded));
-            }
+        if let Some(er) = embed_result {
+            if er.embedded > 0 { parts.push(format!("{} embedding(s) generated", er.embedded)); }
         }
         #[cfg(feature = "pro")]
-        if let Some(ref dr) = describe_result {
-            if dr.described > 0 {
-                parts.push(format!("{} described", dr.described));
-            }
+        if let Some(dr) = describe_result {
+            if dr.described > 0 { parts.push(format!("{} described", dr.described)); }
         }
         if parts.is_empty() {
             println!("Import: nothing to import");
@@ -7363,8 +7141,8 @@ fn run_import_command(
             println!("Import complete: {}", parts.join(", "));
         }
 
-        if let Some(ref ag) = auto_group_result {
-            if cli.log {
+        if let Some(ag) = auto_group_result {
+            if log {
                 for group in &ag.groups {
                     let short_id = &group.target_id[..8.min(group.target_id.len())];
                     eprintln!(
@@ -7383,13 +7161,14 @@ fn run_import_command(
             );
         }
 
-        // Tier-A hints: if the user imported assets without engaging
-        // the AI/Pro post-import phases (and neither was opted into
-        // via [import] config), tell them what's available.
+        // Tier-A hints: tell users about post-import phases they didn't
+        // engage. The `*_result.is_none()` check covers both "didn't opt in"
+        // and "opted in but the phase was skipped" (model missing, VLM
+        // unreachable). Only emit on a real (non-dry) successful import.
         if !dry_run && result.imported > 0 {
             #[cfg(feature = "ai")]
             {
-                if !embed && !import_config.embeddings {
+                if !embed && !config.import.embeddings {
                     println!(
                         "  Tip: run 'maki embed' to generate visual-similarity \
                          embeddings (or pass --embed on import / set \
@@ -7399,7 +7178,7 @@ fn run_import_command(
             }
             #[cfg(feature = "pro")]
             {
-                if !describe && !import_config.descriptions {
+                if !describe && !config.import.descriptions {
                     println!(
                         "  Tip: run 'maki describe' to generate VLM \
                          descriptions (or pass --describe on import / set \

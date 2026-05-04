@@ -30,7 +30,7 @@ impl AssetService {
         auto_tags: &[String],
         dry_run: bool,
         smart: bool,
-        on_file: impl Fn(&Path, FileStatus, Duration),
+        mut on_file: impl FnMut(&Path, FileStatus, Duration),
     ) -> Result<ImportResult> {
         let content_store = ContentStore::new(&self.catalog_root);
         let metadata_store = MetadataStore::new(&self.catalog_root);

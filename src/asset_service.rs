@@ -775,6 +775,8 @@ mod fix;
 mod export;
 mod ai;
 mod video;
+mod workflow;
+pub use workflow::{ImportEvent, ImportPhase, ImportRequest, ImportWorkflowResult};
 
 
 // ═══ FREE FUNCTIONS ═══

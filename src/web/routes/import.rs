@@ -91,31 +91,14 @@ pub async fn start_import_api(
     Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
 }
 
-/// Synchronous dry-run path. Reports counts without emitting progress.
-fn run_import_dry(
+
+/// Build the workflow request shared by the dry-run and live-progress paths.
+fn build_workflow_request(
     state: &AppState,
     req: &StartImportRequest,
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<crate::asset_service::ImportRequest> {
     let registry = crate::device_registry::DeviceRegistry::new(&state.catalog_root);
     let volume = registry.resolve_volume(&req.volume_id)?;
-    let config = crate::config::CatalogConfig::load(&state.catalog_root).unwrap_or_default();
-
-    let import_config = if let Some(ref profile_name) = req.profile {
-        config.import.resolve_profile(profile_name)
-            .ok_or_else(|| anyhow::anyhow!("unknown import profile: {profile_name}"))?
-    } else {
-        config.import.clone()
-    };
-
-    let filter = crate::asset_service::FileTypeFilter::default();
-    let mut tags: Vec<String> = import_config.auto_tags.clone();
-    if let Some(ref extra) = req.tags {
-        tags.extend(extra.iter().cloned());
-    }
-    tags.sort();
-    tags.dedup();
-
-    let smart = req.smart.unwrap_or(import_config.smart_previews);
 
     let mut import_path = volume.mount_point.clone();
     if let Some(ref sub) = req.subfolder {
@@ -127,27 +110,48 @@ fn run_import_dry(
         anyhow::bail!("path does not exist: {}", import_path.display());
     }
 
-    let service = state.asset_service();
-    let result = service.import_with_callback(
-        &[import_path],
-        &volume,
-        &filter,
-        &import_config.exclude,
-        &tags,
-        true, // dry_run
-        smart,
-        |_, _, _| {},
-    )?;
+    Ok(crate::asset_service::ImportRequest {
+        paths: vec![import_path],
+        // Web always passes the resolved volume ID directly — workflow's
+        // resolve_volume accepts ID or label.
+        volume_label: Some(req.volume_id.clone()),
+        profile: req.profile.clone(),
+        include: Vec::new(),
+        skip: Vec::new(),
+        add_tags: req.tags.clone().unwrap_or_default(),
+        dry_run: req.dry_run.unwrap_or(false),
+        smart: req.smart.unwrap_or(false),
+        auto_group: req.auto_group.unwrap_or(false),
+        #[cfg(feature = "ai")]
+        embed: req.embed.unwrap_or(false),
+        #[cfg(not(feature = "ai"))]
+        embed: false,
+        #[cfg(feature = "pro")]
+        describe: req.describe.unwrap_or(false),
+        #[cfg(not(feature = "pro"))]
+        describe: false,
+    })
+}
 
+/// Synchronous dry-run path. Reports counts without emitting progress.
+fn run_import_dry(
+    state: &AppState,
+    req: &StartImportRequest,
+) -> anyhow::Result<serde_json::Value> {
+    let mut wf_req = build_workflow_request(state, req)?;
+    wf_req.dry_run = true;
+    let config = crate::config::CatalogConfig::load(&state.catalog_root).unwrap_or_default();
+    let service = state.asset_service();
+    let r = service.import_workflow(&wf_req, &config, |_| {})?;
     Ok(serde_json::json!({
         "dry_run": true,
-        "imported": result.imported,
-        "locations_added": result.locations_added,
-        "skipped": result.skipped,
-        "recipes_attached": result.recipes_attached,
-        "recipes_updated": result.recipes_updated,
-        "previews_generated": result.previews_generated,
-        "new_asset_ids": result.new_asset_ids,
+        "imported": r.import.imported,
+        "locations_added": r.import.locations_added,
+        "skipped": r.import.skipped,
+        "recipes_attached": r.import.recipes_attached,
+        "recipes_updated": r.import.recipes_updated,
+        "previews_generated": r.import.previews_generated,
+        "new_asset_ids": r.import.new_asset_ids,
     }))
 }
 
@@ -156,265 +160,142 @@ fn run_import_with_progress(
     req: &StartImportRequest,
     job: &Arc<Job>,
 ) -> anyhow::Result<serde_json::Value> {
-    let registry = crate::device_registry::DeviceRegistry::new(&state.catalog_root);
-    let volume = registry.resolve_volume(&req.volume_id)?;
+    use crate::asset_service::ImportEvent;
+
+    let wf_req = build_workflow_request(state, req)?;
     let config = crate::config::CatalogConfig::load(&state.catalog_root).unwrap_or_default();
-
-    let import_config = if let Some(ref profile_name) = req.profile {
-        config.import.resolve_profile(profile_name)
-            .ok_or_else(|| anyhow::anyhow!("unknown import profile: {profile_name}"))?
-    } else {
-        config.import.clone()
-    };
-
-    let filter = crate::asset_service::FileTypeFilter::default();
-    let mut tags: Vec<String> = import_config.auto_tags.clone();
-    if let Some(ref extra) = req.tags {
-        tags.extend(extra.iter().cloned());
-    }
-    tags.sort();
-    tags.dedup();
-
-    let smart = req.smart.unwrap_or(import_config.smart_previews);
-
-    let mut import_path = volume.mount_point.clone();
-    if let Some(ref sub) = req.subfolder {
-        if !sub.is_empty() {
-            import_path = import_path.join(sub);
-        }
-    }
-    if !import_path.exists() {
-        anyhow::bail!("path does not exist: {}", import_path.display());
-    }
-
     let service = state.asset_service();
 
-    // Per-import counters owned by this task. The job registry's progress
-    // snapshot is updated from here on every event, so SSE clients and the
-    // status endpoint see the same totals.
+    // Per-job atomic counters. The workflow emits events sequentially within
+    // each phase; describe runs concurrently but the workflow wraps the
+    // callback in a Mutex so increments are still well-ordered.
     let summary = Arc::new(ImportJobSummary::default());
 
     let summary_for_cb = summary.clone();
     let job_for_cb = job.clone();
-    let result = service.import_with_callback(
-        &[import_path],
-        &volume,
-        &filter,
-        &import_config.exclude,
-        &tags,
-        false,
-        smart,
-        move |path, status, _elapsed| {
-            let label = match status {
-                crate::asset_service::FileStatus::Imported => {
-                    summary_for_cb.imported.fetch_add(1, Relaxed);
-                    "imported"
-                }
-                crate::asset_service::FileStatus::LocationAdded => {
-                    summary_for_cb.locations_added.fetch_add(1, Relaxed);
-                    "location"
-                }
-                crate::asset_service::FileStatus::Skipped => {
-                    summary_for_cb.skipped.fetch_add(1, Relaxed);
-                    "skipped"
-                }
-                crate::asset_service::FileStatus::RecipeAttached
-                | crate::asset_service::FileStatus::RecipeLocationAdded
-                | crate::asset_service::FileStatus::RecipeUpdated => {
-                    summary_for_cb.recipes.fetch_add(1, Relaxed);
-                    "recipe"
-                }
-            };
-            let file = path
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let evt = serde_json::json!({
-                "phase": "import",
-                "done": false,
-                "file": file,
-                "status": label,
-                "imported": summary_for_cb.imported.load(Relaxed),
-                "skipped": summary_for_cb.skipped.load(Relaxed),
-                "locations_added": summary_for_cb.locations_added.load(Relaxed),
-                "recipes": summary_for_cb.recipes.load(Relaxed),
-            });
-            job_for_cb.emit(&evt);
-        },
-    )?;
+    let r = service.import_workflow(&wf_req, &config, move |evt| {
+        match evt {
+            ImportEvent::PhaseStarted(_) | ImportEvent::PhaseSkipped { .. } => {
+                // Phase boundaries: surface them as low-priority events so
+                // the toast/dialog can update its status text. PhaseSkipped
+                // carries the reason for transparency.
+                let payload = match evt {
+                    ImportEvent::PhaseStarted(p) => serde_json::json!({
+                        "phase": p.label(),
+                        "done": false,
+                        "status": "phase_started",
+                    }),
+                    ImportEvent::PhaseSkipped { phase, reason } => serde_json::json!({
+                        "phase": phase.label(),
+                        "done": false,
+                        "status": "phase_skipped",
+                        "message": reason,
+                    }),
+                    _ => unreachable!(),
+                };
+                job_for_cb.emit(&payload);
+            }
+            ImportEvent::File { path, status, elapsed: _ } => {
+                let label = match status {
+                    crate::asset_service::FileStatus::Imported => {
+                        summary_for_cb.imported.fetch_add(1, Relaxed);
+                        "imported"
+                    }
+                    crate::asset_service::FileStatus::LocationAdded => {
+                        summary_for_cb.locations_added.fetch_add(1, Relaxed);
+                        "location"
+                    }
+                    crate::asset_service::FileStatus::Skipped => {
+                        summary_for_cb.skipped.fetch_add(1, Relaxed);
+                        "skipped"
+                    }
+                    crate::asset_service::FileStatus::RecipeAttached
+                    | crate::asset_service::FileStatus::RecipeLocationAdded
+                    | crate::asset_service::FileStatus::RecipeUpdated => {
+                        summary_for_cb.recipes.fetch_add(1, Relaxed);
+                        "recipe"
+                    }
+                };
+                let file = path
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                job_for_cb.emit(&serde_json::json!({
+                    "phase": "import",
+                    "done": false,
+                    "file": file,
+                    "status": label,
+                    "imported": summary_for_cb.imported.load(Relaxed),
+                    "skipped": summary_for_cb.skipped.load(Relaxed),
+                    "locations_added": summary_for_cb.locations_added.load(Relaxed),
+                    "recipes": summary_for_cb.recipes.load(Relaxed),
+                }));
+            }
+            #[cfg(feature = "ai")]
+            ImportEvent::Embed { asset_id, status } => {
+                let label = match status {
+                    crate::asset_service::EmbedStatus::Embedded => {
+                        summary_for_cb.embedded.fetch_add(1, Relaxed);
+                        "embedded"
+                    }
+                    crate::asset_service::EmbedStatus::Skipped(_) => "skipped",
+                    crate::asset_service::EmbedStatus::Error(_) => "error",
+                };
+                let short = &asset_id[..8.min(asset_id.len())];
+                job_for_cb.emit(&serde_json::json!({
+                    "phase": "embed",
+                    "done": false,
+                    "status": label,
+                    "asset": short,
+                    "embedded": summary_for_cb.embedded.load(Relaxed),
+                }));
+            }
+            #[cfg(feature = "pro")]
+            ImportEvent::Describe { asset_id, status, elapsed: _ } => {
+                let label = match status {
+                    crate::vlm::DescribeStatus::Described => {
+                        summary_for_cb.described.fetch_add(1, Relaxed);
+                        "described"
+                    }
+                    crate::vlm::DescribeStatus::Skipped(_) => "skipped",
+                    crate::vlm::DescribeStatus::Error(_) => "error",
+                };
+                let short = &asset_id[..8.min(asset_id.len())];
+                job_for_cb.emit(&serde_json::json!({
+                    "phase": "describe",
+                    "done": false,
+                    "status": label,
+                    "asset": short,
+                    "described": summary_for_cb.described.load(Relaxed),
+                }));
+            }
+        }
+    })?;
 
-    if req.auto_group.unwrap_or(false) && (result.imported > 0 || result.locations_added > 0) {
-        let engine = crate::query::QueryEngine::new(&state.catalog_root);
-        let _ = engine.auto_group(&result.new_asset_ids, false);
-    }
-
-    // Post-import embed phase (AI feature).
-    #[cfg(feature = "ai")]
-    let embed_summary = run_post_import_embed(state, &config, req, &result.new_asset_ids, job, &summary);
-
-    // Post-import describe phase (Pro feature).
-    #[cfg(feature = "pro")]
-    let describe_summary = run_post_import_describe(state, &config, req, &result.new_asset_ids, job, &summary);
-
+    // Build the terminal payload from the workflow result.
     #[allow(unused_mut)]
     let mut out = serde_json::json!({
-        "imported": result.imported,
-        "locations_added": result.locations_added,
-        "skipped": result.skipped,
-        "recipes_attached": result.recipes_attached,
-        "recipes_updated": result.recipes_updated,
-        "previews_generated": result.previews_generated,
-        "new_asset_ids": result.new_asset_ids,
+        "imported": r.import.imported,
+        "locations_added": r.import.locations_added,
+        "skipped": r.import.skipped,
+        "recipes_attached": r.import.recipes_attached,
+        "recipes_updated": r.import.recipes_updated,
+        "previews_generated": r.import.previews_generated,
+        "new_asset_ids": r.import.new_asset_ids,
     });
     #[cfg(feature = "ai")]
-    if let Some((embedded, embed_skipped)) = embed_summary {
-        out["embedded"] = serde_json::json!(embedded);
-        out["embeddings_skipped"] = serde_json::json!(embed_skipped);
+    if let Some(ref er) = r.embed {
+        out["embedded"] = serde_json::json!(er.embedded);
+        out["embeddings_skipped"] = serde_json::json!(er.skipped);
     }
     #[cfg(feature = "pro")]
-    if let Some((described, describe_skipped)) = describe_summary {
-        out["described"] = serde_json::json!(described);
-        out["descriptions_skipped"] = serde_json::json!(describe_skipped);
+    if let Some(ref dr) = r.describe {
+        out["described"] = serde_json::json!(dr.described);
+        out["descriptions_skipped"] = serde_json::json!(dr.skipped);
     }
     Ok(out)
 }
 
-/// Run the post-import embedding phase. Returns `Some((embedded, skipped))` when
-/// the phase ran (model present, opted in), or `None` when skipped.
-#[cfg(feature = "ai")]
-fn run_post_import_embed(
-    state: &AppState,
-    config: &crate::config::CatalogConfig,
-    req: &StartImportRequest,
-    new_asset_ids: &[String],
-    job: &Arc<Job>,
-    summary: &Arc<ImportJobSummary>,
-) -> Option<(u32, u32)> {
-    let opted_in = req.embed.unwrap_or(config.import.embeddings);
-    if !opted_in || new_asset_ids.is_empty() {
-        return None;
-    }
-
-    let model_id = &config.ai.model;
-    let model_dir_str = &config.ai.model_dir;
-    let model_base = if model_dir_str.starts_with("~/") {
-        let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok()?;
-        std::path::PathBuf::from(home).join(&model_dir_str[2..])
-    } else {
-        std::path::PathBuf::from(model_dir_str)
-    };
-    let model_dir = model_base.join(model_id);
-    let mgr = match crate::model_manager::ModelManager::new(&model_dir, model_id) {
-        Ok(m) => m,
-        Err(_) => return None,
-    };
-    if !mgr.model_exists() {
-        job.emit(&serde_json::json!({
-            "phase": "embed",
-            "done": false,
-            "status": "skipped",
-            "message": "model not downloaded",
-        }));
-        return None;
-    }
-
-    let service = crate::asset_service::AssetService::new(&state.catalog_root, state.verbosity, &config.preview);
-    let summary_for_cb = summary.clone();
-    let job_for_cb = job.clone();
-    let r = service.embed_assets(
-        new_asset_ids,
-        &model_dir,
-        model_id,
-        &config.ai.execution_provider,
-        false,
-        move |aid, status, _elapsed| {
-            let label = match status {
-                crate::asset_service::EmbedStatus::Embedded => {
-                    summary_for_cb.embedded.fetch_add(1, Relaxed);
-                    "embedded"
-                }
-                crate::asset_service::EmbedStatus::Skipped(_) => "skipped",
-                crate::asset_service::EmbedStatus::Error(_) => "error",
-            };
-            let short = &aid[..8.min(aid.len())];
-            let evt = serde_json::json!({
-                "phase": "embed",
-                "done": false,
-                "status": label,
-                "asset": short,
-                "embedded": summary_for_cb.embedded.load(Relaxed),
-            });
-            job_for_cb.emit(&evt);
-        },
-    ).ok()?;
-    Some((r.embedded, r.skipped))
-}
-
-/// Run the post-import VLM describe phase. Returns `Some((described, skipped))`
-/// when the phase ran (endpoint reachable, opted in), or `None` when skipped.
-#[cfg(feature = "pro")]
-fn run_post_import_describe(
-    state: &AppState,
-    config: &crate::config::CatalogConfig,
-    req: &StartImportRequest,
-    new_asset_ids: &[String],
-    job: &Arc<Job>,
-    summary: &Arc<ImportJobSummary>,
-) -> Option<(u32, u32)> {
-    let opted_in = req.describe.unwrap_or(config.import.descriptions);
-    if !opted_in || new_asset_ids.is_empty() {
-        return None;
-    }
-
-    let endpoint = &config.vlm.endpoint;
-    let vlm_model = &config.vlm.model;
-    if crate::vlm::check_endpoint(endpoint, 5, state.verbosity).is_err() {
-        job.emit(&serde_json::json!({
-            "phase": "describe",
-            "done": false,
-            "status": "skipped",
-            "message": format!("VLM endpoint unavailable at {endpoint}"),
-        }));
-        return None;
-    }
-
-    let mode = crate::vlm::DescribeMode::from_str(&config.vlm.mode)
-        .unwrap_or(crate::vlm::DescribeMode::Describe);
-    let params = config.vlm.params_for_model(vlm_model);
-    let service = crate::asset_service::AssetService::new(&state.catalog_root, state.verbosity, &config.preview);
-    let summary_for_cb = summary.clone();
-    let job_for_cb = job.clone();
-    let r = service.describe_assets(
-        new_asset_ids,
-        endpoint,
-        vlm_model,
-        &params,
-        mode,
-        false, // force
-        false, // dry_run
-        config.vlm.concurrency,
-        move |aid, status, _elapsed| {
-            let label = match status {
-                crate::vlm::DescribeStatus::Described => {
-                    summary_for_cb.described.fetch_add(1, Relaxed);
-                    "described"
-                }
-                crate::vlm::DescribeStatus::Skipped(_) => "skipped",
-                crate::vlm::DescribeStatus::Error(_) => "error",
-            };
-            let short = &aid[..8.min(aid.len())];
-            let evt = serde_json::json!({
-                "phase": "describe",
-                "done": false,
-                "status": label,
-                "asset": short,
-                "described": summary_for_cb.described.load(Relaxed),
-            });
-            job_for_cb.emit(&evt);
-        },
-    ).ok()?;
-    Some((r.described as u32, r.skipped as u32))
-}
 
 /// GET /api/build-info — report which optional features were compiled in.
 ///
