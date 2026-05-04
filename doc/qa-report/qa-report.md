@@ -10,7 +10,7 @@ Previous QA reports are archived under `doc/qa-report/archive/`.
 
 - **Batch 1 (small DRY wins)**: ✅ landed in commit `6889825` (2026-05-03). Tests still 779/249/886/273. See per-item status below.
 - **Batch 2 (structural splits)**: ✅ done — M1, H1 (partial), M2, H3, H2, M3+M4 across `85984f8`, `7ce8d11`, `9d24d8f`, `6262a39`, `ae3bd4d`, `6f74dec` (2026-05-03 / 2026-05-04). Tests still 779/249/886/273. Only **H1 remaining-arms** (opportunistic) and **H5 remaining-sites** (opportunistic) deferred from earlier batches.
-- **Batch 3 (documentation polish)**: pending.
+- **Batch 3 (documentation polish)**: ✅ done in `0eb33c6` (2026-05-04). Tests still 779/249/886/273.
 
 ---
 
@@ -37,15 +37,15 @@ Previous QA reports are archived under `doc/qa-report/archive/`.
 | M4 | ✅ **DONE** (`6f74dec`, 2026-05-04) — replaced 30 of 40+ if/else branches with four lookup tables: `SIMPLE_FILTERS`, `NUMERIC_FILTERS`, `STRING_FILTERS`, `BOOLEAN_TOKENS`. parse_search_query shrank 242 → 186 LOC (-23%). New filter of those shapes is one table line. | `src/query/parse.rs` | — |
 | M5 | ❌ **WITHDRAWN** (`6889825`) — re-inspection showed the flagged site builds a `Vec<&Volume>` for sequential iteration, not a `HashMap`; `online_map()` returns the wrong shape. The original code is correct as-is. | `src/asset_service.rs:4753` | — |
 | M6 | ✅ **DONE** (`6889825`) — `classify_impl` renamed to `classify_inner` (4 refs in `ai.rs`). Codebase now uniformly uses `_inner` for private helpers. | `src/ai.rs` | — |
-| M7 | 20 of 33 `src/` files lack `//!` module docs | incl. `main.rs`, `catalog.rs`, `asset_service.rs`, `query.rs`, `xmp_reader.rs`, `face_store.rs`, `preview.rs`, `config.rs` | One-or-two-sentence summary per file. Unblocks `cargo doc` legibility and makes onboarding less archaeology. |
-| M8 | 81 undocumented public items in the top-three files | `catalog.rs` 32, `asset_service.rs` 29, `query.rs` 20 | Prioritise `pub fn` and `pub struct` on the public-facing API surface (`Catalog`, `QueryEngine`, `AssetService` entrypoints). |
-| M9 | Large templates lack purpose comments | `templates/{browse,asset,compare,stroll,people,filter_bar_js,lightbox_js}.html` | Newer partials (`import_dialog.html`, `job_toast.html`) start with a 4–8 line HTML comment explaining what the partial is, where it's mounted, and how external code interacts with it. The old large templates have nothing. |
+| M7 | ✅ **DONE** (`0eb33c6`, 2026-05-04) — added `//!` module docs to 29 source files (lib.rs, main.rs, the splitted catalog/asset_service/query roots, models/, web/, plus all the standalone single-file modules). Submodules already had docs from the batch-2 split commits. | `src/**/*.rs` | — |
+| M8 | ✅ **DONE** (`0eb33c6`, 2026-05-04) — recount after batch-2 splits: only 7 actually-undocumented top-three items remained (split surfaced most pub items into submodules that already had docs). All 7 now documented (`Catalog::open`, `SearchSort::from_str`, `FileStatus`, `AssetService` + `::new`, `QueryEngine` + `::new`). | `src/{catalog,asset_service,query}.rs` | — |
+| M9 | ✅ **DONE** (`0eb33c6`, 2026-05-04) — added 4–8 line purpose comments to 17 templates: the seven the report flagged plus tags, collections, duplicates, saved_searches, backup, analytics, stats, results, volumes, lightbox. Pattern matches `import_dialog.html` / `job_toast.html`. | `templates/*.html` | — |
 
 ### LOW
 
 | # | Finding | Citation | Notes |
 |---|---------|----------|-------|
-| L1 | Inconsistent error-response shape in web routes | various `web/routes/*.rs` | Three forms in active use: `Json(json!({"error": ...}))`, `(StatusCode::X, msg)`, `.into_response()` with bare strings. Standardise on one — likely `(StatusCode, Json(json!({"error": ...})))`. |
+| L1 | ⏳ **FOLDED INTO H5** — the inconsistent shapes live in the same `spawn_blocking + match Ok/Ok/Err` chains that `spawn_catalog_blocking` standardises when sites are migrated. Tracking with H5's opportunistic carryover; separate mechanical pass would be busywork. | various `web/routes/*.rs` | — |
 | L2 | ✅ **DONE** (`6889825`) — `crate::config::resolve_model_dir(model_dir_root, model_id)` is now the single source of truth; `web::routes::ai::resolve_model_dir` is a one-line delegate; 3 inline `~/`-expansion blocks in `main.rs` removed. | `src/config.rs`, `src/web/routes/ai.rs`, `src/main.rs` | — |
 | L3 | ✅ **DONE** (`6889825`) — `config::load_config()` returns `(PathBuf, CatalogConfig)`. Replaced the inline pair in **27** command handlers (initial 10+ estimate was conservative). | `src/main.rs` | — |
 | L4 | All web handlers are `async fn` that immediately `spawn_blocking` | `src/web/routes/*.rs` | No real async work happens in any handler. The current shape is safe and idiomatic for axum, but the H5 helper would also tidy this up. |
@@ -82,14 +82,12 @@ Each item is its own PR — they're independent of each other. Order by pain-rel
 
 **Batch 2 fully landed across 2026-05-03 / 2026-05-04.** Only opportunistic carryovers remain: H1's smaller match arms (Describe, GeneratePreviews, Cleanup, Collection, SavedSearch, etc.) and H5's remaining ~100 `spawn_blocking` sites.
 
-### Batch 3 — Documentation polish (~2h, low priority)
+### Batch 3 — Documentation polish ✅ DONE (`0eb33c6`, 2026-05-04)
 
-1. **M7** — Add `//!` module docs to all 20 source files lacking them. One or two sentences each. Mechanical pass with `Grep` for `^//!` to find gaps. (~45 min)
-2. **M8** — Doc the top-three files' undocumented public items (81 total). Prioritise return types and entrypoint methods; skip trivial accessors. (~1h)
-3. **M9** — Add 4–8 line purpose comments to the seven large templates. Pattern: what the template is, where it's mounted, what external JS APIs it exposes. (~30 min)
-4. **L1** — Standardise web error-response shape on `(StatusCode, Json(json!({"error": ...})))`. Mostly mechanical search-and-replace. (~30 min)
-
-This batch can land in any order; each item is independent and self-contained.
+1. ✅ **M7** — `//!` module docs added to 29 source files.
+2. ✅ **M8** — recount-after-splits dropped 81 → 7 undoc items in top three; all 7 documented.
+3. ✅ **M9** — 17 templates got leading purpose comments.
+4. ⏳ **L1** — folded into H5's opportunistic carryover (same `spawn_blocking` chains that `spawn_catalog_blocking` standardises).
 
 ### Not addressed
 
