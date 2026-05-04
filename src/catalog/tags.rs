@@ -29,16 +29,23 @@ impl Catalog {
     /// tag is a *leaf* — i.e. the asset has the tag but no other tag of the
     /// form `<tag>|...` on the same asset.
     ///
-    /// This is the count that matches the browse chip's `/tag` (leaf-only)
-    /// search semantic, and is meaningful in isolation from the
-    /// auto-expanded `own_count` returned by `list_all_tags`. For a parent
-    /// node like `location`, leaf-count equals "assets tagged at exactly
-    /// that level" — typically a small number that surfaces lazily-tagged
-    /// assets (parent-tagged but not specialised into a child).
+    /// Per-row count matches the browse chip's `tag:=^/<full-path>` filter
+    /// (case-sensitive whole-path leaf-only). The tags-page row link for
+    /// "(N as leaf)" uses exactly that filter, so the displayed count and
+    /// the click result population are always equal.
     ///
-    /// Pure SQL via the same `json_each` engine `list_all_tags` uses,
-    /// with a NOT EXISTS subquery checking for any descendant on the same
-    /// asset's tag list.
+    /// For a parent node like `location`, leaf-count equals "assets tagged
+    /// at exactly that level with no deeper child" — typically a small
+    /// number that surfaces lazily-tagged assets (parent-tagged but not
+    /// specialised into a child).
+    ///
+    /// Pure SQL via the same `json_each` engine `list_all_tags` uses, with
+    /// a NOT EXISTS subquery checking for any descendant on the same
+    /// asset's tag list. The descendant check uses GLOB (case-sensitive)
+    /// rather than LIKE so that case strays don't cross-contaminate: an
+    /// asset tagged `["color", "Color|red"]` correctly counts "color" as
+    /// a leaf (its lowercase descendants are absent) without the LIKE
+    /// case-insensitive ASCII fold treating "Color|red" as a descendant.
     pub fn list_leaf_tag_counts(&self) -> Result<std::collections::HashMap<String, u64>> {
         let mut stmt = self.conn.prepare(
             "SELECT je.value, COUNT(*) as cnt \
@@ -46,7 +53,7 @@ impl Catalog {
              WHERE a.tags != '[]' \
                AND NOT EXISTS ( \
                    SELECT 1 FROM json_each(a.tags) AS je2 \
-                   WHERE je2.value LIKE je.value || '|%' \
+                   WHERE je2.value GLOB je.value || '|*' \
                ) \
              GROUP BY je.value",
         )?;

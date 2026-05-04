@@ -1683,6 +1683,26 @@ mod tests {
         let opts_no_eq = SearchOptions { tags: &tags_no_eq, per_page: u32::MAX, ..Default::default() };
         let results_no_eq = catalog.search_paginated(&opts_no_eq).unwrap();
         assert_eq!(results_no_eq.len(), 2, "tag:Holzkirchen should match both");
+
+        // tag:=/Holzkirchen — combined whole-path AND no-descendants.
+        // ae1 has the standalone "Holzkirchen" (whole-path match) BUT also
+        // has "location|Germany|Bayern|Holzkirchen|Marktplatz" — Holzkirchen
+        // is a mid-path component there, so the no-descendants guard rejects.
+        // ae2 has the standalone Holzkirchen with no descendants → matches.
+        // This combination is what the tags-page "(N as leaf)" link uses so
+        // the click count equals the row's leaf count.
+        let tags_eq_leaf = vec!["=/Holzkirchen".to_string()];
+        let opts_eq_leaf = SearchOptions { tags: &tags_eq_leaf, per_page: u32::MAX, ..Default::default() };
+        let results_eq_leaf = catalog.search_paginated(&opts_eq_leaf).unwrap();
+        assert_eq!(results_eq_leaf.len(), 1, "tag:=/Holzkirchen should match only ae2");
+        assert_eq!(results_eq_leaf[0].original_filename, "ae2.jpg");
+
+        // Marker order doesn't matter: tag:/=Holzkirchen must give the same.
+        let tags_alt = vec!["/=Holzkirchen".to_string()];
+        let opts_alt = SearchOptions { tags: &tags_alt, per_page: u32::MAX, ..Default::default() };
+        let results_alt = catalog.search_paginated(&opts_alt).unwrap();
+        assert_eq!(results_alt.len(), 1, "tag:/=Holzkirchen should match only ae2");
+        assert_eq!(results_alt[0].original_filename, "ae2.jpg");
     }
 
     #[test]

@@ -38,15 +38,27 @@
             {% else %}
             <span class="tag-toggle-spacer"></span>
             {% endif %}
-            <a href="/?tag={{ t.display_name|urlencode }}">{{ t.display }}</a>
+            {# Use `=^` markers so the click count equals the row's
+               own_count: case-sensitive (so `color` and `Color` rows go
+               to disjoint asset sets) AND whole-path (so the `color` row
+               doesn't pick up assets where `color` is a leaf segment of
+               an unrelated path like `something|color`). Without these
+               markers the default browse filter is case-insensitive
+               any-path-position, which can be both a few off and quite a
+               few off depending on case strays / segment reuse. #}
+            <a href="/?tag=%3D%5E{{ t.display_name|urlencode }}">{{ t.display }}</a>
         </div>
         <span class="tag-count">
-            {# Headline = own_count: assets carrying this tag in any form
-               (the tag literally, or — via auto-expansion — through any
-               descendant). Matches `tag:foo` (default ▼) browse semantic.
-               Subtle parenthesised number = leaf_count: assets where the
-               tag sits at the leaf on that asset (no descendant on the
-               same asset). Matches `tag:/foo` browse semantic.
+            {# Headline = own_count: assets carrying this tag with this
+               exact whole-path entry (case-sensitive). Matches the click
+               URL above. Note: own_count is auto-expansion-aware since
+               importing `color|red` also stamps the `color` parent on
+               the asset, so a parent row's own_count covers all
+               descendant-tagged assets too.
+               Subtle parenthesised number = leaf_count: same row
+               population, but only assets where the tag has no
+               descendant on the same asset. Matches `tag:=^/foo` browse
+               semantic (whole-path AND no descendants).
                Only show the parens when leaf_count is between 0 and
                own_count exclusive — that's the *interesting* case
                ("some assets are tagged at exactly this level when they
@@ -56,13 +68,13 @@
                be visual noise on every parent row. #}
             {{ t.own_count }}
             {% if t.leaf_count > 0 && t.leaf_count != t.own_count %}
-            {# Click the leaf-count to jump to the browse page with the
-               `tag:/foo` (leaf-only) filter applied — i.e. only the
-               assets that are tagged at exactly this level with no
-               deeper child. Useful for finding sloppily-tagged assets
-               that should be specialised. #}
+            {# Combined `=/` (case-sensitive via `^`) makes the leaf-count
+               click target match the row's leaf number exactly. The
+               server-side filter rewrites to "JSON contains the exact
+               whole-path entry AND no descendant entries on the same
+               asset". #}
             <a class="tag-total-count tag-leaf-link"
-               href="/?tag=/{{ t.display_name|urlencode }}"
+               href="/?tag=%3D%5E%2F{{ t.display_name|urlencode }}"
                title="Show the {{ t.leaf_count }} asset(s) tagged at this exact level (no deeper child) — usually candidates for finer tagging">({{ t.leaf_count }} as leaf)</a>
             {% endif %}
         </span>

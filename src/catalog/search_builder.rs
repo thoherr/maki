@@ -394,11 +394,12 @@ impl Catalog {
         //   by component prefix, so it can't combine with `=` or `/`; when
         //   paired, the prefix-anchor semantic wins and the other flags are
         //   silently dropped.
-        // - `=` (whole-path, path_exact) is stricter than `/` (leaf-only at
-        //   any level, exact_only); when both given, `=` wins and `/` is
-        //   redundant.
+        // - `=` and `/` combine: `=` constrains the value to a whole-path
+        //   match, `/` adds a no-descendants constraint. The combined form
+        //   matches "this exact path AND no descendants on the asset" — the
+        //   semantic the tags-page leaf-count link needs to make its count
+        //   align with the row's leaf number.
         if prefix_anchor { exact_only = false; path_exact = false; }
-        if path_exact { exact_only = false; }
         let tag_value = rest;
         let stored = crate::tag_util::tag_input_to_storage(tag_value);
         let mut exprs = Vec::new();
@@ -431,12 +432,20 @@ impl Catalog {
         if path_exact {
             // Whole-path match: the full tag value equals `stored`, bounded
             // by the JSON quotes. Matches nothing else — no level sliding,
-            // no descendants, no leaf-of-hierarchy variants.
+            // no leaf-of-hierarchy variants. Descendants ARE allowed on the
+            // asset unless `/` is also given (see combined branch below).
             //
             // Use case: disambiguate a root-level tag from same-named leaves
-            // elsewhere in the hierarchy. `tag:/Legoland` matches only the
+            // elsewhere in the hierarchy. `tag:=Legoland` matches only the
             // standalone "Legoland" tag, not "location|Denmark|Legoland" or
             // "location|Germany|Legoland".
+            //
+            // Combined `=/`: whole-path AND no descendants. Used by the
+            // tags-page "(N as leaf)" link so click count == row leaf count.
+            // The negative LIKE clauses cover both descendant positions:
+            //   - `"stored|…`  (the path is at root and has children)
+            //   - `|stored|…`  (the path is mid-tree and has children)
+            let positives_start = exprs.len();
             params.push(Box::new(pat(&format!("\"{stored}\""))));
             exprs.push(format!("a.tags {op} ?"));
             // Input-form fallback (e.g. user typed `>` for hierarchy and the
@@ -450,6 +459,16 @@ impl Catalog {
                 let json_escaped = tag_value.replace('"', "\\\"");
                 params.push(Box::new(pat(&format!("\"{json_escaped}\""))));
                 exprs.push(format!("a.tags {op} ?"));
+            }
+            if exact_only {
+                // Wrap the OR'd positives and append AND-NOT descendant guards.
+                let positives = exprs.split_off(positives_start);
+                let or_block = positives.join(" OR ");
+                params.push(Box::new(desc_pat(&stored)));
+                params.push(Box::new(format!("{wild}|{stored}|{wild}")));
+                exprs.push(format!(
+                    "(({or_block}) AND a.tags NOT {op} ? AND a.tags NOT {op} ?)"
+                ));
             }
             return exprs;
         }
