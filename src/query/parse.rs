@@ -373,11 +373,66 @@ pub(super) fn tokenize_query(query: &str) -> Vec<String> {
 /// let p = parse_search_query("sunset beach");
 /// assert_eq!(p.text, Some("sunset beach".to_string()));
 /// ```
+/// Filters whose value is appended verbatim to a `Vec<String>` field, with
+/// the negation flag selecting between include and exclude lists.
+///
+/// Adding a new filter of this shape is one line: a `(prefix, |p, v, neg| { ... })`
+/// entry in this table. The closure runs in the parsing hot path, so keep it
+/// short — anything beyond the simple include/exclude split belongs in the
+/// custom-parsing block in `parse_search_query`.
+const SIMPLE_FILTERS: &[(&str, fn(&mut ParsedSearch, &str, bool))] = &[
+    ("id:",          |p, v, _n| p.asset_ids.push(v.to_string())),
+    ("type:",        |p, v, n| if n { p.asset_types_exclude.push(v.to_string()) } else { p.asset_types.push(v.to_string()) }),
+    ("tag:",         |p, v, n| if n { p.tags_exclude.push(v.to_string())        } else { p.tags.push(v.to_string()) }),
+    ("format:",      |p, v, n| if n { p.formats_exclude.push(v.to_string())     } else { p.formats.push(v.to_string()) }),
+    ("camera:",      |p, v, n| if n { p.cameras_exclude.push(v.to_string())     } else { p.cameras.push(v.to_string()) }),
+    ("lens:",        |p, v, n| if n { p.lenses_exclude.push(v.to_string())      } else { p.lenses.push(v.to_string()) }),
+    ("description:", |p, v, n| if n { p.descriptions_exclude.push(v.to_string()) } else { p.descriptions.push(v.to_string()) }),
+    ("desc:",        |p, v, n| if n { p.descriptions_exclude.push(v.to_string()) } else { p.descriptions.push(v.to_string()) }),
+    ("collection:",  |p, v, n| if n { p.collections_exclude.push(v.to_string())  } else { p.collections.push(v.to_string()) }),
+    ("path:",        |p, v, n| if n { p.path_prefixes_exclude.push(v.to_string()) } else { p.path_prefixes.push(v.to_string()) }),
+    ("person:",      |p, v, n| if n { p.persons_exclude.push(v.to_string())     } else { p.persons.push(v.to_string()) }),
+];
+
+/// Filters whose value is parsed via `parse_numeric_filter` and assigned to a
+/// single `Option<NumericFilter>` field. Negation is ignored — numeric
+/// comparisons don't have an exclude shape.
+const NUMERIC_FILTERS: &[(&str, fn(&mut ParsedSearch, Option<NumericFilter>))] = &[
+    ("rating:",   |p, n| p.rating = n),
+    ("iso:",      |p, n| p.iso = n),
+    ("focal:",    |p, n| p.focal = n),
+    ("f:",        |p, n| p.aperture = n),
+    ("width:",    |p, n| p.width = n),
+    ("height:",   |p, n| p.height = n),
+    ("stale:",    |p, n| p.stale_days = n),
+    ("copies:",   |p, n| p.copies = n),
+    ("variants:", |p, n| p.variant_count = n),
+    ("duration:", |p, n| p.duration = n),
+    ("tagcount:", |p, n| p.tag_count = n),
+];
+
+/// Boolean tokens that don't carry a value — exact full-token matches.
+const BOOLEAN_TOKENS: &[(&str, fn(&mut ParsedSearch))] = &[
+    ("orphan:true",   |p| p.orphan = true),
+    ("orphan:false",  |p| p.orphan_false = true),
+    ("missing:true",  |p| p.missing = true),
+    ("stacked:true",  |p| p.stacked = Some(true)),
+    ("stacked:false", |p| p.stacked = Some(false)),
+];
+
+/// Filters whose value sets a single `Option<String>` field — date range
+/// bounds, etc. Negation is ignored (no exclude shape).
+const STRING_FILTERS: &[(&str, fn(&mut ParsedSearch, &str))] = &[
+    ("date:",      |p, v| p.date_prefix = Some(v.to_string())),
+    ("dateFrom:",  |p, v| p.date_from = Some(v.to_string())),
+    ("dateUntil:", |p, v| p.date_until = Some(v.to_string())),
+];
+
 pub fn parse_search_query(query: &str) -> ParsedSearch {
     let mut parsed = ParsedSearch::default();
     let mut text_parts = Vec::new();
 
-    for token in tokenize_query(query) {
+    'token: for token in tokenize_query(query) {
         // Detect negation prefix
         let (negated, token_body) = if token.starts_with('-') && token.len() > 1 && token.as_bytes()[1] != b'-' {
             (true, &token[1..])
@@ -385,75 +440,45 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
             (false, token.as_str())
         };
 
-        if let Some(value) = token_body.strip_prefix("id:") {
-            parsed.asset_ids.push(value.to_string());
-        } else if let Some(value) = token_body.strip_prefix("type:") {
-            if negated {
-                parsed.asset_types_exclude.push(value.to_string());
-            } else {
-                parsed.asset_types.push(value.to_string());
+        // Table-driven dispatch for filter shapes that fit one of the four
+        // patterns. The custom-parsing block below handles filters with their
+        // own per-token logic (volume:none, scattered:N/D, geo:any/lat,lng,r,
+        // faces:any/N, embed:any/true, similar:id:limit, text:"q":limit, meta:k=v).
+
+        for (prefix, setter) in SIMPLE_FILTERS {
+            if let Some(value) = token_body.strip_prefix(prefix) {
+                setter(&mut parsed, value, negated);
+                continue 'token;
             }
-        } else if let Some(value) = token_body.strip_prefix("tag:") {
-            if negated {
-                parsed.tags_exclude.push(value.to_string());
-            } else {
-                parsed.tags.push(value.to_string());
+        }
+
+        for (prefix, setter) in NUMERIC_FILTERS {
+            if let Some(value) = token_body.strip_prefix(prefix) {
+                setter(&mut parsed, parse_numeric_filter(value));
+                continue 'token;
             }
-        } else if let Some(value) = token_body.strip_prefix("format:") {
-            if negated {
-                parsed.formats_exclude.push(value.to_string());
-            } else {
-                parsed.formats.push(value.to_string());
+        }
+
+        for (prefix, setter) in STRING_FILTERS {
+            if let Some(value) = token_body.strip_prefix(prefix) {
+                setter(&mut parsed, value);
+                continue 'token;
             }
-        } else if let Some(value) = token_body.strip_prefix("rating:") {
-            parsed.rating = parse_numeric_filter(value);
-        } else if let Some(value) = token_body.strip_prefix("camera:") {
-            if negated {
-                parsed.cameras_exclude.push(value.to_string());
-            } else {
-                parsed.cameras.push(value.to_string());
+        }
+
+        for (full, setter) in BOOLEAN_TOKENS {
+            if token_body == *full {
+                setter(&mut parsed);
+                continue 'token;
             }
-        } else if let Some(value) = token_body.strip_prefix("lens:") {
-            if negated {
-                parsed.lenses_exclude.push(value.to_string());
-            } else {
-                parsed.lenses.push(value.to_string());
-            }
-        } else if let Some(value) = token_body.strip_prefix("description:") {
-            if negated {
-                parsed.descriptions_exclude.push(value.to_string());
-            } else {
-                parsed.descriptions.push(value.to_string());
-            }
-        } else if let Some(value) = token_body.strip_prefix("desc:") {
-            // Short alias for description:
-            if negated {
-                parsed.descriptions_exclude.push(value.to_string());
-            } else {
-                parsed.descriptions.push(value.to_string());
-            }
-        } else if let Some(value) = token_body.strip_prefix("iso:") {
-            parsed.iso = parse_numeric_filter(value);
-        } else if let Some(value) = token_body.strip_prefix("focal:") {
-            parsed.focal = parse_numeric_filter(value);
-        } else if let Some(value) = token_body.strip_prefix("f:") {
-            parsed.aperture = parse_numeric_filter(value);
-        } else if let Some(value) = token_body.strip_prefix("width:") {
-            parsed.width = parse_numeric_filter(value);
-        } else if let Some(value) = token_body.strip_prefix("height:") {
-            parsed.height = parse_numeric_filter(value);
-        } else if let Some(value) = token_body.strip_prefix("meta:") {
+        }
+
+        // --- Custom-parsing filters (per-token logic) ---
+
+        if let Some(value) = token_body.strip_prefix("meta:") {
             if let Some((key, val)) = value.split_once('=') {
                 parsed.meta_filters.push((key.to_string(), val.to_string()));
             }
-        } else if token_body == "orphan:true" {
-            parsed.orphan = true;
-        } else if token_body == "orphan:false" {
-            parsed.orphan_false = true;
-        } else if token_body == "missing:true" {
-            parsed.missing = true;
-        } else if let Some(value) = token_body.strip_prefix("stale:") {
-            parsed.stale_days = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("volume:") {
             if value == "none" {
                 parsed.volume_none = true;
@@ -470,40 +495,14 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
             } else {
                 parsed.color_labels.push(value.to_string());
             }
-        } else if let Some(value) = token_body.strip_prefix("collection:") {
-            if negated {
-                parsed.collections_exclude.push(value.to_string());
-            } else {
-                parsed.collections.push(value.to_string());
-            }
-        } else if let Some(value) = token_body.strip_prefix("path:") {
-            if negated {
-                parsed.path_prefixes_exclude.push(value.to_string());
-            } else {
-                parsed.path_prefixes.push(value.to_string());
-            }
-        } else if let Some(value) = token_body.strip_prefix("copies:") {
-            parsed.copies = parse_numeric_filter(value);
-        } else if let Some(value) = token_body.strip_prefix("variants:") {
-            parsed.variant_count = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("scattered:") {
-            // Support scattered:N+/D syntax where /D is the path depth
+            // scattered:N+/D — N is the numeric filter, /D is the path depth.
             if let Some((num_part, depth_part)) = value.rsplit_once('/') {
                 parsed.scattered = parse_numeric_filter(num_part);
                 parsed.scattered_depth = depth_part.parse::<u32>().ok();
             } else {
                 parsed.scattered = parse_numeric_filter(value);
             }
-        } else if let Some(value) = token_body.strip_prefix("date:") {
-            parsed.date_prefix = Some(value.to_string());
-        } else if let Some(value) = token_body.strip_prefix("dateFrom:") {
-            parsed.date_from = Some(value.to_string());
-        } else if let Some(value) = token_body.strip_prefix("dateUntil:") {
-            parsed.date_until = Some(value.to_string());
-        } else if token_body == "stacked:true" {
-            parsed.stacked = Some(true);
-        } else if token_body == "stacked:false" {
-            parsed.stacked = Some(false);
         } else if let Some(value) = token_body.strip_prefix("geo:") {
             if value == "any" {
                 parsed.has_gps = Some(true);

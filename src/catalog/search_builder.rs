@@ -148,33 +148,7 @@ impl Catalog {
             }
         }
 
-        // --- Text search (positive) ---
-        if let Some(text) = opts.text {
-            if !text.is_empty() {
-                clauses.push(
-                    "(a.name LIKE ? OR bv.original_filename LIKE ? OR a.description LIKE ? OR bv.source_metadata LIKE ?)".to_string(),
-                );
-                let pattern = format!("%{text}%");
-                params.push(Box::new(pattern.clone()));
-                params.push(Box::new(pattern.clone()));
-                params.push(Box::new(pattern.clone()));
-                params.push(Box::new(pattern));
-            }
-        }
-
-        // --- Text exclusion ---
-        // Use IFNULL to handle NULL columns: NULL LIKE '%x%' returns NULL,
-        // and NOT(NULL OR ...) = NULL which is falsy, so we must coalesce.
-        for term in opts.text_exclude {
-            clauses.push(
-                "NOT (IFNULL(a.name,'') LIKE ? OR bv.original_filename LIKE ? OR IFNULL(a.description,'') LIKE ? OR bv.source_metadata LIKE ?)".to_string(),
-            );
-            let pattern = format!("%{term}%");
-            params.push(Box::new(pattern.clone()));
-            params.push(Box::new(pattern.clone()));
-            params.push(Box::new(pattern.clone()));
-            params.push(Box::new(pattern));
-        }
+        Self::add_text_filters(&mut clauses, &mut params, opts.text, opts.text_exclude);
 
         // --- Asset type (equality filter on a.asset_type) ---
         Self::add_equality_filter(&mut clauses, &mut params, opts.asset_types, opts.asset_types_exclude, "a.asset_type", &mut false, false);
@@ -204,68 +178,9 @@ impl Catalog {
             clauses.push(format!("NOT ({})", or_parts.join(" OR ")));
         }
 
-        // --- Format (equality on v.format) ---
-        {
-            let include: Vec<&str> = opts.formats.iter()
-                .flat_map(|e| e.split(',').map(|s| s.trim()))
-                .filter(|s| !s.is_empty())
-                .collect();
-            let exclude: Vec<&str> = opts.formats_exclude.iter()
-                .flat_map(|e| e.split(',').map(|s| s.trim()))
-                .filter(|s| !s.is_empty())
-                .collect();
-            if !include.is_empty() || !exclude.is_empty() {
-                needs_v_join = true;
-            }
-            if include.len() == 1 {
-                clauses.push("v.format = ?".to_string());
-                params.push(Box::new(include[0].to_lowercase()));
-            } else if include.len() > 1 {
-                let placeholders: Vec<&str> = include.iter().map(|_| "?").collect();
-                clauses.push(format!("v.format IN ({})", placeholders.join(",")));
-                for v in &include {
-                    params.push(Box::new(v.to_lowercase()));
-                }
-            }
-            if exclude.len() == 1 {
-                clauses.push("v.format != ?".to_string());
-                params.push(Box::new(exclude[0].to_lowercase()));
-            } else if exclude.len() > 1 {
-                let placeholders: Vec<&str> = exclude.iter().map(|_| "?").collect();
-                clauses.push(format!("v.format NOT IN ({})", placeholders.join(",")));
-                for v in &exclude {
-                    params.push(Box::new(v.to_lowercase()));
-                }
-            }
-        }
+        Self::add_format_filter(&mut clauses, &mut params, opts.formats, opts.formats_exclude, &mut needs_v_join);
 
-        // --- Volume ---
-        if let Some(volume) = opts.volume {
-            if !volume.is_empty() {
-                clauses.push("fl.volume_id = ?".to_string());
-                params.push(Box::new(volume.to_string()));
-            }
-        }
-        if !opts.volume_ids.is_empty() {
-            let placeholders: Vec<String> = opts.volume_ids.iter().map(|_| "?".to_string()).collect();
-            clauses.push(format!("fl.volume_id IN ({})", placeholders.join(",")));
-            for vid in opts.volume_ids {
-                params.push(Box::new(vid.clone()));
-            }
-        }
-        if !opts.volume_ids_exclude.is_empty() {
-            // Exclude assets that have ANY location on these volumes
-            let placeholders: Vec<String> = opts.volume_ids_exclude.iter().map(|_| "?".to_string()).collect();
-            clauses.push(format!(
-                "a.id NOT IN (SELECT DISTINCT v2.asset_id FROM variants v2 \
-                 JOIN file_locations fl2 ON fl2.content_hash = v2.content_hash \
-                 WHERE fl2.volume_id IN ({}))",
-                placeholders.join(",")
-            ));
-            for vid in opts.volume_ids_exclude {
-                params.push(Box::new(vid.clone()));
-            }
-        }
+        Self::add_volume_filter(&mut clauses, &mut params, opts.volume, opts.volume_ids, opts.volume_ids_exclude);
 
         // --- Numeric filters (all use unified NumericFilter type) ---
         // Rating is special: an unrated asset has `rating IS NULL`, but users
@@ -282,38 +197,7 @@ impl Catalog {
         }
         Self::add_equality_filter(&mut clauses, &mut params, opts.color_labels, opts.color_labels_exclude, "a.color_label", &mut false, false);
 
-        // --- Path pattern (LIKE on fl.relative_path) ---
-        // Supports `*` as a wildcard anywhere in the pattern. A trailing `%`
-        // is appended automatically so `path:Pictures/2026` keeps prefix
-        // semantics. Literal `%` and `_` are escaped via `ESCAPE '\'`.
-        {
-            let include: Vec<&str> = opts.path_prefixes.iter()
-                .flat_map(|e| e.split(',').map(|s| s.trim()))
-                .filter(|s| !s.is_empty())
-                .collect();
-            let exclude: Vec<&str> = opts.path_prefixes_exclude.iter()
-                .flat_map(|e| e.split(',').map(|s| s.trim()))
-                .filter(|s| !s.is_empty())
-                .collect();
-            if !include.is_empty() || !exclude.is_empty() {
-                needs_fl_join = true;
-            }
-            if include.len() == 1 {
-                clauses.push("fl.relative_path LIKE ? ESCAPE '\\'".to_string());
-                params.push(Box::new(path_pattern_to_like(include[0])));
-            } else if include.len() > 1 {
-                let mut or_parts = Vec::new();
-                for v in &include {
-                    or_parts.push("fl.relative_path LIKE ? ESCAPE '\\'".to_string());
-                    params.push(Box::new(path_pattern_to_like(v)));
-                }
-                clauses.push(format!("({})", or_parts.join(" OR ")));
-            }
-            for v in &exclude {
-                clauses.push("fl.relative_path NOT LIKE ? ESCAPE '\\'".to_string());
-                params.push(Box::new(path_pattern_to_like(v)));
-            }
-        }
+        Self::add_path_filter(&mut clauses, &mut params, opts.path_prefixes, opts.path_prefixes_exclude, &mut needs_fl_join);
 
         // --- Camera (LIKE on v.camera_model) ---
         Self::add_like_filter(&mut clauses, &mut params, opts.cameras, opts.cameras_exclude, "v.camera_model", &mut needs_v_join);
@@ -379,26 +263,7 @@ impl Catalog {
             Self::numeric_clause_expr(f, &expr, &mut clauses, &mut params);
         }
 
-        // Date filters
-        if let Some(prefix) = opts.date_prefix {
-            if !prefix.is_empty() {
-                clauses.push("a.created_at LIKE ?".to_string());
-                params.push(Box::new(format!("{prefix}%")));
-            }
-        }
-        if let Some(from) = opts.date_from {
-            if !from.is_empty() {
-                clauses.push("a.created_at >= ?".to_string());
-                params.push(Box::new(from.to_string()));
-            }
-        }
-        if let Some(until) = opts.date_until {
-            if !until.is_empty() {
-                let exclusive = next_date_bound(until);
-                clauses.push("a.created_at < ?".to_string());
-                params.push(Box::new(exclusive));
-            }
-        }
+        Self::add_date_filters(&mut clauses, &mut params, opts.date_prefix, opts.date_from, opts.date_until);
 
         // Stack collapse
         if opts.collapse_stacks {
@@ -414,23 +279,7 @@ impl Catalog {
             }
         }
 
-        // Geo bounding box filter
-        if let Some((south, west, north, east)) = opts.geo_bbox {
-            clauses.push("a.latitude >= ? AND a.latitude <= ? AND a.longitude >= ? AND a.longitude <= ?".to_string());
-            params.push(Box::new(south));
-            params.push(Box::new(north));
-            params.push(Box::new(west));
-            params.push(Box::new(east));
-        }
-
-        // GPS presence filter
-        if let Some(has_gps) = opts.has_gps {
-            if has_gps {
-                clauses.push("a.latitude IS NOT NULL AND a.longitude IS NOT NULL".to_string());
-            } else {
-                clauses.push("(a.latitude IS NULL OR a.longitude IS NULL)".to_string());
-            }
-        }
+        Self::add_geo_filters(&mut clauses, &mut params, opts.geo_bbox, opts.has_gps);
 
         // Face filters (use denormalized face_count column)
         if let Some(has_faces) = opts.has_faces {
@@ -831,6 +680,212 @@ impl Catalog {
         for v in &exclude {
             clauses.push(format!("({column} IS NULL OR {column} NOT LIKE ?)"));
             params.push(Box::new(format!("%{v}%")));
+        }
+    }
+
+    /// Free-text filter on `name`, `original_filename`, `description`,
+    /// `source_metadata`. Negative terms wrap the same disjunction in `NOT (...)`
+    /// with `IFNULL` to coalesce nullable columns (NULL LIKE returns NULL,
+    /// which would make NOT(...) undefined).
+    fn add_text_filters(
+        clauses: &mut Vec<String>,
+        params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+        text: Option<&str>,
+        text_exclude: &[String],
+    ) {
+        if let Some(text) = text {
+            if !text.is_empty() {
+                clauses.push(
+                    "(a.name LIKE ? OR bv.original_filename LIKE ? OR a.description LIKE ? OR bv.source_metadata LIKE ?)".to_string(),
+                );
+                let pattern = format!("%{text}%");
+                params.push(Box::new(pattern.clone()));
+                params.push(Box::new(pattern.clone()));
+                params.push(Box::new(pattern.clone()));
+                params.push(Box::new(pattern));
+            }
+        }
+        for term in text_exclude {
+            clauses.push(
+                "NOT (IFNULL(a.name,'') LIKE ? OR bv.original_filename LIKE ? OR IFNULL(a.description,'') LIKE ? OR bv.source_metadata LIKE ?)".to_string(),
+            );
+            let pattern = format!("%{term}%");
+            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern));
+        }
+    }
+
+    /// Equality filter on `v.format` with comma-split include/exclude lists.
+    /// Sets `needs_v_join` since the column is on the variants table.
+    fn add_format_filter(
+        clauses: &mut Vec<String>,
+        params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+        formats: &[String],
+        formats_exclude: &[String],
+        needs_v_join: &mut bool,
+    ) {
+        let include: Vec<&str> = formats.iter()
+            .flat_map(|e| e.split(',').map(|s| s.trim()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        let exclude: Vec<&str> = formats_exclude.iter()
+            .flat_map(|e| e.split(',').map(|s| s.trim()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !include.is_empty() || !exclude.is_empty() {
+            *needs_v_join = true;
+        }
+        if include.len() == 1 {
+            clauses.push("v.format = ?".to_string());
+            params.push(Box::new(include[0].to_lowercase()));
+        } else if include.len() > 1 {
+            let placeholders: Vec<&str> = include.iter().map(|_| "?").collect();
+            clauses.push(format!("v.format IN ({})", placeholders.join(",")));
+            for v in &include {
+                params.push(Box::new(v.to_lowercase()));
+            }
+        }
+        if exclude.len() == 1 {
+            clauses.push("v.format != ?".to_string());
+            params.push(Box::new(exclude[0].to_lowercase()));
+        } else if exclude.len() > 1 {
+            let placeholders: Vec<&str> = exclude.iter().map(|_| "?").collect();
+            clauses.push(format!("v.format NOT IN ({})", placeholders.join(",")));
+            for v in &exclude {
+                params.push(Box::new(v.to_lowercase()));
+            }
+        }
+    }
+
+    /// Volume filter: equality (`opts.volume`), inclusion list (`opts.volume_ids`),
+    /// and exclusion (`opts.volume_ids_exclude` — exclude assets with ANY
+    /// location on those volumes via correlated subquery).
+    fn add_volume_filter(
+        clauses: &mut Vec<String>,
+        params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+        volume: Option<&str>,
+        volume_ids: &[String],
+        volume_ids_exclude: &[String],
+    ) {
+        if let Some(volume) = volume {
+            if !volume.is_empty() {
+                clauses.push("fl.volume_id = ?".to_string());
+                params.push(Box::new(volume.to_string()));
+            }
+        }
+        if !volume_ids.is_empty() {
+            let placeholders: Vec<String> = volume_ids.iter().map(|_| "?".to_string()).collect();
+            clauses.push(format!("fl.volume_id IN ({})", placeholders.join(",")));
+            for vid in volume_ids {
+                params.push(Box::new(vid.clone()));
+            }
+        }
+        if !volume_ids_exclude.is_empty() {
+            let placeholders: Vec<String> = volume_ids_exclude.iter().map(|_| "?".to_string()).collect();
+            clauses.push(format!(
+                "a.id NOT IN (SELECT DISTINCT v2.asset_id FROM variants v2 \
+                 JOIN file_locations fl2 ON fl2.content_hash = v2.content_hash \
+                 WHERE fl2.volume_id IN ({}))",
+                placeholders.join(",")
+            ));
+            for vid in volume_ids_exclude {
+                params.push(Box::new(vid.clone()));
+            }
+        }
+    }
+
+    /// Path-prefix LIKE filter on `fl.relative_path`. Supports `*` as a
+    /// wildcard (mapped to `%`); literal `%`/`_` are escaped via `ESCAPE '\'`.
+    /// A trailing `%` is appended automatically so `path:Pictures/2026` keeps
+    /// prefix semantics. Sets `needs_fl_join`.
+    fn add_path_filter(
+        clauses: &mut Vec<String>,
+        params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+        path_prefixes: &[String],
+        path_prefixes_exclude: &[String],
+        needs_fl_join: &mut bool,
+    ) {
+        let include: Vec<&str> = path_prefixes.iter()
+            .flat_map(|e| e.split(',').map(|s| s.trim()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        let exclude: Vec<&str> = path_prefixes_exclude.iter()
+            .flat_map(|e| e.split(',').map(|s| s.trim()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !include.is_empty() || !exclude.is_empty() {
+            *needs_fl_join = true;
+        }
+        if include.len() == 1 {
+            clauses.push("fl.relative_path LIKE ? ESCAPE '\\'".to_string());
+            params.push(Box::new(path_pattern_to_like(include[0])));
+        } else if include.len() > 1 {
+            let mut or_parts = Vec::new();
+            for v in &include {
+                or_parts.push("fl.relative_path LIKE ? ESCAPE '\\'".to_string());
+                params.push(Box::new(path_pattern_to_like(v)));
+            }
+            clauses.push(format!("({})", or_parts.join(" OR ")));
+        }
+        for v in &exclude {
+            clauses.push("fl.relative_path NOT LIKE ? ESCAPE '\\'".to_string());
+            params.push(Box::new(path_pattern_to_like(v)));
+        }
+    }
+
+    /// Date range filters on `a.created_at`: prefix (LIKE `YYYY-MM%`),
+    /// from (>=), until (<, exclusive — `next_date_bound` rolls forward).
+    fn add_date_filters(
+        clauses: &mut Vec<String>,
+        params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+        date_prefix: Option<&str>,
+        date_from: Option<&str>,
+        date_until: Option<&str>,
+    ) {
+        if let Some(prefix) = date_prefix {
+            if !prefix.is_empty() {
+                clauses.push("a.created_at LIKE ?".to_string());
+                params.push(Box::new(format!("{prefix}%")));
+            }
+        }
+        if let Some(from) = date_from {
+            if !from.is_empty() {
+                clauses.push("a.created_at >= ?".to_string());
+                params.push(Box::new(from.to_string()));
+            }
+        }
+        if let Some(until) = date_until {
+            if !until.is_empty() {
+                let exclusive = next_date_bound(until);
+                clauses.push("a.created_at < ?".to_string());
+                params.push(Box::new(exclusive));
+            }
+        }
+    }
+
+    /// GPS-related filters: bounding-box constraint and presence/absence of
+    /// any latitude/longitude. Both columns live on `a` so no extra join.
+    fn add_geo_filters(
+        clauses: &mut Vec<String>,
+        params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+        geo_bbox: Option<(f64, f64, f64, f64)>,
+        has_gps: Option<bool>,
+    ) {
+        if let Some((south, west, north, east)) = geo_bbox {
+            clauses.push("a.latitude >= ? AND a.latitude <= ? AND a.longitude >= ? AND a.longitude <= ?".to_string());
+            params.push(Box::new(south));
+            params.push(Box::new(north));
+            params.push(Box::new(west));
+            params.push(Box::new(east));
+        }
+        if let Some(has_gps) = has_gps {
+            if has_gps {
+                clauses.push("a.latitude IS NOT NULL AND a.longitude IS NOT NULL".to_string());
+            } else {
+                clauses.push("(a.latitude IS NULL OR a.longitude IS NULL)".to_string());
+            }
         }
     }
 
