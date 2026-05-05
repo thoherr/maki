@@ -3035,6 +3035,7 @@ impl QueryEngine {
         asset_filter: Option<&str>,
         asset_id_set: Option<&HashSet<String>>,
         all: bool,
+        mirror_tags: bool,
         dry_run: bool,
         log: bool,
         callback: Option<&dyn Fn(&str, &str)>,
@@ -3099,7 +3100,7 @@ impl QueryEngine {
             catalog.list_pending_writeback_recipes(volume_id_filter.as_deref())?
         };
 
-        self.writeback_process(pending_recipes, &catalog, &store, &online, &content_store, asset_filter, asset_id_set, dry_run, log, callback)
+        self.writeback_process(pending_recipes, &catalog, &store, &online, &content_store, asset_filter, asset_id_set, mirror_tags, dry_run, log, callback)
     }
 
     /// Process a list of recipes for writeback. Each tuple is (recipe_id, asset_id, volume_id, relative_path).
@@ -3112,6 +3113,7 @@ impl QueryEngine {
         content_store: &ContentStore,
         asset_filter: Option<&str>,
         asset_id_set: Option<&HashSet<String>>,
+        mirror_tags: bool,
         dry_run: bool,
         log: bool,
         callback: Option<&dyn Fn(&str, &str)>,
@@ -3221,11 +3223,42 @@ impl QueryEngine {
                     .into_iter()
                     .collect();
                 let lr_tags = crate::tag_util::expand_all_ancestors(&asset.tags);
-                if !dc_tags.is_empty() {
-                    if let Ok(true) = xmp_reader::update_tags(&full_path, &dc_tags, &[]) {
+
+                // With `--mirror-tags`, read the XMP's existing keyword
+                // lists and remove any entry that's not in the catalog's
+                // current set. This makes the XMP an exact reflection of
+                // catalog tags — necessary for reconciling renames,
+                // splits, deletions, and unicode-fixes that accumulated
+                // while inline writeback was off (the inline path tracks
+                // remove-deltas at edit time, but the queued/manual flush
+                // doesn't persist them, so without mirror-tags the
+                // additive flush silently keeps the old tags around).
+                let (dc_remove, lr_remove): (Vec<String>, Vec<String>) = if mirror_tags {
+                    let xmp = xmp_reader::extract(&full_path);
+                    let dc_set: std::collections::HashSet<&str> =
+                        dc_tags.iter().map(|s| s.as_str()).collect();
+                    let lr_set: std::collections::HashSet<&str> =
+                        lr_tags.iter().map(|s| s.as_str()).collect();
+                    let dc_rm: Vec<String> = xmp.keywords.iter()
+                        .filter(|t| !dc_set.contains(t.as_str()))
+                        .cloned()
+                        .collect();
+                    let lr_rm: Vec<String> = xmp.hierarchical_keywords.iter()
+                        .filter(|t| !lr_set.contains(t.as_str()))
+                        .cloned()
+                        .collect();
+                    (dc_rm, lr_rm)
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+
+                if !dc_tags.is_empty() || !dc_remove.is_empty() {
+                    if let Ok(true) = xmp_reader::update_tags(&full_path, &dc_tags, &dc_remove) {
                         file_changed = true;
                     }
-                    let _ = xmp_reader::update_hierarchical_subjects(&full_path, &lr_tags, &[]);
+                    if let Ok(true) = xmp_reader::update_hierarchical_subjects(&full_path, &lr_tags, &lr_remove) {
+                        file_changed = true;
+                    }
                 }
 
                 if file_changed {

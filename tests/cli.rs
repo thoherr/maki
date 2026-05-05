@@ -9387,6 +9387,84 @@ fn edit_with_writeback_disabled_tracks_pending_then_manual_flush_writes() {
     );
 }
 
+/// `maki writeback --all --mirror-tags <query>` reconciles XMP keyword
+/// lists against the catalog, removing entries the catalog no longer has.
+/// Regression for the additive-only flush bug: a tag rename done while
+/// auto-writeback was off used to leave the OLD tag stranded in XMP
+/// alongside the new one. Mirror mode reads `dc:subject` and
+/// `lr:hierarchicalSubject`, diffs against the asset's catalog tags, and
+/// removes the stale entries — exactly what's needed after large
+/// catalog-only tag restructuring.
+#[test]
+#[cfg(feature = "pro")]
+fn writeback_mirror_tags_removes_stale_xmp_keywords() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Default config: writeback disabled. Stage an XMP that already has
+    // a keyword on disk, then import.
+    let xmp_path = root.join("photos/MT_001.xmp");
+    create_test_file(&root, "photos/MT_001.ARW", b"raw-mirror-tags");
+    create_test_file(
+        &root,
+        "photos/MT_001.xmp",
+        b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n  <rdf:RDF>\n    <rdf:Description xmp:Rating=\"3\">\n      <dc:subject>\n        <rdf:Bag>\n          <rdf:li>OldTag</rdf:li>\n        </rdf:Bag>\n      </dc:subject>\n    </rdf:Description>\n  </rdf:RDF>\n</x:xmpmeta>",
+    );
+    maki()
+        .current_dir(&root)
+        .args(["import", root.join("photos").to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Catalog now has the asset tagged "OldTag" (absorbed during import).
+    // Rename it in MAKI to "NewTag". With auto-flush off, the catalog
+    // updates but the .xmp on disk still has "OldTag".
+    maki()
+        .current_dir(&root)
+        .args(["tag", "rename", "OldTag", "NewTag", "--apply"])
+        .assert()
+        .success();
+
+    let xmp_pre_flush = std::fs::read_to_string(&xmp_path).unwrap();
+    assert!(xmp_pre_flush.contains("OldTag"), "Auto-flush off: XMP still has OldTag pre-flush");
+    assert!(!xmp_pre_flush.contains("NewTag"), "Auto-flush off: NewTag not yet on disk");
+
+    // Default `maki writeback --all` is additive — would leave OldTag.
+    // `--mirror-tags` (requires --all) reconciles the keyword list.
+    maki()
+        .current_dir(&root)
+        .args(["writeback", "--all", "--mirror-tags"])
+        .assert()
+        .success();
+
+    let xmp_post_flush = std::fs::read_to_string(&xmp_path).unwrap();
+    assert!(
+        xmp_post_flush.contains("NewTag"),
+        "Mirror flush wrote NewTag. Got: {xmp_post_flush}"
+    );
+    assert!(
+        !xmp_post_flush.contains("OldTag"),
+        "Mirror flush removed stale OldTag. Got: {xmp_post_flush}"
+    );
+}
+
+/// `--mirror-tags` requires `--all` (clap-level constraint). Using it
+/// alone should be rejected, since mirror mode without --all would only
+/// touch pending recipes — the rename/delete scenario it's designed for
+/// fundamentally needs the broader sweep that --all enables.
+#[test]
+#[cfg(feature = "pro")]
+fn writeback_mirror_tags_requires_all() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    maki()
+        .current_dir(&root)
+        .args(["writeback", "--mirror-tags"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--all").or(predicate::str::contains("required")));
+}
+
 #[test]
 #[cfg(feature = "pro")]
 fn sync_metadata_dry_run() {

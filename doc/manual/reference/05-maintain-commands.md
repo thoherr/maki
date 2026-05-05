@@ -457,6 +457,9 @@ Scope can be narrowed with a positional search query, `--asset`, or `--volume`. 
 **--all**
 : Write current metadata to every XMP recipe in the matching set, not just those flagged pending. Useful for an initial sync, for rematerialising catalog metadata onto disk after large catalog-only restructuring (rename, split, rebuild), or for pushing accumulated edits when you've kept auto-flush off and now want a known asset set written through.
 
+**--mirror-tags** (requires `--all`)
+: Make XMP keyword lists exactly mirror the catalog. Without this flag, writeback is **additive**: catalog tags get pushed onto the XMP but XMP tags the catalog no longer has are left untouched. Renames, splits, deletions, and `tag fix-unicode` performed in MAKI therefore leave stale entries on disk — invisible drift that compounds across batches. With `--mirror-tags`, the writer reads the existing `dc:subject` and `lr:hierarchicalSubject`, diffs against the asset's catalog tags, and removes the stale entries before writing the current set. Pair with a query (`--mirror-tags --all "tag:NewName"` etc.) to scope a one-shot reconciliation; `--all` is required because the mirror operation is most useful as a broad sweep, not on the narrow pending-only default.
+
 **--dry-run**
 : Report what would be written without modifying any files.
 
@@ -490,6 +493,13 @@ Force-write all metadata to XMP (initial sync):
 
 ```bash
 maki writeback --all --log --time
+```
+
+Reconcile XMP keyword lists with the catalog after large tag restructuring (rename / split / delete / fix-unicode performed while auto-flush was off):
+
+```bash
+maki writeback --all --mirror-tags
+maki writeback --all --mirror-tags "tag:NewName"   # scope to one tag's set
 ```
 
 Preview what would be written:

@@ -892,6 +892,18 @@ enum Commands {
         #[arg(long, display_order = 12)]
         all: bool,
 
+        /// Make XMP keyword lists match the catalog exactly. The default
+        /// flush is additive — it pushes catalog tags onto the XMP but
+        /// never removes XMP tags the catalog no longer has, so renames
+        /// and deletions made in MAKI leave stale entries on disk. With
+        /// this flag, dc:subject and lr:hierarchicalSubject are read,
+        /// diffed against the asset's catalog tags, and stale entries
+        /// are removed. Pair with `--all <query>` for a one-shot cleanup
+        /// after large catalog-only tag restructuring (rename, split,
+        /// delete, fix-unicode) accumulated while auto-writeback was off.
+        #[arg(long, display_order = 13, requires = "all")]
+        mirror_tags: bool,
+
         /// Preview what would be written without modifying files
         #[arg(long, display_order = 20)]
         dry_run: bool,
@@ -2386,6 +2398,7 @@ faces/\n\
             volume,
             asset,
             all,
+            mirror_tags,
             dry_run,
             asset_ids,
         } => run_writeback_command(
@@ -2393,6 +2406,7 @@ faces/\n\
             volume,
             asset,
             all,
+            mirror_tags,
             dry_run,
             asset_ids,
             cli.json,

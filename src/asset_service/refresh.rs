@@ -483,6 +483,9 @@ impl AssetService {
                 &content_store,
                 None, // no additional asset filter, already filtered above
                 None, // no asset ID set filter
+                false, // mirror_tags: sync-metadata is incremental — let
+                       // explicit `maki writeback --all --mirror-tags`
+                       // own the destructive cleanup workflow
                 dry_run,
                 false, // log handled by our callback
                 None,

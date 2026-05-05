@@ -459,7 +459,16 @@ pub async fn writeback_asset(
             .map_err(|e| format!("{e:#}"))?;
 
         let wb_result = engine
-            .writeback(None, Some(&full_id), None, false, false, false, None)
+            .writeback(
+                None,
+                Some(&full_id),
+                None,
+                false,  // all: only pending recipes for this asset
+                false,  // mirror_tags: web flush is incremental, never destructive
+                false,  // dry_run
+                false,  // log
+                None,
+            )
             .map_err(|e| e.to_string())?;
         Ok::<_, String>(wb_result)
     })
