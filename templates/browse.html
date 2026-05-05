@@ -341,6 +341,10 @@ window.onFilterChange = onFilterChange;
 
     var selected = new Set();
     var batchBusy = false;
+    // Span hint shown next to the count when the selection covers more
+    // than the visible page (set by Shift-Cmd-A "select all matching").
+    // null means "all selected IDs are on the current page".
+    var selectionPageSpan = null;
 
     // Restore selection from sessionStorage — but clear on forced reload
     try {
@@ -359,7 +363,19 @@ window.onFilterChange = onFilterChange;
 
     function updateToolbar() {
         var n = selected.size;
-        countEl.textContent = n + ' selected';
+        // If the recorded span hint no longer matches the actual selection
+        // size (user toggled individual checkboxes after Shift-Cmd-A), drop
+        // the hint — it'd be misleading. We keep it when the size matches
+        // the spanned set; on partial deselect we'd need per-page metadata
+        // we don't have, so the simpler invariant is "exact match or drop".
+        if (selectionPageSpan && (selectionPageSpan.expectedSize !== n || n === 0)) {
+            selectionPageSpan = null;
+        }
+        var label = n + ' selected';
+        if (selectionPageSpan && selectionPageSpan.totalPages > 1) {
+            label += ' (across ' + selectionPageSpan.totalPages + ' pages)';
+        }
+        countEl.textContent = label;
         if (n > 0) {
             toolbar.classList.add('visible');
             document.body.classList.add('has-batch-toolbar');
@@ -414,6 +430,7 @@ window.onFilterChange = onFilterChange;
 
     function clearSelection() {
         selected.clear();
+        selectionPageSpan = null;
         updateToolbar();
     }
 
@@ -495,7 +512,95 @@ window.onFilterChange = onFilterChange;
             getVisibleIds().forEach(function(id) { selected.add(id); });
             updateToolbar();
         }
+        // Shift-Cmd/Ctrl+A — select all matching the current query (across pages).
+        // Note: KeyboardEvent.key reports the SHIFTED form for letter
+        // keys, so this is "A" not "a" when shift is held.
+        if ((e.key === 'A' || e.key === 'a') && (e.metaKey || e.ctrlKey) && e.shiftKey) {
+            e.preventDefault();
+            selectAllMatching();
+        }
     });
+
+    /// Fetch every asset ID matching the current browse filter and seed
+    /// the selection with them. If the result spans more than one page,
+    /// confirm via modal first; otherwise just merge silently (Shift-Cmd-A
+    /// on a single-page result is effectively the same as Cmd-A).
+    function selectAllMatching() {
+        if (batchBusy) return;
+        // Use the live URL so every active filter param flows through —
+        // avoids re-implementing the search-param whitelist of getFilterParams().
+        fetch('/api/all-ids' + window.location.search)
+            .then(function(r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function(data) {
+                var ids = data.ids || [];
+                var totalPages = data.total_pages || 1;
+                var total = data.total || ids.length;
+                if (ids.length === 0) {
+                    countEl.textContent = 'No matching assets';
+                    setTimeout(function() { updateToolbar(); }, 1200);
+                    return;
+                }
+                if (totalPages <= 1) {
+                    // Spans only the current page → no scary modal.
+                    ids.forEach(function(id) { selected.add(id); });
+                    selectionPageSpan = null;
+                    updateToolbar();
+                    return;
+                }
+                showSelectAllModal(ids, total, totalPages);
+            })
+            .catch(function(e) {
+                countEl.textContent = 'Could not load all matching IDs';
+                setTimeout(function() { updateToolbar(); }, 1500);
+                console.error('select-all-matching:', e);
+            });
+    }
+
+    /// Modal: "Select N matching assets across M pages?" with
+    /// Replace / Add-to-selection radios. Reuses the group-confirm-overlay
+    /// styling to stay visually consistent with delete / group / export modals.
+    function showSelectAllModal(ids, total, totalPages) {
+        var hasExisting = selected.size > 0;
+        var overlay = document.createElement('div');
+        overlay.className = 'group-confirm-overlay';
+        var radios = hasExisting
+            ? '<div class="export-options">' +
+                '<div class="export-row"><label><input type="radio" name="select-mode" value="replace" checked> ' +
+                    'Replace current selection (' + selected.size + ')</label></div>' +
+                '<div class="export-row"><label><input type="radio" name="select-mode" value="add"> ' +
+                    'Add to current selection</label></div>' +
+              '</div>'
+            : '';
+        overlay.innerHTML = '<div class="group-confirm-modal">' +
+            '<h3>Select ' + total + ' matching asset' + (total === 1 ? '' : 's') + '?</h3>' +
+            '<p class="group-confirm-hint">Spans ' + totalPages + ' page' + (totalPages === 1 ? '' : 's') +
+                '. Selection persists across page navigation; batch toolbar acts on the full set.</p>' +
+            radios +
+            '<div class="group-confirm-buttons">' +
+                '<button class="group-confirm-cancel">Cancel</button>' +
+                '<button class="group-confirm-ok select-all-confirm-btn">Select</button>' +
+            '</div></div>';
+        document.body.appendChild(overlay);
+        setupModalKeyboard(overlay, '.select-all-confirm-btn');
+
+        overlay.querySelector('.group-confirm-cancel').addEventListener('click', function() { overlay.remove(); });
+        overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+
+        overlay.querySelector('.select-all-confirm-btn').addEventListener('click', function() {
+            var modeInput = overlay.querySelector('input[name="select-mode"]:checked');
+            var mode = modeInput ? modeInput.value : 'replace';
+            overlay.remove();
+            if (mode === 'replace') {
+                selected.clear();
+            }
+            ids.forEach(function(id) { selected.add(id); });
+            selectionPageSpan = { totalPages: totalPages, expectedSize: selected.size };
+            updateToolbar();
+        });
+    }
 
     function setButtonsBusy(busy) {
         batchBusy = busy;
@@ -505,8 +610,10 @@ window.onFilterChange = onFilterChange;
             countEl.textContent = 'Processing ' + selected.size + ' assets\u2026';
             countEl.classList.add('batch-processing');
         } else {
-            countEl.textContent = selected.size + ' selected';
+            // Restore the regular label via updateToolbar so the
+            // "(across N pages)" hint is preserved.
             countEl.classList.remove('batch-processing');
+            updateToolbar();
         }
     }
 

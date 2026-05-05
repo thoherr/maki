@@ -530,6 +530,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/facets", axum::routing::get(routes::facets_api))
         .route("/api/paths", axum::routing::get(routes::paths_api))
         .route("/api/page-ids", axum::routing::get(routes::page_ids_api))
+        .route("/api/all-ids", axum::routing::get(routes::all_ids_api))
         .route("/api/open-location", axum::routing::post(routes::open_location))
         .route("/api/open-terminal", axum::routing::post(routes::open_terminal))
         .route(

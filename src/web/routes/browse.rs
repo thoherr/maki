@@ -676,6 +676,102 @@ pub async fn search_api(
     }
 }
 
+/// GET /api/all-ids — returns every asset ID matching the current search
+/// query, ignoring pagination. Drives the browse page's Shift-Cmd-A
+/// "select all matching" feature: the JS fetches the full ID list, shows a
+/// confirmation modal sized to `total_pages`, and seeds the existing
+/// client-side selection set so all batch toolbar operations (embed, tag,
+/// auto-tag, detect-faces, describe, delete, …) work unchanged.
+///
+/// Response shape: `{ "ids": [...], "total": N, "total_pages": M }`.
+/// `total_pages` is computed from `[serve] per_page` so the modal can say
+/// "Select 487 matching assets across 9 pages?" without a second request.
+pub async fn all_ids_api(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<SearchParams>,
+) -> Response {
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let catalog = state.catalog()?;
+
+        let bf = build_parsed_search(&params, &state);
+        let parsed = bf.parsed;
+        let volume = bf.volume;
+        let path_volume_id = bf.path_volume_id;
+        let sort_str = bf.sort_str;
+        let collapse_stacks = bf.collapse_stacks;
+
+        let mut opts = parsed.to_search_options();
+        if !volume.is_empty() {
+            opts.volume = Some(&volume);
+        }
+        if let Some(ref vid) = path_volume_id {
+            if opts.volume.is_none() {
+                opts.volume = Some(vid);
+            }
+        }
+
+        let collection_ids: Vec<String> = if !parsed.collections.is_empty() {
+            resolve_collection_ids(&parsed.collections, catalog.conn())
+        } else { Vec::new() };
+        if !collection_ids.is_empty() {
+            opts.collection_asset_ids = Some(&collection_ids);
+        }
+
+        let collection_exclude_ids: Vec<String> = if !parsed.collections_exclude.is_empty() {
+            resolve_collection_ids(&parsed.collections_exclude, catalog.conn())
+        } else { Vec::new() };
+        if !collection_exclude_ids.is_empty() {
+            opts.collection_exclude_ids = Some(&collection_exclude_ids);
+        }
+
+        #[cfg(feature = "ai")]
+        let person_ids: Vec<String> = if !parsed.persons.is_empty() {
+            let face_store = crate::face_store::FaceStore::new(catalog.conn());
+            intersect_name_groups(&parsed.persons, |name| {
+                face_store.find_person_asset_ids(name).unwrap_or_default()
+            })
+        } else { Vec::new() };
+        #[cfg(not(feature = "ai"))]
+        let person_ids: Vec<String> = Vec::new();
+        if !person_ids.is_empty() {
+            opts.person_asset_ids = Some(&person_ids);
+        }
+
+        let per_page = state.per_page;
+        opts.sort = SearchSort::from_str(&sort_str);
+        opts.collapse_stacks = collapse_stacks;
+        // Single virtual page that covers the entire result set. SQLite's
+        // LIMIT/OFFSET handles huge values fine; even a 100k-asset catalog
+        // is a single sub-second query returning ~3 MB of UUID strings —
+        // well under any browser-side memory ceiling we care about.
+        opts.page = 1;
+        opts.per_page = u32::MAX;
+
+        let total = catalog.search_count(&opts)?;
+        let total_pages = if per_page > 0 {
+            ((total as f64) / per_page as f64).ceil() as u32
+        } else {
+            1
+        };
+        let rows = catalog.search_paginated(&opts)?;
+        let ids: Vec<String> = rows.iter().map(|r| r.asset_id.clone()).collect();
+
+        Ok::<_, anyhow::Error>(serde_json::json!({
+            "ids": ids,
+            "total": total,
+            "total_pages": total_pages,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(json)) => Json(json).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+    }
+}
+
 /// GET /api/page-ids — returns asset IDs for a given page.
 pub async fn page_ids_api(
     State(state): State<Arc<AppState>>,
