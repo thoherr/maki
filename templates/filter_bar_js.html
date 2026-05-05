@@ -985,7 +985,11 @@
             // a spurious input event) shouldn't re-fetch.
             if (prefix === lastQuery) return;
             lastQuery = prefix;
-            var url = '/api/paths?limit=20&q=' + encodeURIComponent(prefix);
+            // limit=100: a yearly/monthly/daily directory tree easily
+            // outgrows 20 (≥30 years × 12 months × 31 days, plus
+            // multi-shoot days). 100 covers every realistic same-level
+            // sibling count without overwhelming the dropdown.
+            var url = '/api/paths?limit=100&q=' + encodeURIComponent(prefix);
             var vol = selectedVolumeId();
             if (vol) url += '&volume=' + encodeURIComponent(vol);
             fetch(url)

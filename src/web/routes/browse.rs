@@ -1140,7 +1140,7 @@ pub async fn paths_api(
             return Ok::<_, anyhow::Error>(serde_json::json!([] as [String; 0]));
         }
 
-        let limit = params.limit.unwrap_or(20).clamp(1, 100) as usize;
+        let limit = params.limit.unwrap_or(100).clamp(1, 100) as usize;
         let catalog = state.catalog()?;
 
         // Handle absolute paths: if the user typed a path starting with `/`
