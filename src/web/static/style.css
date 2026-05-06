@@ -1210,6 +1210,70 @@ select.badge {
 
 /* Nav: Import link + running-job status badge (base.html). */
 a.nav-action { cursor: pointer; }
+
+/* ── Nav dropdown (e.g. Catalog → Stats / Analytics / Backup / Volumes / Duplicates).
+   Trigger sits in the white-on-coloured nav band; menu pops down with the
+   regular card surface so the items use the body theme's text colours. */
+.nav-dropdown {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+.nav-dropdown-trigger {
+    background: none;
+    border: none;
+    color: #fff;
+    font: inherit;
+    font-weight: 600;
+    font-size: 0.9rem;
+    cursor: pointer;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+}
+.nav-dropdown-trigger:hover {
+    opacity: 0.85;
+}
+.nav-dropdown-caret {
+    font-size: 0.65em;
+    opacity: 0.8;
+    transition: transform 0.12s ease;
+}
+.nav-dropdown.open .nav-dropdown-caret {
+    transform: rotate(180deg);
+}
+.nav-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 0.45rem);
+    left: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    min-width: 160px;
+    padding: 0.3rem 0;
+    display: none;
+    z-index: 950;
+}
+.nav-dropdown.open .nav-dropdown-menu {
+    display: block;
+}
+/* `nav` prefix lets the selector beat the generic `nav a { color: #fff }`
+   rule above without resorting to !important. */
+nav .nav-dropdown-menu a {
+    display: block;
+    padding: 0.45rem 1rem;
+    color: var(--text);
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+nav .nav-dropdown-menu a:hover {
+    background: var(--badge-bg);
+    opacity: 1;
+}
 .nav-import-badge {
     display: inline-block;
     margin-left: 0.3em;

@@ -22,11 +22,19 @@
             <a href="/collections">Collections</a>
             <a href="/saved-searches">Searches</a>
             <span class="nav-sep"></span>
-            <a href="/stats">Stats</a>
-            <a href="/analytics">Analytics</a>
-            <a href="/backup">Backup</a>
-            <a href="/volumes">Volumes</a>
-            <a href="/duplicates">Duplicates</a>
+            <div class="nav-dropdown" id="nav-catalog">
+                <button type="button" class="nav-dropdown-trigger" id="nav-catalog-btn"
+                        aria-haspopup="true" aria-expanded="false" aria-controls="nav-catalog-menu">
+                    Catalog<span class="nav-dropdown-caret" aria-hidden="true">&#9662;</span>
+                </button>
+                <div class="nav-dropdown-menu" id="nav-catalog-menu" role="menu">
+                    <a href="/stats" role="menuitem">Stats</a>
+                    <a href="/analytics" role="menuitem">Analytics</a>
+                    <a href="/backup" role="menuitem">Backup</a>
+                    <a href="/volumes" role="menuitem">Volumes</a>
+                    <a href="/duplicates" role="menuitem">Duplicates</a>
+                </div>
+            </div>
             <span class="nav-sep"></span>
             <a href="#" id="nav-import-link" class="nav-action">
                 Import<span id="nav-import-badge" class="nav-import-badge" style="display:none" title="Import in progress">●</span>
@@ -141,6 +149,35 @@
 {% include "maintain_dialog_js.html" %}
 {% include "job_toast.html" %}
 {% include "job_toast_js.html" %}
+<script>
+// ── Nav: Catalog dropdown ────────────────────────────────────────────────
+// Click trigger to toggle; click outside or Escape to close. Click on any
+// item inside follows the link (browser default) and the menu hides on
+// next page load anyway.
+(function() {
+    var dd = document.getElementById('nav-catalog');
+    if (!dd) return;
+    var btn = document.getElementById('nav-catalog-btn');
+    btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var open = dd.classList.toggle('open');
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    document.addEventListener('click', function(e) {
+        if (!dd.contains(e.target)) {
+            dd.classList.remove('open');
+            btn.setAttribute('aria-expanded', 'false');
+        }
+    });
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && dd.classList.contains('open')) {
+            dd.classList.remove('open');
+            btn.setAttribute('aria-expanded', 'false');
+            btn.focus();
+        }
+    });
+})();
+</script>
 <script>
 // ── Nav: Import + Maintain links + running-job status badges ─────────────
 // Single shared poll on /api/jobs drives both badges. Each badge lights up
