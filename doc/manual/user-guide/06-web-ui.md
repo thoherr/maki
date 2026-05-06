@@ -60,6 +60,19 @@ bind = "127.0.0.1"
 Command-line flags always override `maki.toml` settings. See the [Configuration Reference](../reference/08-configuration.md) for details.
 
 
+## Navigation bar
+
+Every page has a horizontal nav bar across the top. From left to right:
+
+- **Brand** (MAKI logo) — link to the browse page.
+- **Browse** and (on AI builds) **Stroll** — primary content views.
+- **Tags**, **People** (Pro), **Collections**, **Searches** — catalog organisation pages.
+- **Catalog ▾** dropdown — collapses Stats, Analytics, Backup, Volumes, Duplicates into one menu so the bar stays compact. Click the trigger to open; click outside or press Escape to close. The caret rotates when open. These pages are read-mostly catalog inspection views, used a few times a week rather than daily.
+- **Import●** and **Maintain●** — long-running command launchers (see [Importing from a volume](#importing-from-a-volume) and [Maintain Dialog](#maintain-dialog) below). The pulsing dot lights up when a job of that kind is running anywhere in the catalog; clicking the entry while a job is in flight re-attaches to its progress feed.
+- **Help (?)** and **Theme toggle** — keyboard-shortcut overlay and dark-mode switch.
+
+The dropdown is keyboard-accessible (`Tab` to focus, `Enter` to open, `Esc` to close) and screen-reader friendly (`role="menu"` with `aria-expanded` on the trigger).
+
 ## Dark Mode
 
 The web UI supports dark mode. A toggle button (sun/moon icon) in the navigation bar switches between light and dark themes. Your preference is saved in the browser and applied instantly on every page load.
@@ -873,6 +886,30 @@ While importing, the dialog switches to a live progress view: a progress bar, ru
 A **pulsing red dot** next to the "Import" entry in the navigation indicates that a job is running anywhere in the catalog. Click the entry while a job is in flight and the dialog **re-attaches to the running job**: it replays the last ~100 events and continues with the live stream, so a page reload during a long import doesn't lose the activity feed. Only one import runs at a time, server-side.
 
 When the import finishes, the dialog shows a summary and a **Browse imported** link that scopes the browse view to the newly imported assets — exact `id:` filter for small batches (up to 80 assets), or the volume + subfolder filter sorted by date for larger ones. This is the web equivalent of `maki import` for the most common workflow: plug in a card, register it (if needed), import to your media volume.
+
+## Maintain Dialog
+
+The **Maintain** entry in the top navigation (next to Import) opens a tabbed modal that exposes the long-running maintenance commands to the web UI. Three tabs:
+
+- **Writeback** — flushes pending metadata edits to `.xmp` recipe files on disk. Web equivalent of `maki writeback`. Always works regardless of `[writeback] enabled` (the config flag governs only *automatic* flush on every edit; this dialog is the explicit manual flush). The form exposes:
+  - **Volume** dropdown — restrict to a single volume's recipes, or "All online volumes" to flush everywhere.
+  - **Query** — optional search filter to scope to a subset (same syntax as the search bar; e.g. `tag:wedding`).
+  - `Write all XMP recipes in scope (not just pending)` — the `--all` knob. Useful for rematerialising catalog metadata after large catalog-only restructuring (rename/split/delete tags) when the recipes weren't flagged pending.
+  - `Mirror tags — remove XMP keywords the catalog no longer has` — the `--mirror-tags` knob. Reads each XMP's `dc:subject` and `lr:hierarchicalSubject`, diffs against the asset's catalog tags, and removes stale entries. Greyed out unless "Write all" is checked (mirror mode requires the broader sweep). **Destructive**: any keyword that's in the XMP but not in the catalog is dropped.
+  - `Dry run — preview without writing` — reports counts without modifying files.
+
+- **Sync metadata** — bidirectional XMP ↔ catalog sync. Web equivalent of `maki sync-metadata`. Inbound: external XMP edits (made in Lightroom / Capture One while the volume was outside MAKI) are pulled into the catalog. Outbound: pending catalog edits are flushed back to XMP for recipes that didn't change externally. Recipes that changed both on disk and in MAKI are reported as conflicts and skipped. Form options:
+  - **Volume** dropdown.
+  - `Re-extract embedded XMP from JPEG/TIFF media files` — the `--media` knob. Slow; use when you suspect external tools wrote XMP-in-JPEG that wasn't reflected in sidecars.
+  - `Dry run`.
+
+- **Verify** — content-hash check for media + recipes on disk. Web equivalent of `maki verify`. Re-hashes each file, compares against the stored content hash, reports mismatches (silent corruption, accidental edits, sync glitches) and missing files. Form options:
+  - **Volume** dropdown.
+  - **Skip files verified within last N days** — the `[verify] max_age_days` equivalent. Leave blank to re-verify all files.
+
+Each form's **Run** button posts to a server endpoint that immediately returns a job ID and runs the operation in the background. The shared **progress toast** (bottom-right of the screen, same as Embed / Auto-tag / Detect-faces) shows live per-file progress and a final summary line built from the job's terminal counters. Closing the dialog while a job runs is fine — the toast keeps watching, and the **pulsing dot on the Maintain entry** stays lit until the job finishes. Click the Maintain entry while a job is in flight to re-attach to it.
+
+Only one job per kind runs at a time; starting a second writeback / sync-metadata / verify while one of the same kind is still running returns 409 from the server. Different kinds run in parallel (you can have a verify going while you also flush a writeback).
 
 ---
 

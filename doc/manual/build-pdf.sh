@@ -258,6 +258,9 @@ cat > "$TMPDIR/header.tex" << 'LATEX'
 \newunicodechar{⊞}{{\symbolfont ⊞}}
 \newunicodechar{↗}{{\symbolfont ↗}}
 \newunicodechar{ℹ}{{\symbolfont ℹ}}
+\newunicodechar{●}{{\symbolfont ●}}
+\newunicodechar{↔}{{\symbolfont ↔}}
+\newunicodechar{▾}{{\symbolfont ▾}}
 \newfontfamily{\mathsymbolfont}{STIX Two Math}[Scale=MatchLowercase]
 \newunicodechar{✓}{{\mathsymbolfont ✓}}
 \newunicodechar{∅}{{\mathsymbolfont ∅}}

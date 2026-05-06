@@ -2,6 +2,37 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.5.1 (2026-05-06)
+
+A web-UI release: long-running maintenance commands (writeback, sync-metadata, verify) get a launcher dialog instead of being CLI-only, and the top-of-page nav bar gets a "Catalog" dropdown to keep the seven existing entries from sprawling.
+
+Tests unchanged: 782 + 249 standard, 889 + 276 pro.
+
+### Maintain dialog
+
+A new "**Maintain**" entry sits next to "Import" in the navigation, with the same pulsing-dot status badge and the same re-attach-to-running-job click behaviour. Click it to open a tabbed modal:
+
+- **Writeback tab** — volume + query scope, three checkboxes:
+  - `Write all XMP recipes in scope (not just pending)` — the `--all` knob, useful for rematerialising catalog metadata after large catalog-only restructuring.
+  - `Mirror tags — remove XMP keywords the catalog no longer has` — the `--mirror-tags` knob (auto-disabled until "Write all" is checked, mirroring the clap-level constraint). Reads each XMP's `dc:subject` and `lr:hierarchicalSubject`, diffs against the asset's catalog tags, removes stale entries.
+  - `Dry run — preview without writing`.
+- **Sync metadata tab** — bidirectional XMP ↔ catalog sync. Volume scope, `--media` (re-extract embedded XMP from JPEG/TIFF), `--dry-run`. Summary surfaces inbound / outbound / conflicts / unchanged / media-refreshed counts.
+- **Verify tab** — content-hash check for media + recipes on disk. Volume scope, max-age-days threshold to skip recently-verified files.
+
+Each form posts to a new `POST /api/maintain/<op>` endpoint that returns `{job_id}` immediately and streams per-file progress through the existing `JobRegistry` SSE pipeline. Closing the dialog while a job runs is fine — the standard progress toast keeps watching, and the pulsing dot on the Maintain entry stays lit until the job finishes.
+
+`JobKind` enum gained `Writeback`, `SyncMetadata`, `Verify` variants. The shared progress toast learned the new summary counters (`written`, `inbound`, `outbound`, `conflicts`, `unchanged`, `media_refreshed`, `verified`, `modified`) so terminal events render readable summaries. The shared nav-badge polling drives both the Import and Maintain badges from a single `/api/jobs` poll, filtering by JobKind on the client side. At-most-one-job-per-kind is enforced server-side (409 on conflict); different kinds run in parallel.
+
+Engine APIs are reused as-is — no signature changes to `engine.writeback`, `service.sync_metadata`, `service.verify`. The route boundary handles the small adaptation between the dialog's volume-label string and `sync_metadata`'s `Option<&Volume>` parameter.
+
+### Catalog nav dropdown
+
+Five top-level entries (Stats, Analytics, Backup, Volumes, Duplicates) collapsed into one "Catalog ▾" dropdown to keep the nav bar from sprawling now that Maintain landed alongside Import. The dropdown trigger sits in the same nav band; its menu pops down with the body theme's card surface (so menu text uses regular body colour, not the white-on-coloured nav contrast). Click outside or Escape closes; the caret rotates 180° to indicate state. `aria-haspopup`/`aria-expanded`/`role="menu"`/`role="menuitem"` wired for screen readers. Pages themselves are unchanged.
+
+### Layout fix
+
+Maintain dialog checkbox labels rendered each child on its own line — input, text node, `<strong>`, `<span>` all stacked vertically — because the inherited `.import-modal label` rule sets `flex-direction: column` (correct for "Volume" stacking above its select) and the override never reset it. Explicit `flex-direction: row` plus `margin-bottom: 0` and `flex-shrink: 0` on the input keeps each checkbox row on a single line that wraps naturally.
+
 ## v4.5.0 (2026-05-05)
 
 A behaviour-and-UX release. The headline change is a rework of XMP writeback semantics so the safety-net default (`[writeback] enabled = false`) no longer blocks change tracking or the explicit `maki writeback` command — the config flag now controls *only* automatic flush on every edit. A new `--mirror-tags` flag reconciles XMP keyword lists with the catalog after large catalog-only restructuring (rename, split, delete, fix-unicode), so accumulated drift can be flushed in one shot. Browse gains Shift-Cmd-A "select all matching the current filter" with a confirmation modal — the missing primitive for "I forgot to embed/auto-tag this 500-photo shoot." The tags page click count now equals what the click target shows. Tag autocomplete keeps middle-of-hierarchy matches visible and lets you drill into a prefix.
