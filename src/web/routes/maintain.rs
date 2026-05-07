@@ -541,6 +541,10 @@ pub struct StartSyncRequest {
     /// Volume label (required for sync — the engine method takes a `Volume`,
     /// and the natural "scan the whole catalog" web mode is "scan this volume").
     pub volume: String,
+    /// Optional volume-relative subpath to scope the scan (e.g. "2024/wedding").
+    /// Without it, the whole volume is scanned. Joined with the volume's mount
+    /// point on the server before being passed to the engine.
+    pub path: Option<String>,
     /// Apply changes (move locations, mark missing). Without this, dry-run.
     #[serde(default)]
     pub apply: bool,
@@ -622,9 +626,27 @@ fn run_sync(
         }));
     };
 
-    // Sync's "paths" parameter scopes the scan; we use the volume's mount
-    // point, which is the natural "whole-volume sweep" semantic.
-    let paths = vec![volume.mount_point.clone()];
+    // Sync's "paths" parameter scopes the scan. Default: the whole volume
+    // (its mount point). With an explicit subpath we join — but reject any
+    // value that escapes the mount via `..` so a malicious / mistyped value
+    // can't sweep the user's home directory. The engine itself is volume-
+    // scoped after this anyway, but the path is handed to a filesystem walk
+    // before that, so the boundary check belongs here.
+    let scan_path = match req.path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(rel) => {
+            let candidate = volume.mount_point.join(rel.trim_start_matches('/'));
+            let canon_mount = std::fs::canonicalize(&volume.mount_point)
+                .unwrap_or_else(|_| volume.mount_point.clone());
+            let canon_candidate = std::fs::canonicalize(&candidate)
+                .unwrap_or_else(|_| candidate.clone());
+            if !canon_candidate.starts_with(&canon_mount) {
+                anyhow::bail!("path escapes the volume mount: {}", rel);
+            }
+            canon_candidate
+        }
+        None => volume.mount_point.clone(),
+    };
+    let paths = vec![scan_path];
     let result = service.sync(&paths, &volume, req.apply, req.remove_stale, &[], on_file)?;
 
     Ok(serde_json::json!({

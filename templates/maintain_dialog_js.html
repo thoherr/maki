@@ -23,6 +23,7 @@
     ];
 
     var volumesLoaded = false;
+    var volumesByLabel = {};   // label → volume object — used by path autocomplete to resolve label → ID for the /api/volumes/{id}/browse call.
     function populateVolumes() {
         if (volumesLoaded) return Promise.resolve();
         return fetch('/api/volumes')
@@ -39,6 +40,7 @@
                         sel.appendChild(opt);
                     });
                 });
+                vols.forEach(function(v) { volumesByLabel[v.label] = v; });
                 volumesLoaded = true;
             })
             .catch(function() {});
@@ -178,6 +180,7 @@
         if (!vol) { alert('Please choose a volume.'); return; }
         var body = {
             volume: vol,
+            path: document.getElementById('maintain-sy-path').value.trim() || null,
             apply: syApply.checked,
             remove_stale: syStale.checked
         };
@@ -233,6 +236,143 @@
             alert(label + ' failed to start: ' + e.message);
         });
     }
+
+    // ── Path autocomplete (Sync, Cleanup) ──────────────────────────────
+    // Same pattern as the import dialog's subfolder field: debounced fetch
+    // against /api/volumes/{id}/browse, ↑/↓/Tab/Enter to drill into a
+    // directory (or commit a file). Volume label → ID is resolved through
+    // the cached volumesByLabel map so the volume select can stay
+    // user-friendly (label) while the API call needs the UUID.
+    function attachPathAutocomplete(input, volumeSelect, ac) {
+        if (!input || !volumeSelect || !ac) return;
+        var acIndex = -1;
+        var lastQuery = null;
+        var debounceTimer = null;
+
+        function hide() { ac.style.display = 'none'; acIndex = -1; }
+
+        function splitPath(p) {
+            var i = p.lastIndexOf('/');
+            return i < 0
+                ? { dir: '', leaf: p }
+                : { dir: p.substring(0, i + 1), leaf: p.substring(i + 1) };
+        }
+
+        function escHtml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
+
+        function render(entries, leafFilter) {
+            ac.innerHTML = '';
+            acIndex = -1;
+            var leafLc = leafFilter.toLowerCase();
+            var matches = entries.filter(function(e) {
+                return e.name.toLowerCase().indexOf(leafLc) === 0;
+            });
+            if (matches.length === 0) { hide(); return; }
+            matches.forEach(function(e) {
+                var div = document.createElement('div');
+                div.className = 'tag-suggestion';
+                var display = e.is_dir ? e.relative_path + '/' : e.relative_path;
+                div.setAttribute('data-path', display);
+                div.setAttribute('data-is-dir', e.is_dir ? '1' : '0');
+                var icon = e.is_dir ? '📁' : '📄';
+                div.innerHTML = '<span class="path-entry-icon">' + icon + '</span>' +
+                    escHtml(e.name) + (e.is_dir ? '/' : '');
+                div.onmousedown = function(ev) {
+                    ev.preventDefault();
+                    accept(display, e.is_dir);
+                };
+                ac.appendChild(div);
+            });
+            ac.style.display = 'block';
+        }
+
+        function highlight(idx) {
+            var items = ac.querySelectorAll('.tag-suggestion');
+            items.forEach(function(el, i) { el.classList.toggle('active', i === idx); });
+            if (idx >= 0 && items[idx]) items[idx].scrollIntoView({block: 'nearest'});
+        }
+
+        function accept(path, isDir) {
+            input.value = path;
+            hide();
+            if (isDir) { input.focus(); fetchEntries(path); }
+        }
+
+        function currentVolumeId() {
+            var label = volumeSelect.value;
+            if (!label) return null;
+            var v = volumesByLabel[label];
+            return v ? v.id : null;
+        }
+
+        function fetchEntries(currentValue) {
+            var volId = currentVolumeId();
+            if (!volId) { hide(); return; }
+            var split = splitPath(currentValue);
+            var prefix = split.dir.replace(/\/+$/, '');
+            var key = volId + '|' + prefix + '|' + split.leaf;
+            if (key === lastQuery) return;
+            lastQuery = key;
+            var url = '/api/volumes/' + encodeURIComponent(volId) +
+                '/browse?limit=50&prefix=' + encodeURIComponent(prefix);
+            fetch(url)
+                .then(function(r) { return r.ok ? r.json() : { entries: [] }; })
+                .then(function(data) {
+                    if (input.value !== currentValue) return;
+                    render(data.entries || [], split.leaf);
+                })
+                .catch(hide);
+        }
+
+        function schedule(value) {
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(function() { fetchEntries(value); }, 120);
+        }
+
+        input.addEventListener('input', function() { schedule(this.value); });
+        input.addEventListener('focus', function() {
+            // Clear the cache so a refocus after a volume change refetches
+            // (the user may have switched volume since last typing).
+            lastQuery = null;
+            fetchEntries(this.value);
+        });
+        input.addEventListener('blur', function() { setTimeout(hide, 150); });
+        // When the volume selector changes, drop the cached query so the
+        // next keystroke (or focus) hits the new volume's tree.
+        volumeSelect.addEventListener('change', function() { lastQuery = null; });
+
+        input.addEventListener('keydown', function(e) {
+            var items = ac.querySelectorAll('.tag-suggestion');
+            var open = ac.style.display === 'block' && items.length > 0;
+            if (e.key === 'ArrowDown' && open) {
+                e.preventDefault();
+                acIndex = Math.min(acIndex + 1, items.length - 1);
+                highlight(acIndex);
+            } else if (e.key === 'ArrowUp' && open) {
+                e.preventDefault();
+                acIndex = Math.max(acIndex - 1, 0);
+                highlight(acIndex);
+            } else if ((e.key === 'Tab' || e.key === 'Enter') && open && acIndex >= 0) {
+                e.preventDefault();
+                var el = items[acIndex];
+                accept(el.getAttribute('data-path'), el.getAttribute('data-is-dir') === '1');
+            } else if (e.key === 'Escape' && open) {
+                e.preventDefault();
+                hide();
+            }
+        });
+    }
+
+    attachPathAutocomplete(
+        document.getElementById('maintain-sy-path'),
+        document.getElementById('maintain-sy-volume'),
+        document.getElementById('maintain-sy-path-ac')
+    );
+    attachPathAutocomplete(
+        document.getElementById('maintain-cu-path'),
+        document.getElementById('maintain-cu-volume'),
+        document.getElementById('maintain-cu-path-ac')
+    );
 
     window.makiMaintain = {
         openDialog: openDialog,

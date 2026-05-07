@@ -150,6 +150,13 @@
                         <option value="">Choose a volume…</option>
                     </select>
                 </div>
+                <div class="maintain-row">
+                    <label for="maintain-sy-path">Subpath <span class="maintain-row-hint">(optional, volume-relative; restrict the scan to a subtree)</span></label>
+                    <div class="path-input-wrap">
+                        <input type="text" id="maintain-sy-path" placeholder="e.g. 2024/wedding" autocomplete="off">
+                        <div id="maintain-sy-path-ac" class="tag-autocomplete" style="display:none"></div>
+                    </div>
+                </div>
                 <div class="maintain-checkboxes">
                     <label><input type="checkbox" id="maintain-sy-apply"> Apply changes <span class="maintain-row-hint">(without this, dry-run only)</span></label>
                     <label><input type="checkbox" id="maintain-sy-stale" disabled> Remove stale catalog locations for missing files <span class="maintain-row-hint">(requires &ldquo;apply&rdquo;)</span></label>
@@ -204,8 +211,11 @@
                     </select>
                 </div>
                 <div class="maintain-row">
-                    <label for="maintain-cu-path">Path prefix <span class="maintain-row-hint">(catalog-relative; restrict to a subtree)</span></label>
-                    <input type="text" id="maintain-cu-path" placeholder="e.g. 2024/wedding">
+                    <label for="maintain-cu-path">Path prefix <span class="maintain-row-hint">(volume-relative; restrict to a subtree — autocomplete works once a volume is selected)</span></label>
+                    <div class="path-input-wrap">
+                        <input type="text" id="maintain-cu-path" placeholder="e.g. 2024/wedding" autocomplete="off">
+                        <div id="maintain-cu-path-ac" class="tag-autocomplete" style="display:none"></div>
+                    </div>
                 </div>
                 <div class="maintain-checkboxes">
                     <label><input type="checkbox" id="maintain-cu-apply"> Apply changes <span class="maintain-row-hint">(without this, report-only)</span></label>
