@@ -4778,7 +4778,23 @@ body.has-batch-toolbar { padding-bottom: 60px; }
    Reuses .import-overlay/.import-modal for the chrome; adds tabs and
    a slightly different form layout (vertical stacks of checkboxes
    instead of the import dialog's horizontal grid because the maintain
-   tabs cluster many small toggles). */
+   tabs cluster many small toggles). The modal is wider than the import
+   one (750px vs 500px) because the seven tab labels need room to fit
+   on a single row at the top of the modal. */
+#maintain-modal {
+    max-width: 750px;
+}
+/* If we ever add an 8th+ tab, allow the bar to scroll horizontally
+   instead of wrapping — wrapped tabs look like a separate sub-nav and
+   misread as nested structure. */
+.maintain-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+}
+.maintain-tab {
+    white-space: nowrap;
+    flex-shrink: 0;
+}
 .import-header {
     display: flex;
     justify-content: space-between;
