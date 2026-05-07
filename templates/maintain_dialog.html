@@ -20,6 +20,10 @@
             <button type="button" class="maintain-tab active" role="tab" data-maintain-tab="writeback" aria-selected="true">Writeback</button>
             <button type="button" class="maintain-tab" role="tab" data-maintain-tab="sync-metadata" aria-selected="false">Sync metadata</button>
             <button type="button" class="maintain-tab" role="tab" data-maintain-tab="verify" aria-selected="false">Verify</button>
+            <button type="button" class="maintain-tab" role="tab" data-maintain-tab="generate-previews" aria-selected="false">Previews</button>
+            <button type="button" class="maintain-tab" role="tab" data-maintain-tab="sync" aria-selected="false">Sync</button>
+            <button type="button" class="maintain-tab" role="tab" data-maintain-tab="refresh" aria-selected="false">Refresh</button>
+            <button type="button" class="maintain-tab" role="tab" data-maintain-tab="cleanup" aria-selected="false">Cleanup</button>
         </div>
 
         {# ── Writeback ───────────────────────────────────────────── #}
@@ -99,6 +103,116 @@
                 <div class="import-form-actions">
                     <button type="button" class="batch-btn" id="maintain-vf-cancel">Close</button>
                     <button type="submit" class="batch-btn batch-btn-primary" id="maintain-vf-run">Run verify</button>
+                </div>
+            </form>
+        </div>
+
+        {# ── Generate previews ──────────────────────────────────── #}
+        <div class="maintain-pane" data-maintain-pane="generate-previews" style="display:none">
+            <p class="maintain-blurb">
+                (Re-)generate the asset thumbnails the browse grid shows.
+                Useful after <code>fix-roles --apply</code> moved a different
+                variant into the best-preview slot, or to add 2560px smart
+                previews to assets that only have the regular thumbnail.
+            </p>
+            <form id="maintain-gp-form">
+                <div class="maintain-row">
+                    <label for="maintain-gp-volume">Volume</label>
+                    <select id="maintain-gp-volume" name="volume">
+                        <option value="">All online volumes</option>
+                    </select>
+                </div>
+                <div class="maintain-checkboxes">
+                    <label><input type="checkbox" id="maintain-gp-smart"> Also generate the 2560 px smart preview</label>
+                    <label><input type="checkbox" id="maintain-gp-upgrade"> Upgrade only &mdash; regenerate when a different variant is now the best <span class="maintain-row-hint">(skip already-correct)</span></label>
+                    <label><input type="checkbox" id="maintain-gp-force"> Force regenerate every preview, even existing ones <span class="maintain-row-hint">(slow)</span></label>
+                </div>
+                <div class="import-form-actions">
+                    <button type="button" class="batch-btn" id="maintain-gp-cancel">Close</button>
+                    <button type="submit" class="batch-btn batch-btn-primary" id="maintain-gp-run">Generate previews</button>
+                </div>
+            </form>
+        </div>
+
+        {# ── Sync (file layer) ──────────────────────────────────── #}
+        <div class="maintain-pane" data-maintain-pane="sync" style="display:none">
+            <p class="maintain-blurb">
+                Reconcile a volume's catalog locations with what's actually
+                on disk: detect moved, modified, new, and missing files. Use
+                <strong>Apply</strong> to update the catalog; use
+                <strong>Remove stale</strong> to drop locations for files that
+                are confirmed missing.
+            </p>
+            <form id="maintain-sy-form">
+                <div class="maintain-row">
+                    <label for="maintain-sy-volume">Volume <span class="maintain-row-hint">(required)</span></label>
+                    <select id="maintain-sy-volume" name="volume" required>
+                        <option value="">Choose a volume…</option>
+                    </select>
+                </div>
+                <div class="maintain-checkboxes">
+                    <label><input type="checkbox" id="maintain-sy-apply"> Apply changes <span class="maintain-row-hint">(without this, dry-run only)</span></label>
+                    <label><input type="checkbox" id="maintain-sy-stale" disabled> Remove stale catalog locations for missing files <span class="maintain-row-hint">(requires &ldquo;apply&rdquo;)</span></label>
+                </div>
+                <div class="import-form-actions">
+                    <button type="button" class="batch-btn" id="maintain-sy-cancel">Close</button>
+                    <button type="submit" class="batch-btn batch-btn-primary" id="maintain-sy-run">Run sync</button>
+                </div>
+            </form>
+        </div>
+
+        {# ── Refresh (re-read source metadata) ──────────────────── #}
+        <div class="maintain-pane" data-maintain-pane="refresh" style="display:none">
+            <p class="maintain-blurb">
+                Re-read metadata from <code>.xmp</code> sidecar/recipe files
+                that changed on disk since the last scan. With <strong>media
+                XMP</strong> on, the embedded XMP block in JPEG/TIFF is also
+                re-extracted. Use after editing in Lightroom / Capture One
+                while MAKI was offline.
+            </p>
+            <form id="maintain-rf-form">
+                <div class="maintain-row">
+                    <label for="maintain-rf-volume">Volume</label>
+                    <select id="maintain-rf-volume" name="volume">
+                        <option value="">All online volumes</option>
+                    </select>
+                </div>
+                <div class="maintain-checkboxes">
+                    <label><input type="checkbox" id="maintain-rf-media"> Also re-extract embedded XMP from JPEG/TIFF media files <span class="maintain-row-hint">(slow)</span></label>
+                    <label><input type="checkbox" id="maintain-rf-dry"> Dry run &mdash; preview without writing</label>
+                </div>
+                <div class="import-form-actions">
+                    <button type="button" class="batch-btn" id="maintain-rf-cancel">Close</button>
+                    <button type="submit" class="batch-btn batch-btn-primary" id="maintain-rf-run">Run refresh</button>
+                </div>
+            </form>
+        </div>
+
+        {# ── Cleanup ────────────────────────────────────────────── #}
+        <div class="maintain-pane" data-maintain-pane="cleanup" style="display:none">
+            <p class="maintain-blurb">
+                Remove orphaned records and files: stale catalog locations
+                whose files no longer exist; locationless variants;
+                orphaned assets, previews, embeddings, and face crops left
+                behind by deletes or relocations.
+            </p>
+            <form id="maintain-cu-form">
+                <div class="maintain-row">
+                    <label for="maintain-cu-volume">Volume</label>
+                    <select id="maintain-cu-volume" name="volume">
+                        <option value="">All volumes</option>
+                    </select>
+                </div>
+                <div class="maintain-row">
+                    <label for="maintain-cu-path">Path prefix <span class="maintain-row-hint">(catalog-relative; restrict to a subtree)</span></label>
+                    <input type="text" id="maintain-cu-path" placeholder="e.g. 2024/wedding">
+                </div>
+                <div class="maintain-checkboxes">
+                    <label><input type="checkbox" id="maintain-cu-apply"> Apply changes <span class="maintain-row-hint">(without this, report-only)</span></label>
+                </div>
+                <div class="import-form-actions">
+                    <button type="button" class="batch-btn" id="maintain-cu-cancel">Close</button>
+                    <button type="submit" class="batch-btn batch-btn-primary" id="maintain-cu-run">Run cleanup</button>
                 </div>
             </form>
         </div>

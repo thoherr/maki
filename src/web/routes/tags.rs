@@ -245,6 +245,125 @@ pub async fn delete_tag_api(
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct ExportVocabularyQuery {
+    /// Output format: `yaml` (default), `text`, or `json`.
+    pub format: Option<String>,
+    /// Annotate each entry with its asset count. YAML emits `# N assets`
+    /// trailing comments; JSON always carries counts; text format ignores
+    /// the flag (Lightroom / Capture One reject comments).
+    pub counts: Option<u8>,
+    /// Drop planned-but-unused entries (vocabulary.yaml entries with zero
+    /// matching assets). Without this flag, planned entries are merged in
+    /// at count = 0 so the export reflects the full intended hierarchy.
+    pub prune: Option<u8>,
+    /// Export only the built-in default vocabulary (ignores catalog tags
+    /// and the on-disk vocabulary.yaml). For comparing your vocabulary
+    /// to the latest MAKI defaults after an upgrade.
+    pub default: Option<u8>,
+}
+
+/// GET /api/tags/export-vocabulary — produce the vocabulary file and stream
+/// it back as a download. Mirrors `maki tag export-vocabulary` so users who
+/// only have the web UI open can sync their tag tree to Lightroom / Capture
+/// One without dropping to a shell.
+///
+/// Returns the rendered content with the appropriate Content-Type and a
+/// `Content-Disposition: attachment` header so the browser triggers a
+/// download dialog. The filename matches the CLI default (vocabulary.yaml /
+/// .txt / .json).
+pub async fn export_vocabulary_api(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ExportVocabularyQuery>,
+) -> Response {
+    let format = q.format.as_deref().unwrap_or("yaml").to_lowercase();
+    let with_counts = q.counts.unwrap_or(0) != 0;
+    let prune = q.prune.unwrap_or(0) != 0;
+    let default_only = q.default.unwrap_or(0) != 0;
+
+    enum Fmt { Yaml, Text, Json }
+    let (fmt, filename, content_type) = match format.as_str() {
+        "yaml" | "yml" => (Fmt::Yaml, "vocabulary.yaml", "application/x-yaml; charset=utf-8"),
+        "text" | "txt" => (Fmt::Text, "vocabulary.txt", "text/plain; charset=utf-8"),
+        "json" => (Fmt::Json, "vocabulary.json", "application/json; charset=utf-8"),
+        other => return (StatusCode::BAD_REQUEST, format!("unknown format '{other}': expected 'yaml', 'text', or 'json'")).into_response(),
+    };
+
+    let state = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let content: String = if default_only {
+            // Built-in tree only — counts always 0, so the flag is moot.
+            match fmt {
+                Fmt::Yaml => crate::vocabulary::default_vocabulary().to_string(),
+                Fmt::Text => {
+                    let flat = crate::vocabulary::parse_vocabulary(crate::vocabulary::default_vocabulary());
+                    let pairs: Vec<(String, u64)> = flat.into_iter().map(|t| (t, 0)).collect();
+                    let (text, _) = crate::vocabulary::tags_to_keyword_text(&pairs);
+                    text
+                }
+                Fmt::Json => {
+                    let flat = crate::vocabulary::parse_vocabulary(crate::vocabulary::default_vocabulary());
+                    let pairs: Vec<(String, u64)> = flat.into_iter().map(|t| (t, 0)).collect();
+                    crate::vocabulary::tags_to_vocabulary_json(&pairs)
+                }
+            }
+        } else {
+            let catalog = state.catalog()?;
+            let mut all_tags = catalog.list_all_tags()?;
+
+            if !prune {
+                // Merge planned-but-unused entries from vocabulary.yaml at count=0.
+                let vocab = crate::vocabulary::load_vocabulary(&state.catalog_root);
+                let existing: std::collections::HashSet<String> =
+                    all_tags.iter().map(|(name, _)| name.clone()).collect();
+                for vt in vocab {
+                    if !existing.contains(&vt) {
+                        all_tags.push((vt, 0));
+                    }
+                }
+            }
+            all_tags.sort_by(|a, b| a.0.cmp(&b.0));
+
+            match fmt {
+                Fmt::Yaml => {
+                    if with_counts {
+                        crate::vocabulary::tags_to_vocabulary_yaml_with_counts(&all_tags)
+                    } else {
+                        crate::vocabulary::tags_to_vocabulary_yaml(&all_tags)
+                    }
+                }
+                Fmt::Text => {
+                    let (text, _sanitized) = crate::vocabulary::tags_to_keyword_text(&all_tags);
+                    text
+                }
+                Fmt::Json => crate::vocabulary::tags_to_vocabulary_json(&all_tags),
+            }
+        };
+        Ok::<_, anyhow::Error>(content)
+    })
+    .await;
+
+    let body = match result {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    };
+
+    use axum::http::header;
+    let response = (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, content_type.to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        body,
+    );
+    response.into_response()
+}
+
 /// GET /api/tags — all tags as JSON (for autocomplete).
 pub async fn tags_api(State(state): State<Arc<AppState>>) -> Response {
     let state = state.clone();

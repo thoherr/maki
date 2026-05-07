@@ -13,7 +13,13 @@
 {% block nav_organize %}{% if ai_enabled %}<a href="/people">People</a>{% endif %}{% endblock %}
 
 {% block content %}
-<h1>Tags <span class="muted" id="tag-count">({{ total_tags }})</span></h1>
+<div class="tag-page-header">
+    <h1>Tags <span class="muted" id="tag-count">({{ total_tags }})</span></h1>
+    {# Right-aligned toolbar slot for page-level actions. #}
+    <div class="tag-page-actions">
+        <button type="button" class="batch-btn" id="tag-export-btn" title="Export your tag vocabulary as YAML / keyword text / JSON for backup or for sharing with Lightroom / Capture One.">Export vocabulary…</button>
+    </div>
+</div>
 
 {% if tags.is_empty() %}
 <p class="muted">No tags yet.</p>
@@ -786,4 +792,89 @@
 })();
 </script>
 {% endif %}
+
+{# Export-vocabulary button is shown unconditionally (works on empty
+   catalogues too — emits the planned vocabulary or the built-in default).
+   The modal stays minimal: format radio + two checkboxes (counts / prune)
+   + a "default only" escape hatch for users comparing their tree to the
+   built-in starter vocabulary after a MAKI upgrade. #}
+<script>
+(function() {
+    var btn = document.getElementById('tag-export-btn');
+    if (!btn) return;
+
+    function showExportModal() {
+        var overlay = document.createElement('div');
+        overlay.className = 'group-confirm-overlay';
+        overlay.innerHTML = '<div class="group-confirm-modal">' +
+            '<h3>Export vocabulary</h3>' +
+            '<p class="group-confirm-hint">Download your tag tree as a file. ' +
+                '<strong>YAML</strong> is the format MAKI itself reads (round-trips through `vocabulary.yaml`); ' +
+                '<strong>keyword text</strong> imports into Lightroom / Capture One; ' +
+                '<strong>JSON</strong> is convenient for scripts.</p>' +
+            '<div class="export-options">' +
+                '<div class="export-row"><label><input type="radio" name="vocab-fmt" value="yaml" checked> YAML</label></div>' +
+                '<div class="export-row"><label><input type="radio" name="vocab-fmt" value="text"> Keyword text (Lightroom / Capture One)</label></div>' +
+                '<div class="export-row"><label><input type="radio" name="vocab-fmt" value="json"> JSON</label></div>' +
+            '</div>' +
+            '<div class="export-options" style="margin-top:0.6rem">' +
+                '<div class="export-row"><label><input type="checkbox" id="vocab-counts"> Annotate with per-tag asset count <span class="muted">(YAML / JSON only)</span></label></div>' +
+                '<div class="export-row"><label><input type="checkbox" id="vocab-prune"> Prune planned-but-unused entries</label></div>' +
+                '<div class="export-row"><label><input type="checkbox" id="vocab-default"> Built-in default vocabulary only <span class="muted">(ignores your catalog tags)</span></label></div>' +
+            '</div>' +
+            '<div class="group-confirm-buttons">' +
+                '<button class="group-confirm-cancel">Cancel</button>' +
+                '<button class="group-confirm-ok" id="vocab-download">Download</button>' +
+            '</div></div>';
+        document.body.appendChild(overlay);
+
+        var fmtInputs = overlay.querySelectorAll('input[name="vocab-fmt"]');
+        var countsCb = overlay.querySelector('#vocab-counts');
+        var pruneCb = overlay.querySelector('#vocab-prune');
+        var defaultCb = overlay.querySelector('#vocab-default');
+
+        // Counts in keyword text would break Lightroom / Capture One import;
+        // disable the box when text is selected so the user can't shoot
+        // themselves in the foot.
+        function syncCountsState() {
+            var fmt = overlay.querySelector('input[name="vocab-fmt"]:checked').value;
+            countsCb.disabled = (fmt === 'text');
+            if (countsCb.disabled) countsCb.checked = false;
+        }
+        fmtInputs.forEach(function(r) { r.addEventListener('change', syncCountsState); });
+        syncCountsState();
+
+        // "Default only" mode bypasses catalog and vocabulary.yaml — counts
+        // and prune become meaningless.
+        defaultCb.addEventListener('change', function() {
+            var on = defaultCb.checked;
+            countsCb.disabled = on || overlay.querySelector('input[name="vocab-fmt"]:checked').value === 'text';
+            pruneCb.disabled = on;
+            if (on) { countsCb.checked = false; pruneCb.checked = false; }
+        });
+
+        function close() { overlay.remove(); }
+        overlay.querySelector('.group-confirm-cancel').addEventListener('click', close);
+        overlay.addEventListener('click', function(e) { if (e.target === overlay) close(); });
+        document.addEventListener('keydown', function esc(e) {
+            if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
+        });
+
+        overlay.querySelector('#vocab-download').addEventListener('click', function() {
+            var fmt = overlay.querySelector('input[name="vocab-fmt"]:checked').value;
+            var params = ['format=' + encodeURIComponent(fmt)];
+            if (countsCb.checked) params.push('counts=1');
+            if (pruneCb.checked) params.push('prune=1');
+            if (defaultCb.checked) params.push('default=1');
+            // Browser-driven download: navigate to the URL; the
+            // Content-Disposition: attachment header on the server triggers
+            // a file save dialog rather than rendering inline.
+            window.location.href = '/api/tags/export-vocabulary?' + params.join('&');
+            close();
+        });
+    }
+
+    btn.addEventListener('click', showExportModal);
+})();
+</script>
 {% endblock %}

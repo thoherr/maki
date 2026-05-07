@@ -192,7 +192,10 @@
     if (!importLink && !maintLink) return;
 
     // Maintain-side kinds: keep in sync with src/web/jobs.rs JobKind.
-    var MAINT_KINDS = { writeback: 1, sync_metadata: 1, verify: 1 };
+    var MAINT_KINDS = {
+        writeback: 1, sync_metadata: 1, verify: 1,
+        generate_previews: 1, sync: 1, refresh: 1, cleanup: 1
+    };
 
     // Poll cadences:
     //   ACTIVE (job running)  4 s — keeps the pulse responsive

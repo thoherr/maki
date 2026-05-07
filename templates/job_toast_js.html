@@ -76,6 +76,27 @@
         if (typeof evt.verified === 'number')           parts.push(evt.verified + ' verified');
         if (typeof evt.modified === 'number' && evt.modified > 0)
                                                         parts.push(evt.modified + ' modified');
+        // Round-2 maintain summaries (generate-previews, sync, refresh, cleanup).
+        if (typeof evt.generated === 'number' && evt.generated > 0)
+                                                        parts.push(evt.generated + ' previews');
+        if (typeof evt.upgraded === 'number' && evt.upgraded > 0)
+                                                        parts.push(evt.upgraded + ' upgraded');
+        if (typeof evt.refreshed === 'number' && evt.refreshed > 0)
+                                                        parts.push(evt.refreshed + ' refreshed');
+        if (typeof evt.moved === 'number' && evt.moved > 0)
+                                                        parts.push(evt.moved + ' moved');
+        if (typeof evt.new_files === 'number' && evt.new_files > 0)
+                                                        parts.push(evt.new_files + ' new');
+        if (typeof evt.missing === 'number' && evt.missing > 0)
+                                                        parts.push(evt.missing + ' missing');
+        if (typeof evt.stale_removed === 'number' && evt.stale_removed > 0)
+                                                        parts.push(evt.stale_removed + ' stale dropped');
+        if (typeof evt.removed_variants === 'number' && evt.removed_variants > 0)
+                                                        parts.push(evt.removed_variants + ' variants removed');
+        if (typeof evt.removed_assets === 'number' && evt.removed_assets > 0)
+                                                        parts.push(evt.removed_assets + ' assets removed');
+        if (typeof evt.removed_previews === 'number' && evt.removed_previews > 0)
+                                                        parts.push(evt.removed_previews + ' previews removed');
         if (typeof evt.skipped === 'number' && evt.skipped > 0)
                                                         parts.push(evt.skipped + ' skipped');
         if (typeof evt.failed === 'number' && evt.failed > 0)

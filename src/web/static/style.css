@@ -2801,6 +2801,18 @@ body.has-batch-toolbar { padding-bottom: 60px; }
 /* Preload images (hidden) */
 .lightbox-preload { display: none; }
 
+/* Tag page header — flex row so the page-level action buttons sit
+   right-aligned next to the H1 instead of stacking below it. */
+.tag-page-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+}
+.tag-page-header h1 { margin: 0; }
+.tag-page-actions { display: flex; gap: 0.5rem; }
+
 /* ===== Saved Searches Management Page ===== */
 .ss-page-header { margin-bottom: 1rem; }
 .ss-page-header h1 { margin: 0; }

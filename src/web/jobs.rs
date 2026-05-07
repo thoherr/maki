@@ -43,6 +43,10 @@ pub enum JobKind {
     Writeback,
     SyncMetadata,
     Verify,
+    GeneratePreviews,
+    Sync,
+    Refresh,
+    Cleanup,
 }
 
 impl JobKind {
@@ -56,6 +60,10 @@ impl JobKind {
             JobKind::Writeback => "Writeback",
             JobKind::SyncMetadata => "Sync metadata",
             JobKind::Verify => "Verify",
+            JobKind::GeneratePreviews => "Generate previews",
+            JobKind::Sync => "Sync",
+            JobKind::Refresh => "Refresh",
+            JobKind::Cleanup => "Cleanup",
         }
     }
 }

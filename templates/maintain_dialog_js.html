@@ -15,7 +15,11 @@
     var volumeSelects = [
         document.getElementById('maintain-wb-volume'),
         document.getElementById('maintain-sm-volume'),
-        document.getElementById('maintain-vf-volume')
+        document.getElementById('maintain-vf-volume'),
+        document.getElementById('maintain-gp-volume'),
+        document.getElementById('maintain-sy-volume'),
+        document.getElementById('maintain-rf-volume'),
+        document.getElementById('maintain-cu-volume')
     ];
 
     var volumesLoaded = false;
@@ -79,6 +83,10 @@
 
     // Reattach helper: if a maintain-kind job is currently running, open the
     // toast for it instead of the dialog. Mirrors makiImport.reattachIfRunning.
+    var MAINT_KINDS = {
+        writeback: 1, sync_metadata: 1, verify: 1,
+        generate_previews: 1, sync: 1, refresh: 1, cleanup: 1
+    };
     function reattachIfRunning() {
         return fetch('/api/jobs')
             .then(function(r) { return r.ok ? r.json() : { jobs: [] }; })
@@ -87,7 +95,7 @@
                 for (var i = 0; i < jobs.length; i++) {
                     if (jobs[i].completed) continue;
                     var k = jobs[i].kind;
-                    if (k === 'writeback' || k === 'sync_metadata' || k === 'verify') {
+                    if (MAINT_KINDS[k]) {
                         if (window.makiJob && window.makiJob.watch) {
                             window.makiJob.watch(jobs[i].id, jobs[i].kind_label || k, {});
                         }
@@ -143,6 +151,63 @@
         launchJob('/api/maintain/verify', body, 'Verify');
     });
     document.getElementById('maintain-vf-cancel').addEventListener('click', closeDialog);
+
+    // ── Generate previews tab ──────────────────────────────────────────
+    document.getElementById('maintain-gp-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        var body = {
+            volume: document.getElementById('maintain-gp-volume').value || null,
+            smart: document.getElementById('maintain-gp-smart').checked,
+            upgrade: document.getElementById('maintain-gp-upgrade').checked,
+            force: document.getElementById('maintain-gp-force').checked
+        };
+        launchJob('/api/maintain/generate-previews', body, 'Generate previews');
+    });
+    document.getElementById('maintain-gp-cancel').addEventListener('click', closeDialog);
+
+    // ── Sync tab (file-layer reconciliation) ───────────────────────────
+    var syApply = document.getElementById('maintain-sy-apply');
+    var syStale = document.getElementById('maintain-sy-stale');
+    syApply.addEventListener('change', function() {
+        syStale.disabled = !syApply.checked;
+        if (!syApply.checked) syStale.checked = false;
+    });
+    document.getElementById('maintain-sy-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        var vol = document.getElementById('maintain-sy-volume').value;
+        if (!vol) { alert('Please choose a volume.'); return; }
+        var body = {
+            volume: vol,
+            apply: syApply.checked,
+            remove_stale: syStale.checked
+        };
+        launchJob('/api/maintain/sync', body, 'Sync');
+    });
+    document.getElementById('maintain-sy-cancel').addEventListener('click', closeDialog);
+
+    // ── Refresh tab ────────────────────────────────────────────────────
+    document.getElementById('maintain-rf-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        var body = {
+            volume: document.getElementById('maintain-rf-volume').value || null,
+            media: document.getElementById('maintain-rf-media').checked,
+            dry_run: document.getElementById('maintain-rf-dry').checked
+        };
+        launchJob('/api/maintain/refresh', body, 'Refresh');
+    });
+    document.getElementById('maintain-rf-cancel').addEventListener('click', closeDialog);
+
+    // ── Cleanup tab ────────────────────────────────────────────────────
+    document.getElementById('maintain-cu-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        var body = {
+            volume: document.getElementById('maintain-cu-volume').value || null,
+            path: document.getElementById('maintain-cu-path').value.trim() || null,
+            apply: document.getElementById('maintain-cu-apply').checked
+        };
+        launchJob('/api/maintain/cleanup', body, 'Cleanup');
+    });
+    document.getElementById('maintain-cu-cancel').addEventListener('click', closeDialog);
 
     // ── Common: POST → watch toast → close dialog ──────────────────────
     function launchJob(url, body, label) {

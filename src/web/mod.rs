@@ -425,6 +425,7 @@ fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::post(routes::reimport_metadata),
         )
         .route("/api/tags", axum::routing::get(routes::tags_api))
+        .route("/api/tags/export-vocabulary", axum::routing::get(routes::export_vocabulary_api))
         .route("/api/tag/rename", axum::routing::post(routes::rename_tag_api))
         .route("/api/tag/split", axum::routing::post(routes::split_tag_api))
         .route("/api/tag/delete", axum::routing::post(routes::delete_tag_api))
@@ -534,6 +535,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/maintain/writeback", axum::routing::post(routes::start_writeback_api))
         .route("/api/maintain/sync-metadata", axum::routing::post(routes::start_sync_metadata_api))
         .route("/api/maintain/verify", axum::routing::post(routes::start_verify_api))
+        .route("/api/maintain/generate-previews", axum::routing::post(routes::start_generate_previews_api))
+        .route("/api/maintain/sync", axum::routing::post(routes::start_sync_api))
+        .route("/api/maintain/refresh", axum::routing::post(routes::start_refresh_api))
+        .route("/api/maintain/cleanup", axum::routing::post(routes::start_cleanup_api))
         .route("/api/open-location", axum::routing::post(routes::open_location))
         .route("/api/open-terminal", axum::routing::post(routes::open_terminal))
         .route(
