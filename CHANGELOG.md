@@ -2,6 +2,41 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.5.3 (2026-05-08)
+
+A bug-fix patch release. Four web-UI fixes, all reported during real-world tag-cleanup work on a multi-thousand-asset catalog.
+
+Tests: 790 + 249 standard, 897 + 276 pro (up from 782 / 249 / 889 / 276 — eight new round-trip tests in `saved_search`).
+
+### Saved searches: round-trip every filter type
+
+A saved search like `path:Pictures/Masters/2026/2026-05/` reloaded the browse page with no path filter applied — the chip looked like a no-op. Cause: `SavedSearch::to_url_params` only emitted URL params for `q`, `type`, `tag`, `format`, `label`, `rating`, `sort`. Anything else (`path`, `volume`, `collection`, `person`, plus every niche filter like `camera:`, `iso:`, `tagcount:`, `geo:`, `has_faces:`, exclude variants, …) was silently parsed and dropped.
+
+Fix is two-pass: (1) emit dedicated URL params for the few widget-backed filters so the dropdowns reflect the saved values; (2) take the raw query, drop the tokens those URL params consumed, and stuff the remainder into `q=`. Token-level rules:
+
+- **Multi-value URL params** (`tag`, `person`) — every occurrence consumed, emitted comma-joined since `build_parsed_search` accepts comma-separated chip lists.
+- **Single-value URL params** (`type`, `format`, `label`, `volume`, `collection`, `path`, `rating`) — first occurrence consumed; subsequent occurrences fall through to `q=` so the catalog ANDs them in.
+- **Negations** (`-tag:rejected`, `-camera:Phone`, …) — kept (no URL param for negation).
+- **Niche filters and free text** (`camera:`, `iso:`, `tagcount:`, `geo_bbox:`, `has_faces:`, etc.) — kept.
+- **Whitespace values** (`tag:"Fools Theater"`) — re-quoted before joining so the next tokenizer pass keeps the same boundaries.
+- **`label:none`** — round-trips via the `label=none` sentinel that `build_parsed_search` already understands.
+
+`query::tokenize_query` was promoted from `pub(super)` to `pub` so the saved-search module can reuse it directly. Adding a new structured filter to the search engine now requires zero changes here unless a dedicated widget arrives with it — the remainder catches anything we don't explicitly route.
+
+### Browse → detail navigation: cross-page boundary no longer duplicates IDs
+
+Walking through assets via the detail-page Next button across more than one page boundary appended duplicate IDs to the cached `browseIds` list. Symptom: the same images came back as the user kept clicking next, especially noticeable while editing tags (which shrinks the result set, making the duplicates look interleaved with new assets rather than identical repeats).
+
+Cause: the prev-boundary handler decremented a single `maki-browse-page` counter after fetching the previous page, but the next-boundary handler **never** updated any counter. Once the user reached the end of the concatenated list, the boundary code re-fetched `browsePage + 1` against the stale value and appended the same page again.
+
+Fix: split `maki-browse-page` into `maki-browse-page-min` (tracked by the prev handler) and `maki-browse-page-max` (tracked by the next handler). Each handler updates its own counter; the guards `pageMin > 1` / `pageMax < totalPages` reliably stop fetching once the entire result set is materialized. Legacy `maki-browse-page` key still written so a detail tab open during the upgrade keeps navigating correctly.
+
+### Import dialog log: phase-boundary events render as boundary lines
+
+Mid-import the activity log started showing entries like `phase_started undefined` followed by `embed phase_started`. Not a race condition — the SSE event order was fine. Cause: the JS log renderer had explicit branches for `phase === 'embed'` and `phase === 'describe'` per-file events but no branch for `PhaseStarted` / `PhaseSkipped` *boundary* events, which carry no `file` or `asset` field. Boundary events for the `import` and `auto_group` phases fell through to the generic else branch and rendered `evt.status + ' ' + evt.file` → literal "phase_started undefined". Boundary events for `embed` / `describe` hit the per-phase branch with no asset → "embed phase_started ".
+
+Fix: dedicated up-front branch for `status === 'phase_started' || 'phase_skipped'`. Boundary lines now read `— import phase started —`, `— embed phase started —`, etc., styled with a small `.import-log-phase` CSS class (slightly bolder, body-text colour) so the section breaks stand out from per-file noise. `PhaseSkipped` events also carry the reason (e.g. *"— embed phase skipped: no AI build —"*).
+
 ## v4.5.2 (2026-05-07)
 
 A web-UI release. Round 2 of the Maintain dialog adds four more tabs (Generate previews, Sync, Refresh, Cleanup), the tags page gets a one-click vocabulary export button, and the Maintain dialog grows wider so the seven tab labels fit on a single row.
