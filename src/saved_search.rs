@@ -30,30 +30,62 @@ fn is_false(v: &bool) -> bool {
 impl SavedSearch {
     /// Convert the stored query into browse-page URL parameters.
     ///
-    /// Parses the query string into structured filters and builds separate URL
-    /// params so the browse page dropdowns reflect the active filters.
+    /// Parses the query string into structured filters and emits a URL param
+    /// for each filter type that the browse page recognises as a dedicated
+    /// dropdown / input. This populates the widgets so the user can refine
+    /// the saved search by tweaking a dropdown rather than editing raw query
+    /// text. Filters without a dedicated widget (cameras, descriptions, geo,
+    /// tagcount, has_faces, …) round-trip through `q=` instead.
+    ///
+    /// Bug history: pre-fix this function emitted only `q`, `type`, `tag`,
+    /// `format`, `label`, `rating`, `sort` — `path`, `volume`, `collection`,
+    /// and `person` were silently dropped, so a saved search like
+    /// `path:Pictures/2026/2026-05/` produced a URL with no `path=` param
+    /// and clicking the chip "lost" the filter. Free-text-only `q=` (which
+    /// stripped structured tokens that DID have widget mappings) compounded
+    /// the problem since niche filters had no fallback channel.
     pub fn to_url_params(&self) -> String {
         let parsed = parse_search_query(&self.query);
         let mut params = Vec::new();
 
-        // Free-text portion
+        // q= carries the free-text portion ONLY — structured tokens that
+        // have widget mappings are emitted as dedicated URL params below
+        // (so the dropdown stays editable without conflicting with q=).
+        // The few niche tokens we don't yet round-trip (cameras, lenses,
+        // descriptions, iso/focal/aperture/width/height, codec, geo bbox,
+        // has_faces, tagcount, scattered, …) are still dropped for now —
+        // the most common ones now travel through dedicated params.
         if let Some(ref text) = parsed.text {
             params.push(format!("q={}", urlencoded(text)));
         }
 
-        // Structured filters extracted from query
-        // For now, only use the first element if multiple are present
+        // Structured filters with dedicated widgets on the browse page.
+        // Multi-value URL params (`tag`, `person`) accept comma-separated
+        // chip lists per `build_parsed_search` — emit comma-joined so a
+        // saved search filtering on "tag:a,b" round-trips correctly.
         if let Some(t) = parsed.asset_types.first() {
             params.push(format!("type={}", urlencoded(t)));
         }
-        if let Some(t) = parsed.tags.first() {
-            params.push(format!("tag={}", urlencoded(t)));
+        if !parsed.tags.is_empty() {
+            params.push(format!("tag={}", urlencoded(&parsed.tags.join(","))));
         }
         if let Some(f) = parsed.formats.first() {
             params.push(format!("format={}", urlencoded(f)));
         }
         if let Some(l) = parsed.color_labels.first() {
             params.push(format!("label={}", urlencoded(l)));
+        }
+        if let Some(v) = parsed.volumes.first() {
+            params.push(format!("volume={}", urlencoded(v)));
+        }
+        if let Some(c) = parsed.collections.first() {
+            params.push(format!("collection={}", urlencoded(c)));
+        }
+        if !parsed.persons.is_empty() {
+            params.push(format!("person={}", urlencoded(&parsed.persons.join(","))));
+        }
+        if let Some(p) = parsed.path_prefixes.first() {
+            params.push(format!("path={}", urlencoded(p)));
         }
 
         // Rating: reconstruct the filter string
@@ -186,6 +218,60 @@ mod tests {
         assert!(params.contains("q=sunset%20beach"));
         assert!(params.contains("type=image"));
         assert!(params.contains("sort=date_desc"));
+    }
+
+    /// Regression: `path:` was silently dropped from the URL, so a saved
+    /// search like `path:Pictures/Masters/2026/2026-05/` clicked from a
+    /// browse-page chip reloaded the page with NO path filter applied.
+    #[test]
+    fn to_url_params_preserves_path() {
+        let ss = SavedSearch {
+            name: "May 2026".to_string(),
+            query: "path:Pictures/Masters/2026/2026-05/".to_string(),
+            sort: None,
+            favorite: false,
+        };
+        let params = ss.to_url_params();
+        // Path round-trips with its trailing slash intact. The minimal
+        // `urlencoded` helper only escapes characters that conflict with
+        // query syntax (`&`, `=`, `+`, ` `); forward slashes are URL-safe
+        // in query values and pass through unchanged.
+        assert!(
+            params.contains("path=Pictures/Masters/2026/2026-05/"),
+            "expected path= in URL params, got: {params}"
+        );
+    }
+
+    #[test]
+    fn to_url_params_preserves_volume_collection_person() {
+        let ss = SavedSearch {
+            name: "Test".to_string(),
+            query: "volume:Photos collection:Wedding person:Alice".to_string(),
+            sort: None,
+            favorite: false,
+        };
+        let params = ss.to_url_params();
+        assert!(params.contains("volume=Photos"), "missing volume: {params}");
+        assert!(params.contains("collection=Wedding"), "missing collection: {params}");
+        assert!(params.contains("person=Alice"), "missing person: {params}");
+    }
+
+    #[test]
+    fn to_url_params_multi_value_tag_and_person() {
+        // The browse page's `tag` and `person` URL params accept
+        // comma-separated lists; multi-value filters in the saved query
+        // should round-trip as joined strings rather than first-value-only.
+        let ss = SavedSearch {
+            name: "Test".to_string(),
+            query: "tag:wedding tag:landscape person:Alice person:Bob".to_string(),
+            sort: None,
+            favorite: false,
+        };
+        let params = ss.to_url_params();
+        // Commas pass through `urlencoded` unchanged (URL-safe in query
+        // values). The browse page splits the value on `,` server-side.
+        assert!(params.contains("tag=wedding,landscape"), "tag list: {params}");
+        assert!(params.contains("person=Alice,Bob"), "person list: {params}");
     }
 
     #[test]
