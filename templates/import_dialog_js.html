@@ -596,13 +596,28 @@
                 }
                 return;
             }
-            // Phase-aware status line. The import phase emits events without a
-            // `phase` field (legacy shape); embed/describe events carry their
-            // own phase tag and per-phase counters.
+            // Phase-aware status line. The import phase emits per-file events
+            // without a `phase` field (legacy shape); embed/describe per-file
+            // events carry their own phase tag and per-phase counters.
+            // Phase-boundary events (status: phase_started / phase_skipped) are
+            // emitted by every phase (import, auto_group, embed, describe) and
+            // carry no `file` / `asset` field — handle them up-front so they
+            // render as clean boundary lines instead of leaking into the
+            // per-file branches as "phase_started undefined".
             var statusEl = document.getElementById('import-status-text');
             var log = document.getElementById('import-log');
             var line = document.createElement('div');
-            if (evt.phase === 'embed') {
+            if (evt.status === 'phase_started' || evt.status === 'phase_skipped') {
+                var ph = evt.phase || 'unknown';
+                if (evt.status === 'phase_started') {
+                    statusEl.textContent = 'Phase: ' + ph + '…';
+                    line.textContent = '— ' + ph + ' phase started —';
+                } else {
+                    line.textContent = '— ' + ph + ' phase skipped' +
+                        (evt.message ? ': ' + evt.message : '') + ' —';
+                }
+                line.className = 'import-log-phase';
+            } else if (evt.phase === 'embed') {
                 statusEl.textContent = 'Embedding… ' + (evt.embedded || 0) + ' done';
                 line.textContent = 'embed ' + evt.status + ' ' + (evt.asset || '');
             } else if (evt.phase === 'describe') {

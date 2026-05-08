@@ -4769,6 +4769,14 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     padding: 0.5rem;
     line-height: 1.4;
 }
+/* Phase-boundary lines (`— embed phase started —`) stand out from the
+   per-file noise above and below. Slightly bolder + a thin top margin so
+   the eye finds the section break. */
+.import-log .import-log-phase {
+    color: var(--text);
+    font-weight: 600;
+    margin-top: 0.25rem;
+}
 .import-result-text {
     font-size: 1rem;
     margin-bottom: 1rem;
