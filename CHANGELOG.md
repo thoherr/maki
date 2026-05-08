@@ -2,6 +2,42 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.5.4 (2026-05-08)
+
+A small feature release: lightbox slideshow mode. Click a thumbnail to open the lightbox, hit Spacebar (or the new ▶ button in the toolbar), and the lightbox auto-advances through the result set.
+
+Tests: 790 + 249 standard, 897 + 276 pro (unchanged from v4.5.3 — the slideshow is browser-side JS exercising the existing `navigate()` function).
+
+### Slideshow
+
+Two new toolbar buttons in the lightbox top-right (between the labels group and Info):
+
+- **▶ / ▌▌** — start / pause. Same as pressing **Space**.
+- **↻ / →** — loop-after-last toggle. `↻` (active) wraps from the last asset of the entire result set back to the first; `→` stops at the last asset.
+
+Three keyboard shortcuts (scoped to lightbox-open so Space doesn't fight the browser's default scroll-down on other pages):
+
+- **Space** — toggle play/pause.
+- **`+` / `-`** while running — bump the cadence by ±1 second (clamped 1–60). When paused these keep their existing zoom behaviour. The current value flashes briefly in a small "5s" badge next to the play button.
+
+Auto-pause on every deliberate user action so manual moves override the auto-advance: clicking prev/next, pressing arrow keys, changing the rating, changing the label, pressing Escape (which closes the lightbox and stops the slideshow).
+
+**Cross-page advance**: the slideshow walks the entire result set, not just the current browse page. When the auto-advance reaches the end of the visible page, the host page swaps in the next page's results via htmx and the lightbox reopens at index 0; the slideshow timer keeps ticking through the swap so the cadence holds. Implementation hooks into the existing `_onNavigateBeyond` callback that prev/next at page boundaries already used.
+
+**Loop-from-end-back-to-start**: when loop is on AND the slideshow reaches the last asset of the last page, the host's `onNavigateBeyond` handler queries the lightbox (`isSlideshowLooping()` / `isSlideshowRunning()`) and navigates to page 1. The pagination jump uses URL-rewrite + `htmx.ajax` rather than the old "click the nth-child pagination link" approach, which is more robust to pagination markup changes. Loop-off at the same boundary detects the no-progress case (same item ID after `navigate(1)`) and stops the slideshow cleanly so it doesn't tick forever on a frozen view.
+
+### Configuration
+
+Two new keys in `[browse]`:
+
+```toml
+[browse]
+slideshow_seconds = 5     # default 5; range 1–60
+slideshow_loop = true     # default true
+```
+
+Loaded by `AppState::new` from `maki.toml` and surfaced to the lightbox JS via the existing `/api/build-info` endpoint (which gained the two new fields without disturbing the import dialog's `{ai, pro}` gating). Runtime adjustments via `+`/`-` and the loop button apply for the current session only.
+
 ## v4.5.3 (2026-05-08)
 
 A bug-fix patch release. Four web-UI fixes, all reported during real-world tag-cleanup work on a multi-thousand-asset catalog.
