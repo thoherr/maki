@@ -3064,7 +3064,15 @@ window.damFacets = (function() {
         sessionStorage.setItem('maki-browse-home', window.location.href);
         var meta = document.getElementById('results-meta');
         if (meta) {
+            // page-min / page-max track the range of pages currently
+            // materialized in browseIds (the detail page extends this list
+            // when the user navigates past a page boundary). On a fresh
+            // browse render only one page is materialized, so min == max.
+            // Keep the legacy `maki-browse-page` key in sync so old detail
+            // tabs reading sessionStorage during a transition still work.
             sessionStorage.setItem('maki-browse-page', meta.dataset.page);
+            sessionStorage.setItem('maki-browse-page-min', meta.dataset.page);
+            sessionStorage.setItem('maki-browse-page-max', meta.dataset.page);
             sessionStorage.setItem('maki-browse-total-pages', meta.dataset.totalPages);
         }
     }

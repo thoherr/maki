@@ -801,7 +801,12 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
     var nextNav = document.getElementById('nav-next');
     var backNav = document.getElementById('nav-back');
 
-    var browsePage = parseInt(sessionStorage.getItem('maki-browse-page') || '0');
+    // pageMin / pageMax bracket the range of pages currently materialized
+    // in browseIds. Legacy single-page key falls back when the new keys
+    // aren't present yet (e.g. user has an old browse tab open).
+    var legacyBrowsePage = parseInt(sessionStorage.getItem('maki-browse-page') || '0');
+    var browsePageMin = parseInt(sessionStorage.getItem('maki-browse-page-min') || '0') || legacyBrowsePage;
+    var browsePageMax = parseInt(sessionStorage.getItem('maki-browse-page-max') || '0') || legacyBrowsePage;
     var browseTotalPages = parseInt(sessionStorage.getItem('maki-browse-total-pages') || '0');
 
     function setNavLinks() {
@@ -848,29 +853,44 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
     var prevSpinner = document.getElementById('nav-prev-loading');
     var nextSpinner = document.getElementById('nav-next-loading');
 
-    if (idx === 0 && browsePage > 1) {
+    // PREV boundary: extend browseIds with the previous page and shift
+    // pageMin down. Without this update the next prev-fetch (after another
+    // boundary navigation) would re-fetch the same page and prepend its IDs
+    // again — duplicates on the prev side of the list.
+    if (idx === 0 && browsePageMin > 1) {
         prevSpinner.classList.add('active');
-        fetchPageIds(browsePage - 1, function(data) {
+        fetchPageIds(browsePageMin - 1, function(data) {
             prevSpinner.classList.remove('active');
             if (data.ids && data.ids.length > 0) {
                 browseIds = data.ids.concat(browseIds);
                 idx = data.ids.length;
+                browsePageMin = browsePageMin - 1;
                 sessionStorage.setItem('maki-browse-ids', JSON.stringify(browseIds));
-                sessionStorage.setItem('maki-browse-page', String(browsePage - 1));
-                browsePage = browsePage - 1;
+                sessionStorage.setItem('maki-browse-page-min', String(browsePageMin));
+                // Keep legacy key in sync (prev fed it with min historically).
+                sessionStorage.setItem('maki-browse-page', String(browsePageMin));
                 prevNav.href = '/asset/' + browseIds[idx - 1];
                 prevNav.classList.remove('invisible');
             }
         });
     }
 
-    if (idx >= 0 && idx === browseIds.length - 1 && browsePage < browseTotalPages) {
+    // NEXT boundary: same shape, mirrored on pageMax. Pre-fix this branch
+    // never updated any page counter, so once a user reached the end of
+    // the concatenated browseIds the boundary fired again with the same
+    // (browsePage + 1) target and the next page's IDs got appended a
+    // second time — visible to the user as repeated images while paging
+    // through asset details. Fix: maintain pageMax independently of
+    // pageMin so the two boundaries don't tug on the same variable.
+    if (idx >= 0 && idx === browseIds.length - 1 && browsePageMax < browseTotalPages) {
         nextSpinner.classList.add('active');
-        fetchPageIds(browsePage + 1, function(data) {
+        fetchPageIds(browsePageMax + 1, function(data) {
             nextSpinner.classList.remove('active');
             if (data.ids && data.ids.length > 0) {
                 browseIds = browseIds.concat(data.ids);
+                browsePageMax = browsePageMax + 1;
                 sessionStorage.setItem('maki-browse-ids', JSON.stringify(browseIds));
+                sessionStorage.setItem('maki-browse-page-max', String(browsePageMax));
                 nextNav.href = '/asset/' + browseIds[idx + 1];
                 nextNav.classList.remove('invisible');
             }
