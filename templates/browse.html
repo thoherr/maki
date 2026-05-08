@@ -1953,12 +1953,41 @@ window.onFilterChange = onFilterChange;
         var curPage = parseInt(meta.dataset.page);
         var totalPages = parseInt(meta.dataset.totalPages);
         var targetPage = (delta > 0) ? curPage + 1 : curPage - 1;
-        if (targetPage < 1 || targetPage > totalPages) { damLightbox.hideLoading(); return; }
-        window._lightboxResumeIndex = (delta > 0) ? 0 : -1;
-        var link = (delta > 0)
-            ? document.querySelector('.top-pagination a[href]:nth-last-child(2)')
-            : document.querySelector('.top-pagination a[href]:nth-child(2)');
-        if (link) link.click();
+
+        // Slideshow wrap: when the slideshow is running in loop mode and
+        // we hit the end of the last page (or the start of the first
+        // page going backwards), jump to the opposite end of the result
+        // set instead of bailing. Without this the slideshow would silently
+        // freeze on the last asset of the last page.
+        var looping = window.damLightbox &&
+            window.damLightbox.isSlideshowRunning &&
+            window.damLightbox.isSlideshowRunning() &&
+            window.damLightbox.isSlideshowLooping();
+        if (looping && delta > 0 && curPage >= totalPages) {
+            targetPage = 1;
+            window._lightboxResumeIndex = 0;
+        } else if (looping && delta < 0 && curPage <= 1) {
+            targetPage = totalPages;
+            window._lightboxResumeIndex = -1;
+        } else if (targetPage < 1 || targetPage > totalPages) {
+            damLightbox.hideLoading();
+            return;
+        } else {
+            window._lightboxResumeIndex = (delta > 0) ? 0 : -1;
+        }
+
+        // Build the target URL by replacing the page param in the current
+        // URL — works for both adjacent-page navigation and slideshow
+        // wrap (where target may be 1 or totalPages, not curPage ± 1).
+        var url = new URL(window.location.href);
+        url.searchParams.set('page', String(targetPage));
+        // htmx swap into #results to keep the lightbox overlay alive.
+        if (window.htmx) {
+            htmx.ajax('GET', url.pathname + url.search, {target: '#results', swap: 'innerHTML'});
+            history.pushState(null, '', url.pathname + url.search);
+        } else {
+            window.location.href = url.pathname + url.search;
+        }
     };
     // Thumbnail click opens lightbox
     document.getElementById('results').addEventListener('click', function(e) {

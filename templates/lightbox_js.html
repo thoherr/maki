@@ -390,19 +390,29 @@
     function isSlideshowRunning() { return slideshowTimer !== null; }
 
     function slideshowTick() {
-        // If we're at the last item AND loop is off, stop.
-        // If at last AND loop is on, jump back to 0 and re-render.
-        if (currentIndex >= items.length - 1) {
-            if (slideshowLoop) {
-                currentIndex = 0;
-                render();
-            } else {
-                stopSlideshow();
-            }
-            return;
+        // Always delegate to navigate(1). When we're inside the current
+        // page's items, that just advances the index. When we're at the
+        // last item, navigate(1) calls _onNavigateBeyond(1) — host pages
+        // (browse.html) handle the page swap and reopen the lightbox at
+        // index 0 of the next page; the slideshow timer keeps ticking
+        // through the swap so the next advance happens on schedule.
+        //
+        // The host's onNavigateBeyond also handles the wrap-to-first case
+        // when slideshowLoop is on and we're at the last page (it queries
+        // isSlideshowLooping() and navigates to page 1). When loop is off
+        // and we're at the very end, the host's handler returns without
+        // acting; navigate(1) leaves currentIndex put. We detect that
+        // stuck state below and stop the slideshow cleanly so it doesn't
+        // tick forever on a frozen view.
+        var prevId = items[currentIndex] ? items[currentIndex].id : null;
+        navigate(1);
+        // After-tick stuck detection: if we're at items.length-1 and the
+        // current item didn't change (synchronous case — no host handler,
+        // or handler bailed), stop the slideshow.
+        var stillSameItem = items[currentIndex] && items[currentIndex].id === prevId;
+        if (stillSameItem && currentIndex === items.length - 1 && !slideshowLoop) {
+            stopSlideshow();
         }
-        currentIndex += 1;
-        render();
     }
 
     function startSlideshow() {
@@ -594,13 +604,17 @@
             close();
             return;
         }
+        // Arrow keys are deliberate user navigation — pause any active
+        // slideshow so the user's move overrides the auto-advance.
         if (e.key === 'ArrowLeft') {
             e.preventDefault(); e.stopImmediatePropagation();
+            if (isSlideshowRunning()) stopSlideshow();
             navigate(-1);
             return;
         }
         if (e.key === 'ArrowRight') {
             e.preventDefault(); e.stopImmediatePropagation();
+            if (isSlideshowRunning()) stopSlideshow();
             navigate(1);
             return;
         }
@@ -692,6 +706,12 @@
         openWithData: openWithData,
         close: close,
         getCurrentId: getCurrentId,
+        // Slideshow state introspection — used by host pages so their
+        // onNavigateBeyond handler can wrap from last page to first
+        // when slideshow loop is on (otherwise reaching the end of the
+        // result set would just freeze the lightbox).
+        isSlideshowRunning: function() { return isSlideshowRunning(); },
+        isSlideshowLooping: function() { return slideshowLoop; },
         set onClose(fn) { _onClose = fn; },
         set onRatingChange(fn) { _onRatingChange = fn; },
         set onLabelChange(fn) { _onLabelChange = fn; },
