@@ -293,7 +293,7 @@ impl ParsedSearch {
 ///   `tag:"Fools Theater" rating:4+` → `["tag:Fools Theater", "rating:4+"]`
 ///   `tag:landscape type:image`      → `["tag:landscape", "type:image"]`
 ///   `hello world`                   → `["hello", "world"]`
-pub(super) fn tokenize_query(query: &str) -> Vec<String> {
+pub fn tokenize_query(query: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut chars = query.chars().peekable();
 
