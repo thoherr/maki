@@ -2613,6 +2613,28 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     text-decoration: none;
 }
 .lightbox-btn:hover { opacity: 1; background: rgba(255,255,255,0.1); text-decoration: none; }
+/* Highlight the play/loop buttons when their feature is active so the
+   user can see at a glance whether the slideshow is running and whether
+   it'll wrap at the end. */
+.lightbox-btn.active {
+    background: rgba(255,255,255,0.18);
+    border-color: rgba(255,255,255,0.45);
+    opacity: 1;
+}
+/* Speed badge — the small "5s" indicator that appears next to the play
+   button when the slideshow is active or the user just bumped the
+   cadence with +/-. */
+.lb-slideshow-speed {
+    color: #fff;
+    opacity: 0.75;
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+    margin: 0 0.2rem;
+    padding: 0.15rem 0.35rem;
+    background: rgba(255,255,255,0.08);
+    border-radius: 3px;
+    line-height: 1;
+}
 .lightbox-main {
     flex: 1;
     display: flex;

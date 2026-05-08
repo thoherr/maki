@@ -209,6 +209,10 @@
         overlay.classList.add('open');
         document.body.style.overflow = 'hidden';
         render();
+        // Pull slideshow defaults on first open so the loop button shows
+        // the correct state even before the user clicks Play. No-op on
+        // subsequent opens once the config is cached.
+        loadSlideshowConfig();
     }
 
     function openById(assetId) {
@@ -222,6 +226,9 @@
     }
 
     function close() {
+        // Stop any active slideshow first — it should never outlive the
+        // lightbox. Safe to call when not running.
+        stopSlideshow();
         resetZoom();
         isOpen = false;
         overlay.classList.remove('open');
@@ -349,9 +356,142 @@
         }
     }
 
+    // ── Slideshow controller ───────────────────────────────────────────
+    // Auto-advances the lightbox every `slideshowSeconds` seconds. Runtime
+    // adjustments via +/- bump the cadence by 1 s (clamped to 1..60); the
+    // current value flashes in the speed badge for ~1.5 s. Loop mode is a
+    // separate toggle: when off, the slideshow stops after the last visible
+    // asset (same logic as manual Next reaching the boundary). User
+    // interaction that's not the slideshow itself pauses it (manual prev/
+    // next, rating change, label change, escape, close).
+    var slideshowTimer = null;
+    var slideshowSeconds = 5;
+    var slideshowLoop = true;
+    var slideshowConfigLoaded = false;
+    var slideshowSpeedTimer = null;
+
+    function loadSlideshowConfig() {
+        if (slideshowConfigLoaded) return Promise.resolve();
+        return fetch('/api/build-info')
+            .then(function(r) { return r.ok ? r.json() : {}; })
+            .then(function(d) {
+                if (typeof d.slideshow_seconds === 'number' && d.slideshow_seconds > 0) {
+                    slideshowSeconds = d.slideshow_seconds;
+                }
+                if (typeof d.slideshow_loop === 'boolean') {
+                    slideshowLoop = d.slideshow_loop;
+                }
+                slideshowConfigLoaded = true;
+                renderLoopButton();
+            })
+            .catch(function() { slideshowConfigLoaded = true; });
+    }
+
+    function isSlideshowRunning() { return slideshowTimer !== null; }
+
+    function slideshowTick() {
+        // If we're at the last item AND loop is off, stop.
+        // If at last AND loop is on, jump back to 0 and re-render.
+        if (currentIndex >= items.length - 1) {
+            if (slideshowLoop) {
+                currentIndex = 0;
+                render();
+            } else {
+                stopSlideshow();
+            }
+            return;
+        }
+        currentIndex += 1;
+        render();
+    }
+
+    function startSlideshow() {
+        if (slideshowTimer) return;
+        loadSlideshowConfig().then(function() {
+            slideshowTimer = setInterval(slideshowTick, slideshowSeconds * 1000);
+            renderToggleButton();
+            flashSlideshowSpeed();
+        });
+    }
+
+    function stopSlideshow() {
+        if (slideshowTimer === null) return;
+        clearInterval(slideshowTimer);
+        slideshowTimer = null;
+        renderToggleButton();
+        var sp = document.getElementById('lb-slideshow-speed');
+        if (sp) sp.style.display = 'none';
+    }
+
+    function toggleSlideshow() {
+        if (isSlideshowRunning()) stopSlideshow();
+        else startSlideshow();
+    }
+
+    function adjustSlideshowSpeed(delta) {
+        slideshowSeconds = Math.max(1, Math.min(60, slideshowSeconds + delta));
+        if (isSlideshowRunning()) {
+            // Restart the interval at the new cadence.
+            clearInterval(slideshowTimer);
+            slideshowTimer = setInterval(slideshowTick, slideshowSeconds * 1000);
+        }
+        flashSlideshowSpeed();
+    }
+
+    function flashSlideshowSpeed() {
+        var sp = document.getElementById('lb-slideshow-speed');
+        if (!sp) return;
+        sp.textContent = slideshowSeconds + 's';
+        sp.style.display = '';
+        if (slideshowSpeedTimer) clearTimeout(slideshowSpeedTimer);
+        slideshowSpeedTimer = setTimeout(function() {
+            // Keep it visible only while running; auto-fade after the flash
+            // when the slideshow is paused so the toolbar stays clean.
+            if (!isSlideshowRunning()) sp.style.display = 'none';
+        }, 1500);
+    }
+
+    function toggleSlideshowLoop() {
+        loadSlideshowConfig().then(function() {
+            slideshowLoop = !slideshowLoop;
+            renderLoopButton();
+        });
+    }
+
+    function renderToggleButton() {
+        var btn = document.getElementById('lb-slideshow-toggle');
+        if (!btn) return;
+        if (isSlideshowRunning()) {
+            btn.innerHTML = '&#9612;&#9612;'; // ▌▌ pause glyph
+            btn.title = 'Pause slideshow (Space)';
+            btn.classList.add('active');
+        } else {
+            btn.innerHTML = '&#9654;'; // ▶ play glyph
+            btn.title = 'Start slideshow (Space)';
+            btn.classList.remove('active');
+        }
+    }
+
+    function renderLoopButton() {
+        var btn = document.getElementById('lb-slideshow-loop');
+        if (!btn) return;
+        if (slideshowLoop) {
+            btn.innerHTML = '&#x21BB;'; // ↻ loop glyph
+            btn.title = 'Loop after last (currently ON; click to stop at end)';
+            btn.classList.add('active');
+        } else {
+            btn.innerHTML = '&#x2192;'; // → straight-through glyph
+            btn.title = 'Loop after last (currently OFF; click to wrap to first)';
+            btn.classList.remove('active');
+        }
+    }
+
     function applyRating(rating) {
         var item = items[currentIndex];
         if (!item) return;
+        // Rating change is a deliberate user action — pause the slideshow
+        // so the user has time to assess the rating they just set.
+        if (isSlideshowRunning()) stopSlideshow();
         fetch('/api/asset/' + item.id + '/rating', {
             method: 'PUT',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
@@ -366,6 +506,7 @@
     function applyLabel(label) {
         var item = items[currentIndex];
         if (!item) return;
+        if (isSlideshowRunning()) stopSlideshow();
         fetch('/api/asset/' + item.id + '/label', {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
@@ -385,9 +526,20 @@
         if (e.target === this && !imgWrap.classList.contains('zoomed')) close();
     });
 
-    // Nav arrows
-    document.getElementById('lb-prev').addEventListener('click', function() { navigate(-1); });
-    document.getElementById('lb-next').addEventListener('click', function() { navigate(1); });
+    // Nav arrows — manual prev/next pauses any active slideshow so the
+    // user's deliberate move overrides the auto-advance.
+    document.getElementById('lb-prev').addEventListener('click', function() {
+        if (isSlideshowRunning()) stopSlideshow();
+        navigate(-1);
+    });
+    document.getElementById('lb-next').addEventListener('click', function() {
+        if (isSlideshowRunning()) stopSlideshow();
+        navigate(1);
+    });
+
+    // Slideshow controls
+    document.getElementById('lb-slideshow-toggle').addEventListener('click', toggleSlideshow);
+    document.getElementById('lb-slideshow-loop').addEventListener('click', toggleSlideshowLoop);
 
     // Info toggle
     function toggleInfo() {
@@ -472,12 +624,35 @@
             return;
         }
 
-        // Zoom shortcuts
+        // Spacebar — toggle slideshow play/pause. Scoped to lightbox-open
+        // (the outer guard ensures we only consume Space when isOpen is
+        // true) so we don't fight the browser's default scroll-down on
+        // pages where the lightbox isn't active.
+        if (e.key === ' ' || e.code === 'Space') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            toggleSlideshow();
+            return;
+        }
+
+        // Zoom shortcuts. `+`/`-` are dual-purpose: when the slideshow is
+        // running they bump the cadence (visible feedback via the speed
+        // badge), otherwise they zoom in/out as before.
         if (!e.metaKey && !e.ctrlKey && !e.altKey) {
             if (e.key === ',') { e.preventDefault(); e.stopImmediatePropagation(); zoomFit(); return; }
             if (e.key === '.') { e.preventDefault(); e.stopImmediatePropagation(); zoomTo(1.0); return; }
-            if (e.key === '+' || e.key === '=') { e.preventDefault(); e.stopImmediatePropagation(); zoomIn(); return; }
-            if (e.key === '-') { e.preventDefault(); e.stopImmediatePropagation(); zoomOut(); return; }
+            if (e.key === '+' || e.key === '=') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                if (isSlideshowRunning()) adjustSlideshowSpeed(1);
+                else zoomIn();
+                return;
+            }
+            if (e.key === '-') {
+                e.preventDefault(); e.stopImmediatePropagation();
+                if (isSlideshowRunning()) adjustSlideshowSpeed(-1);
+                else zoomOut();
+                return;
+            }
         }
 
         // Alt/Option+0-7: label

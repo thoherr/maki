@@ -390,12 +390,24 @@ All browse keyboard shortcuts for rating and label work inside the lightbox:
 | r/o/y/g/b/p/u | Set label by color initial |
 | , (comma) | Fit to screen (zoom) |
 | . (period) | 100% zoom |
-| + | Zoom in |
-| - | Zoom out |
+| + | Zoom in *(or bump slideshow speed +1 s when slideshow is running)* |
+| - | Zoom out *(or bump slideshow speed −1 s when slideshow is running)* |
+| Space | Start / pause slideshow |
 
 **Video playback**: Video assets display inline in the lightbox. Click the video to play or pause it. Use the "Detail" button or press `d` to navigate to the detail page for full playback controls.
 
-When the lightbox is open, browse keyboard navigation (arrow keys for card focus, Enter, Space) is suppressed.
+When the lightbox is open, browse keyboard navigation (arrow keys for card focus, Enter, Space) is suppressed — `Space` toggles the slideshow instead.
+
+### Slideshow
+
+Two buttons in the top toolbar (next to Info / Detail / Close):
+
+- **▶ / ▌▌** — start / pause. Same as pressing **Space**.
+- **↻ / →** — loop after last asset. `↻` (active) wraps to the first asset when the slideshow reaches the end; `→` stops at the last asset.
+
+While the slideshow is running, `+` / `-` bump the cadence by one second (clamped to 1–60 s). The current value flashes briefly next to the play button. Initial cadence and loop state come from `[browse] slideshow_seconds` and `[browse] slideshow_loop` in `maki.toml` (defaults: 5 s, loop on).
+
+The slideshow auto-pauses on any deliberate user action: manual prev/next click, rating change, label change, Escape. Closing the lightbox stops the slideshow entirely.
 
 
 ## Asset Detail Page

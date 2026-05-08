@@ -698,6 +698,8 @@ Controls default browsing behavior for both the CLI `maki search` and the web UI
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `default_filter` | string | *(none)* | Search filter applied to all browse, search, and stroll views. Uses the same syntax as the search bar. |
+| `slideshow_seconds` | integer | `5` | Initial advance interval (seconds) for the lightbox slideshow. The user can bump it at runtime with `+`/`-` while the slideshow is running (range clamped to 1–60). |
+| `slideshow_loop` | bool | `true` | Initial loop-after-last state of the lightbox slideshow. When `true`, the slideshow wraps from the last visible asset back to the first; when `false`, it stops at the last asset. Toggle button in the lightbox toolbar overrides this per-session. |
 
 The default filter is AND'd with whatever the user types — it acts as a persistent base filter. In the web UI, a toggle next to the search bar lets you temporarily disable it.
 
@@ -721,7 +723,27 @@ default_filter = "-tag:rest -tag:rejected"
 # Show only images
 [browse]
 default_filter = "type:image"
+
+# Slideshow — start at 8-second cadence, stop at end instead of looping
+[browse]
+slideshow_seconds = 8
+slideshow_loop = false
 ```
+
+### Slideshow
+
+The web UI's lightbox has a slideshow mode. Two buttons in the lightbox toolbar:
+
+- **▶ / ▌▌** — start / pause. Keyboard shortcut: **Space**.
+- **↻ / →** — loop after last asset (toggle). When `↻` (loop on), the slideshow wraps to the first asset; when `→` (loop off), it stops at the last asset.
+
+While the slideshow is running:
+
+- **`+`** / **`-`** bump the cadence by one second (clamped to 1–60). The current value flashes briefly next to the play button.
+- Clicking **Prev** / **Next**, changing the **rating** or **label**, or pressing **Esc** auto-pauses the slideshow so deliberate user actions take precedence over auto-advance.
+- Closing the lightbox stops the slideshow.
+
+The defaults come from `slideshow_seconds` and `slideshow_loop` in `[browse]`; runtime changes apply for the current session only.
 
 ---
 
@@ -991,6 +1013,8 @@ When a field is absent from `maki.toml`, these defaults apply:
 | `vlm.repeat_penalty` | `0.0` (server default) |
 | `writeback.enabled` | `false` |
 | `browse.default_filter` | none |
+| `browse.slideshow_seconds` | `5` |
+| `browse.slideshow_loop` | `true` |
 
 ---
 

@@ -242,6 +242,13 @@ pub struct AppState {
     pub vlm_enabled: bool,
     pub verbosity: crate::Verbosity,
     pub default_filter: Option<String>,
+    /// Lightbox slideshow advance interval (seconds). Surfaced to the
+    /// browser via `/api/build-info` and the lightbox JS uses it as the
+    /// initial cadence; the user can bump it at runtime with `+`/`-`.
+    pub slideshow_seconds: u32,
+    /// Lightbox slideshow loop-after-last-asset toggle. Initial state of
+    /// the loop button in the lightbox toolbar.
+    pub slideshow_loop: bool,
     pub vlm_config: crate::config::VlmConfig,
     #[cfg(feature = "ai")]
     pub ai_model: tokio::sync::Mutex<Option<crate::ai::SigLipModel>>,
@@ -279,6 +286,11 @@ impl AppState {
         let smart_on_demand = preview_config.generate_on_demand;
         let vlm_enabled = cfg!(feature = "pro") && check_vlm_at_startup(&vlm_config);
         let catalog_pool = Arc::new(CatalogPool::new(&catalog_root, 4).expect("Failed to open catalog pool"));
+        // Read slideshow config from disk once at startup; lightbox JS pulls
+        // these via /api/build-info. Loose load (default_filter is already
+        // passed in by caller) avoids growing the new() signature further.
+        let browse_cfg = crate::config::CatalogConfig::load(&catalog_root)
+            .map(|c| c.browse).unwrap_or_default();
         Self {
             catalog_root,
             catalog_pool,
@@ -296,6 +308,8 @@ impl AppState {
             stroll_discover_pool,
             ai_enabled: true,
             default_filter,
+            slideshow_seconds: browse_cfg.slideshow_seconds.max(1),
+            slideshow_loop: browse_cfg.slideshow_loop,
             verbosity,
             vlm_enabled,
             vlm_config,
@@ -314,6 +328,8 @@ impl AppState {
         let smart_on_demand = preview_config.generate_on_demand;
         let vlm_enabled = cfg!(feature = "pro") && check_vlm_at_startup(&vlm_config);
         let catalog_pool = Arc::new(CatalogPool::new(&catalog_root, 4).expect("Failed to open catalog pool"));
+        let browse_cfg = crate::config::CatalogConfig::load(&catalog_root)
+            .map(|c| c.browse).unwrap_or_default();
         Self {
             catalog_root,
             catalog_pool,
@@ -331,6 +347,8 @@ impl AppState {
             stroll_discover_pool,
             ai_enabled: false,
             default_filter,
+            slideshow_seconds: browse_cfg.slideshow_seconds.max(1),
+            slideshow_loop: browse_cfg.slideshow_loop,
             verbosity,
             vlm_enabled,
             vlm_config,

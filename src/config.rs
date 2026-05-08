@@ -615,12 +615,35 @@ fn is_default_cli(c: &CliDefaults) -> bool {
 }
 
 /// Browse behavior configuration.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BrowseConfig {
     /// Default search filter applied to browse/search/stroll views.
     /// Uses standard search syntax (e.g. "rating:1+", "-tag:rest").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_filter: Option<String>,
+    /// Slideshow advance interval in seconds. Drives the lightbox's
+    /// auto-advance feature (Spacebar to start/stop, `+`/`-` to bump
+    /// runtime). Practical range 1–60; values below 1 are clamped to 1
+    /// at runtime to keep the UI responsive.
+    #[serde(default = "default_slideshow_seconds")]
+    pub slideshow_seconds: u32,
+    /// When the slideshow reaches the last visible asset, wrap back to
+    /// the first (`true`) or stop and pause (`false`).
+    #[serde(default = "default_slideshow_loop")]
+    pub slideshow_loop: bool,
+}
+
+fn default_slideshow_seconds() -> u32 { 5 }
+fn default_slideshow_loop() -> bool { true }
+
+impl Default for BrowseConfig {
+    fn default() -> Self {
+        Self {
+            default_filter: None,
+            slideshow_seconds: default_slideshow_seconds(),
+            slideshow_loop: default_slideshow_loop(),
+        }
+    }
 }
 
 fn is_default_browse(b: &BrowseConfig) -> bool {

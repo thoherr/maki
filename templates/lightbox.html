@@ -26,6 +26,13 @@
             <span class="lb-dot" data-label="Purple" style="background:#9b59b6;" title="Purple"></span>
             <span class="lb-clear" title="Clear label">&times;</span>
         </span>
+        <!-- Slideshow play/pause + loop toggle. The play button text and
+             title swap to "Pause" / "Stop" when running; the loop toggle
+             flips between ⟳ (loop on) and → (stop at end). Both pull
+             initial state from /api/build-info on first toggle. -->
+        <button class="lightbox-btn" id="lb-slideshow-toggle" title="Start slideshow (Space)">&#9654;</button>
+        <button class="lightbox-btn" id="lb-slideshow-loop" title="Loop after last (toggle)">&#x21BB;</button>
+        <span class="lb-slideshow-speed" id="lb-slideshow-speed" style="display:none" title="Adjust with + / -"></span>
         <button class="lightbox-btn" id="lb-info-toggle" title="Toggle info (i)">&#8505;</button>
         <a class="lightbox-btn" id="lb-detail-link" title="Open detail page">&#8599; Detail</a>
         <button class="lightbox-btn" id="lb-close" title="Close (Esc)">&times;</button>

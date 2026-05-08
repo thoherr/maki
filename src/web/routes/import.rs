@@ -297,14 +297,22 @@ fn run_import_with_progress(
 }
 
 
-/// GET /api/build-info — report which optional features were compiled in.
-///
-/// Used by the import dialog to hide the Embeddings (ai) and Descriptions
-/// (pro) checkboxes when the running binary doesn't support those phases.
-pub async fn build_info_api() -> Response {
+/// GET /api/build-info — report which optional features were compiled in,
+/// plus a few user-config values the JS layer needs at runtime
+/// (slideshow defaults, etc.). Used by the import dialog to gate the
+/// Embeddings (ai) / Descriptions (pro) checkboxes; the lightbox JS uses
+/// the slideshow values as the initial cadence + loop state.
+pub async fn build_info_api(
+    State(state): State<Arc<AppState>>,
+) -> Response {
     let ai = cfg!(feature = "ai");
     let pro = cfg!(feature = "pro");
-    Json(serde_json::json!({"ai": ai, "pro": pro})).into_response()
+    Json(serde_json::json!({
+        "ai": ai,
+        "pro": pro,
+        "slideshow_seconds": state.slideshow_seconds,
+        "slideshow_loop": state.slideshow_loop,
+    })).into_response()
 }
 
 /// GET /api/import/profiles — list named import profiles from `[import.profiles.*]`.
