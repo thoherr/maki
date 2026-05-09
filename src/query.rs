@@ -237,6 +237,12 @@ pub struct TagRenameResult {
     pub renamed: usize,
     pub removed: usize,
     pub skipped: usize,
+    /// Per-asset failures (e.g. "no such file or directory" if the YAML
+    /// sidecar got removed out of band). The bulk operation continues
+    /// past them rather than aborting; entries here are surfaced to the
+    /// caller for follow-up.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
 }
 
 /// Action taken for a single asset during tag split.
@@ -256,6 +262,9 @@ pub struct TagSplitResult {
     pub matched: usize,
     pub split: usize,
     pub skipped: usize,
+    /// Per-asset failures (e.g. missing YAML sidecar); see TagRenameResult::errors.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
 }
 
 /// Action taken for a single asset during tag delete.
@@ -275,6 +284,9 @@ pub struct TagDeleteResult {
     pub matched: usize,
     pub removed: usize,
     pub skipped: usize,
+    /// Per-asset failures (e.g. missing YAML sidecar); see TagRenameResult::errors.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
 }
 
 /// Result of a `maki tag fix-unicode` operation.
@@ -292,6 +304,9 @@ pub struct TagFixUnicodeResult {
     /// Assets that had two encoding-variants of the same logical tag and
     /// where one of them was dropped during dedup.
     pub merged: usize,
+    /// Per-asset failures (e.g. missing YAML sidecar); see TagRenameResult::errors.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
 }
 
 /// Result of a `maki writeback` operation.
@@ -1503,8 +1518,24 @@ impl QueryEngine {
         let new_prefix = format!("{new_tag}|");
 
         for (asset_id, _stack_id) in &matches {
-            let uuid: uuid::Uuid = asset_id.parse()?;
-            let mut asset = store.load(uuid)?;
+            // Tolerate per-asset load failures (e.g. YAML sidecar deleted
+            // out of band by a CLI cleanup running concurrently with the
+            // server). Record the error and continue with the rest of the
+            // matched set rather than aborting the entire rename.
+            let uuid: uuid::Uuid = match asset_id.parse() {
+                Ok(u) => u,
+                Err(e) => {
+                    result.errors.push(format!("{asset_id}: invalid UUID: {e}"));
+                    continue;
+                }
+            };
+            let mut asset = match store.load(uuid) {
+                Ok(a) => a,
+                Err(e) => {
+                    result.errors.push(format!("{asset_id}: failed to load sidecar: {e:#}"));
+                    continue;
+                }
+            };
 
             // Find all tags that match: exact match OR (unless exact_only) prefix match (descendants)
             let has_exact = asset.tags.iter().any(|t| cmp_eq(t, old_tag));
@@ -1702,8 +1733,22 @@ impl QueryEngine {
         let expanded_targets = crate::tag_util::expand_all_ancestors(new_tags);
 
         for (asset_id, _stack_id) in &matches {
-            let uuid: uuid::Uuid = asset_id.parse()?;
-            let mut asset = store.load(uuid)?;
+            // Same skip-on-load-failure pattern as tag_rename — see that
+            // function for the rationale.
+            let uuid: uuid::Uuid = match asset_id.parse() {
+                Ok(u) => u,
+                Err(e) => {
+                    result.errors.push(format!("{asset_id}: invalid UUID: {e}"));
+                    continue;
+                }
+            };
+            let mut asset = match store.load(uuid) {
+                Ok(a) => a,
+                Err(e) => {
+                    result.errors.push(format!("{asset_id}: failed to load sidecar: {e:#}"));
+                    continue;
+                }
+            };
 
             let has_exact = asset.tags.iter().any(|t| cmp_eq(t, old_tag));
             let has_descendants = asset.tags.iter().any(|t| starts_with_old_prefix(t));
@@ -1842,8 +1887,22 @@ impl QueryEngine {
         let prefix = format!("{tag}|");
 
         for (asset_id, _stack_id) in &matches {
-            let uuid: uuid::Uuid = asset_id.parse()?;
-            let mut asset = store.load(uuid)?;
+            // See tag_rename for the rationale on tolerating per-asset
+            // load failures rather than aborting the whole delete.
+            let uuid: uuid::Uuid = match asset_id.parse() {
+                Ok(u) => u,
+                Err(e) => {
+                    result.errors.push(format!("{asset_id}: invalid UUID: {e}"));
+                    continue;
+                }
+            };
+            let mut asset = match store.load(uuid) {
+                Ok(a) => a,
+                Err(e) => {
+                    result.errors.push(format!("{asset_id}: failed to load sidecar: {e:#}"));
+                    continue;
+                }
+            };
 
             // Collect every tag value to drop on this asset. Exact match
             // always; descendants only when not in leaf-only mode.
@@ -1949,7 +2008,13 @@ impl QueryEngine {
             result.scanned += 1;
             let mut asset = match store.load(s.id) {
                 Ok(a) => a,
-                Err(_) => continue,
+                Err(e) => {
+                    // Record so the caller can surface it; mirror the
+                    // tag_rename / tag_split / tag_delete tolerance pattern
+                    // for consistency across the four bulk-mutation flows.
+                    result.errors.push(format!("{}: failed to load sidecar: {e:#}", s.id));
+                    continue;
+                }
             };
 
             // Build the post-normalisation tag list, tracking what changed.
@@ -5505,6 +5570,74 @@ mod tests {
         let a2_after: crate::models::Asset = store.load(a2_id.parse().unwrap()).unwrap();
         assert!(a2_after.tags.contains(&"Wildlife".to_string()), "leaf Animals → Wildlife");
         assert!(!a2_after.tags.contains(&"Animals".to_string()), "old tag removed");
+    }
+
+    /// Regression: a missing YAML sidecar (e.g. deleted out of band by a
+    /// concurrent CLI cleanup, or just plain catalog/disk drift) used to
+    /// abort the entire bulk rename with "no such file or directory".
+    /// The fix records the per-asset failure in `result.errors` and
+    /// continues with the remaining matches.
+    #[test]
+    fn tag_rename_tolerates_missing_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("metadata")).unwrap();
+        crate::config::CatalogConfig::default().save(root).unwrap();
+        crate::device_registry::DeviceRegistry::init(root).unwrap();
+        let catalog = crate::catalog::Catalog::open(root).unwrap();
+        catalog.initialize().unwrap();
+        let store = crate::metadata_store::MetadataStore::new(root);
+
+        // Two assets with the same tag. We'll persist the YAML for the
+        // first and then *delete* it from disk before running the rename
+        // — this simulates the cleanup-out-of-band scenario the user hit.
+        let mut a1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ms1");
+        a1.tags = vec!["Foo".to_string()];
+        let v1 = crate::models::Variant {
+            content_hash: "sha256:ms1".to_string(), asset_id: a1.id,
+            role: crate::models::VariantRole::Original, format: "jpg".to_string(),
+            file_size: 100, original_filename: "ms1.jpg".to_string(),
+            source_metadata: Default::default(), locations: vec![],
+        };
+        a1.variants.push(v1.clone());
+        catalog.insert_asset(&a1).unwrap();
+        catalog.insert_variant(&v1).unwrap();
+        store.save(&a1).unwrap();
+
+        let mut a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ms2");
+        a2.tags = vec!["Foo".to_string()];
+        let v2 = crate::models::Variant {
+            content_hash: "sha256:ms2".to_string(), asset_id: a2.id,
+            role: crate::models::VariantRole::Original, format: "jpg".to_string(),
+            file_size: 100, original_filename: "ms2.jpg".to_string(),
+            source_metadata: Default::default(), locations: vec![],
+        };
+        a2.variants.push(v2.clone());
+        catalog.insert_asset(&a2).unwrap();
+        catalog.insert_variant(&v2).unwrap();
+        store.save(&a2).unwrap();
+
+        // Nuke a1's sidecar but leave the catalog row — exactly the state
+        // a half-finished cleanup or external delete would leave behind.
+        // (Use metadata_store.delete so we hit the same sharded path the
+        // production code uses.)
+        store.delete(a1.id).unwrap();
+
+        let engine = QueryEngine::new(root);
+        let result = engine.tag_rename("Foo", "Bar", true, |_, _| {}).unwrap();
+
+        // a2 renamed cleanly; a1 surfaced as a per-asset error.
+        assert_eq!(result.renamed, 1, "the surviving asset got renamed");
+        assert_eq!(result.errors.len(), 1, "the missing-sidecar failure was recorded");
+        assert!(
+            result.errors[0].contains(&a1.id.to_string()),
+            "error mentions the offending asset: {}",
+            result.errors[0]
+        );
+        // Verify a2's tag really did flip.
+        let a2_after: crate::models::Asset = store.load(a2.id).unwrap();
+        assert!(a2_after.tags.contains(&"Bar".to_string()));
+        assert!(!a2_after.tags.contains(&"Foo".to_string()));
     }
 
     #[test]
