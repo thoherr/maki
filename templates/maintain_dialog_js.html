@@ -89,24 +89,33 @@
         writeback: 1, sync_metadata: 1, verify: 1,
         generate_previews: 1, sync: 1, refresh: 1, cleanup: 1
     };
+    // Reattach to a running maintain job by reopening the dialog in
+    // progress phase (mirrors the import dialog's reattachIfRunning).
+    // The user gets the larger status surface back instead of being
+    // stuck with just the toast — and Minimize is still one click away
+    // if they want to hand it off again.
     function reattachIfRunning() {
-        return fetch('/api/jobs')
-            .then(function(r) { return r.ok ? r.json() : { jobs: [] }; })
-            .then(function(s) {
-                var jobs = s.jobs || [];
-                for (var i = 0; i < jobs.length; i++) {
-                    if (jobs[i].completed) continue;
-                    var k = jobs[i].kind;
-                    if (MAINT_KINDS[k]) {
-                        if (window.makiJob && window.makiJob.watch) {
-                            window.makiJob.watch(jobs[i].id, jobs[i].kind_label || k, {});
-                        }
-                        return true;
-                    }
+        return populateVolumes().then(function() {
+            return fetch('/api/jobs');
+        })
+        .then(function(r) { return r.ok ? r.json() : { jobs: [] }; })
+        .then(function(s) {
+            var jobs = s.jobs || [];
+            for (var i = 0; i < jobs.length; i++) {
+                if (jobs[i].completed) continue;
+                var k = jobs[i].kind;
+                if (MAINT_KINDS[k]) {
+                    var label = jobs[i].kind_label || k.replace(/_/g, ' ');
+                    overlay.style.display = 'flex';
+                    showProgressPhase(label);
+                    progressStatusEl.textContent = label + '… (re-attached to running job)';
+                    attachProgressStream(jobs[i].id, label);
+                    return true;
                 }
-                return false;
-            })
-            .catch(function() { return false; });
+            }
+            return false;
+        })
+        .catch(function() { return false; });
     }
 
     // ── Writeback tab ──────────────────────────────────────────────────
@@ -212,8 +221,153 @@
     });
     document.getElementById('maintain-cu-cancel').addEventListener('click', closeDialog);
 
-    // ── Common: POST → watch toast → close dialog ──────────────────────
+    // ── Phase switcher — forms / progress / result ─────────────────────
+    // Mirrors the import dialog's pick → form → progress → result flow:
+    // a job stays inside the modal during its lifetime so the user gets
+    // the larger status surface, with a Minimize button to hand off to
+    // the small toast if they want to keep working. The dialog only
+    // returns to the tabbed forms when the user clicks Close on the
+    // result phase, or cancels back from progress (no separate cancel
+    // for now — Close on result is the natural exit).
+    var formsEl = document.getElementById('maintain-forms');
+    var progressEl = document.getElementById('maintain-progress');
+    var resultEl = document.getElementById('maintain-result');
+    var progressTitleEl = document.getElementById('maintain-progress-title');
+    var progressStatusEl = document.getElementById('maintain-progress-status');
+    var progressLogEl = document.getElementById('maintain-progress-log');
+    var resultTitleEl = document.getElementById('maintain-result-title');
+    var resultTextEl = document.getElementById('maintain-result-text');
+    var activeJobId = null;
+    var activeEventSource = null;
+
+    function showFormsPhase() {
+        formsEl.style.display = '';
+        progressEl.style.display = 'none';
+        resultEl.style.display = 'none';
+    }
+    function showProgressPhase(label) {
+        formsEl.style.display = 'none';
+        progressEl.style.display = 'block';
+        resultEl.style.display = 'none';
+        progressTitleEl.textContent = label + '…';
+        progressStatusEl.textContent = 'Starting…';
+        progressLogEl.innerHTML = '';
+    }
+    function showResultPhase(label, evt) {
+        formsEl.style.display = 'none';
+        progressEl.style.display = 'none';
+        resultEl.style.display = 'block';
+        resultTitleEl.textContent = label + ' — done';
+        resultTextEl.innerHTML = renderSummaryHtml(evt);
+    }
+
+    // Build a readable summary from whatever counters the terminal event
+    // carries. Same priority order as job_toast_js's summaryLine; we
+    // duplicate it here rather than import it because the in-modal view
+    // wants slightly different formatting (one line per counter).
+    function renderSummaryHtml(evt) {
+        if (evt.error) return '<div style="color:var(--danger,#c0392b)"><strong>Failed:</strong> ' + escHtml(String(evt.error)) + '</div>';
+        var rows = [];
+        function add(key, label) {
+            if (typeof evt[key] === 'number') rows.push('<li>' + evt[key] + ' ' + label + '</li>');
+        }
+        add('written', 'XMP files written');
+        add('inbound', 'inbound');
+        add('outbound', 'outbound');
+        add('conflicts', 'conflict(s)');
+        add('unchanged', 'unchanged');
+        add('media_refreshed', 'media re-extracted');
+        add('verified', 'verified');
+        add('modified', 'modified');
+        add('generated', 'previews generated');
+        add('upgraded', 'previews upgraded');
+        add('refreshed', 'refreshed');
+        add('moved', 'moved');
+        add('new_files', 'new');
+        add('missing', 'missing');
+        add('stale_removed', 'stale dropped');
+        add('removed_variants', 'variants removed');
+        add('removed_assets', 'assets removed');
+        add('removed_previews', 'previews removed');
+        add('skipped', 'skipped');
+        add('failed', 'failed');
+        if (Array.isArray(evt.errors) && evt.errors.length > 0) {
+            rows.push('<li>' + evt.errors.length + ' error(s) &mdash; check the server logs</li>');
+        }
+        return rows.length === 0 ? 'Done' : '<ul style="margin:0; padding-left:1.2em">' + rows.join('') + '</ul>';
+    }
+
+    function escHtml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function attachProgressStream(jobId, label) {
+        activeJobId = jobId;
+        if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
+        activeEventSource = new EventSource('/api/jobs/' + encodeURIComponent(jobId) + '/progress');
+        activeEventSource.onmessage = function(e) {
+            var evt;
+            try { evt = JSON.parse(e.data); } catch (_) { return; }
+            if (evt.done) {
+                if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
+                showResultPhase(label, evt);
+                // Some maintain ops change the catalog tag set (cleanup,
+                // sync --apply --remove-stale). Invalidate the
+                // browse-side tag autocomplete cache so the next typed
+                // tag query refetches /api/tags rather than serving
+                // stale entries that cleanup just dropped.
+                if (typeof window._damTagCache !== 'undefined') {
+                    window._damTagCache = null;
+                }
+                if (window.makiMaintainStatus) window.makiMaintainStatus.refresh();
+                return;
+            }
+            // Phase-aware status line — the maintain endpoints emit per-
+            // file events with `processed`, `status`, optional `asset`.
+            // No phase boundaries (these are single-phase jobs) so the
+            // import dialog's `phase_started` handling isn't needed.
+            var status = (typeof evt.processed === 'number')
+                ? (evt.processed + ' done' + (evt.status ? ' — ' + evt.status : '') + (evt.asset ? ' (' + evt.asset + ')' : ''))
+                : (evt.status || 'Working…');
+            progressStatusEl.textContent = status;
+            // Append a log line; cap at last 50 like the import dialog.
+            var line = document.createElement('div');
+            line.textContent = (evt.status || '') + (evt.asset ? ' ' + evt.asset : '');
+            progressLogEl.appendChild(line);
+            if (progressLogEl.children.length > 50) progressLogEl.removeChild(progressLogEl.firstChild);
+            progressLogEl.scrollTop = progressLogEl.scrollHeight;
+        };
+        activeEventSource.onerror = function() {
+            if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
+            progressStatusEl.textContent =
+                'Connection lost. The job may still be running on the server — check the badge.';
+        };
+    }
+
+    // Minimize hands the running job to the global progress toast and
+    // closes the dialog. The job keeps running on the server (it's a
+    // registered job); reopening Maintain via the nav badge re-attaches.
+    document.getElementById('maintain-progress-minimize').addEventListener('click', function() {
+        if (!activeJobId) { closeDialog(); return; }
+        if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
+        var label = progressTitleEl.textContent.replace(/…$/, '');
+        if (window.makiJob && window.makiJob.watch) {
+            window.makiJob.watch(activeJobId, label, {});
+        }
+        closeDialog();
+        // Reset to forms phase so the next dialog open isn't stuck on
+        // progress for a now-detached job.
+        showFormsPhase();
+    });
+
+    document.getElementById('maintain-result-close').addEventListener('click', function() {
+        showFormsPhase();
+        closeDialog();
+    });
+
+    // ── Common: POST → switch to progress phase → stream SSE → result ──
     function launchJob(url, body, label) {
+        showProgressPhase(label);
         fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -226,13 +380,15 @@
             return r.json();
         })
         .then(function(data) {
-            if (data.job_id && window.makiJob && window.makiJob.watch) {
-                window.makiJob.watch(data.job_id, label, {});
-            }
-            closeDialog();
+            if (!data.job_id) throw new Error('server returned no job id');
+            attachProgressStream(data.job_id, label);
             if (window.makiMaintainStatus) window.makiMaintainStatus.refresh();
         })
         .catch(function(e) {
+            // Failed to *start* the job — bounce back to the forms phase
+            // and surface the error inline so the user can retry without
+            // a modal alert.
+            showFormsPhase();
             alert(label + ' failed to start: ' + e.message);
         });
     }

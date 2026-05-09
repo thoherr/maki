@@ -16,6 +16,15 @@
             <button type="button" class="import-close" id="maintain-close" aria-label="Close">&times;</button>
         </div>
 
+        {# The dialog has three top-level phases that swap in/out of the
+           modal body, mirroring the import dialog's lifecycle:
+             - "forms"    — the tabbed forms (initial + after Close on
+                            a finished job)
+             - "progress" — live progress for a running job
+             - "result"   — terminal summary + Close button
+           The tabs container and per-tab panes all live inside #maintain-forms
+           so we can hide the whole forms phase by toggling one element. #}
+        <div id="maintain-forms">
         <div class="maintain-tabs" role="tablist">
             <button type="button" class="maintain-tab active" role="tab" data-maintain-tab="writeback" aria-selected="true">Writeback</button>
             <button type="button" class="maintain-tab" role="tab" data-maintain-tab="sync-metadata" aria-selected="false">Sync metadata</button>
@@ -225,6 +234,31 @@
                     <button type="submit" class="batch-btn batch-btn-primary" id="maintain-cu-run">Run cleanup</button>
                 </div>
             </form>
+        </div>
+        </div> {# /#maintain-forms #}
+
+        {# ── Progress phase ─────────────────────────────────────────
+           Visible while a job is running. Shows a live status line +
+           recent activity log; Minimize hands the running job off to
+           the small toast and closes the modal so the user can keep
+           working without losing the feed. #}
+        <div id="maintain-progress" style="display:none">
+            <h3 id="maintain-progress-title">Working…</h3>
+            <div id="maintain-progress-status" class="import-status-text">Starting…</div>
+            <div id="maintain-progress-log" class="import-log"></div>
+            <div class="import-form-actions">
+                <button type="button" class="batch-btn" id="maintain-progress-minimize"
+                        title="Hide this dialog and show a small progress toast — the job keeps running on the server.">Minimize to toast</button>
+            </div>
+        </div>
+
+        {# ── Result phase ─────────────────────────────────────────── #}
+        <div id="maintain-result" style="display:none">
+            <h3 id="maintain-result-title">Done</h3>
+            <div id="maintain-result-text" class="import-result-text"></div>
+            <div class="import-form-actions">
+                <button type="button" class="batch-btn batch-btn-primary" id="maintain-result-close">Close</button>
+            </div>
         </div>
     </div>
 </div>
