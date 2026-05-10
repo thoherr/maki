@@ -557,6 +557,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/maintain/sync", axum::routing::post(routes::start_sync_api))
         .route("/api/maintain/refresh", axum::routing::post(routes::start_refresh_api))
         .route("/api/maintain/cleanup", axum::routing::post(routes::start_cleanup_api))
+        .route("/api/config", axum::routing::get(routes::get_config_api).post(routes::save_config_api))
+        .route("/api/config/schema", axum::routing::get(routes::get_config_schema_api))
         .route("/api/open-location", axum::routing::post(routes::open_location))
         .route("/api/open-terminal", axum::routing::post(routes::open_terminal))
         .route(

@@ -25,6 +25,8 @@ mod duplicates;
 pub use duplicates::*;
 mod import;
 pub use import::*;
+mod config;
+pub use config::*;
 mod jobs;
 pub use jobs::*;
 mod maintain;

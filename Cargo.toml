@@ -23,6 +23,8 @@ kamadak-exif = "0.5"
 quick-xml = "0.36"
 regex = "1"
 toml = "0.8"
+toml_edit = "0.22"
+schemars = { version = "0.8", features = ["uuid1"] }
 glob-match = "0.2"
 unicode-normalization = "0.1"
 rustyline = { version = "15", features = ["derive"] }

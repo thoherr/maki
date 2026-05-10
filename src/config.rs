@@ -10,11 +10,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Preview output format.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PreviewFormat {
     Jpeg,
@@ -38,7 +39,7 @@ impl PreviewFormat {
 }
 
 /// Preview generation configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PreviewConfig {
     #[serde(default = "default_max_edge")]
     pub max_edge: u32,
@@ -84,7 +85,7 @@ impl Default for PreviewConfig {
 }
 
 /// Web server configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ServeConfig {
     #[serde(default = "default_port")]
     pub port: u16,
@@ -152,7 +153,7 @@ impl Default for ServeConfig {
 }
 
 /// Import behavior configuration.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ImportConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,
@@ -170,7 +171,7 @@ pub struct ImportConfig {
 
 /// A named import profile that overrides `[import]` defaults.
 /// Fields are optional — unset fields inherit from the base `[import]` config.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ImportProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude: Option<Vec<String>>,
@@ -217,7 +218,7 @@ fn is_default_import(i: &ImportConfig) -> bool {
 }
 
 /// Auto-group behavior configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct GroupConfig {
     /// Regex pattern to identify session root directories.
     /// Auto-group uses this to determine which directory level is the "shoot"
@@ -249,7 +250,7 @@ fn is_default_group(g: &GroupConfig) -> bool {
 }
 
 /// Dedup behavior configuration.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct DedupConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefer: Option<String>,
@@ -260,7 +261,7 @@ fn is_default_dedup(d: &DedupConfig) -> bool {
 }
 
 /// Verify behavior configuration.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct VerifyConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_age_days: Option<u64>,
@@ -271,7 +272,7 @@ fn is_default_verify(v: &VerifyConfig) -> bool {
 }
 
 /// AI auto-tagging configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AiConfig {
     #[serde(default = "default_ai_model")]
     pub model: String,
@@ -359,7 +360,7 @@ fn is_default_ai(a: &AiConfig) -> bool {
 ///
 /// All fields are optional — when absent, the global `[vlm]` value is used.
 /// Configured under `[vlm.model_config."model-name"]` in `maki.toml`.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct VlmModelConfig {
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
@@ -373,7 +374,7 @@ pub struct VlmModelConfig {
 }
 
 /// VLM (vision-language model) configuration for image descriptions.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct VlmConfig {
     /// VLM server endpoint (Ollama, LM Studio, vLLM, or any OpenAI-compatible API).
     #[serde(default = "default_vlm_endpoint")]
@@ -524,7 +525,7 @@ fn is_default_vlm(v: &VlmConfig) -> bool {
 }
 
 /// Contact sheet default configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ContactSheetDefaults {
     #[serde(default = "default_cs_layout")]
     pub layout: String,
@@ -568,7 +569,7 @@ fn is_default_contact_sheet(c: &ContactSheetDefaults) -> bool {
 }
 
 /// XMP writeback configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct WritebackConfig {
     /// Enable *automatic* XMP writeback on every edit. When true, edits
     /// to rating, label, description, and tags write through to the
@@ -597,7 +598,7 @@ fn is_default_writeback(w: &WritebackConfig) -> bool {
 
 /// Default CLI flags. These are OR'd with command-line flags —
 /// setting `log = true` here is like always passing `--log`.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct CliDefaults {
     /// Enable --log by default
     #[serde(default)]
@@ -615,7 +616,7 @@ fn is_default_cli(c: &CliDefaults) -> bool {
 }
 
 /// Browse behavior configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct BrowseConfig {
     /// Default search filter applied to browse/search/stroll views.
     /// Uses standard search syntax (e.g. "rating:1+", "-tag:rest").
@@ -651,7 +652,7 @@ fn is_default_browse(b: &BrowseConfig) -> bool {
 }
 
 /// Catalog configuration stored in maki.toml.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CatalogConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_volume: Option<Uuid>,

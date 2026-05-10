@@ -4939,6 +4939,101 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     flex-shrink: 0;
 }
 
+/* ── Config form (Maintain → Config tab) ────────────────────
+   The schema walker emits one .config-row per leaf field and a nested
+   <details class="config-section"> per sub-table. Visual rhythm: tighter
+   than the regular maintain forms because there are ~50 fields total
+   and we want the whole tree to fit vertically without too much
+   scrolling. */
+.config-section {
+    margin-bottom: 0.75rem;
+    border-left: 2px solid var(--border);
+    padding: 0.25rem 0 0.25rem 0.6rem;
+}
+.config-section-title {
+    font-family: monospace;
+    font-size: 0.85rem;
+    color: var(--text);
+    cursor: pointer;
+    padding: 0.15rem 0;
+    user-select: none;
+}
+.config-section[open] .config-section-title {
+    margin-bottom: 0.4rem;
+}
+.config-row {
+    margin-bottom: 0.55rem;
+}
+.config-label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-bottom: 0.18rem;
+}
+.config-help {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    opacity: 0.8;
+    line-height: 1.35;
+    margin-bottom: 0.25rem;
+}
+.config-input,
+.config-select {
+    width: 100%;
+    padding: 0.32rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-card);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.88rem;
+    box-sizing: border-box;
+}
+.config-checkbox {
+    margin-right: 0.4rem;
+}
+/* "restart required" pill next to fields the user can't hot-reload. */
+.config-restart-pill {
+    font-size: 0.62rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--bg-card);
+    background: var(--text-muted);
+    padding: 0.08rem 0.4rem;
+    border-radius: 8px;
+    line-height: 1.3;
+}
+/* HashMap escape-hatch notice — small grey block, no widget. */
+.config-hashmap-notice {
+    font-size: 0.8rem;
+    background: var(--badge-bg);
+    border-left: 2px solid var(--border);
+    padding: 0.4rem 0.55rem;
+    border-radius: 0 4px 4px 0;
+    color: var(--text-muted);
+}
+.config-status {
+    padding: 0.5rem 0.7rem;
+    border-radius: 4px;
+    margin-bottom: 0.7rem;
+    font-size: 0.85rem;
+}
+.config-status-info { background: var(--badge-bg); color: var(--text); }
+.config-status-success { background: rgba(46, 204, 113, 0.18); color: var(--text); border-left: 3px solid #2ecc71; }
+.config-status-warn { background: rgba(243, 156, 18, 0.18); color: var(--text); border-left: 3px solid #f39c12; }
+.config-status-error { background: rgba(192, 57, 43, 0.18); color: var(--text); border-left: 3px solid #c0392b; }
+.config-form-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+}
+
 /* Reusable progress toast for background jobs (embed, auto-tag, detect-faces).
    Floating bottom-right; sits above page content but below modals. */
 .job-toast {

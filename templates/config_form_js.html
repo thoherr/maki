@@ -1,0 +1,426 @@
+{# Config form: walks the JSON Schema returned from
+   /api/config/schema and renders a tree of form widgets. Mounted into
+   the Config tab of the Maintain dialog (templates/maintain_dialog.html).
+   Public API: window.makiConfigForm.load() — fetches schema + current
+   values and renders the form into #maintain-cfg-form. #}
+<script>
+(function() {
+    var formEl = document.getElementById('maintain-cfg-form');
+    var statusEl = document.getElementById('maintain-cfg-status');
+    if (!formEl || !statusEl) return;
+
+    var rawSchema = null;       // full JSON schema (with definitions)
+    var currentConfig = null;   // current values
+    var loaded = false;
+
+    function setStatus(msg, kind) {
+        if (!msg) { statusEl.style.display = 'none'; statusEl.textContent = ''; return; }
+        statusEl.textContent = msg;
+        statusEl.className = 'config-status config-status-' + (kind || 'info');
+        statusEl.style.display = 'block';
+    }
+
+    // Resolve `$ref` chains against schema.definitions. Schemars emits
+    // refs of the form `#/definitions/Foo` for every named type.
+    function resolveRef(node) {
+        if (!node || typeof node !== 'object') return node;
+        if (node.$ref) {
+            var name = node.$ref.replace('#/definitions/', '');
+            var def = (rawSchema.definitions || {})[name];
+            if (!def) return node; // unknown — render as best-effort
+            // Merge any overlay fields (description, etc.) onto the def
+            var merged = Object.assign({}, def);
+            for (var k in node) {
+                if (k !== '$ref') merged[k] = node[k];
+            }
+            return merged;
+        }
+        return node;
+    }
+
+    // Pretty-print a snake_case section/field name as "Snake case"
+    // for the heading / label. Preserves multi-word casing the user
+    // would expect ("Default filter", not "Default_filter").
+    function humanise(name) {
+        return name
+            .replace(/_/g, ' ')
+            .replace(/^./, function(c) { return c.toUpperCase(); });
+    }
+
+    // Type detection that handles the "type can be a string or array of
+    // strings (incl. 'null')" schemars quirk for Option<T>.
+    function nodeType(node) {
+        var t = node.type;
+        if (!t) return null;
+        if (Array.isArray(t)) {
+            // ["null", "string"] or ["null", "integer"] = optional T
+            for (var i = 0; i < t.length; i++) {
+                if (t[i] !== 'null') return t[i];
+            }
+            return null;
+        }
+        return t;
+    }
+
+    function isOptional(node) {
+        return Array.isArray(node.type) && node.type.indexOf('null') !== -1;
+    }
+
+    // Extract a value from the current config by dot-path (e.g.
+    // "preview.max_edge"). Returns undefined if any segment is missing.
+    function getValue(path) {
+        if (!currentConfig) return undefined;
+        var parts = path.split('.');
+        var cur = currentConfig;
+        for (var i = 0; i < parts.length; i++) {
+            if (cur == null || typeof cur !== 'object') return undefined;
+            cur = cur[parts[i]];
+        }
+        return cur;
+    }
+
+    function setValue(target, path, value) {
+        var parts = path.split('.');
+        var cur = target;
+        for (var i = 0; i < parts.length - 1; i++) {
+            if (cur[parts[i]] == null || typeof cur[parts[i]] !== 'object') {
+                cur[parts[i]] = {};
+            }
+            cur = cur[parts[i]];
+        }
+        cur[parts[parts.length - 1]] = value;
+    }
+
+    // Boot-time options that need a `maki serve` restart to take effect.
+    // Mirrors `needs_restart` in src/web/routes/config.rs — front-end shows
+    // the pill before save so users see it next to the field they're
+    // touching, not just in the post-save banner.
+    var BOOT_TIME = {
+        'serve.port': 1, 'serve.bind': 1, 'serve.per_page': 1,
+        'serve.stroll_neighbors': 1, 'serve.stroll_neighbors_max': 1,
+        'serve.stroll_fanout': 1, 'serve.stroll_fanout_max': 1,
+        'serve.stroll_discover_pool': 1,
+        'preview.max_edge': 1, 'preview.format': 1, 'preview.quality': 1,
+        'preview.smart_max_edge': 1, 'preview.smart_quality': 1,
+        'preview.generate_on_demand': 1,
+        'ai.model': 1, 'ai.execution_provider': 1, 'ai.model_dir': 1,
+        'browse.default_filter': 1
+    };
+
+    // Render a form-row label with optional "Restart required" pill +
+    // description from the schema's doc-comment. Returns a `<label>`
+    // wrapping element ready to receive an input child.
+    function makeLabel(path, label, description) {
+        var wrap = document.createElement('div');
+        wrap.className = 'config-row';
+        var lbl = document.createElement('label');
+        lbl.className = 'config-label';
+        lbl.textContent = label;
+        if (BOOT_TIME[path]) {
+            var pill = document.createElement('span');
+            pill.className = 'config-restart-pill';
+            pill.textContent = 'restart required';
+            pill.title = 'Changes to this field take effect only after restarting `maki serve`.';
+            lbl.appendChild(pill);
+        }
+        wrap.appendChild(lbl);
+        if (description) {
+            var help = document.createElement('div');
+            help.className = 'config-help';
+            help.textContent = description;
+            wrap.appendChild(help);
+        }
+        return wrap;
+    }
+
+    // Widget builders. Each returns the input element and registers a
+    // collector under `path` so collectValues() can read it back. We
+    // accumulate collectors here rather than walking the DOM at save
+    // time so type round-tripping (number → number, not "5") is exact.
+    var collectors = {};
+
+    function buildEnumSelect(path, node, current) {
+        var sel = document.createElement('select');
+        sel.className = 'config-select';
+        // Schemars emits an `enum` array with the variants. Some unions
+        // also produce `oneOf` shapes — fall back to that if `enum`
+        // isn't directly present.
+        var values = node.enum;
+        if (!values && Array.isArray(node.oneOf)) {
+            values = node.oneOf
+                .map(function(v) { return v.const; })
+                .filter(function(v) { return v != null; });
+        }
+        if (!values) values = [];
+        if (isOptional(node)) {
+            var opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = '(unset)';
+            sel.appendChild(opt);
+        }
+        values.forEach(function(v) {
+            var opt = document.createElement('option');
+            opt.value = String(v);
+            opt.textContent = String(v);
+            sel.appendChild(opt);
+        });
+        if (current != null) sel.value = String(current);
+        else if (isOptional(node)) sel.value = '';
+        collectors[path] = function() {
+            var v = sel.value;
+            return v === '' ? null : v;
+        };
+        return sel;
+    }
+
+    function buildBoolCheckbox(path, current) {
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'config-checkbox';
+        cb.checked = !!current;
+        collectors[path] = function() { return cb.checked; };
+        return cb;
+    }
+
+    function buildNumberInput(path, node, current) {
+        var input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'config-input';
+        if (typeof node.minimum === 'number') input.min = String(node.minimum);
+        if (typeof node.maximum === 'number') input.max = String(node.maximum);
+        if (current != null) input.value = String(current);
+        var isInt = nodeType(node) === 'integer';
+        collectors[path] = function() {
+            var v = input.value.trim();
+            if (v === '') return isOptional(node) ? null : (isInt ? 0 : 0.0);
+            return isInt ? parseInt(v, 10) : parseFloat(v);
+        };
+        return input;
+    }
+
+    function buildTextInput(path, node, current) {
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'config-input';
+        if (current != null) input.value = String(current);
+        collectors[path] = function() {
+            var v = input.value;
+            if (v === '' && isOptional(node)) return null;
+            return v;
+        };
+        return input;
+    }
+
+    // Vec<String> → chip list. Same UX as the import-dialog tag picker
+    // would be ideal but heavier; for phase 1 we use a comma-separated
+    // textarea — simple, copy-paste friendly, and unambiguous for the
+    // small lists ([ai].labels, [import].auto_tags, [vlm].models, etc.).
+    function buildStringList(path, current) {
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'config-input';
+        input.placeholder = 'comma-separated';
+        if (Array.isArray(current)) input.value = current.join(', ');
+        collectors[path] = function() {
+            var raw = input.value.trim();
+            if (raw === '') return [];
+            return raw.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        };
+        return input;
+    }
+
+    // HashMap<String, T> — open-ended sub-table like
+    // `[import.profiles.<name>]`. Phase 1 escape hatch: render as a
+    // read-only summary + a hint to edit `maki.toml` directly.
+    function buildHashMapNotice(path, current) {
+        var div = document.createElement('div');
+        div.className = 'config-hashmap-notice';
+        var keys = current && typeof current === 'object' ? Object.keys(current) : [];
+        var msg = keys.length === 0
+            ? 'No entries.'
+            : keys.length + ' entry: ' + keys.join(', ');
+        if (keys.length > 1) msg = keys.length + ' entries: ' + keys.join(', ');
+        div.innerHTML =
+            '<div class="config-help">' + msg + '</div>' +
+            '<div class="config-help" style="opacity:0.7">' +
+            'Open-ended sub-tables aren\'t editable from the form yet — ' +
+            'edit <code>maki.toml</code> directly to add or rename entries here.' +
+            '</div>';
+        // Pass the value through unchanged on save — front-end can't
+        // edit it, but we shouldn't drop it either.
+        collectors[path] = function() {
+            return current || {};
+        };
+        return div;
+    }
+
+    // The walker. `node` is a (possibly $ref-resolved) schema node,
+    // `path` is the dot-path used by getValue/setValue, `parent` is the
+    // DOM container to append to. Recurses into `properties` for object
+    // types; the entry point is the top-level CatalogConfig object.
+    function walk(node, path, parent, label) {
+        node = resolveRef(node);
+        var t = nodeType(node);
+        var current = getValue(path);
+        var description = node.description;
+
+        if (t === 'object' && node.properties) {
+            // Top level: no wrapper. Sub-section: collapsible group.
+            var container;
+            if (path === '') {
+                container = parent;
+            } else {
+                var section = document.createElement('details');
+                section.className = 'config-section';
+                section.open = true;
+                var summary = document.createElement('summary');
+                summary.className = 'config-section-title';
+                summary.textContent = '[' + label + ']';
+                section.appendChild(summary);
+                if (description) {
+                    var help = document.createElement('div');
+                    help.className = 'config-help';
+                    help.textContent = description;
+                    section.appendChild(help);
+                }
+                parent.appendChild(section);
+                container = section;
+            }
+            // Iterate properties in declaration order (schemars preserves it
+            // via an ordered map).
+            var props = node.properties;
+            // Some nested schemars-generated definitions also have
+            // `additionalProperties` — those are HashMap fields. Render
+            // a single notice covering all of them at the section level.
+            Object.keys(props).forEach(function(key) {
+                var sub = resolveRef(props[key]);
+                var subPath = path === '' ? key : path + '.' + key;
+                walk(sub, subPath, container, key);
+            });
+            // additionalProperties → HashMap value. Render the notice if
+            // any entries exist.
+            if (node.additionalProperties && typeof node.additionalProperties === 'object') {
+                var keys = current && typeof current === 'object'
+                    ? Object.keys(current).filter(function(k) { return !(k in (node.properties || {})); })
+                    : [];
+                if (keys.length > 0) {
+                    var hm = {};
+                    keys.forEach(function(k) { hm[k] = current[k]; });
+                    container.appendChild(buildHashMapNotice(path + '.<extras>', hm));
+                }
+            }
+            return;
+        }
+
+        // Leaf field — render label + widget.
+        var wrap = makeLabel(path, humanise(label || path), description);
+        var widget;
+        if (t === 'boolean') {
+            widget = buildBoolCheckbox(path, current);
+            // Move the checkbox to the front of the label for aesthetics.
+            wrap.querySelector('.config-label').insertBefore(widget, wrap.querySelector('.config-label').firstChild);
+        } else if (t === 'integer' || t === 'number') {
+            widget = buildNumberInput(path, node, current);
+            wrap.appendChild(widget);
+        } else if (t === 'string') {
+            if (Array.isArray(node.enum) || Array.isArray(node.oneOf)) {
+                widget = buildEnumSelect(path, node, current);
+            } else {
+                widget = buildTextInput(path, node, current);
+            }
+            wrap.appendChild(widget);
+        } else if (t === 'array') {
+            // For now: only Vec<String> is supported. Other array types
+            // fall through to a hashmap-style notice.
+            var items = resolveRef(node.items || {});
+            if (nodeType(items) === 'string') {
+                widget = buildStringList(path, current);
+                wrap.appendChild(widget);
+            } else {
+                wrap.appendChild(buildHashMapNotice(path, current));
+            }
+        } else {
+            wrap.appendChild(buildHashMapNotice(path, current));
+        }
+        parent.appendChild(wrap);
+    }
+
+    // Walk the `currentConfig` tree, applying every collector that has
+    // a registered path. Collectors return values; we set them on a
+    // copy of the original config so untouched sub-trees (HashMap
+    // contents, fields not yet supported by the walker) are preserved.
+    function collectValues() {
+        var out = JSON.parse(JSON.stringify(currentConfig || {}));
+        Object.keys(collectors).forEach(function(path) {
+            if (path.indexOf('<extras>') !== -1) return; // hashmap notice — leave as-is
+            var v = collectors[path]();
+            // Strip null leaves (matches the serde `skip_serializing_if`
+            // convention for Option<T>; sending explicit null can confuse
+            // the typed deserializer for non-Option fields).
+            setValue(out, path, v);
+        });
+        return out;
+    }
+
+    function render() {
+        formEl.innerHTML = '';
+        collectors = {};
+        walk(rawSchema, '', formEl, '');
+        var actions = document.createElement('div');
+        actions.className = 'config-form-actions';
+        actions.innerHTML =
+            '<button type="button" class="batch-btn" id="maintain-cfg-reload">Reload from disk</button>' +
+            '<button type="button" class="batch-btn batch-btn-primary" id="maintain-cfg-save">Save</button>';
+        formEl.appendChild(actions);
+        document.getElementById('maintain-cfg-reload').addEventListener('click', loadAndRender);
+        document.getElementById('maintain-cfg-save').addEventListener('click', save);
+    }
+
+    function loadAndRender() {
+        setStatus('Loading…', 'info');
+        Promise.all([
+            fetch('/api/config').then(function(r) { return r.ok ? r.json() : Promise.reject('GET /api/config failed'); }),
+            fetch('/api/config/schema').then(function(r) { return r.ok ? r.json() : Promise.reject('GET /api/config/schema failed'); })
+        ]).then(function(results) {
+            currentConfig = results[0].config;
+            rawSchema = results[1];
+            loaded = true;
+            setStatus(null);
+            render();
+        }).catch(function(e) {
+            setStatus('Could not load config: ' + e, 'error');
+        });
+    }
+
+    function save() {
+        var body = { config: collectValues() };
+        setStatus('Saving…', 'info');
+        fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        }).then(function(r) {
+            if (!r.ok) return r.text().then(function(t) { throw new Error(t || ('HTTP ' + r.status)); });
+            return r.json();
+        }).then(function(data) {
+            currentConfig = body.config;
+            if (data.restart_required) {
+                setStatus('Saved. Some changes need a `maki serve` restart to take effect.', 'warn');
+            } else {
+                setStatus('Saved. Hot-reload-safe options take effect immediately.', 'success');
+            }
+        }).catch(function(e) {
+            setStatus('Save failed: ' + e.message, 'error');
+        });
+    }
+
+    window.makiConfigForm = {
+        load: function() {
+            // Always reload — the on-disk file might have changed since
+            // last open, and the user expects the form to reflect reality.
+            loadAndRender();
+        },
+        isLoaded: function() { return loaded; }
+    };
+})();
+</script>

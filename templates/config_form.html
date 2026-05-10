@@ -1,0 +1,9 @@
+{# Config form fragment — rendered by config_form_js.html into the
+   Maintain dialog's Config tab. Two top-level zones:
+   - #maintain-cfg-form: the auto-generated form. JS populates this on
+     first show by walking the JSON Schema returned from
+     /api/config/schema and binding the values from /api/config.
+   - #maintain-cfg-status: inline message area for save errors and the
+     "restart required" banner. #}
+<div id="maintain-cfg-status" class="config-status" style="display:none"></div>
+<div id="maintain-cfg-form"></div>
