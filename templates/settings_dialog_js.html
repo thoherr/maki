@@ -1,0 +1,45 @@
+{# Settings dialog controller. Public API:
+     window.makiSettings.openDialog()  — show + load (or reload) the form
+     window.makiSettings.closeDialog() — hide
+   Mirrors makiMaintain so the nav handler in base.html stays uniform.
+   The actual form rendering and validation lives in the schema walker
+   in config_form_js.html; this controller is just open/close + Escape +
+   click-outside dismiss. #}
+<script>
+(function() {
+    var overlay = document.getElementById('settings-overlay');
+    if (!overlay) return;
+    var closeBtn = document.getElementById('settings-close');
+
+    function open() {
+        overlay.style.display = 'flex';
+        if (window.makiConfigForm && window.makiConfigForm.load) {
+            window.makiConfigForm.load();
+        }
+    }
+    function close() {
+        overlay.style.display = 'none';
+    }
+    closeBtn.addEventListener('click', close);
+    overlay.addEventListener('click', function(e) {
+        if (e.target === overlay) close();
+    });
+    // Scope the Escape handler to this overlay's open state so it doesn't
+    // fight with the Maintain dialog's identical handler when both are
+    // wired into the same document.
+    document.addEventListener('keydown', function(e) {
+        if (overlay.style.display !== 'none' && e.key === 'Escape') {
+            // Don't close when an in-form input might be capturing the key
+            // (browsers like Safari send Escape to inputs to clear them);
+            // the form-level click-outside or Close button is the formal
+            // way to dismiss.
+            close();
+        }
+    });
+
+    window.makiSettings = {
+        openDialog: open,
+        closeDialog: close
+    };
+})();
+</script>

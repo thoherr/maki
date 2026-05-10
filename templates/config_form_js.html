@@ -373,7 +373,36 @@
             '<button type="button" class="batch-btn batch-btn-primary" id="maintain-cfg-save">Save</button>';
         formEl.appendChild(actions);
         document.getElementById('maintain-cfg-reload').addEventListener('click', loadAndRender);
-        document.getElementById('maintain-cfg-save').addEventListener('click', save);
+        var saveBtn = document.getElementById('maintain-cfg-save');
+        saveBtn.addEventListener('click', save);
+        // Focus Save by default — the user opened the dialog to confirm
+        // a settings change, and Enter on a focused button is a familiar
+        // "commit" gesture. preventScroll so a long form doesn't jump.
+        try { saveBtn.focus({preventScroll: true}); } catch (_) { saveBtn.focus(); }
+    }
+
+    // Floating toast for save feedback. Appears bottom-right (out of the
+    // way of the modal-open form), auto-dismisses after a few seconds.
+    // Reuses the .job-toast styling so it visually matches Embed /
+    // Auto-tag completion notifications. We don't pipe through the
+    // shared makiJob.watch helper because there's no SSE feed for a
+    // synchronous save — just a one-shot success / error message.
+    function showToast(text, kind) {
+        var existing = document.getElementById('config-save-toast');
+        if (existing) existing.remove();
+        var toast = document.createElement('div');
+        toast.id = 'config-save-toast';
+        toast.className = 'job-toast config-save-toast config-save-toast-' + (kind || 'success');
+        toast.style.display = 'block';
+        toast.innerHTML =
+            '<div class="job-toast-label">' + (kind === 'error' ? 'Save failed' : 'Settings saved') + '</div>' +
+            '<div class="job-toast-status">' + escHtml(text) + '</div>';
+        document.body.appendChild(toast);
+        var ms = kind === 'error' ? 8000 : 4000;
+        setTimeout(function() { if (toast.parentNode) toast.remove(); }, ms);
+    }
+    function escHtml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     function loadAndRender() {
@@ -404,13 +433,19 @@
             return r.json();
         }).then(function(data) {
             currentConfig = body.config;
+            // Inline status disappears (clean form); toast carries the
+            // confirmation so the user sees it whether or not the
+            // settings dialog is still in front. Restart-required gets
+            // a warn-coloured toast so it's distinguishable at a glance.
+            setStatus(null);
             if (data.restart_required) {
-                setStatus('Saved. Some changes need a `maki serve` restart to take effect.', 'warn');
+                showToast('Some changes need a `maki serve` restart to take effect.', 'warn');
             } else {
-                setStatus('Saved. Hot-reload-safe options take effect immediately.', 'success');
+                showToast('Hot-reload-safe options applied immediately.', 'success');
             }
         }).catch(function(e) {
-            setStatus('Save failed: ' + e.message, 'error');
+            setStatus(null);
+            showToast(e.message, 'error');
         });
     }
 

@@ -5033,6 +5033,18 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     padding-top: 0.75rem;
     border-top: 1px solid var(--border);
 }
+/* One-shot save-feedback toast for the Settings dialog. Reuses the
+   .job-toast chrome (bottom-right, fixed, layered above the dialog)
+   but adds a coloured left edge to differentiate success/warn/error
+   without piping through the shared makiJob.watch SSE plumbing — a
+   synchronous save doesn't need a live feed. */
+.config-save-toast {
+    border-left-width: 4px;
+    border-left-style: solid;
+}
+.config-save-toast-success { border-left-color: #2ecc71; }
+.config-save-toast-warn    { border-left-color: #f39c12; }
+.config-save-toast-error   { border-left-color: #c0392b; }
 
 /* Reusable progress toast for background jobs (embed, auto-tag, detect-faces).
    Floating bottom-right; sits above page content but below modals. */

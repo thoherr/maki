@@ -57,13 +57,6 @@
             p.style.display = on ? '' : 'none';
             p.classList.toggle('active', on);
         });
-        // Lazy-load the config form on first switch to the Config tab —
-        // walking the schema and rendering ~12 sections × ~5 fields is
-        // cheap, but no point doing it before the user actually navigates
-        // there.
-        if (name === 'config' && window.makiConfigForm) {
-            window.makiConfigForm.load();
-        }
     }
 
     tabs.forEach(function(t) {

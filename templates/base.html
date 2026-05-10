@@ -42,6 +42,7 @@
             <a href="#" id="nav-maintain-link" class="nav-action">
                 Maintain<span id="nav-maintain-badge" class="nav-import-badge" style="display:none" title="Maintenance job in progress">●</span>
             </a>
+            <a href="#" id="nav-settings-link" class="nav-action" title="Edit maki.toml in the browser">Settings</a>
         </div>
         <button class="theme-toggle" id="help-toggle" title="Keyboard shortcuts (?)">?</button>
         <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">
@@ -147,6 +148,8 @@
 {% include "import_dialog_js.html" %}
 {% include "maintain_dialog.html" %}
 {% include "maintain_dialog_js.html" %}
+{% include "settings_dialog.html" %}
+{% include "settings_dialog_js.html" %}
 {% include "config_form_js.html" %}
 {% include "job_toast.html" %}
 {% include "job_toast_js.html" %}
@@ -271,6 +274,14 @@
             } else if (window.makiMaintain) {
                 window.makiMaintain.openDialog();
             }
+        });
+    }
+
+    var settingsLink = document.getElementById('nav-settings-link');
+    if (settingsLink) {
+        settingsLink.addEventListener('click', function(e) {
+            e.preventDefault();
+            if (window.makiSettings) window.makiSettings.openDialog();
         });
     }
 

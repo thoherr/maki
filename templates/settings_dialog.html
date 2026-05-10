@@ -1,0 +1,24 @@
+{# Settings dialog — own modal hosting the schema-driven config form
+   (split off from the Maintain dialog in v4.5.5; was a tab there
+   originally but Settings and the maintenance ops have very different
+   cadences and the user wanted them visually separated). The dialog
+   itself is intentionally close to the Maintain modal in chrome — same
+   width, same close button, same overlay backdrop — so the two feel
+   like siblings. #}
+<div id="settings-overlay" class="import-overlay" style="display:none">
+    <div class="import-modal" id="settings-modal" role="dialog" aria-labelledby="settings-title" aria-modal="true">
+        <div class="import-header">
+            <h2 id="settings-title">Settings</h2>
+            <button type="button" class="import-close" id="settings-close" aria-label="Close">&times;</button>
+        </div>
+        <p class="maintain-blurb">
+            Edit <code>maki.toml</code> directly in the browser. Field types
+            are validated against the config schema; the previous file is
+            backed up to <code>maki.toml.bak</code> before each save. Fields
+            tagged <em>restart required</em> only take effect after
+            restarting <code>maki serve</code> &mdash; hot-reload-safe
+            options apply immediately.
+        </p>
+        {% include "config_form.html" %}
+    </div>
+</div>

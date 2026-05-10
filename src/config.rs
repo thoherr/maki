@@ -6,7 +6,7 @@
 //! filesystem looking for `maki.toml`; `load_config` is the convenience
 //! helper most command handlers use.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -165,8 +165,12 @@ pub struct ImportConfig {
     pub embeddings: bool,
     #[serde(default)]
     pub descriptions: bool,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub profiles: HashMap<String, ImportProfile>,
+    /// BTreeMap (not HashMap) so the saved file lists profiles in
+    /// alphabetical order, deterministically across saves — HashMap
+    /// iteration is randomised, which made the file diff-noisy under
+    /// version control.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<String, ImportProfile>,
 }
 
 /// A named import profile that overrides `[import]` defaults.
@@ -200,19 +204,22 @@ impl ImportConfig {
             smart_previews: profile.smart_previews.unwrap_or(self.smart_previews),
             embeddings: profile.embeddings.unwrap_or(self.embeddings),
             descriptions: profile.descriptions.unwrap_or(self.descriptions),
-            profiles: HashMap::new(),
+            profiles: BTreeMap::new(),
         })
     }
 }
 
+#[allow(dead_code)] // pre-v4.5.5 these powered `skip_serializing_if`; kept as tidy equality helpers for tests / future use.
 fn is_default_preview(p: &PreviewConfig) -> bool {
     *p == PreviewConfig::default()
 }
 
+#[allow(dead_code)] // pre-v4.5.5 these powered `skip_serializing_if`; kept as tidy equality helpers for tests / future use.
 fn is_default_serve(s: &ServeConfig) -> bool {
     *s == ServeConfig::default()
 }
 
+#[allow(dead_code)] // pre-v4.5.5 these powered `skip_serializing_if`; kept as tidy equality helpers for tests / future use.
 fn is_default_import(i: &ImportConfig) -> bool {
     *i == ImportConfig::default()
 }
@@ -245,6 +252,7 @@ impl Default for GroupConfig {
     }
 }
 
+#[allow(dead_code)] // pre-v4.5.5 these powered `skip_serializing_if`; kept as tidy equality helpers for tests / future use.
 fn is_default_group(g: &GroupConfig) -> bool {
     *g == GroupConfig::default()
 }
@@ -256,6 +264,7 @@ pub struct DedupConfig {
     pub prefer: Option<String>,
 }
 
+#[allow(dead_code)] // pre-v4.5.5 these powered `skip_serializing_if`; kept as tidy equality helpers for tests / future use.
 fn is_default_dedup(d: &DedupConfig) -> bool {
     *d == DedupConfig::default()
 }
@@ -267,6 +276,7 @@ pub struct VerifyConfig {
     pub max_age_days: Option<u64>,
 }
 
+#[allow(dead_code)] // pre-v4.5.5 these powered `skip_serializing_if`; kept as tidy equality helpers for tests / future use.
 fn is_default_verify(v: &VerifyConfig) -> bool {
     *v == VerifyConfig::default()
 }
@@ -352,6 +362,7 @@ impl Default for AiConfig {
     }
 }
 
+#[allow(dead_code)] // pre-v4.5.5 these powered `skip_serializing_if`; kept as tidy equality helpers for tests / future use.
 fn is_default_ai(a: &AiConfig) -> bool {
     *a == AiConfig::default()
 }
@@ -434,9 +445,11 @@ pub struct VlmConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<String>,
 
-    /// Per-model parameter overrides.
-    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
-    pub model_config: std::collections::HashMap<String, VlmModelConfig>,
+    /// Per-model parameter overrides. BTreeMap so the saved file lists
+    /// model entries in deterministic alphabetical order (HashMap was
+    /// diff-noisy under version control across saves).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_config: BTreeMap<String, VlmModelConfig>,
 }
 
 fn default_vlm_endpoint() -> String {
@@ -484,7 +497,7 @@ impl Default for VlmConfig {
             top_k: 0,
             repeat_penalty: 0.0,
             models: Vec::new(),
-            model_config: std::collections::HashMap::new(),
+            model_config: BTreeMap::new(),
         }
     }
 }
@@ -524,6 +537,7 @@ impl VlmConfig {
     }
 }
 
+#[allow(dead_code)] // pre-v4.5.5 these powered `skip_serializing_if`; kept as tidy equality helpers for tests / future use.
 fn is_default_vlm(v: &VlmConfig) -> bool {
     *v == VlmConfig::default()
 }
@@ -568,6 +582,7 @@ impl Default for ContactSheetDefaults {
     }
 }
 
+#[allow(dead_code)] // pre-v4.5.5 these powered `skip_serializing_if`; kept as tidy equality helpers for tests / future use.
 fn is_default_contact_sheet(c: &ContactSheetDefaults) -> bool {
     *c == ContactSheetDefaults::default()
 }
@@ -596,6 +611,7 @@ impl Default for WritebackConfig {
     }
 }
 
+#[allow(dead_code)] // pre-v4.5.5 these powered `skip_serializing_if`; kept as tidy equality helpers for tests / future use.
 fn is_default_writeback(w: &WritebackConfig) -> bool {
     *w == WritebackConfig::default()
 }
@@ -615,6 +631,7 @@ pub struct CliDefaults {
     pub verbose: bool,
 }
 
+#[allow(dead_code)] // pre-v4.5.5 these powered `skip_serializing_if`; kept as tidy equality helpers for tests / future use.
 fn is_default_cli(c: &CliDefaults) -> bool {
     *c == CliDefaults::default()
 }
@@ -651,38 +668,56 @@ impl Default for BrowseConfig {
     }
 }
 
+#[allow(dead_code)] // pre-v4.5.5 these powered `skip_serializing_if`; kept as tidy equality helpers for tests / future use.
 fn is_default_browse(b: &BrowseConfig) -> bool {
     *b == BrowseConfig::default()
 }
 
 /// Catalog configuration stored in maki.toml.
+///
+/// **Section serialisation**: Pre-v4.5.5 every section had
+/// `skip_serializing_if = "is_default_*"` so an unmodified default
+/// section was omitted from the saved file. That made the on-disk file
+/// shorter but had two failure modes: (1) saving from the web Config
+/// editor would silently omit explicit-default values like
+/// `[writeback] enabled = false`, leaving the user uncertain whether
+/// the click took effect; (2) once the user customised any field in a
+/// previously-skipped section, that section's position in the file
+/// changed (skipped sections leave a gap) — diff-noisy under version
+/// control.
+///
+/// Now every section is always emitted in declaration order. Files are
+/// longer but byte-identical save-to-save when nothing's changed, and
+/// the editor's "save" produces a file the user can recognise as the
+/// state they configured. Optional fields inside a section still skip
+/// when `None` — only top-level sections lost the per-section skip.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CatalogConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_volume: Option<Uuid>,
-    #[serde(default, skip_serializing_if = "is_default_preview")]
+    #[serde(default)]
     pub preview: PreviewConfig,
-    #[serde(default, skip_serializing_if = "is_default_serve")]
+    #[serde(default)]
     pub serve: ServeConfig,
-    #[serde(default, skip_serializing_if = "is_default_import")]
+    #[serde(default)]
     pub import: ImportConfig,
-    #[serde(default, skip_serializing_if = "is_default_dedup")]
+    #[serde(default)]
     pub dedup: DedupConfig,
-    #[serde(default, skip_serializing_if = "is_default_verify")]
+    #[serde(default)]
     pub verify: VerifyConfig,
-    #[serde(default, skip_serializing_if = "is_default_ai")]
+    #[serde(default)]
     pub ai: AiConfig,
-    #[serde(default, skip_serializing_if = "is_default_contact_sheet")]
+    #[serde(default)]
     pub contact_sheet: ContactSheetDefaults,
-    #[serde(default, skip_serializing_if = "is_default_vlm")]
+    #[serde(default)]
     pub vlm: VlmConfig,
-    #[serde(default, skip_serializing_if = "is_default_browse")]
+    #[serde(default)]
     pub browse: BrowseConfig,
-    #[serde(default, skip_serializing_if = "is_default_writeback")]
+    #[serde(default)]
     pub writeback: WritebackConfig,
-    #[serde(default, skip_serializing_if = "is_default_cli")]
+    #[serde(default)]
     pub cli: CliDefaults,
-    #[serde(default, skip_serializing_if = "is_default_group")]
+    #[serde(default)]
     pub group: GroupConfig,
 }
 
@@ -814,8 +849,18 @@ mod tests {
     fn serialize_default_config() {
         let config = CatalogConfig::default();
         let toml_str = toml::to_string_pretty(&config).unwrap();
-        // Default config should be empty (all fields skipped)
-        assert!(toml_str.trim().is_empty(), "got: {toml_str}");
+        // Pre-v4.5.5 every section was skipped via `skip_serializing_if =
+        // is_default_*`, so this test asserted an empty string. Now every
+        // section is always emitted (so save round-trips are deterministic
+        // and explicit-default values like `enabled = false` survive a
+        // round-trip from the web Config editor). Sanity-check that the
+        // output is non-empty and has the expected canonical section order.
+        assert!(!toml_str.is_empty());
+        let preview_pos = toml_str.find("[preview]").expect("preview section");
+        let serve_pos = toml_str.find("[serve]").expect("serve section");
+        let writeback_pos = toml_str.find("[writeback]").expect("writeback section");
+        assert!(preview_pos < serve_pos, "preview before serve");
+        assert!(serve_pos < writeback_pos, "serve before writeback");
     }
 
     #[test]
@@ -1142,6 +1187,69 @@ max_edge = 1000
     /// expand a clean `0.1` into `0.10000000149011612` etc. The fix was to
     /// store the values as f64 — TOML's native float type — instead of f32,
     /// which loses precision on cast and exposes that loss when serialised.
+    /// Regression: pre-v4.5.5 every section had `skip_serializing_if =
+    /// "is_default_*"`, which meant a freshly-loaded-and-resaved file
+    /// could differ from a multiply-saved file (because as the user
+    /// touched sections they'd flip from "skipped" to "present" and
+    /// the file's section order would change). And `HashMap::iter()`
+    /// is randomised, so multiple saves of the same multi-profile
+    /// config produced files in different orders — diff-noisy under
+    /// version control.
+    ///
+    /// Now: every section is always emitted in declaration order,
+    /// named sub-tables (`profiles`, `model_config`) are BTreeMap so
+    /// they sort alphabetically, and a save → load → save round-trip
+    /// is byte-identical.
+    #[test]
+    fn save_load_save_is_byte_identical() {
+        // Construct a config that exercises every section and a
+        // multi-entry HashMap-shaped sub-table.
+        let mut cfg = CatalogConfig::default();
+        cfg.import.profiles.insert(
+            "zebra".to_string(),
+            ImportProfile { auto_tags: Some(vec!["z".into()]), ..Default::default() },
+        );
+        cfg.import.profiles.insert(
+            "alpha".to_string(),
+            ImportProfile { auto_tags: Some(vec!["a".into()]), ..Default::default() },
+        );
+
+        // First save.
+        let s1 = toml::to_string_pretty(&cfg).unwrap();
+        // Load and re-save — the round-trip must be deterministic.
+        let parsed: CatalogConfig = toml::from_str(&s1).unwrap();
+        let s2 = toml::to_string_pretty(&parsed).unwrap();
+        // Re-save again — and a third time — to catch HashMap-style
+        // randomness if it crept back in.
+        let s3 = toml::to_string_pretty(&parsed).unwrap();
+        let parsed2: CatalogConfig = toml::from_str(&s2).unwrap();
+        let s4 = toml::to_string_pretty(&parsed2).unwrap();
+
+        assert_eq!(s1, s2, "save → load → save not byte-identical");
+        assert_eq!(s2, s3, "second save of same in-memory config differs");
+        assert_eq!(s3, s4, "save → load → save chain not stable");
+
+        // Profiles must appear in alphabetical order (BTreeMap), not
+        // randomised insertion order.
+        let alpha_pos = s1.find("[import.profiles.alpha]").expect("alpha section present");
+        let zebra_pos = s1.find("[import.profiles.zebra]").expect("zebra section present");
+        assert!(alpha_pos < zebra_pos, "expected profiles in alphabetical order: {s1}");
+    }
+
+    /// Regression: an explicit `false` for a default-`false` bool used
+    /// to disappear from the saved file, leaving the user uncertain
+    /// whether their click took effect. With per-section
+    /// `skip_serializing_if` removed, the section is always present
+    /// and the explicit value is round-tripped.
+    #[test]
+    fn explicit_false_default_round_trips() {
+        let cfg = CatalogConfig::default();
+        // [writeback] enabled has default = false. Confirm it's emitted.
+        let s = toml::to_string_pretty(&cfg).unwrap();
+        assert!(s.contains("[writeback]"), "writeback section missing: {s}");
+        assert!(s.contains("enabled = false"), "enabled = false not in saved output: {s}");
+    }
+
     /// Regression: editing config values via the web form (which round-trips
     /// every f-typed field through serde + toml::to_string_pretty) must not
     /// expand a clean `0.2` into `0.20000000298023224` etc. The fix was to
@@ -1216,7 +1324,7 @@ skip = ["audio"]
             embeddings: false,
             descriptions: false,
             profiles: {
-                let mut m = std::collections::HashMap::new();
+                let mut m = BTreeMap::new();
                 m.insert("card".to_string(), ImportProfile {
                     auto_tags: Some(vec!["from-card".to_string()]),
                     smart_previews: Some(true),
