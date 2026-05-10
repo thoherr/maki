@@ -126,7 +126,8 @@ fn suggest_tags_inner(
         }
     }
 
-    let threshold = state.ai_config.threshold;
+    // Config carries f64 (TOML round-trips cleanly that way); classify() takes f32.
+    let threshold = state.ai_config.threshold as f32;
     let suggestions = model.classify(&image_emb, &label_list, &label_embs, threshold);
 
     let existing: std::collections::HashSet<String> = details
@@ -276,7 +277,7 @@ fn batch_auto_tag_inner(
         (labels, embs)
     };
 
-    let threshold = state.ai_config.threshold;
+    let threshold = state.ai_config.threshold as f32;
     let service = state.asset_service();
     let mut resp = BatchAutoTagResponse {
         succeeded: 0,

@@ -109,7 +109,8 @@ pub async fn batch_detect_faces(
     let state2 = state.clone();
     let job_for_task = job.clone();
     let exec_provider = state.ai_config.execution_provider.clone();
-    let min_conf = state.ai_config.face_min_confidence;
+    // Config carries f64 (TOML round-trips cleanly that way); detector API takes f32.
+    let min_conf = state.ai_config.face_min_confidence as f32;
 
     tokio::spawn(async move {
         let job_inner = job_for_task.clone();
@@ -183,7 +184,7 @@ fn detect_faces_inner(state: &AppState, asset_ids: &[String]) -> Result<serde_js
     let result = service.detect_faces(
         asset_ids,
         &mut detector,
-        state.ai_config.face_min_confidence,
+        state.ai_config.face_min_confidence as f32,
         true,
         true,
         |_, _, _| {},
@@ -500,8 +501,8 @@ pub async fn cluster_faces_api(
         let catalog = state.catalog()?;
         let _ = crate::face_store::FaceStore::initialize(catalog.conn());
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
-        let threshold = state.ai_config.face_cluster_threshold;
-        let min_confidence = state.ai_config.face_min_confidence;
+        let threshold = state.ai_config.face_cluster_threshold as f32;
+        let min_confidence = state.ai_config.face_min_confidence as f32;
         let result = face_store.auto_cluster(threshold, min_confidence, None)?;
         let _ = face_store.save_all_yaml(&state.catalog_root);
         state.dropdown_cache.invalidate_people();

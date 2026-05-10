@@ -277,7 +277,7 @@ pub struct AiConfig {
     #[serde(default = "default_ai_model")]
     pub model: String,
     #[serde(default = "default_ai_threshold")]
-    pub threshold: f32,
+    pub threshold: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub labels: Option<String>,
     #[serde(default = "default_ai_model_dir")]
@@ -285,9 +285,9 @@ pub struct AiConfig {
     #[serde(default = "default_ai_prompt")]
     pub prompt: String,
     #[serde(default = "default_face_cluster_threshold")]
-    pub face_cluster_threshold: f32,
+    pub face_cluster_threshold: f64,
     #[serde(default = "default_face_min_confidence")]
-    pub face_min_confidence: f32,
+    pub face_min_confidence: f64,
     /// Execution provider for ONNX inference: "auto", "cpu", "coreml".
     /// "auto" selects the best available provider for the platform.
     #[serde(default = "default_execution_provider")]
@@ -305,7 +305,7 @@ fn default_ai_model() -> String {
     "siglip-vit-b16-256".to_string()
 }
 
-fn default_ai_threshold() -> f32 {
+fn default_ai_threshold() -> f64 {
     0.1
 }
 
@@ -321,7 +321,7 @@ fn default_ai_prompt() -> String {
     "a photograph of {}".to_string()
 }
 
-fn default_face_cluster_threshold() -> f32 {
+fn default_face_cluster_threshold() -> f64 {
     // Tuned for the aligned FP32 ArcFace pipeline. Intra-person cosine
     // similarity typically falls in 0.5–0.9; inter-person similarity is
     // negative-to-slightly-positive. 0.35 sits near the valley between
@@ -332,7 +332,7 @@ fn default_face_cluster_threshold() -> f32 {
     0.35
 }
 
-fn default_face_min_confidence() -> f32 {
+fn default_face_min_confidence() -> f64 {
     0.7
 }
 
@@ -363,13 +363,13 @@ fn is_default_ai(a: &AiConfig) -> bool {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
 pub struct VlmModelConfig {
     pub max_tokens: Option<u32>,
-    pub temperature: Option<f32>,
+    pub temperature: Option<f64>,
     pub timeout: Option<u32>,
     pub max_image_edge: Option<u32>,
     pub num_ctx: Option<u32>,
-    pub top_p: Option<f32>,
+    pub top_p: Option<f64>,
     pub top_k: Option<u32>,
-    pub repeat_penalty: Option<f32>,
+    pub repeat_penalty: Option<f64>,
     pub prompt: Option<String>,
 }
 
@@ -402,7 +402,7 @@ pub struct VlmConfig {
 
     /// Sampling temperature (0.0 = deterministic, 1.0+ = creative).
     #[serde(default = "default_vlm_temperature")]
-    pub temperature: f32,
+    pub temperature: f64,
 
     /// Concurrent requests (for servers that handle parallelism).
     #[serde(default = "default_vlm_concurrency")]
@@ -419,7 +419,7 @@ pub struct VlmConfig {
 
     /// Nucleus sampling threshold. 0.0 = disabled (use temperature only).
     #[serde(default)]
-    pub top_p: f32,
+    pub top_p: f64,
 
     /// Top-K sampling. 0 = disabled.
     #[serde(default)]
@@ -427,7 +427,7 @@ pub struct VlmConfig {
 
     /// Repeat penalty. 0.0 = disabled.
     #[serde(default)]
-    pub repeat_penalty: f32,
+    pub repeat_penalty: f64,
 
     /// Additional models available for selection in the web UI.
     /// The default `model` is always included as the first option.
@@ -459,7 +459,7 @@ fn default_vlm_mode() -> String {
     "describe".to_string()
 }
 
-fn default_vlm_temperature() -> f32 {
+fn default_vlm_temperature() -> f64 {
     0.7
 }
 
@@ -494,15 +494,19 @@ impl VlmConfig {
     /// over global defaults.
     pub fn params_for_model(&self, model: &str) -> crate::vlm::VlmParams {
         let mc = self.model_config.get(model);
+        // Config holds float values as f64 (TOML's native float type, so the
+        // round-trip through `toml::to_string_pretty` doesn't expose f32
+        // imprecision like 0.1 → 0.10000000149011612). VlmParams takes f32
+        // because the downstream LLM API expects f32; cast at this boundary.
         crate::vlm::VlmParams {
             max_tokens: mc.and_then(|c| c.max_tokens).unwrap_or(self.max_tokens),
             timeout: mc.and_then(|c| c.timeout).unwrap_or(self.timeout),
-            temperature: mc.and_then(|c| c.temperature).unwrap_or(self.temperature),
+            temperature: mc.and_then(|c| c.temperature).unwrap_or(self.temperature) as f32,
             max_image_edge: mc.and_then(|c| c.max_image_edge).unwrap_or(self.max_image_edge),
             num_ctx: mc.and_then(|c| c.num_ctx).unwrap_or(self.num_ctx),
-            top_p: mc.and_then(|c| c.top_p).unwrap_or(self.top_p),
+            top_p: mc.and_then(|c| c.top_p).unwrap_or(self.top_p) as f32,
             top_k: mc.and_then(|c| c.top_k).unwrap_or(self.top_k),
-            repeat_penalty: mc.and_then(|c| c.repeat_penalty).unwrap_or(self.repeat_penalty),
+            repeat_penalty: mc.and_then(|c| c.repeat_penalty).unwrap_or(self.repeat_penalty) as f32,
             prompt: mc.and_then(|c| c.prompt.clone()).or_else(|| self.prompt.clone()),
         }
     }
@@ -534,7 +538,7 @@ pub struct ContactSheetDefaults {
     #[serde(default = "default_cs_fields")]
     pub fields: String,
     #[serde(default = "default_cs_margin")]
-    pub margin: f32,
+    pub margin: f64,
     #[serde(default = "default_cs_quality")]
     pub quality: u8,
     #[serde(default = "default_cs_label_style")]
@@ -546,7 +550,7 @@ pub struct ContactSheetDefaults {
 fn default_cs_layout() -> String { "standard".to_string() }
 fn default_cs_paper() -> String { "a4".to_string() }
 fn default_cs_fields() -> String { "filename,date,rating".to_string() }
-fn default_cs_margin() -> f32 { 10.0 }
+fn default_cs_margin() -> f64 { 10.0_f64 }
 fn default_cs_quality() -> u8 { 90 }
 fn default_cs_label_style() -> String { "border".to_string() }
 
@@ -1131,6 +1135,35 @@ max_edge = 1000
         let input = "[browse]\n";
         let config: CatalogConfig = toml::from_str(input).unwrap();
         assert_eq!(config.browse.default_filter, None);
+    }
+
+    /// Regression: editing config values via the web form (which round-trips
+    /// every f-typed field through serde + toml::to_string_pretty) must not
+    /// expand a clean `0.1` into `0.10000000149011612` etc. The fix was to
+    /// store the values as f64 — TOML's native float type — instead of f32,
+    /// which loses precision on cast and exposes that loss when serialised.
+    /// Regression: editing config values via the web form (which round-trips
+    /// every f-typed field through serde + toml::to_string_pretty) must not
+    /// expand a clean `0.2` into `0.20000000298023224` etc. The fix was to
+    /// store the values as f64 — TOML's native float type — instead of f32,
+    /// which loses precision on cast and exposes that loss when serialised.
+    /// Use 0.2 (not the default 0.1) so the [ai] section actually serialises.
+    #[test]
+    fn float_values_round_trip_cleanly() {
+        let input = "[ai]\nthreshold = 0.2\n";
+        let config: CatalogConfig = toml::from_str(input).unwrap();
+        assert_eq!(config.ai.threshold, 0.2, "0.2 parses exactly as f64");
+        let out = toml::to_string_pretty(&config).unwrap();
+        assert!(
+            out.contains("threshold = 0.2\n") || out.contains("threshold = 0.2\r\n"),
+            "expected literal `threshold = 0.2` in serialised output, got: {out}"
+        );
+        // Direct check that f32 imprecision didn't leak. The specific
+        // long form for f32::from(0.2) cast to f64 is 0.20000000298…
+        assert!(
+            !out.contains("0.20000000"),
+            "f32 imprecision leaked into the serialised output: {out}"
+        );
     }
 
     #[test]

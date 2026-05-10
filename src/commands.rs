@@ -206,8 +206,11 @@ pub fn run_faces_command(
             let _ = maki::face_store::FaceStore::initialize(catalog.conn());
             let face_store = maki::face_store::FaceStore::new(catalog.conn());
 
-            let thresh = threshold.unwrap_or(config.ai.face_cluster_threshold);
-            let min_conf = min_confidence.unwrap_or(config.ai.face_min_confidence);
+            // CLI threshold/min_confidence args are f32 (clap default for `--threshold`);
+            // config carries f64 since v4.5.5 (for clean TOML round-trips). Cast to f32
+            // at this boundary so the rest of the function sees a single type.
+            let thresh = threshold.unwrap_or(config.ai.face_cluster_threshold as f32);
+            let min_conf = min_confidence.unwrap_or(config.ai.face_min_confidence as f32);
 
             // Resolve scope to asset IDs (same pattern as maki embed)
             let scoped_ids: Option<Vec<String>> = if query.is_some() || asset.is_some() || volume.is_some() {
@@ -1562,7 +1565,8 @@ pub fn run_auto_tag_command(
         );
     }
 
-    let threshold = threshold.unwrap_or(config.ai.threshold);
+    // CLI threshold is f32; config field is f64 since v4.5.5. Cast at the boundary.
+    let threshold = threshold.unwrap_or(config.ai.threshold as f32);
 
     // Resolve labels
     let label_list: Vec<String> = if let Some(ref labels_path) = labels {
@@ -3827,7 +3831,9 @@ pub fn run_contact_sheet_command(
         .parse()?;
 
     let cs_quality = quality.unwrap_or(cs_defaults.quality);
-    let cs_margin = margin.unwrap_or(cs_defaults.margin);
+    // CLI --margin is f32; config carries f64 since v4.5.5. Cast at the boundary;
+    // ContactSheetConfig.margin_mm downstream is f32.
+    let cs_margin = margin.unwrap_or(cs_defaults.margin as f32);
 
     let cs_config = ContactSheetConfig {
         layout: cs_layout,
