@@ -3222,6 +3222,14 @@ impl QueryEngine {
                 }
             };
 
+            // Track only the recipes whose write actually succeeded (or
+            // had nothing to do because the XMP was already in sync). The
+            // sidecar pending-flag clear below mirrors this set so a
+            // recipe that skipped — offline volume or missing file —
+            // keeps its `pending_writeback = true` and gets picked up by
+            // the next `maki writeback` once the volume comes back online.
+            let mut cleared_recipe_ids: HashSet<String> = HashSet::new();
+
             for (recipe_id, volume_id, rel_path) in recipe_entries {
                 let vol_uuid: uuid::Uuid = match volume_id.parse() {
                     Ok(u) => u,
@@ -3343,6 +3351,7 @@ impl QueryEngine {
                 }
 
                 let _ = catalog.clear_pending_writeback(recipe_id);
+                cleared_recipe_ids.insert(recipe_id.clone());
                 result.written += 1;
                 if log {
                     eprintln!("{rel_path} — written");
@@ -3352,16 +3361,24 @@ impl QueryEngine {
                 }
             }
 
-            // Save sidecar with cleared pending flags
-            if !dry_run {
-                // Clear pending_writeback on all processed recipes
+            // Save sidecar with cleared pending flags — but only for
+            // recipes that actually completed. A multi-variant asset
+            // with one offline variant must keep its overall pending
+            // state so the offline recipe still gets flushed later.
+            if !dry_run && !cleared_recipe_ids.is_empty() {
+                let mut any_changed = false;
                 for r in &mut asset.recipes {
-                    if recipe_entries.iter().any(|(rid, _, _)| r.id.to_string() == *rid) {
+                    if cleared_recipe_ids.contains(&r.id.to_string())
+                        && r.pending_writeback
+                    {
                         r.pending_writeback = false;
+                        any_changed = true;
                     }
                 }
-                if let Err(e) = store.save(&asset) {
-                    eprintln!("Warning: could not save sidecar for {asset_id}: {e}");
+                if any_changed {
+                    if let Err(e) = store.save(&asset) {
+                        eprintln!("Warning: could not save sidecar for {asset_id}: {e}");
+                    }
                 }
             }
         }

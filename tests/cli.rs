@@ -9465,6 +9465,128 @@ fn writeback_mirror_tags_requires_all() {
         .stderr(predicate::str::contains("--all").or(predicate::str::contains("required")));
 }
 
+/// Regression: `maki writeback` must NOT clear `pending_writeback` for
+/// recipes it skipped because their volume was offline. The previous
+/// implementation force-cleared the flag on every recipe in the asset's
+/// process set after the per-recipe loop, regardless of whether each
+/// recipe was actually written or skipped — so a multi-variant asset
+/// with one offline variant would silently lose its pending state on
+/// disk (the YAML sidecar got cleared while the SQLite flag for the
+/// skipped recipe stayed correct, an internal inconsistency that
+/// `rebuild-catalog` from YAML would then surface as lost edits).
+#[test]
+#[cfg(feature = "pro")]
+fn writeback_preserves_pending_when_volume_offline() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Register a separate "removable" volume in a sibling tempdir so the
+    // recipe lives on a volume we can independently take offline (by
+    // renaming the mount directory). Keeping it outside the catalog
+    // root avoids the auto-added test-vol from init_catalog winning the
+    // most-specific-mount-point lookup at import time.
+    let removable_dir = tempdir().unwrap();
+    let removable = removable_dir.path().canonicalize().unwrap();
+    maki()
+        .current_dir(&root)
+        .args(["volume", "add", "removable", removable.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let xmp_path = removable.join("WB_OFF.xmp");
+    create_test_file(&removable, "WB_OFF.ARW", b"raw-offline-vol");
+    create_test_file(
+        &removable,
+        "WB_OFF.xmp",
+        b"<x:xmpmeta><rdf:RDF><rdf:Description xmp:Rating=\"1\"/></rdf:RDF></x:xmpmeta>",
+    );
+    maki()
+        .current_dir(&root)
+        .args(["import", removable.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Empty query (NOT "*") matches all assets — `*` is treated as a
+    // literal free-text token.
+    let out = maki()
+        .current_dir(&root)
+        .args(["search", "-q", ""])
+        .output()
+        .unwrap();
+    let asset_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    assert!(
+        !asset_id.is_empty(),
+        "search returned no asset after import"
+    );
+
+    // Edit while writeback is auto-off — marks the recipe pending.
+    maki()
+        .current_dir(&root)
+        .args(["edit", &asset_id, "--rating", "5"])
+        .assert()
+        .success();
+    maki()
+        .current_dir(&root)
+        .args(["status"])
+        .assert()
+        .stdout(predicate::str::contains("pending XMP writeback"));
+
+    // Take the removable volume offline by renaming its mount point.
+    // The device registry uses `mount_point.exists()` to decide online
+    // status, so the directory just has to be unreachable at its
+    // registered path.
+    let stashed = removable.with_extension("offline");
+    std::fs::rename(&removable, &stashed).unwrap();
+
+    // Manual flush. Should report the recipe as skipped (offline) and
+    // — crucially — leave the pending flag intact.
+    maki()
+        .current_dir(&root)
+        .args(["writeback"])
+        .assert()
+        .success();
+
+    // Bring the volume back so `maki status` can see the file again
+    // when it walks the catalog.
+    std::fs::rename(&stashed, &removable).unwrap();
+
+    // SQLite side: status still announces the pending writeback. The
+    // bug clear-path was in `writeback_process`'s after-loop sidecar
+    // save; we want to confirm the DB flag also stayed put (the inner
+    // loop's `continue` already skipped the DB clear, so this is a
+    // belt-and-suspenders check that the skip path wasn't structurally
+    // moved into the cleared set by a future refactor).
+    maki()
+        .current_dir(&root)
+        .args(["status"])
+        .assert()
+        .stdout(predicate::str::contains("pending XMP writeback"));
+
+    // YAML sidecar: confirm the recipe entry there also kept
+    // pending_writeback: true. The sidecar is the source of truth, so
+    // a cleared YAML would be the actual user-visible regression —
+    // a subsequent `rebuild-catalog` would lose the pending state.
+    let sidecar = root
+        .join("metadata")
+        .join(&asset_id[..2])
+        .join(format!("{asset_id}.yaml"));
+    let yaml = std::fs::read_to_string(&sidecar).unwrap();
+    assert!(
+        yaml.contains("pending_writeback: true"),
+        "Sidecar must still have pending_writeback: true after writeback \
+         skipped the recipe for an offline volume. Got:\n{yaml}"
+    );
+
+    // The XMP itself on disk should NOT have been written — its Rating
+    // stays at 1 (the original) since the volume was offline during the
+    // flush attempt.
+    let xmp_after = std::fs::read_to_string(&xmp_path).unwrap();
+    assert!(
+        xmp_after.contains("Rating=\"1\"") || xmp_after.contains("Rating='1'"),
+        "Offline-volume XMP must stay at Rating=1. Got: {xmp_after}"
+    );
+}
+
 #[test]
 #[cfg(feature = "pro")]
 fn sync_metadata_dry_run() {
