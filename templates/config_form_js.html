@@ -85,29 +85,47 @@
         return Array.isArray(node.type) && node.type.indexOf('null') !== -1;
     }
 
-    // Extract a value from the current config by dot-path (e.g.
-    // "preview.max_edge"). Returns undefined if any segment is missing.
+    // Paths are arrays of segments (e.g. ["preview", "max_edge"], or
+    // ["vlm", "model_config", "qwen2.5vl:3b", "temperature"]). We can't
+    // use dot-joined strings: hashmap keys like model names contain dots,
+    // which would break naive split('.') traversal.
+
     function getValue(path) {
         if (!currentConfig) return undefined;
-        var parts = path.split('.');
         var cur = currentConfig;
-        for (var i = 0; i < parts.length; i++) {
+        for (var i = 0; i < path.length; i++) {
             if (cur == null || typeof cur !== 'object') return undefined;
-            cur = cur[parts[i]];
+            cur = cur[path[i]];
         }
         return cur;
     }
 
     function setValue(target, path, value) {
-        var parts = path.split('.');
         var cur = target;
-        for (var i = 0; i < parts.length - 1; i++) {
-            if (cur[parts[i]] == null || typeof cur[parts[i]] !== 'object') {
-                cur[parts[i]] = {};
+        for (var i = 0; i < path.length - 1; i++) {
+            if (cur[path[i]] == null || typeof cur[path[i]] !== 'object') {
+                cur[path[i]] = {};
             }
-            cur = cur[parts[i]];
+            cur = cur[path[i]];
         }
-        cur[parts[parts.length - 1]] = value;
+        cur[path[path.length - 1]] = value;
+    }
+
+    // Collector key: paths-as-arrays can't directly index a plain object,
+    // and joining on '.' collides with dotted hashmap keys. Use the Unit
+    // Separator (U+001F) which can't appear in identifiers or in our
+    // hashmap keys.
+    var KEY_SEP = '\x1f';
+    function pathKey(path) { return path.join(KEY_SEP); }
+
+    // Render a path the TOML way for section titles — bare identifiers
+    // stay bare, anything else gets quoted: ["vlm","model_config","qwen2.5vl:3b"]
+    // → vlm.model_config."qwen2.5vl:3b".
+    function pathToToml(path) {
+        return path.map(function(p) {
+            if (/^[A-Za-z0-9_-]+$/.test(p)) return p;
+            return '"' + p.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+        }).join('.');
     }
 
     // Boot-time options that need a `maki serve` restart to take effect.
@@ -135,7 +153,7 @@
         var lbl = document.createElement('label');
         lbl.className = 'config-label';
         lbl.textContent = label;
-        if (BOOT_TIME[path]) {
+        if (BOOT_TIME[path.join('.')]) {
             var pill = document.createElement('span');
             pill.className = 'config-restart-pill';
             pill.textContent = 'restart required';
@@ -185,7 +203,7 @@
         });
         if (current != null) sel.value = String(current);
         else if (isOptional(node)) sel.value = '';
-        collectors[path] = function() {
+        collectors[pathKey(path)] = function() {
             var v = sel.value;
             return v === '' ? null : v;
         };
@@ -197,7 +215,7 @@
         cb.type = 'checkbox';
         cb.className = 'config-checkbox';
         cb.checked = !!current;
-        collectors[path] = function() { return cb.checked; };
+        collectors[pathKey(path)] = function() { return cb.checked; };
         return cb;
     }
 
@@ -218,7 +236,7 @@
         input.step = 'any';
         if (current != null) input.value = String(current);
         var isInt = nodeType(node) === 'integer';
-        collectors[path] = function() {
+        collectors[pathKey(path)] = function() {
             // valueAsNumber bypasses the .value-when-invalid-returns-empty
             // quirk; it returns NaN only when the field is genuinely blank
             // or contains non-numeric garbage.
@@ -237,7 +255,7 @@
         input.type = 'text';
         input.className = 'config-input';
         if (current != null) input.value = String(current);
-        collectors[path] = function() {
+        collectors[pathKey(path)] = function() {
             var v = input.value;
             if (v === '' && isOptional(node)) return null;
             return v;
@@ -255,7 +273,7 @@
         input.className = 'config-input';
         input.placeholder = 'comma-separated';
         if (Array.isArray(current)) input.value = current.join(', ');
-        collectors[path] = function() {
+        collectors[pathKey(path)] = function() {
             var raw = input.value.trim();
             if (raw === '') return [];
             return raw.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
@@ -282,72 +300,113 @@
             '</div>';
         // Pass the value through unchanged on save — front-end can't
         // edit it, but we shouldn't drop it either.
-        collectors[path] = function() {
+        collectors[pathKey(path)] = function() {
             return current || {};
         };
         return div;
     }
 
     // The walker. `node` is a (possibly $ref-resolved) schema node,
-    // `path` is the dot-path used by getValue/setValue, `parent` is the
-    // DOM container to append to. Recurses into `properties` for object
-    // types; the entry point is the top-level CatalogConfig object.
+    // `path` is the array of segments used by getValue/setValue, `parent`
+    // is the DOM container to append to. Recurses into `properties` for
+    // object types and into existing keys for `additionalProperties`
+    // hashmaps. The entry point is the top-level CatalogConfig object
+    // walked from path=[].
     function walk(node, path, parent, label) {
         node = resolveRef(node);
         var t = nodeType(node);
         var current = getValue(path);
         var description = node.description;
 
+        // Helper: build a collapsible <details> section with a TOML-style
+        // title. Used for both struct sections and hashmap-entry sections
+        // — the title makes the maki.toml position explicit so users can
+        // cross-reference what they're editing with the on-disk file.
+        function makeSection(titleText) {
+            var section = document.createElement('details');
+            section.className = 'config-section';
+            section.open = true;
+            var summary = document.createElement('summary');
+            summary.className = 'config-section-title';
+            summary.textContent = titleText;
+            section.appendChild(summary);
+            if (description) {
+                var help = document.createElement('div');
+                help.className = 'config-help';
+                help.textContent = description;
+                section.appendChild(help);
+            }
+            return section;
+        }
+
         if (t === 'object' && node.properties) {
-            // Top level: no wrapper. Sub-section: collapsible group.
+            // Top level: no wrapper. Sub-section: collapsible group with
+            // a `[dotted.path]` title so the user can map widgets to the
+            // maki.toml layout at a glance.
             var container;
-            if (path === '') {
+            if (path.length === 0) {
                 container = parent;
             } else {
-                var section = document.createElement('details');
-                section.className = 'config-section';
-                section.open = true;
-                var summary = document.createElement('summary');
-                summary.className = 'config-section-title';
-                summary.textContent = '[' + label + ']';
-                section.appendChild(summary);
-                if (description) {
-                    var help = document.createElement('div');
-                    help.className = 'config-help';
-                    help.textContent = description;
-                    section.appendChild(help);
-                }
+                var section = makeSection('[' + pathToToml(path) + ']');
                 parent.appendChild(section);
                 container = section;
             }
             // Iterate properties in declaration order (schemars preserves it
             // via an ordered map).
             var props = node.properties;
-            // Some nested schemars-generated definitions also have
-            // `additionalProperties` — those are HashMap fields. Render
-            // a single notice covering all of them at the section level.
             Object.keys(props).forEach(function(key) {
                 var sub = resolveRef(props[key]);
-                var subPath = path === '' ? key : path + '.' + key;
-                walk(sub, subPath, container, key);
+                walk(sub, path.concat(key), container, key);
             });
-            // additionalProperties → HashMap value. Render the notice if
-            // any entries exist.
-            if (node.additionalProperties && typeof node.additionalProperties === 'object') {
-                var keys = current && typeof current === 'object'
-                    ? Object.keys(current).filter(function(k) { return !(k in (node.properties || {})); })
-                    : [];
-                if (keys.length > 0) {
-                    var hm = {};
-                    keys.forEach(function(k) { hm[k] = current[k]; });
-                    container.appendChild(buildHashMapNotice(path + '.<extras>', hm));
-                }
+            return;
+        }
+
+        // HashMap<String, T> — type:"object" with `additionalProperties`
+        // describing the value schema (and no `properties`). Render each
+        // existing key as an editable sub-section walked against the value
+        // schema. Adding/renaming/deleting entries stays a maki.toml-only
+        // operation for now — the schema offers no way to express which
+        // keys are legal, so a name field would be free-form and could
+        // easily get out of sync with code that expects specific names
+        // (e.g. VLM model identifiers must match what's loaded in Ollama).
+        if (t === 'object' && node.additionalProperties &&
+            typeof node.additionalProperties === 'object') {
+            var hmContainer;
+            if (path.length === 0) {
+                hmContainer = parent;
+            } else {
+                var hmSection = makeSection('[' + pathToToml(path) + ']');
+                parent.appendChild(hmSection);
+                hmContainer = hmSection;
+            }
+            var entryKeys = current && typeof current === 'object'
+                ? Object.keys(current) : [];
+            if (entryKeys.length === 0) {
+                var empty = document.createElement('div');
+                empty.className = 'config-help';
+                empty.style.opacity = '0.7';
+                empty.textContent =
+                    'No entries. Add one in maki.toml directly — the form ' +
+                    'can edit existing entries but not create new keys.';
+                hmContainer.appendChild(empty);
+            } else {
+                var valueSchema = resolveRef(node.additionalProperties);
+                entryKeys.forEach(function(k) {
+                    walk(valueSchema, path.concat(k), hmContainer, k);
+                });
+                var hint = document.createElement('div');
+                hint.className = 'config-help';
+                hint.style.opacity = '0.7';
+                hint.style.marginTop = '0.4rem';
+                hint.innerHTML =
+                    'To add or rename entries, edit <code>maki.toml</code> directly.';
+                hmContainer.appendChild(hint);
             }
             return;
         }
 
         // Leaf field — render label + widget.
-        var wrap = makeLabel(path, humanise(label || path), description);
+        var wrap = makeLabel(path, humanise(label || pathToToml(path)), description);
         var widget;
         if (t === 'boolean') {
             widget = buildBoolCheckbox(path, current);
@@ -385,12 +444,9 @@
     // contents, fields not yet supported by the walker) are preserved.
     function collectValues() {
         var out = JSON.parse(JSON.stringify(currentConfig || {}));
-        Object.keys(collectors).forEach(function(path) {
-            if (path.indexOf('<extras>') !== -1) return; // hashmap notice — leave as-is
-            var v = collectors[path]();
-            // Strip null leaves (matches the serde `skip_serializing_if`
-            // convention for Option<T>; sending explicit null can confuse
-            // the typed deserializer for non-Option fields).
+        Object.keys(collectors).forEach(function(key) {
+            var v = collectors[key]();
+            var path = key.split(KEY_SEP);
             setValue(out, path, v);
         });
         return out;
@@ -399,7 +455,7 @@
     function render() {
         formEl.innerHTML = '';
         collectors = {};
-        walk(rawSchema, '', formEl, '');
+        walk(rawSchema, [], formEl, '');
         var actions = document.createElement('div');
         actions.className = 'config-form-actions';
         actions.innerHTML =
