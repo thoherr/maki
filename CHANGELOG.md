@@ -2,6 +2,84 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.5.5 (2026-05-11)
+
+A web-UI release: `maki.toml` becomes editable in the browser via a schema-driven Settings dialog, the Maintain dialog grows the same forms → progress → result lifecycle the Import dialog already had, and a `sync --apply --remove-stale` + tag-rename race no longer aborts bulk tag operations.
+
+Tests: 794 + 249 standard, 901 + 276 pro (up from 790 / 249 / 897 / 276 — four new config-round-trip regression tests on each build flavour). No engine signature changes; the only Rust-side behaviour shift is config-serialisation determinism (always emit every section, in declaration order).
+
+### Settings dialog
+
+New top-nav entry **Settings** (next to Maintain) opens a modal that renders every option in `maki.toml` as a form widget. The form is generated from the `CatalogConfig` JSON Schema (via the `schemars` 0.8 crate, with `JsonSchema` derived on every config type) so a new option in `src/config.rs` shows up in the dialog automatically — no separate UI registration step.
+
+Widget mapping per type:
+
+- `bool` → checkbox
+- `i*` / `u*` → number input (with `step="any"` so direct typing of floats / step-mismatched values isn't dropped)
+- `f64` → number input
+- `String` → text input
+- `String` with an `enum` derive on the type → `<select>` of variants
+- `Vec<String>` → comma-separated text input
+- nested struct → collapsible `<details>` section with a TOML-style title (`[preview]`, `[vlm]`, …)
+- `BTreeMap<String, T>` → one editable sub-section per existing key (e.g. `[import.profiles.hinterhalt]`, `[vlm.model_config."qwen2.5vl:3b"]`)
+
+Three endpoints back the dialog:
+
+- `GET /api/config` — current values + raw `maki.toml` body
+- `GET /api/config/schema` — `schemars::schema_for!(CatalogConfig)` output
+- `POST /api/config` — validate by deserialising the submitted JSON back into `CatalogConfig` (serde catches type errors and unknown keys), then save. The previous file gets copied to `maki.toml.bak` before each save so a bad edit is recoverable.
+
+Restart-required hints come from a `needs_restart(old, new)` server-side classifier that knows which options are bound at startup (`[serve].port`, `[preview].max_edge`, `[ai].model`, …). Touched fields show a small **restart required** pill next to the label; the post-save toast is amber when any restart-required field changed and green when everything took effect immediately.
+
+UX:
+
+- Lives in its own modal, **not** a Maintain tab — Maintain operations and Settings have very different cadences (one-off long-running ops vs. routine config tweaks) and bundling them together made the Maintain modal feel overloaded.
+- **Save button focused on render** so `Enter` after a single edit commits the change without a mouse hop.
+- **Floating toast** for save feedback (reusing the `.job-toast` chrome) sits bottom-right so the user sees confirmation even if they Escape out of the dialog before the response lands.
+- **Escape** closes the dialog (with the dialog's own keydown handler scoped to its own open state so it doesn't fight the Maintain dialog's identical handler when both are wired into the same document).
+
+#### Adding / renaming hashmap keys stays manual
+
+Hashmap-typed config (`[import.profiles.<name>]`, `[vlm.model_config."<model>"]`) renders each existing key as an editable sub-section, but **adding or renaming entries is `maki.toml`-only** for now. Rationale: the schema can't express which keys are legal — VLM model names must match what's loaded on the Ollama side, profile names are referenced from `import --profile <name>` invocations — and a free-form name field would be too easy to get out of sync. The form shows a hint to that effect at the bottom of each hashmap section.
+
+#### Config serialisation determinism
+
+Pre-v4.5.5 each section in `CatalogConfig` had `skip_serializing_if = "is_default_*"` so an unmodified default section was omitted from the saved file. That made the on-disk file shorter but had two failure modes the Settings dialog exposed:
+
+1. Saving from the Settings dialog with no changes would silently omit explicit-default values like `[writeback] enabled = false`, leaving the user uncertain whether the click took effect.
+2. Once any field in a previously-skipped section was customised, that section's position in the file changed (skipped sections leave a gap), making the file diff-noisy under version control across saves of the same config.
+
+Now every section is always emitted in declaration order. Files are slightly longer but byte-stable across no-op saves and across machines. Three new regression tests (`save_load_save_is_byte_identical`, `explicit_false_default_round_trips`, `float_values_round_trip_cleanly`) lock the invariants in.
+
+Same release also switches `f32` → `f64` on every config float field. `f32` values round-tripped through TOML serialisation gain trailing-precision noise (`0.1` → `0.10000000149011612`) because the f32 → f64 widening conversion when TOML's parser reads back the saved string isn't a clean inverse. `f64` throughout the config eliminates the drift; cast back to `f32` happens only at the boundaries that need it (VLM payloads, ONNX inputs, contact-sheet margins).
+
+`BTreeMap` (not `HashMap`) for `import.profiles` and `vlm.model_config` so the saved file lists entries in alphabetical order, deterministic across saves — `HashMap` iteration is randomised, which made the file diff-noisy under version control between two saves of the same data.
+
+### Maintain dialog: forms → progress → result phases
+
+The Maintain modal previously closed itself on submit and tracked the running job only through the small nav-bar toast. The Import dialog, by contrast, keeps its modal open with a larger progress area until the job finishes. Inconsistent — and the toast's terse comma-joined summary lost detail for ops with many counters (cleanup, sync, refresh).
+
+The Maintain dialog now uses the same three-phase lifecycle as Import:
+
+- **forms** — the seven tab forms (initial state and after Close on a finished job).
+- **progress** — visible while a job is running. Status line + last 50 log lines + a "Minimize to toast" button.
+- **result** — terminal summary as a counter list (one line per non-zero counter — `12 written`, `4 conflicts`, …) + Close.
+
+Implementation mirrors `import_dialog_js.html`'s `showPhase()` switch plus a self-contained `attachProgressStream()` that subscribes to `/api/jobs/{id}/progress` SSE for the running job.
+
+Two related changes:
+
+- `reattachIfRunning` (the function called when the user clicks the Maintain nav badge while a job is running) now reopens the **dialog in progress phase**, not the toast. Larger surface, same Minimize button is one click away. Matches what the Import dialog does.
+- On terminal `done: true`, the browse-side tag autocomplete cache is invalidated (`window._damTagCache = null`). Maintain ops that change the catalog tag set — `cleanup`, `sync --apply --remove-stale` — could otherwise serve stale autocomplete entries from the 30-second cache. Belt-and-suspenders fix.
+
+### Tag bulk mutations: tolerate missing-sidecar errors mid-loop
+
+Reported flow: user runs `maki sync --apply --remove-stale` from a shell while `maki serve` is up, then renames a tag from the web UI and gets *"no such file or directory"*. The web server's catalog connection sees the fresh row state (SQLite WAL handles that), but the YAML sidecar for some asset is gone on disk while its row still references it.
+
+`tag_rename`'s per-asset loop did `store.load(uuid)?`, which propagated the I/O error through the whole bulk operation and aborted everything from the failing asset onward — so the rename was applied to assets up to the missing sidecar and silently skipped for the rest.
+
+Fix: `tag_rename`, `tag_split`, `tag_delete`, and `tag_normalize` (which powers `tag fix-unicode`) now catch the load failure (plus the upstream UUID parse failure), record it on the result struct as `errors: Vec<String>`, and continue the loop. The catalog or on-disk state will be cleaned up by `maki cleanup --apply`; the bulk tag operation no longer aborts on a transient inconsistency it didn't create.
+
 ## v4.5.4 (2026-05-08)
 
 A small feature release: lightbox slideshow mode. Click a thumbnail to open the lightbox, hit Spacebar (or the new ▶ button in the toolbar), and the lightbox auto-advances through the result set.

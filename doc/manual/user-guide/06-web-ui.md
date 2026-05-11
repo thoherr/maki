@@ -69,6 +69,7 @@ Every page has a horizontal nav bar across the top. From left to right:
 - **Tags**, **People** (Pro), **Collections**, **Searches** — catalog organisation pages.
 - **Catalog ▾** dropdown — collapses Stats, Analytics, Backup, Volumes, Duplicates into one menu so the bar stays compact. Click the trigger to open; click outside or press Escape to close. The caret rotates when open. These pages are read-mostly catalog inspection views, used a few times a week rather than daily.
 - **Import●** and **Maintain●** — long-running command launchers (see [Importing from a volume](#importing-from-a-volume) and [Maintain Dialog](#maintain-dialog) below). The pulsing dot lights up when a job of that kind is running anywhere in the catalog; clicking the entry while a job is in flight re-attaches to its progress feed.
+- **Settings** — opens the schema-driven `maki.toml` editor (see [Settings Dialog](#settings-dialog) below).
 - **Help (?)** and **Theme toggle** — keyboard-shortcut overlay and dark-mode switch.
 
 The dropdown is keyboard-accessible (`Tab` to focus, `Enter` to open, `Esc` to close) and screen-reader friendly (`role="menu"` with `aria-expanded` on the trigger).
@@ -941,9 +942,23 @@ The **Maintain** entry in the top navigation (next to Import) opens a tabbed mod
   - **Path prefix** — optional volume-relative path to restrict cleanup to a subtree. Same filesystem autocomplete as the Sync tab once a volume is chosen.
   - `Apply changes` — without this, report-only.
 
-Each form's **Run** button posts to a server endpoint that immediately returns a job ID and runs the operation in the background. The shared **progress toast** (bottom-right of the screen, same as Embed / Auto-tag / Detect-faces) shows live per-file progress and a final summary line built from the job's terminal counters. Closing the dialog while a job runs is fine — the toast keeps watching, and the **pulsing dot on the Maintain entry** stays lit until the job finishes. Click the Maintain entry while a job is in flight to re-attach to it.
+Each form's **Run** button posts to a server endpoint that immediately returns a job ID and runs the operation in the background. The dialog switches into a **progress phase** with a status line, the last 50 log entries, and a **Minimize to toast** button so you can dismiss the dialog and keep watching from the bottom-right progress toast (same as Embed / Auto-tag / Detect-faces). When the job finishes, the dialog flips into a **result phase** showing a counter list (`12 written`, `4 conflicts`, …) and a Close button.
+
+The **pulsing dot on the Maintain entry** stays lit until the job finishes. Click the Maintain entry while a job is in flight to re-attach — the dialog opens directly into the progress phase showing the live feed.
 
 Only one job per kind runs at a time; starting a second writeback / sync-metadata / verify / previews / sync / refresh / cleanup while one of the same kind is still running returns 409 from the server. Different kinds run in parallel (you can have a verify going while you also flush a writeback).
+
+## Settings Dialog
+
+The **Settings** entry in the top navigation (next to Maintain) opens a modal that renders every option in `maki.toml` as a form widget. The form is generated from the `CatalogConfig` JSON Schema, so a new option added in the Rust source shows up here automatically — there's no separate UI registration step.
+
+Widgets follow types: checkboxes for `bool`, number inputs for integers / floats, text inputs for strings, `<select>` for enums, comma-separated text for `Vec<String>`, collapsible `<details>` sections for nested structs (`[preview]`, `[serve]`, …). Hashmap-typed config (`[import.profiles.<name>]`, `[vlm.model_config."<model>"]`) renders each existing key as an editable sub-section.
+
+Fields bound at server startup (`[serve].port`, `[preview].max_edge`, `[ai].model`, etc.) show a small **restart required** pill next to the label. After Save, a toast appears bottom-right: green if every change took effect immediately, amber if any restart-required field changed.
+
+Before each save the previous file is copied to `maki.toml.bak`, so a bad edit is recoverable. Validation runs server-side by deserialising the submitted JSON back into the typed config struct — type errors and unknown keys are rejected before the file is written.
+
+**Adding or renaming hashmap keys stays manual**: the schema can't express which keys are legal (e.g. VLM model names must match what's loaded on Ollama, profile names are referenced from `import --profile <name>` invocations), and a free-form name field would be too easy to get out of sync. The form shows a hint to that effect at the bottom of each hashmap section — open `maki.toml` in a text editor for those edits.
 
 ---
 
