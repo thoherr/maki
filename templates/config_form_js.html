@@ -22,8 +22,27 @@
 
     // Resolve `$ref` chains against schema.definitions. Schemars emits
     // refs of the form `#/definitions/Foo` for every named type.
+    //
+    // Schemars 0.8 has a quirk: when a struct field has a `#[serde(default)]`
+    // attribute AND its type is a named struct, the emitted schema wraps the
+    // $ref inside an `allOf` so the `default` value can sit next to it:
+    //
+    //   { "default": {...}, "allOf": [{"$ref": "#/definitions/Foo"}] }
+    //
+    // Walk through that wrapper so the form gets the underlying object
+    // shape instead of falling through to the unknown-type leaf branch.
     function resolveRef(node) {
         if (!node || typeof node !== 'object') return node;
+        // allOf with a single $ref entry is the wrapper schemars emits when
+        // a `default` (or `description`) sits next to a ref.
+        if (Array.isArray(node.allOf) && node.allOf.length === 1 && node.allOf[0].$ref) {
+            var inner = resolveRef(node.allOf[0]);
+            var overlaid = Object.assign({}, inner);
+            for (var k in node) {
+                if (k !== 'allOf') overlaid[k] = node[k];
+            }
+            return overlaid;
+        }
         if (node.$ref) {
             var name = node.$ref.replace('#/definitions/', '');
             var def = (rawSchema.definitions || {})[name];
@@ -188,12 +207,27 @@
         input.className = 'config-input';
         if (typeof node.minimum === 'number') input.min = String(node.minimum);
         if (typeof node.maximum === 'number') input.max = String(node.maximum);
+        // step="any" — without it, <input type="number"> defaults to step=1.
+        // That clashes with two real values from schemars: (a) float fields
+        // like `ai.threshold` whose values (0.1, 0.35, 0.7) don't match
+        // step=1, and (b) integer fields where step=1 is fine but browsers
+        // (Safari, in particular) can return `input.value === ""` for the
+        // mid-edit invalid state, which then routes through the empty-string
+        // fallback and writes 0 to the file. "any" sidesteps the entire
+        // step-validation machinery so direct typing reliably round-trips.
+        input.step = 'any';
         if (current != null) input.value = String(current);
         var isInt = nodeType(node) === 'integer';
         collectors[path] = function() {
-            var v = input.value.trim();
-            if (v === '') return isOptional(node) ? null : (isInt ? 0 : 0.0);
-            return isInt ? parseInt(v, 10) : parseFloat(v);
+            // valueAsNumber bypasses the .value-when-invalid-returns-empty
+            // quirk; it returns NaN only when the field is genuinely blank
+            // or contains non-numeric garbage.
+            var n = input.valueAsNumber;
+            if (isNaN(n)) {
+                if (isOptional(node)) return null;
+                return isInt ? 0 : 0.0;
+            }
+            return isInt ? Math.trunc(n) : n;
         };
         return input;
     }
