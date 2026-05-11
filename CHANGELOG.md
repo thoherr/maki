@@ -2,6 +2,25 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.5.6 (2026-05-11)
+
+A bug-fix patch. One regression in the writeback flow: `maki writeback` was clearing the YAML sidecar's `pending_writeback` flag on recipes it had actually *skipped* (offline volume, missing file), so a `rebuild-catalog` from YAML would silently lose those staged edits.
+
+Tests: 794 + 249 standard, 901 + **277** pro (one new regression test, `writeback_preserves_pending_when_volume_offline`).
+
+### Writeback: pending flag preserved on skipped recipes
+
+`writeback_process` had two flag-clear paths: a per-recipe `clear_pending_writeback()` inside the per-recipe loop (correctly gated — `continue` for offline/missing files skipped it) and a YAML-side sidecar clear AFTER the loop that iterated the asset's full `recipe_entries` list and zeroed every flag regardless. So on a multi-variant asset with one offline variant, the SQLite row for the skipped recipe stayed correct (`pending_writeback = true`) but the YAML sidecar's recipe entry got cleared. The two layers diverged. Practical impact: a subsequent `maki rebuild-catalog` (which rebuilds the catalog from YAML, the source of truth) would silently drop the staged edit, because YAML claimed everything had been flushed.
+
+Fix: track per-recipe success in a `cleared_recipe_ids: HashSet<String>` populated only when a recipe reaches the success path, and have the sidecar-save loop honour that set instead of the broader `recipe_entries`. Skipped recipes now keep `pending_writeback: true` in both layers, so the next `maki writeback` picks them up when the volume comes back online.
+
+Coverage check while in there:
+
+- The four inline writeback paths (`write_back_rating_to_xmp_inner` and siblings for tags / description / label) were already per-recipe-safe via `mark_recipe_pending` / `clear_recipe_pending` helpers — they touch only the specific recipe's flag, no cross-contamination. No change needed.
+- `[writeback] enabled = false` semantics still match the v4.5.0 design (the config flag governs only *automatic* flush on every edit; `is_writeback_enabled()` is checked inside the `_inner` methods, which treats "off" the same as "offline": mark pending, skip the file write). `writeback_process()` itself has no enabled-gate — the explicit manual flush always runs, as documented.
+- `--all` and `--mirror-tags` flow through the same `writeback_process()` so they're covered by the same fix.
+- The web `POST /api/maintain/writeback` route calls `engine.writeback()` directly — also covered.
+
 ## v4.5.5 (2026-05-11)
 
 A web-UI release: `maki.toml` becomes editable in the browser via a schema-driven Settings dialog, the Maintain dialog grows the same forms → progress → result lifecycle the Import dialog already had, and a `sync --apply --remove-stale` + tag-rename race no longer aborts bulk tag operations.
