@@ -176,6 +176,20 @@
     // time so type round-tripping (number → number, not "5") is exact.
     var collectors = {};
 
+    // Every widget below tracks a per-instance `dirty` flag, set the
+    // first time the user actually interacts with the input. The
+    // collector returns the *original* value (the `current` passed in
+    // at render time) when the widget is still pristine.
+    //
+    // Why: rendering an Option<bool>=None as an unchecked checkbox is
+    // visually fine, but if the collector then returned `false`
+    // unconditionally we'd report a phantom change on every save —
+    // the on-disk Option was *absent* (None), the collected value is
+    // Some(false), the toml_edit diff sees a real difference and
+    // writes a new line. Same for Option<Vec<String>>=None rendered
+    // as an empty CSV input. Pristine-detection sidesteps both: a
+    // no-op save reports zero diffs because no widget moved.
+
     function buildEnumSelect(path, node, current) {
         var sel = document.createElement('select');
         sel.className = 'config-select';
@@ -203,7 +217,11 @@
         });
         if (current != null) sel.value = String(current);
         else if (isOptional(node)) sel.value = '';
+        var originalValue = current === undefined ? null : current;
+        var dirty = false;
+        sel.addEventListener('change', function() { dirty = true; });
         collectors[pathKey(path)] = function() {
+            if (!dirty) return originalValue;
             var v = sel.value;
             return v === '' ? null : v;
         };
@@ -215,7 +233,13 @@
         cb.type = 'checkbox';
         cb.className = 'config-checkbox';
         cb.checked = !!current;
-        collectors[pathKey(path)] = function() { return cb.checked; };
+        var originalValue = current === undefined ? null : current;
+        var dirty = false;
+        cb.addEventListener('change', function() { dirty = true; });
+        collectors[pathKey(path)] = function() {
+            if (!dirty) return originalValue;
+            return cb.checked;
+        };
         return cb;
     }
 
@@ -236,7 +260,11 @@
         input.step = 'any';
         if (current != null) input.value = String(current);
         var isInt = nodeType(node) === 'integer';
+        var originalValue = current === undefined ? null : current;
+        var dirty = false;
+        input.addEventListener('input', function() { dirty = true; });
         collectors[pathKey(path)] = function() {
+            if (!dirty) return originalValue;
             // valueAsNumber bypasses the .value-when-invalid-returns-empty
             // quirk; it returns NaN only when the field is genuinely blank
             // or contains non-numeric garbage.
@@ -255,7 +283,11 @@
         input.type = 'text';
         input.className = 'config-input';
         if (current != null) input.value = String(current);
+        var originalValue = current === undefined ? null : current;
+        var dirty = false;
+        input.addEventListener('input', function() { dirty = true; });
         collectors[pathKey(path)] = function() {
+            if (!dirty) return originalValue;
             var v = input.value;
             if (v === '' && isOptional(node)) return null;
             return v;
@@ -273,7 +305,11 @@
         input.className = 'config-input';
         input.placeholder = 'comma-separated';
         if (Array.isArray(current)) input.value = current.join(', ');
+        var originalValue = current === undefined ? null : current;
+        var dirty = false;
+        input.addEventListener('input', function() { dirty = true; });
         collectors[pathKey(path)] = function() {
+            if (!dirty) return originalValue;
             var raw = input.value.trim();
             if (raw === '') return [];
             return raw.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
