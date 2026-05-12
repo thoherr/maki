@@ -1012,6 +1012,14 @@ select.badge {
     font-style: italic;
     margin-left: 2px;
 }
+/* Vocabulary mapping caption — model picked a flat label, MAKI applied
+   the hierarchical mapping. Subtle so it doesn't crowd the tag itself. */
+.ai-tag-source {
+    font-size: 0.65em;
+    opacity: 0.55;
+    font-style: italic;
+    margin-left: 4px;
+}
 
 /* Similar images grid */
 .similar-grid {

@@ -1568,13 +1568,17 @@ pub fn run_auto_tag_command(
     // CLI threshold is f32; config field is f64 since v4.5.5. Cast at the boundary.
     let threshold = threshold.unwrap_or(config.ai.threshold as f32);
 
-    // Resolve labels
-    let label_list: Vec<String> = if let Some(ref labels_path) = labels {
-        maki::ai::load_labels_from_file(std::path::Path::new(labels_path))?
+    // Resolve vocabulary. CLI `--labels` wins; otherwise fall back
+    // to `[ai].labels` in config; otherwise use the built-in default.
+    // Either path may point at a `.yaml`/`.yml` vocabulary file
+    // (rich, with hierarchical mapping) or a plain `.txt` flat list
+    // (identity mapping).
+    let vocabulary = if let Some(ref labels_path) = labels {
+        maki::ai_vocabulary::load_from_path(std::path::Path::new(labels_path))?
     } else if let Some(ref config_labels) = config.ai.labels {
-        maki::ai::load_labels_from_file(std::path::Path::new(config_labels))?
+        maki::ai_vocabulary::load_from_path(std::path::Path::new(config_labels))?
     } else {
-        maki::ai::DEFAULT_LABELS.iter().map(|s| s.to_string()).collect()
+        maki::ai_vocabulary::default_vocabulary()
     };
 
     let prompt = &config.ai.prompt;
@@ -1586,7 +1590,7 @@ pub fn run_auto_tag_command(
         asset.as_deref(),
         volume.as_deref(),
         threshold,
-        &label_list,
+        &vocabulary,
         prompt,
         apply,
         &model_dir,

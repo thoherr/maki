@@ -74,6 +74,8 @@ pub mod xmp_reader;
 #[cfg(feature = "ai")]
 pub mod ai;
 #[cfg(feature = "ai")]
+pub mod ai_vocabulary;
+#[cfg(feature = "ai")]
 pub mod embedding_store;
 #[cfg(feature = "ai")]
 pub mod face;

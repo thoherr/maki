@@ -1,0 +1,152 @@
+# MAKI default AI vocabulary.
+#
+# Each key is a label the SigLIP model sees (so it must be a short,
+# embedding-friendly noun phrase). Each value is the hierarchical
+# MAKI tag (or list of tags) suggested when the model picks that
+# label.
+#
+# This file is the source of truth for both: the labels list is
+# derived from the keys at load time. There is no separate
+# my-labels.txt.
+#
+# To override: copy this file to your catalog (or anywhere), edit
+# freely, and point `[ai] labels = "path/to/your-vocab.yaml"` at
+# it in `maki.toml`. The `.yaml` / `.yml` extension is what
+# switches the loader into vocabulary mode. A plain `.txt` file
+# still works for backward-compatible flat-label setups (in
+# which case the suggested tag IS the label).
+#
+# Conventions used below — none of these are MAKI-enforced, just
+# the tagging-guide's defaults so the out-of-the-box experience
+# fits a coherent taxonomy:
+#
+#   subject|...     — what the photo IS of
+#   event|...       — occasion / what's happening
+#   lighting|...    — quality of light
+#   technique|...   — artistic / processing style
+#   composition|... — formal characteristics
+#   season|...      — time of year
+#   type|...        — non-photo formats
+#
+# To fan a single label into multiple tags, use a list value.
+# To leave a label flat (no mapping applied), use null.
+# To remove a label from the active vocabulary entirely, comment
+# the line out.
+
+# ── Scene types ────────────────────────────────────────────────
+landscape: subject|landscape
+portrait: subject|portrait
+street photography: subject|street
+architecture: subject|architecture
+cityscape: subject|cityscape
+seascape: subject|seascape
+aerial view: subject|aerial
+panorama: subject|panorama
+interior: subject|interior
+still life: subject|still-life
+macro: subject|macro
+wildlife: subject|wildlife
+underwater: subject|underwater
+astrophotography: subject|astro
+night photography: subject|night
+
+# ── Nature ─────────────────────────────────────────────────────
+mountain: subject|nature|mountain
+forest: subject|nature|forest
+beach: subject|nature|beach
+ocean: subject|nature|ocean
+river: subject|nature|river
+lake: subject|nature|lake
+waterfall: subject|nature|waterfall
+desert: subject|nature|desert
+field: subject|nature|field
+garden: subject|nature|garden
+flowers: subject|nature|flowers
+trees: subject|nature|trees
+sky: subject|sky
+clouds: subject|sky|clouds
+sunset: lighting|sunset
+sunrise: lighting|sunrise
+fog: subject|weather|fog
+snow: subject|weather|snow
+rain: subject|weather|rain
+
+# ── People ─────────────────────────────────────────────────────
+person: subject|person
+group of people: subject|group
+child: subject|child
+family: subject|family
+couple: subject|couple
+crowd: subject|crowd
+self-portrait: subject|self-portrait
+
+# ── Animals ────────────────────────────────────────────────────
+dog: subject|animal|dog
+cat: subject|animal|cat
+bird: subject|animal|bird
+horse: subject|animal|horse
+fish: subject|animal|fish
+insect: subject|animal|insect
+butterfly: subject|animal|butterfly
+
+# ── Urban / Vehicles ───────────────────────────────────────────
+building: subject|architecture|building
+bridge: subject|architecture|bridge
+road: subject|urban|road
+car: subject|vehicle|car
+bicycle: subject|vehicle|bicycle
+train: subject|vehicle|train
+airplane: subject|vehicle|airplane
+boat: subject|vehicle|boat
+skyscraper: subject|architecture|skyscraper
+
+# ── Food & Objects ─────────────────────────────────────────────
+food: subject|food
+drink: subject|food|drink
+book: subject|object|book
+clothing: subject|object|clothing
+jewelry: subject|object|jewelry
+furniture: subject|object|furniture
+
+# ── Events ─────────────────────────────────────────────────────
+wedding: event|wedding
+concert: event|concert
+festival: event|festival
+sports: event|sports
+celebration: event|celebration
+ceremony: event|ceremony
+
+# ── Artistic technique / composition ───────────────────────────
+black and white: technique|black-and-white
+long exposure: technique|long-exposure
+silhouette: technique|silhouette
+reflection: composition|reflection
+shadow: composition|shadow
+abstract: technique|abstract
+minimalist: technique|minimalist
+texture: technique|texture
+pattern: composition|pattern
+bokeh: technique|bokeh
+motion blur: technique|motion-blur
+
+# ── Seasonal ───────────────────────────────────────────────────
+spring: season|spring
+summer: season|summer
+autumn: season|autumn
+winter: season|winter
+
+# ── Travel ─────────────────────────────────────────────────────
+travel: subject|travel
+landmark: subject|landmark
+monument: subject|landmark|monument
+ruins: subject|landmark|ruins
+market: subject|venue|market
+museum: subject|venue|museum
+church: subject|venue|church
+temple: subject|venue|temple
+
+# ── Non-photo formats ──────────────────────────────────────────
+document: type|document
+screenshot: type|screenshot
+infographic: type|infographic
+product photography: subject|product

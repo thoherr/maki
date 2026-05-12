@@ -34,13 +34,24 @@ pub(super) fn resolve_model_dir(config: &crate::config::AiConfig) -> std::path::
     crate::config::resolve_model_dir(&config.model_dir, &config.model)
 }
 
-/// Load the auto-tag label list (from a configured labels file, or the built-in
-/// default vocabulary).
-pub(super) fn resolve_labels(config: &crate::config::AiConfig) -> Result<Vec<String>, String> {
+/// Load the active vocabulary — labels the model is scored against,
+/// plus the (possibly identity) mapping from those flat labels to
+/// hierarchical MAKI tags.
+///
+/// Resolution order:
+/// 1. `[ai].labels = "x.yaml"` (or `.yml`) — full vocabulary with mapping
+/// 2. `[ai].labels = "x.txt"` (or any other extension) — flat labels,
+///    identity mapping (preserves pre-v4.5.x semantics for users who
+///    haven't migrated to the YAML format yet)
+/// 3. neither — built-in [`default_vocabulary`] (96 labels organised
+///    by facet, see `src/default-vocabulary.yaml`)
+pub(super) fn resolve_vocabulary(
+    config: &crate::config::AiConfig,
+) -> Result<crate::ai_vocabulary::Vocabulary, String> {
     if let Some(ref labels_path) = config.labels {
-        crate::ai::load_labels_from_file(std::path::Path::new(labels_path))
-            .map_err(|e| format!("Failed to load labels: {e}"))
+        crate::ai_vocabulary::load_from_path(std::path::Path::new(labels_path))
+            .map_err(|e| format!("Failed to load vocabulary: {e:#}"))
     } else {
-        Ok(crate::ai::DEFAULT_LABELS.iter().map(|s| s.to_string()).collect())
+        Ok(crate::ai_vocabulary::default_vocabulary())
     }
 }

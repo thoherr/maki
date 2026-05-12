@@ -1203,15 +1203,29 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
             html += '</div>';
             suggestions.forEach(function(s) {
                 var pct = Math.round(s.confidence * 100);
+                var dataTag = s.tag.replace(/"/g,'&quot;');
+                // Hierarchical mapping in effect: model picked `source_label`,
+                // we'd apply the hierarchical `tag`. Show the source as a
+                // small caption so the user can see what the AI actually
+                // classified vs. what they'd apply.
+                var srcAttr = '';
+                var srcCaption = '';
+                if (s.source_label) {
+                    var srcEsc = s.source_label.replace(/"/g,'&quot;');
+                    srcAttr = ' title="AI picked: ' + srcEsc + '"';
+                    srcCaption = '<span class="ai-tag-source">(from ' + srcEsc + ')</span>';
+                }
                 if (s.existing) {
-                    html += '<span class="ai-tag-suggestion ai-tag-existing" data-tag="' + s.tag.replace(/"/g,'&quot;') + '">' +
+                    html += '<span class="ai-tag-suggestion ai-tag-existing" data-tag="' + dataTag + '"' + srcAttr + '>' +
                         s.tag +
+                        srcCaption +
                         '<span class="ai-tag-confidence">' + pct + '%</span>' +
                         '<span class="ai-tag-existing-label">already applied</span>' +
                         '</span>';
                 } else {
-                    html += '<span class="ai-tag-suggestion" data-tag="' + s.tag.replace(/"/g,'&quot;') + '">' +
+                    html += '<span class="ai-tag-suggestion" data-tag="' + dataTag + '"' + srcAttr + '>' +
                         s.tag +
+                        srcCaption +
                         '<span class="ai-tag-confidence">' + pct + '%</span>' +
                         '<span class="ai-tag-accept" title="Accept" onclick="acceptTag(this)">&#10003;</span>' +
                         '<span class="ai-tag-dismiss" title="Dismiss" onclick="this.closest(\'.ai-tag-suggestion\').remove();">&times;</span>' +

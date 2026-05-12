@@ -17,9 +17,17 @@ use crate::web::AppState;
 
 #[derive(Debug, serde::Serialize)]
 pub struct SuggestTagsResponse {
+    /// Hierarchical tag MAKI would apply when this suggestion is accepted.
     pub tag: String,
     pub confidence: f32,
     pub existing: bool,
+    /// When the active vocabulary mapped a non-identity label → tag,
+    /// the original label the SigLIP model actually picked. Surfaced
+    /// as a small "(from: sunset)" subtitle in the dropdown so the
+    /// user can see what the AI classified the image as underneath
+    /// the hierarchical tag. `None` for identity mappings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_label: Option<String>,
 }
 
 /// POST /api/asset/{id}/suggest-tags — suggest tags for an asset using AI.
@@ -110,20 +118,26 @@ fn suggest_tags_inner(
     }
     let model = model_opt.as_mut().unwrap();
 
-    let labels = super::resolve_labels(&state.ai_config)?;
-    let label_cache_read = state.ai_label_cache.blocking_read();
-    let cached = label_cache_read.is_some();
-    drop(label_cache_read);
+    let vocabulary = super::resolve_vocabulary(&state.ai_config)?;
+    // Cache hit requires the cached label list to match the currently-
+    // resolved labels exactly. If the user edits `[ai].labels` (or the
+    // YAML file behind it) between requests, the stale embeddings can't
+    // be reused — the indices wouldn't line up with the new labels.
+    let cached_match = {
+        let guard = state.ai_label_cache.blocking_read();
+        guard.as_ref().is_some_and(|(l, _)| l.as_slice() == vocabulary.labels.as_slice())
+    };
 
-    let (label_list, label_embs) = if cached {
+    let (label_list, label_embs) = if cached_match {
         let guard = state.ai_label_cache.blocking_read();
         let (l, e) = guard.as_ref().unwrap();
         (l.clone(), e.clone())
     } else {
-        vlog!("encoding {} labels (cold cache)…", labels.len());
+        vlog!("encoding {} labels (cold cache)…", vocabulary.labels.len());
         let t_enc = std::time::Instant::now();
         let prompt_template = &state.ai_config.prompt;
-        let prompted: Vec<String> = labels
+        let prompted: Vec<String> = vocabulary
+            .labels
             .iter()
             .map(|l| ai::apply_prompt_template(prompt_template, l))
             .collect();
@@ -132,8 +146,8 @@ fn suggest_tags_inner(
             .map_err(|e| format!("Failed to encode labels: {e:#}"))?;
         vlog!("labels encoded ({:?})", t_enc.elapsed());
         let mut guard = state.ai_label_cache.blocking_write();
-        *guard = Some((labels.clone(), embs.clone()));
-        (labels, embs)
+        *guard = Some((vocabulary.labels.clone(), embs.clone()));
+        (vocabulary.labels.clone(), embs)
     };
 
     vlog!("encoding image…");
@@ -160,7 +174,9 @@ fn suggest_tags_inner(
 
     // Config carries f64 (TOML round-trips cleanly that way); classify() takes f32.
     let threshold = state.ai_config.threshold as f32;
-    let suggestions = model.classify(&image_emb, &label_list, &label_embs, threshold);
+    let flat_suggestions = model.classify(&image_emb, &label_list, &label_embs, threshold);
+    // Fan out into hierarchical tags + dedup by max confidence.
+    let mapped = vocabulary.apply(flat_suggestions);
 
     let existing: std::collections::HashSet<String> = details
         .tags
@@ -168,15 +184,13 @@ fn suggest_tags_inner(
         .map(|t| t.to_lowercase())
         .collect();
 
-    let result: Vec<SuggestTagsResponse> = suggestions
+    let result: Vec<SuggestTagsResponse> = mapped
         .into_iter()
-        .map(|s| {
-            let is_existing = existing.contains(&s.tag.to_lowercase());
-            SuggestTagsResponse {
-                tag: s.tag,
-                confidence: s.confidence,
-                existing: is_existing,
-            }
+        .map(|s| SuggestTagsResponse {
+            existing: existing.contains(&s.tag.to_lowercase()),
+            tag: s.tag,
+            confidence: s.confidence,
+            source_label: s.source_label,
         })
         .collect();
 
@@ -287,7 +301,7 @@ fn batch_auto_tag_inner(
     }
     let model = model_guard.as_mut().unwrap();
 
-    let labels = super::resolve_labels(&state.ai_config)?;
+    let vocabulary = super::resolve_vocabulary(&state.ai_config)?;
     let label_cache_read = state.ai_label_cache.blocking_read();
     let cached = label_cache_read.is_some();
     drop(label_cache_read);
@@ -298,7 +312,8 @@ fn batch_auto_tag_inner(
         (l.clone(), e.clone())
     } else {
         let prompt_template = &state.ai_config.prompt;
-        let prompted: Vec<String> = labels
+        let prompted: Vec<String> = vocabulary
+            .labels
             .iter()
             .map(|l| ai::apply_prompt_template(prompt_template, l))
             .collect();
@@ -306,8 +321,8 @@ fn batch_auto_tag_inner(
             .encode_texts(&prompted)
             .map_err(|e| format!("Failed to encode labels: {e:#}"))?;
         let mut guard = state.ai_label_cache.blocking_write();
-        *guard = Some((labels.clone(), embs.clone()));
-        (labels, embs)
+        *guard = Some((vocabulary.labels.clone(), embs.clone()));
+        (vocabulary.labels.clone(), embs)
     };
 
     let threshold = state.ai_config.threshold as f32;
@@ -387,7 +402,8 @@ fn batch_auto_tag_inner(
             }
         }
 
-        let suggestions = model.classify(&image_emb, &label_list, &label_embs, threshold);
+        let flat_suggestions = model.classify(&image_emb, &label_list, &label_embs, threshold);
+        let mapped = vocabulary.apply(flat_suggestions);
 
         let existing: std::collections::HashSet<String> = details
             .tags
@@ -395,7 +411,7 @@ fn batch_auto_tag_inner(
             .map(|t| t.to_lowercase())
             .collect();
 
-        let new_tags: Vec<String> = suggestions
+        let new_tags: Vec<String> = mapped
             .into_iter()
             .filter(|s| !existing.contains(&s.tag.to_lowercase()))
             .map(|s| s.tag)

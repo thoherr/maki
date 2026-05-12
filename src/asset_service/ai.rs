@@ -9,6 +9,12 @@ impl AssetService {
     // ═══ AI & FACES ═══
 
     /// Auto-tag assets using SigLIP zero-shot classification.
+    ///
+    /// `vocabulary` carries both the flat labels the model is scored
+    /// against AND the (possibly identity) mapping to hierarchical
+    /// MAKI tags. The classify output is mapped before being applied
+    /// to the asset so the same hierarchy-aware flow works from the
+    /// CLI as from the web UI.
     #[cfg(feature = "ai")]
     pub fn auto_tag(
         &self,
@@ -16,7 +22,7 @@ impl AssetService {
         asset_id: Option<&str>,
         volume: Option<&str>,
         threshold: f32,
-        labels: &[String],
+        vocabulary: &crate::ai_vocabulary::Vocabulary,
         prompt_template: &str,
         apply: bool,
         model_dir: &std::path::Path,
@@ -24,7 +30,7 @@ impl AssetService {
         execution_provider: &str,
         on_asset: impl Fn(&str, &crate::ai::AutoTagStatus, Duration),
     ) -> Result<crate::ai::AutoTagResult> {
-        use crate::ai::{self, AutoTagResult, AutoTagStatus, AssetSuggestions, SigLipModel};
+        use crate::ai::{self, AutoTagResult, AutoTagStatus, AutoTagSuggestion, AssetSuggestions, SigLipModel};
         use crate::catalog::Catalog;
         use crate::embedding_store::EmbeddingStore;
         use crate::preview::PreviewGenerator;
@@ -40,7 +46,8 @@ impl AssetService {
         let mut model = SigLipModel::load_with_provider(model_dir, model_id, self.verbosity, execution_provider)?;
 
         // Prepare label texts with prompt template
-        let prompted_labels: Vec<String> = labels
+        let prompted_labels: Vec<String> = vocabulary
+            .labels
             .iter()
             .map(|l| ai::apply_prompt_template(prompt_template, l))
             .collect();
@@ -147,15 +154,26 @@ impl AssetService {
             }
             let _ = crate::embedding_store::write_embedding_binary(&self.catalog_root, model_id, aid, &image_emb);
 
-            // Classify
-            let suggestions = if self.verbosity.debug {
+            // Classify (against the flat labels), then apply the
+            // hierarchical mapping. Suggestions returned to the rest
+            // of the loop are post-mapping — `s.tag` is the final
+            // hierarchical tag MAKI will apply.
+            let flat_suggestions = if self.verbosity.debug {
                 eprintln!("  [debug] asset {} — image: {}", &aid[..8.min(aid.len())], image_path.display());
                 let norm: f32 = image_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
                 eprintln!("  [debug] embedding norm: {norm:.6} (expected ~1.0 for L2-normalized)");
-                model.classify_debug(&image_emb, labels, &label_embs, threshold)
+                model.classify_debug(&image_emb, &vocabulary.labels, &label_embs, threshold)
             } else {
-                model.classify(&image_emb, labels, &label_embs, threshold)
+                model.classify(&image_emb, &vocabulary.labels, &label_embs, threshold)
             };
+            let suggestions: Vec<AutoTagSuggestion> = vocabulary
+                .apply(flat_suggestions)
+                .into_iter()
+                .map(|m| AutoTagSuggestion {
+                    tag: m.tag,
+                    confidence: m.confidence,
+                })
+                .collect();
 
             // Filter out tags already on the asset
             let existing_tags: HashSet<String> = details
