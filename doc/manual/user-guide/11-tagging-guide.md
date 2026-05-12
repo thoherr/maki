@@ -387,59 +387,142 @@ If your unique tag count is climbing past 1,000 (excluding person names and even
 
 ## Auto-Tagging and the Label Vocabulary
 
-MAKI's auto-tagging uses a vision-language model (SigLIP) to suggest tags based on visual content. It works by matching image features against a list of text labels -- the **label vocabulary**.
+MAKI's auto-tagging uses a vision-language model (SigLIP) to suggest tags based on visual content. It works by matching image features against a list of text labels -- the **AI vocabulary**.
 
-The label vocabulary is different from your full tag vocabulary:
+The AI vocabulary is different from your **catalog vocabulary** (the tag tree this chapter is otherwise about), and the two interact:
 
-| | Label vocabulary (auto-tagging) | Full vocabulary (human tagging) |
+| | AI vocabulary | Catalog vocabulary |
 |---|---|---|
 | **Purpose** | What the AI model can *see* | What you want to *find* |
-| **Structure** | Flat list, one term per line | Hierarchical tree |
-| **Size** | 200-400 terms | 300-500+ terms |
+| **Structure** | Flat list of labels, each mapped to one or more hierarchical tags | Hierarchical tree |
+| **Size** | 100-400 labels | 300-500+ tags |
 | **Content** | Visually recognizable concepts | Includes abstract, contextual, personal terms |
-| **Examples** | `sunset`, `concert`, `dog`, `bridge` | `subject/event/workshop`, `project/Bricking Bavaria` |
+| **Examples** | `sunset`, `concert`, `dog`, `bridge` | `subject\|event\|workshop`, `project\|Bricking Bavaria` |
+
+The AI suggests tags from a flat vocabulary; the mapping converts each hit into the canonical hierarchical tag MAKI actually applies. Both vocabularies ship with sensible defaults, and the defaults are coherent -- every tag the AI vocabulary maps to is also a leaf in the catalog vocabulary, so the two stay in sync.
 
 ### Configuring labels
 
-Create a text file with one label per line:
+The AI vocabulary lives in a single YAML file. Keys are the labels the model sees; values are the hierarchical tag(s) to suggest when a label scores above threshold:
 
-```
-# my-labels.txt
-landscape
-portrait
-concert
-street photography
-...
+```yaml
+# my-labels.yaml
+sunset:
+  - subject|nature|sky
+  - technique|lighting|golden hour
+concert: subject|performing arts|concert
+portrait: subject|person|portrait
+dog: subject|animal|domestic
+abstract: subject|concept|abstract
+# null = "leave the label flat, no canonical mapping"
+weather:
 ```
 
-Reference it in `maki.toml`:
+Point `maki.toml` at it:
 
 ```toml
 [ai]
-labels = "my-labels.txt"
+labels = "my-labels.yaml"
 threshold = 0.3
 ```
 
 A higher threshold (0.3-0.5) produces fewer but more confident suggestions. A lower threshold (0.1-0.2) casts a wider net at the cost of more false positives.
 
-### Label design tips
-
-- Use **short, concrete phrases**: `mountain` works better than `mountainous terrain`
-- Match the prompt template: with the default `"a photograph of {}"`, labels should read naturally after "a photograph of" -- "a photograph of a sunset" (good), "a photograph of a subject|nature|sky|sunset" (bad)
-- **Don't use hierarchy in labels** -- the model sees text, not structure. Use flat terms
-- Include **genre labels** that vision models handle well: `concert`, `portrait`, `landscape`, `macro`, `street photography`, `architecture`
-- Include **compositional labels**: `silhouette`, `reflection`, `bokeh`, `long exposure`
-- Skip things the model can't see: person names, event names, abstract concepts, workflow state
-- Test and iterate: run `maki auto-tag --asset <id> --log` on a few representative images to see what the model suggests at your current threshold
-
-### Mapping labels to hierarchical tags
-
-Auto-tagging produces flat labels (`concert`, `sunset`). You can manually place these into your hierarchy when accepting suggestions, or accept them flat and batch-reorganize later using tag rename:
+To start from the built-in default (which already maps 96 photographic labels into the canonical hierarchy described in this chapter), dump it and edit:
 
 ```bash
-# Rename flat tags into hierarchy (example)
-maki tag rename "concert" "subject|performing arts|concert"
+maki ai export-vocabulary --default > my-labels.yaml
 ```
+
+Legacy `.txt` flat-list files (one label per line, identity mapping) still load — the loader picks format by extension. To migrate an existing flat list to YAML with identity mappings as a starting point:
+
+```bash
+maki ai export-vocabulary > my-labels.yaml   # converts the active .txt file
+```
+
+### Label design tips
+
+- Use **short, concrete phrases**: `mountain` works better than `mountainous terrain`.
+- Match the prompt template: with the default `"a photograph of {}"`, labels should read naturally after "a photograph of" -- "a photograph of a sunset" (good), "a photograph of a subject|nature|sky|sunset" (bad).
+- **Don't use hierarchy in label keys** -- the model sees the key as text and scores the image against it. Use flat terms for keys; put hierarchy in the values.
+- Include **genre labels** that vision models handle well: `concert`, `portrait`, `landscape`, `macro`, `street photography`, `architecture`.
+- Include **compositional labels**: `silhouette`, `reflection`, `bokeh`, `long exposure`.
+- Skip things the model can't see: person names, event names, abstract concepts, workflow state.
+- Test and iterate: `maki auto-tag --asset <id> --log` on a few representative images shows what the model picks at your threshold.
+
+### When AI specificity meets your catalog hierarchy
+
+The shipped default vocabulary maps to canonical leaves: `dog` and `cat` both land on `subject|animal|domestic`, `car` and `train` both on `subject|urban|transport`, every kind of book/jewelry/furniture on `subject|object|other`. The mapping is deliberately conservative -- the default catalog vocabulary stops at the genus level, so the default AI vocabulary maps no deeper than that. It's a scaffold; no orphan tags appear in autocomplete out of the box.
+
+But the AI saw something more specific. The model picked `dog` because it actually *looks* like a dog; collapsing that to `domestic` loses information that your tag tree may want to capture. Three coherent strategies, depending on how much your catalog has grown:
+
+**1. Conservative.** Keep the default mapping. Tag genus-level (`subject|animal|domestic`, `subject|object|other`). Filter by what's in the photo via search rather than tag hierarchy depth. Good when you're starting out, or when species-level distinctions don't drive how you browse.
+
+**2. Extend both vocabularies together.** If your catalog already has `subject|animal|domestic|dog`, `subject|animal|domestic|cat`, etc. as real tags, point the AI mapping at those leaves so AI suggestions land where you want them. Two files to edit:
+
+```yaml
+# my-labels.yaml — point AI labels at the leaves
+dog:   subject|animal|domestic|dog
+cat:   subject|animal|domestic|cat
+horse: subject|animal|domestic|horse
+```
+
+```yaml
+# vocabulary.yaml — declare those leaves in the catalog vocabulary
+subject:
+  animal:
+    domestic:
+      - dog
+      - cat
+      - horse
+      - cow
+      - sheep
+```
+
+The two files evolve together: every leaf you tag actively becomes a leaf in `vocabulary.yaml`, and the AI mapping points at it. The pair stays consistent.
+
+**3. Promote a branch.** When the canonical nesting doesn't fit, lift the branch to its own facet. Example: vehicles aren't always urban -- a tractor in a field, a fishing boat at sea, an airplane in flight don't belong under `subject|urban|transport`. Some photographers promote `transport` to a top-level `subject|vehicle` facet:
+
+```yaml
+subject:
+  vehicle:
+    - car
+    - truck
+    - motorcycle
+    - bicycle
+    - train
+    - airplane
+    - boat
+```
+
+```yaml
+# my-labels.yaml — re-point the AI labels
+car:      subject|vehicle|car
+truck:    subject|vehicle|truck
+bicycle:  subject|vehicle|bicycle
+# ...
+```
+
+See [Thinking in facets](#thinking-in-facets-when-to-promote-a-branch-to-top-level) for when this kind of promotion is the right call.
+
+**Best practices**
+
+- **Start with the default.** Run `maki ai export-vocabulary --default > my-labels.yaml` and look through it before customizing. The default is a working baseline that's coherent with the default catalog vocabulary.
+- **Add leaves you actually browse by.** Don't pre-emptively add every species name the AI knows -- the catalog vocabulary should reflect axes you genuinely filter on, not theoretical completeness. Add a leaf the first time you'd want to filter by it.
+- **Keep both files in sync.** When you add a leaf to `vocabulary.yaml`, update `my-labels.yaml` so the AI label maps to it. When you remove a leaf, scan `my-labels.yaml` for orphan references. (A future helper command may automate the consistency check.)
+- **Use fan-out sparingly.** One label can map to multiple tags (sunset → sky subject AND golden-hour lighting). Useful for labels that genuinely span two facets, noisy otherwise -- if every "wedding" suggestion adds three tags you didn't want, you've over-fanned.
+- **Null where it doesn't fit.** Labels with no clean canonical home (weather, seasonal, generic terms) stay `null` and surface flat. Decide what to do with each *when you see it on a real photo*, not in the vocabulary file ahead of time.
+
+### Renaming legacy flat tags into hierarchy
+
+If your catalog has flat tags from earlier AI runs (before the YAML mapping existed), batch-reorganize with `maki tag rename`:
+
+```bash
+maki tag rename "concert" "subject|performing arts|concert"
+maki tag rename "dog" "subject|animal|domestic|dog"
+```
+
+Then update `my-labels.yaml` so future AI suggestions land at the new path directly.
 
 ---
 
