@@ -217,7 +217,16 @@
         });
         if (current != null) sel.value = String(current);
         else if (isOptional(node)) sel.value = '';
-        var originalValue = current === undefined ? null : current;
+        // Preserve `undefined` (key absent in the loaded JSON) as-is rather
+        // than coercing to null. setValue + JSON.stringify drop undefined
+        // keys entirely, so the request mirrors the "key was absent" state
+        // on the server. Serde's #[serde(default)] then fills in Vec::new(),
+        // false, None, etc. — matching the original config exactly. Coercing
+        // to null breaks non-Option Vec<String> fields (`Vec::is_empty` makes
+        // them skip-serialize when empty), which would otherwise see a
+        // pristine widget submit JSON null and fail validation with
+        // "invalid type: null, expected a sequence".
+        var originalValue = current;
         var dirty = false;
         sel.addEventListener('change', function() { dirty = true; });
         collectors[pathKey(path)] = function() {
@@ -233,7 +242,16 @@
         cb.type = 'checkbox';
         cb.className = 'config-checkbox';
         cb.checked = !!current;
-        var originalValue = current === undefined ? null : current;
+        // Preserve `undefined` (key absent in the loaded JSON) as-is rather
+        // than coercing to null. setValue + JSON.stringify drop undefined
+        // keys entirely, so the request mirrors the "key was absent" state
+        // on the server. Serde's #[serde(default)] then fills in Vec::new(),
+        // false, None, etc. — matching the original config exactly. Coercing
+        // to null breaks non-Option Vec<String> fields (`Vec::is_empty` makes
+        // them skip-serialize when empty), which would otherwise see a
+        // pristine widget submit JSON null and fail validation with
+        // "invalid type: null, expected a sequence".
+        var originalValue = current;
         var dirty = false;
         cb.addEventListener('change', function() { dirty = true; });
         collectors[pathKey(path)] = function() {
@@ -260,7 +278,16 @@
         input.step = 'any';
         if (current != null) input.value = String(current);
         var isInt = nodeType(node) === 'integer';
-        var originalValue = current === undefined ? null : current;
+        // Preserve `undefined` (key absent in the loaded JSON) as-is rather
+        // than coercing to null. setValue + JSON.stringify drop undefined
+        // keys entirely, so the request mirrors the "key was absent" state
+        // on the server. Serde's #[serde(default)] then fills in Vec::new(),
+        // false, None, etc. — matching the original config exactly. Coercing
+        // to null breaks non-Option Vec<String> fields (`Vec::is_empty` makes
+        // them skip-serialize when empty), which would otherwise see a
+        // pristine widget submit JSON null and fail validation with
+        // "invalid type: null, expected a sequence".
+        var originalValue = current;
         var dirty = false;
         input.addEventListener('input', function() { dirty = true; });
         collectors[pathKey(path)] = function() {
@@ -283,7 +310,16 @@
         input.type = 'text';
         input.className = 'config-input';
         if (current != null) input.value = String(current);
-        var originalValue = current === undefined ? null : current;
+        // Preserve `undefined` (key absent in the loaded JSON) as-is rather
+        // than coercing to null. setValue + JSON.stringify drop undefined
+        // keys entirely, so the request mirrors the "key was absent" state
+        // on the server. Serde's #[serde(default)] then fills in Vec::new(),
+        // false, None, etc. — matching the original config exactly. Coercing
+        // to null breaks non-Option Vec<String> fields (`Vec::is_empty` makes
+        // them skip-serialize when empty), which would otherwise see a
+        // pristine widget submit JSON null and fail validation with
+        // "invalid type: null, expected a sequence".
+        var originalValue = current;
         var dirty = false;
         input.addEventListener('input', function() { dirty = true; });
         collectors[pathKey(path)] = function() {
@@ -305,7 +341,16 @@
         input.className = 'config-input';
         input.placeholder = 'comma-separated';
         if (Array.isArray(current)) input.value = current.join(', ');
-        var originalValue = current === undefined ? null : current;
+        // Preserve `undefined` (key absent in the loaded JSON) as-is rather
+        // than coercing to null. setValue + JSON.stringify drop undefined
+        // keys entirely, so the request mirrors the "key was absent" state
+        // on the server. Serde's #[serde(default)] then fills in Vec::new(),
+        // false, None, etc. — matching the original config exactly. Coercing
+        // to null breaks non-Option Vec<String> fields (`Vec::is_empty` makes
+        // them skip-serialize when empty), which would otherwise see a
+        // pristine widget submit JSON null and fail validation with
+        // "invalid type: null, expected a sequence".
+        var originalValue = current;
         var dirty = false;
         input.addEventListener('input', function() { dirty = true; });
         collectors[pathKey(path)] = function() {
