@@ -2,6 +2,110 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.5.7 (2026-05-12)
+
+A mixed release. Headline feature is **hierarchical AI tagging** — the SigLIP zero-shot classifier still produces flat labels under the hood, but a new vocabulary YAML format maps each label to the canonical hierarchical tag(s) MAKI applies, eliminating the post-suggestion cleanup pass users had been doing by hand. Headline fix is the **`encode_texts` chunking that stopped Suggest tags from OOM-killing the server** on real-world custom vocabularies. Plus comment-preserving config saves, a writeback bugfix, and several smaller refinements.
+
+Tests: 797 + 249 standard, 915 + 277 pro (up from 794 / 249 / 901 / 277).
+
+### AI vocabulary with hierarchical mapping
+
+The SigLIP zero-shot classifier is inherently flat — it scores an image against bare labels like "sunset" or "wedding". Users who maintain a hierarchical tag taxonomy (the tagging guide's whole pitch — `lighting|sunset`, `event|wedding`, …) had to manually rename every "new" tag the AI applied. Reported workflow: run Suggest tags, get 20 suggestions back, spend 5 minutes converting each one.
+
+A new YAML format for `[ai] labels` carries both the labels the model sees AND the hierarchical tag(s) to suggest when a label scores. Detected by extension on load:
+
+```yaml
+# my-labels.yaml
+sunset:
+  - subject|nature|sky
+  - technique|lighting|golden hour
+concert: subject|performing arts|concert
+dog: subject|animal|domestic
+abstract: subject|concept|abstract
+weather: null     # null = leave flat, no canonical mapping
+```
+
+Keys are the labels (single source of truth — no separate `my-labels.txt` to keep in sync). Values: a single hierarchical tag, a list (one-to-many fan-out — `sunset` lands on BOTH the sky subject and the golden-hour lighting in one suggestion), or `null` (leave the label flat). Apply step fans out + dedups by max confidence so two flat labels that map to the same tag don't double-suggest.
+
+A new module `src/ai_vocabulary.rs` carries the loader and apply step. The flow runs for both `POST /api/asset/{id}/suggest-tags` and `POST /api/batch/auto-tag`, and CLI `maki auto-tag` goes through the same path via `AssetService::auto_tag` — same hierarchy-aware result at both surfaces.
+
+`SuggestTagsResponse` gains a `source_label: Option<String>`. When the vocabulary applied a non-identity mapping, the dropdown shows a small "(from sunset)" caption next to the hierarchical tag so the user sees what the AI actually classified the image as underneath the applied tag.
+
+Built-in default vocabulary `src/default-vocabulary.yaml` maps the 96 default photographic labels into the canonical hierarchy documented in the tagging guide. A new strict consistency test `default_vocabulary_targets_exist_in_canonical_hierarchy` walks the AI vocabulary, takes each non-identity mapping target, and asserts it appears in the parsed-canonical set from `crate::vocabulary::parse_vocabulary(default_vocabulary())`. This locks the contract: any future edit that introduces a mapping not in the canonical hierarchy fails CI.
+
+Backward compat is total. Three concentric layers:
+
+1. No `[ai].labels` set → built-in default labels with the default hierarchical mapping (new).
+2. `[ai].labels = "x.txt"` → load txt as flat list, identity mapping (today's behaviour, unchanged).
+3. `[ai].labels = "x.yaml"` → load vocabulary + mapping (new).
+
+The label cache (`state.ai_label_cache`) gains a labels-equality check so editing the vocabulary mid-session invalidates the cached embeddings instead of silently mis-indexing.
+
+### `maki ai export-vocabulary`
+
+New CLI command group `maki ai` for AI utilities (only subcommand so far is `export-vocabulary`):
+
+```bash
+# Fork the built-in default vocabulary to start your own
+maki ai export-vocabulary --default > my-labels.yaml
+
+# Migrate an existing legacy .txt file to YAML (preserves order)
+maki ai export-vocabulary > my-labels.yaml
+
+# Save anywhere via --output
+maki ai export-vocabulary --default --output ~/photos/vocab.yaml
+```
+
+Parallels `maki tag export-vocabulary` for the catalog tag taxonomy — same `--default` flag shape, same stdout-by-default + `--output FILE`. When the active vocabulary is a `.yaml` file, output is verbatim (preserves user comments + key order). When it's a `.txt` file, it's converted to YAML with identity mappings (`label: null`) as a migration template.
+
+### `subject|vehicle` promoted to its own facet
+
+Following the tagging guide's "Thinking in facets" principle: vehicles aren't always urban (a tractor in a field, a fishing boat at sea, an airplane in flight). The default catalog vocabulary loses `subject|urban|transport` and gains a top-level `subject|vehicle` facet with seven leaves: `car, truck, motorcycle, bicycle, train, airplane, boat`. The default AI vocabulary re-points `car`/`bicycle`/`train`/`airplane`/`boat` accordingly. `road` stays on `subject|urban|street` (road infra is street, not vehicle).
+
+`vehicle` is the one species-deep branch in the default — most others stop at genus level. The tagging guide's "When AI specificity meets your catalog hierarchy" section explains the reasoning so users can apply the same logic to their own catalogs.
+
+User data is unaffected — catalogs already using `subject|urban|transport|*` keep working unchanged. The change is purely to the default scaffold for new catalogs and to where new AI suggestions land.
+
+### Suggest-tags safety nets
+
+A user report: Suggest tags hanging for 90+ seconds, then `Failed to fetch` in the browser, then `zsh: killed` on the CLI. Process RSS hit 95 GB before macOS jetsam killed it. Three findings:
+
+- **`encode_texts` was running the entire vocabulary through ONNX in a single batch.** For a 322-label custom vocabulary on SigLIP 2 Large multilingual (1024-dim, 24+ transformer layers) with the CoreML execution provider on Apple Silicon, intermediate attention activations balloon proportional to `batch * seq_len² * heads * layers`. The 322-label batch pushed the process past 90 GB resident. **Fix: chunk into 32-label mini-batches.** Output is bit-identical (each label still passes through the same encoder; only the batch-dimension grouping changes). Per-call ONNX allocation drops by an order of magnitude.
+
+- **`image::ImageReader::no_limits()` removed the crate's 512 MiB decode cap in the AI preprocess path,** so an unexpectedly large outlier image (200 MP film scan, malformed file) could OOM the process during decode-before-resize. **Fix: bounded 2 GiB cap via `image::Limits`.** Medium-format 16-bit TIFFs (~600 MB decoded) still work; outliers fail with an actionable error pointing at `maki generate-previews --upgrade`.
+
+- **The suggest-tags hot path had no progress markers,** so when CoreML compilation or label encoding took 60+ seconds the user saw nothing on stderr — couldn't tell whether the process was stuck or working. **Fix: phase timing prints behind `--verbose`** at every boundary (image resolved, model lock acquired, model loaded, labels encoded, image encoded, classified). When the request hangs, the last line printed before the kill names the responsible phase.
+
+### Settings save: preserve comments + per-key formatting
+
+Opening the Settings dialog and clicking Save without changing anything used to rewrite `maki.toml` — comments above sections gone, every default-valued field spelled out, the user's notes on which SigLIP variant is active dropped. Cause: the save path ran the typed `CatalogConfig` through `toml::to_string_pretty`, which round-trips data correctly but doesn't preserve formatting metadata.
+
+The web save path now uses a field-level diff against the on-disk representation, applied to a `toml_edit::DocumentMut` parsed from the existing file. `DocumentMut` preserves comments, blank lines, key order, single vs double quotes — every formatting choice the user made by hand. The diff walks both `new_config` and `current_config` as `serde_json` trees and only touches keys whose values actually differ. Touched keys get value-replaced in place (the key's decor stays); untouched keys are never visited.
+
+A no-op save now round-trips byte-identical to the input — three new regression tests pin this contract:
+
+- `save_with_comments_no_op_is_byte_identical`
+- `save_with_comments_single_field_change_keeps_comments`
+- `save_with_comments_optional_clear_removes_line`
+
+`CatalogConfig::save` itself is untouched — still used by `maki init` and any CLI path that writes a fresh file. Only the Settings dialog's save endpoint flows through the new function.
+
+### Settings form: pristine-state tracking per widget
+
+Follow-up to the comment-preserving save. The form was still adding entries to `[import.profiles.<name>]` sub-tables on no-op saves — most visibly default-`false` values for the Option<bool> fields (`embeddings`, `descriptions`, `smart_previews`). Cause was JS-side: rendering an `Option<bool>=None` produces an unchecked checkbox that looks identical to `Option<bool>=Some(false)`. The widget's collector then always returned `cb.checked` → so an untouched checkbox-rendered-from-None reported `false` on submit, the server-side diff saw `None → Some(false)` as a real change, and the toml_edit pass dutifully added `embeddings = false` to the section. Same shape for Option<Vec<String>>=None rendered as an empty CSV input.
+
+Each widget builder (enum select, bool checkbox, number input, text input, string-list input) now captures the `current` value at render time and only flips a `dirty` flag when the user fires an actual input/change event. The collector returns `originalValue` while pristine, and only computes from form state once the user has touched it. `undefined` (key absent from the loaded JSON) is preserved as `undefined` so `JSON.stringify` drops it from the request — `#[serde(default)]` then fills in `Vec::new()` / `false` / `None` on the server, matching the original "absent" state exactly.
+
+### Writeback: don't clear pending flag on skipped recipes
+
+`maki writeback` was force-clearing `pending_writeback` on every recipe in the per-asset process set after the inner per-recipe loop ran, without distinguishing recipes that actually completed from recipes that hit `continue` for an offline volume or missing file. The SQLite-side clear inside the loop was correctly gated (`continue` skipped it), but the YAML sidecar's clear loop afterwards iterated `recipe_entries` blindly and zeroed every flag — so the sidecar diverged from the DB on multi-variant assets with one offline variant.
+
+User-visible symptom: an asset with a variant on an unplugged drive would lose its `pending_writeback: true` mark in the YAML sidecar even though the actual write got skipped. A subsequent `rebuild-catalog` from YAML would then silently lose the staged edit.
+
+Fix tracks per-recipe success in a `cleared_recipe_ids: HashSet<String>` populated only when a recipe reaches the success path, and the sidecar-save loop now only touches recipes in that set. Skipped recipes keep their pending state in both layers so the next `maki writeback` picks them up when the volume comes back online.
+
+`--all`, `--mirror-tags`, and the web `POST /api/maintain/writeback` all flow through the same `writeback_process` and are covered by the same fix. New regression test `writeback_preserves_pending_when_volume_offline` registers a removable volume, edits, renames its mount to take it offline, runs writeback, restores the mount, and asserts both `maki status` and the YAML sidecar still report pending.
+
 ## v4.5.6 (2026-05-11)
 
 A bug-fix patch. One regression in the writeback flow: `maki writeback` was clearing the YAML sidecar's `pending_writeback` flag on recipes it had actually *skipped* (offline volume, missing file), so a `rebuild-catalog` from YAML would silently lose those staged edits.
