@@ -123,7 +123,19 @@ subject:
   urban:
     - architecture
     - street
-    - transport
+  vehicle:
+    # Promoted out of `subject|urban|transport` — vehicles aren't
+    # always urban (a tractor in a field, a fishing boat at sea, an
+    # airplane in flight don't belong under the "urban" branch).
+    # Treating vehicles as their own subject axis lets queries
+    # intersect them cleanly with any setting.
+    - car
+    - truck
+    - motorcycle
+    - bicycle
+    - train
+    - airplane
+    - boat
   person:
     - portrait
     - group

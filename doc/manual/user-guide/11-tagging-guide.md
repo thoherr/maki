@@ -162,8 +162,15 @@ subject
 │   └── domestic     (dog, cat, horse, cow, sheep, ...)
 ├── urban
 │   ├── architecture (building, bridge, skyscraper, tower, facade, ...)
-│   ├── street       (road, alley, graffiti, neon sign, shop front, ...)
-│   └── transport    (car, bicycle, train, airplane, boat, ...)
+│   └── street       (road, alley, graffiti, neon sign, shop front, ...)
+├── vehicle          (cross-cuts every setting — not constrained to urban)
+│   ├── car
+│   ├── truck
+│   ├── motorcycle
+│   ├── bicycle
+│   ├── train
+│   ├── airplane
+│   └── boat
 ├── person
 │   ├── portrait     (headshot, environmental portrait, candid, ...)
 │   ├── group        (family, couple, crowd, ...)
@@ -213,7 +220,7 @@ subject
 You don't need all of these on day one. Start with the top two levels and add
 leaf nodes as your collection demands them.
 
-**Subject qualifiers — style, condition, mood:** These three branches are *cross-cutting qualifiers* that can be combined with any other subject category. They describe *how* the subject looks or feels, not *what* it is. Tag a vintage car photo as `subject|urban|transport|car` + `subject|style|vintage`. Tag an abandoned factory as `subject|urban|architecture` + `subject|condition|abandoned` + `subject|mood|mysterious`.
+**Subject qualifiers — style, condition, mood:** These three branches are *cross-cutting qualifiers* that can be combined with any other subject category. They describe *how* the subject looks or feels, not *what* it is. Tag a vintage car photo as `subject|vehicle|car` + `subject|style|vintage`. Tag an abandoned factory as `subject|urban|architecture` + `subject|condition|abandoned` + `subject|mood|mysterious`.
 
 Don't confuse `subject|style` (the subject's visual era — vintage, modern, retro) with `technique|style` (the photographic technique — black and white, high key, infrared). A vintage car shot in black and white gets both: `subject|style|vintage` + `technique|style|black and white`.
 
@@ -452,7 +459,7 @@ maki ai export-vocabulary > my-labels.yaml   # converts the active .txt file
 
 ### When AI specificity meets your catalog hierarchy
 
-The shipped default vocabulary maps to canonical leaves: `dog` and `cat` both land on `subject|animal|domestic`, `car` and `train` both on `subject|urban|transport`, every kind of book/jewelry/furniture on `subject|object|other`. The mapping is deliberately conservative -- the default catalog vocabulary stops at the genus level, so the default AI vocabulary maps no deeper than that. It's a scaffold; no orphan tags appear in autocomplete out of the box.
+The shipped default vocabulary maps to canonical leaves: `dog` and `cat` both land on `subject|animal|domestic`, every kind of book/jewelry/furniture on `subject|object|other`. The mapping is deliberately conservative -- the default catalog vocabulary stops at the genus level for most branches, so the default AI vocabulary maps no deeper than that. It's a scaffold; no orphan tags appear in autocomplete out of the box. (One exception: the vehicle branch has species-level leaves out of the box -- see strategy 3 below for the reasoning.)
 
 But the AI saw something more specific. The model picked `dog` because it actually *looks* like a dog; collapsing that to `domestic` loses information that your tag tree may want to capture. Three coherent strategies, depending on how much your catalog has grown:
 
@@ -481,7 +488,7 @@ subject:
 
 The two files evolve together: every leaf you tag actively becomes a leaf in `vocabulary.yaml`, and the AI mapping points at it. The pair stays consistent.
 
-**3. Promote a branch.** When the canonical nesting doesn't fit, lift the branch to its own facet. Example: vehicles aren't always urban -- a tractor in a field, a fishing boat at sea, an airplane in flight don't belong under `subject|urban|transport`. Some photographers promote `transport` to a top-level `subject|vehicle` facet:
+**3. Promote a branch.** When the canonical nesting doesn't fit, lift the branch to its own facet. Worked example, taken from MAKI's own defaults: vehicles aren't always urban — a tractor in a field, a fishing boat at sea, an airplane in flight don't belong under an "urban" branch. The default vocabulary therefore puts vehicles in their own top-level subject facet:
 
 ```yaml
 subject:
@@ -495,15 +502,17 @@ subject:
     - boat
 ```
 
+and the default AI mapping points at those leaves directly:
+
 ```yaml
-# my-labels.yaml — re-point the AI labels
-car:      subject|vehicle|car
-truck:    subject|vehicle|truck
-bicycle:  subject|vehicle|bicycle
-# ...
+car:     subject|vehicle|car
+bicycle: subject|vehicle|bicycle
+train:   subject|vehicle|train
+airplane: subject|vehicle|airplane
+boat:    subject|vehicle|boat
 ```
 
-See [Thinking in facets](#thinking-in-facets-when-to-promote-a-branch-to-top-level) for when this kind of promotion is the right call.
+Apply the same reasoning to your own catalog when you notice a leaf that you keep wanting to use across multiple parent branches — that's the signal it's an independent axis, not a refinement. See [Thinking in facets](#thinking-in-facets-when-to-promote-a-branch-to-top-level) for the underlying principle.
 
 **Best practices**
 

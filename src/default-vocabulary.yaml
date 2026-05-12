@@ -113,16 +113,20 @@ fish: subject|animal|aquatic
 insect: subject|animal|invertebrate
 butterfly: subject|animal|invertebrate
 
-# ── Urban / vehicles ───────────────────────────────────────────────
+# ── Urban ──────────────────────────────────────────────────────────
 building: subject|urban|architecture
 bridge: subject|urban|architecture
 road: subject|urban|street
-car: subject|urban|transport
-bicycle: subject|urban|transport
-train: subject|urban|transport
-airplane: subject|urban|transport
-boat: subject|urban|transport
 skyscraper: subject|urban|architecture
+
+# ── Vehicles (top-level subject facet — see tagging guide) ─────────
+# Promoted out of `subject|urban|transport` because vehicles span
+# every setting, not just urban ones.
+car: subject|vehicle|car
+bicycle: subject|vehicle|bicycle
+train: subject|vehicle|train
+airplane: subject|vehicle|airplane
+boat: subject|vehicle|boat
 
 # ── Food & objects ─────────────────────────────────────────────────
 food: subject|object|food
