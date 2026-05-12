@@ -1,152 +1,183 @@
 # MAKI default AI vocabulary.
 #
-# Each key is a label the SigLIP model sees (so it must be a short,
-# embedding-friendly noun phrase). Each value is the hierarchical
-# MAKI tag (or list of tags) suggested when the model picks that
-# label.
+# Each key is a label the SigLIP model sees (a short, embedding-friendly
+# noun phrase). Each value is the canonical hierarchical MAKI tag (or
+# list of tags) suggested when the model picks that label.
 #
-# This file is the source of truth for both: the labels list is
-# derived from the keys at load time. There is no separate
-# my-labels.txt.
+# This file is the single source of truth: the labels list is derived
+# from the keys at load time — there is no separate my-labels.txt.
 #
 # To override: copy this file to your catalog (or anywhere), edit
-# freely, and point `[ai] labels = "path/to/your-vocab.yaml"` at
-# it in `maki.toml`. The `.yaml` / `.yml` extension is what
-# switches the loader into vocabulary mode. A plain `.txt` file
-# still works for backward-compatible flat-label setups (in
-# which case the suggested tag IS the label).
+# freely, and point `[ai] labels = "path/to/your-vocab.yaml"` at it
+# in maki.toml. The `.yaml` / `.yml` extension is what switches the
+# loader into vocabulary mode. A plain `.txt` file still works for
+# backward-compatible flat-label setups.
 #
-# Conventions used below — none of these are MAKI-enforced, just
-# the tagging-guide's defaults so the out-of-the-box experience
-# fits a coherent taxonomy:
+# ── Mapping principles ─────────────────────────────────────────────
 #
-#   subject|...     — what the photo IS of
-#   event|...       — occasion / what's happening
-#   lighting|...    — quality of light
-#   technique|...   — artistic / processing style
-#   composition|... — formal characteristics
-#   season|...      — time of year
-#   type|...        — non-photo formats
+# Every right-hand-side tag below ALSO appears as a leaf in the
+# default catalog vocabulary (see src/vocabulary.rs and the tagging
+# guide at doc/manual/user-guide/11-tagging-guide.md). That keeps the
+# two vocabularies — what the AI suggests, and what your tag tree
+# expects — coherent, so the autocomplete shows AI-applied tags
+# under their proper facet branch with no orphans.
 #
-# To fan a single label into multiple tags, use a list value.
-# To leave a label flat (no mapping applied), use null.
-# To remove a label from the active vocabulary entirely, comment
-# the line out.
+# Facets (from the tagging guide):
+#   subject     what is in the image — `subject|<branch>|<leaf>`
+#   technique   how it was made — `technique|<branch>|<leaf>`
+#                 style: black and white, high key, low key, infrared
+#                 exposure: long exposure, double exposure, HDR
+#                 lighting: natural light, flash, studio,
+#                           golden hour, blue hour, stage lighting
+#                 composition: minimalist, symmetry, leading lines
+#                 effect: bokeh, motion blur, silhouette,
+#                         reflection, lens flare
+#   event       specific dated occasions — free-form (event|<your-name>)
+#   location    where — free-form (location|<country>|<region>|<city>)
+#   person      named individuals — `person|family|<name>` etc.
+#   project     personal projects — free-form
+#   color       dominant content color — flat (color|<name>)
+#
+# Where an AI label has no clean canonical fit (weather, seasons,
+# screenshots/documents, generic terms like "celebration") it's left
+# `null` — the model sees the label, suggests it as a flat tag if it
+# scores, and you decide manually how to file it. Add or override
+# mappings here whenever a pattern emerges in your catalog.
+#
+# Note on hyphens vs spaces: canonical leaves use spaces ("black and
+# white", "long exposure", "golden hour"), matching how the tagging
+# guide and src/vocabulary.rs spell them. Don't substitute hyphens
+# unless your local vocabulary uses them — that would create a second
+# parallel tag and break autocomplete.
 
-# ── Scene types ────────────────────────────────────────────────
-landscape: subject|landscape
-portrait: subject|portrait
-street photography: subject|street
-architecture: subject|architecture
-cityscape: subject|cityscape
-seascape: subject|seascape
-aerial view: subject|aerial
-panorama: subject|panorama
-interior: subject|interior
-still life: subject|still-life
-macro: subject|macro
-wildlife: subject|wildlife
-underwater: subject|underwater
-astrophotography: subject|astro
-night photography: subject|night
+# ── Scene types ────────────────────────────────────────────────────
+landscape: subject|nature|landscape
+portrait: subject|person|portrait
+street photography: subject|urban|street
+architecture: subject|urban|architecture
+cityscape: null            # broader than subject|urban|architecture — let user decide
+seascape: subject|nature|water
+aerial view: null          # no canonical facet; specialty subject
+panorama: null             # a format, not a subject
+interior: null             # no canonical leaf
+still life: subject|object|other
+macro: null                # macro is scale / technique, not a subject leaf
+wildlife: null             # fans over multiple animal branches — user judges
+underwater: null
+astrophotography: subject|nature|sky
+night photography: null    # night isn't in any canonical facet
 
-# ── Nature ─────────────────────────────────────────────────────
-mountain: subject|nature|mountain
-forest: subject|nature|forest
-beach: subject|nature|beach
-ocean: subject|nature|ocean
-river: subject|nature|river
-lake: subject|nature|lake
-waterfall: subject|nature|waterfall
-desert: subject|nature|desert
-field: subject|nature|field
-garden: subject|nature|garden
-flowers: subject|nature|flowers
-trees: subject|nature|trees
-sky: subject|sky
-clouds: subject|sky|clouds
-sunset: lighting|sunset
-sunrise: lighting|sunrise
-fog: subject|weather|fog
-snow: subject|weather|snow
-rain: subject|weather|rain
+# ── Nature ─────────────────────────────────────────────────────────
+mountain: subject|nature|landscape
+forest: subject|nature|landscape
+beach: subject|nature|water
+ocean: subject|nature|water
+river: subject|nature|water
+lake: subject|nature|water
+waterfall: subject|nature|water
+desert: subject|nature|landscape
+field: subject|nature|landscape
+garden: subject|nature|flora
+flowers: subject|nature|flora
+trees: subject|nature|flora
+sky: subject|nature|sky
+clouds: subject|nature|sky
+sunset:
+  # Sunset photos earn two facet hits at once: the sky subject AND
+  # the golden-hour lighting condition. Fanning out matches the
+  # tagging guide's facet-orthogonality principle.
+  - subject|nature|sky
+  - technique|lighting|golden hour
+sunrise:
+  - subject|nature|sky
+  - technique|lighting|golden hour
+fog: null                  # weather — no canonical facet yet
+snow: null
+rain: null
 
-# ── People ─────────────────────────────────────────────────────
-person: subject|person
-group of people: subject|group
-child: subject|child
-family: subject|family
-couple: subject|couple
-crowd: subject|crowd
-self-portrait: subject|self-portrait
+# ── People ─────────────────────────────────────────────────────────
+person: subject|person|portrait
+group of people: subject|person|group
+child: subject|person|portrait
+family: subject|person|group
+couple: subject|person|group
+crowd: subject|person|group
+self-portrait: subject|person|portrait
 
-# ── Animals ────────────────────────────────────────────────────
-dog: subject|animal|dog
-cat: subject|animal|cat
+# ── Animals ────────────────────────────────────────────────────────
+dog: subject|animal|domestic
+cat: subject|animal|domestic
 bird: subject|animal|bird
-horse: subject|animal|horse
-fish: subject|animal|fish
-insect: subject|animal|insect
-butterfly: subject|animal|butterfly
+horse: subject|animal|domestic
+fish: subject|animal|aquatic
+insect: subject|animal|invertebrate
+butterfly: subject|animal|invertebrate
 
-# ── Urban / Vehicles ───────────────────────────────────────────
-building: subject|architecture|building
-bridge: subject|architecture|bridge
-road: subject|urban|road
-car: subject|vehicle|car
-bicycle: subject|vehicle|bicycle
-train: subject|vehicle|train
-airplane: subject|vehicle|airplane
-boat: subject|vehicle|boat
-skyscraper: subject|architecture|skyscraper
+# ── Urban / vehicles ───────────────────────────────────────────────
+building: subject|urban|architecture
+bridge: subject|urban|architecture
+road: subject|urban|street
+car: subject|urban|transport
+bicycle: subject|urban|transport
+train: subject|urban|transport
+airplane: subject|urban|transport
+boat: subject|urban|transport
+skyscraper: subject|urban|architecture
 
-# ── Food & Objects ─────────────────────────────────────────────
-food: subject|food
-drink: subject|food|drink
-book: subject|object|book
-clothing: subject|object|clothing
-jewelry: subject|object|jewelry
-furniture: subject|object|furniture
+# ── Food & objects ─────────────────────────────────────────────────
+food: subject|object|food
+drink: subject|object|food
+book: subject|object|other
+clothing: subject|object|other
+jewelry: subject|object|other
+furniture: subject|object|other
 
-# ── Events ─────────────────────────────────────────────────────
-wedding: event|wedding
-concert: event|concert
-festival: event|festival
-sports: event|sports
-celebration: event|celebration
-ceremony: event|ceremony
+# ── Events (generic scene types — see tagging guide on subject|event vs event|) ──
+wedding: subject|event|wedding
+concert: subject|performing arts|concert
+festival: subject|event|festival
+sports: subject|event|sports event
+celebration: null          # too generic — could be wedding, festival, …
+ceremony: null             # too generic — likely already covered by wedding/festival
 
-# ── Artistic technique / composition ───────────────────────────
-black and white: technique|black-and-white
-long exposure: technique|long-exposure
-silhouette: technique|silhouette
-reflection: composition|reflection
-shadow: composition|shadow
-abstract: technique|abstract
-minimalist: technique|minimalist
-texture: technique|texture
-pattern: composition|pattern
-bokeh: technique|bokeh
-motion blur: technique|motion-blur
+# ── Artistic technique / composition / effect ──────────────────────
+black and white: technique|style|black and white
+long exposure: technique|exposure|long exposure
+silhouette: technique|effect|silhouette
+reflection: technique|effect|reflection
+shadow: null               # no canonical leaf
+abstract: subject|concept|abstract
+minimalist: technique|composition|minimalist
+texture: null              # no canonical leaf
+pattern: null              # no canonical leaf
+bokeh: technique|effect|bokeh
+motion blur: technique|effect|motion blur
 
-# ── Seasonal ───────────────────────────────────────────────────
-spring: season|spring
-summer: season|summer
-autumn: season|autumn
-winter: season|winter
+# ── Seasonal ───────────────────────────────────────────────────────
+# Season isn't a canonical facet yet. If you tag seasonally, add a
+# top-level facet (`season|spring`, …) — see the tagging guide's
+# "Thinking in facets" section for when to promote a branch.
+spring: null
+summer: null
+autumn: null
+winter: null
 
-# ── Travel ─────────────────────────────────────────────────────
-travel: subject|travel
-landmark: subject|landmark
-monument: subject|landmark|monument
-ruins: subject|landmark|ruins
-market: subject|venue|market
-museum: subject|venue|museum
-church: subject|venue|church
-temple: subject|venue|temple
+# ── Travel ─────────────────────────────────────────────────────────
+travel: subject|concept|travel
+landmark: null             # broader than architecture; usually wants location|
+monument: subject|urban|architecture
+ruins: subject|condition|ruined
+market: null
+museum: subject|urban|architecture
+church: subject|urban|architecture
+temple: subject|urban|architecture
 
-# ── Non-photo formats ──────────────────────────────────────────
-document: type|document
-screenshot: type|screenshot
-infographic: type|infographic
-product photography: subject|product
+# ── Non-photo formats ──────────────────────────────────────────────
+# Screenshots / documents / infographics fit the catalog awkwardly.
+# Leave flat so they surface as a maintenance signal: if you've got
+# them in your catalog at all, you probably want a dedicated
+# workflow-tag (e.g. `workflow|reference`) rather than a content tag.
+document: subject|object|other
+screenshot: null
+infographic: null
+product photography: subject|object|other

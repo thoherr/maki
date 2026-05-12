@@ -266,12 +266,74 @@ mod tests {
     fn default_vocabulary_loads() {
         let v = default_vocabulary();
         assert!(v.len() >= 90, "expected ≥ 90 default labels, got {}", v.len());
-        // Spot-check a couple of mappings the rest of the suite relies on.
-        assert_eq!(v.map_label("sunset"), vec!["lighting|sunset"]);
-        assert_eq!(v.map_label("wedding"), vec!["event|wedding"]);
+        // Spot-check mappings the rest of the suite relies on. Each
+        // value MUST be a leaf in the canonical default catalog
+        // vocabulary (src/vocabulary.rs::default_vocabulary).
+        assert_eq!(v.map_label("wedding"), vec!["subject|event|wedding"]);
+        assert_eq!(v.map_label("portrait"), vec!["subject|person|portrait"]);
+        assert_eq!(
+            v.map_label("black and white"),
+            vec!["technique|style|black and white"]
+        );
+        assert_eq!(
+            v.map_label("reflection"),
+            vec!["technique|effect|reflection"]
+        );
+        // Fan-out: sunset hits both sky subject and golden-hour lighting.
+        let sunset = v.map_label("sunset");
+        assert!(sunset.contains(&"subject|nature|sky".to_string()));
+        assert!(sunset.contains(&"technique|lighting|golden hour".to_string()));
+        // Null mapping (no canonical fit) → identity pass-through.
+        assert_eq!(v.map_label("fog"), vec!["fog"]);
         // Unmapped label passes through.
-        assert_eq!(v.map_label("absolutely-not-in-vocab"),
-                   vec!["absolutely-not-in-vocab"]);
+        assert_eq!(
+            v.map_label("absolutely-not-in-vocab"),
+            vec!["absolutely-not-in-vocab"]
+        );
+    }
+
+    /// Every non-null mapping target in the default AI vocabulary must
+    /// also exist as a leaf (or intermediate node) in the canonical
+    /// default catalog vocabulary. This is the consistency contract
+    /// the user cares about: AI-suggested tags appear under their
+    /// proper facet branch in autocomplete with no orphans.
+    #[test]
+    fn default_vocabulary_targets_exist_in_canonical_hierarchy() {
+        let ai = default_vocabulary();
+        // Build the set of canonical tag paths from the catalog
+        // default vocabulary. parse_vocabulary returns full
+        // dotted/piped paths for every leaf.
+        let canonical_yaml = crate::vocabulary::default_vocabulary();
+        let canonical: std::collections::HashSet<String> =
+            crate::vocabulary::parse_vocabulary(canonical_yaml)
+                .into_iter()
+                .collect();
+
+        let mut missing: Vec<(String, String)> = Vec::new();
+        for label in &ai.labels {
+            for tag in ai.map_label(label) {
+                // Identity (no canonical mapping) — tag equals label,
+                // which won't be in the canonical set. Skip.
+                if tag == *label {
+                    continue;
+                }
+                if !canonical.contains(&tag) {
+                    missing.push((label.clone(), tag));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "AI vocabulary maps to {} tags that aren't in the canonical \
+             catalog vocabulary — every mapping target must be a leaf in \
+             src/vocabulary.rs::default_vocabulary. Mismatches:\n{}",
+            missing.len(),
+            missing
+                .iter()
+                .map(|(l, t)| format!("  {l} → {t}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
     }
 
     #[test]
