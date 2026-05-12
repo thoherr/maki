@@ -520,13 +520,39 @@ fn extract_pooled_embedding(
 
 /// Preprocess an image for SigLIP: resize to NxN, normalize to [-1, 1].
 fn preprocess_image(path: &Path, image_size: usize) -> Result<Array4<f32>> {
-    // Remove memory limit — medium format 16-bit TIFFs can exceed 600 MB when decoded,
-    // but we immediately resize to a small square so peak memory is brief.
+    // Decode-time memory cap. The `image` crate's default is 512 MiB, which
+    // bounces back on the medium-format 16-bit TIFFs (50-100 MP, ~600 MB
+    // decoded) we genuinely want to support — pre-2026 the code path used
+    // `reader.no_limits()` to silence those rejections. The downside of
+    // unlimited decode is that an unexpectedly large outlier (e.g. a 200 MP
+    // film scan that landed in the catalog without a preview generated)
+    // could allocate multiple GB before the resize, push the process into
+    // memory pressure on a busy macOS host, and trigger a jetsam kill.
+    //
+    // 2 GiB threads the needle: room for legitimate medium-format material,
+    // hard ceiling well below the kill zone.
     let mut reader = image::ImageReader::open(path)
         .with_context(|| format!("Failed to open image: {}", path.display()))?;
-    reader.no_limits();
-    let img = reader.decode()
-        .with_context(|| format!("Failed to decode image: {}", path.display()))?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(2 * 1024 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader.decode().map_err(|e| {
+        // Surface the most likely user-actionable mitigation when the cap
+        // is what failed. The error string match is the only public way
+        // to distinguish a limit error from a decode error in image 0.25.
+        let msg = format!("{e}");
+        let lowered = msg.to_lowercase();
+        if lowered.contains("insufficient memory") || lowered.contains("limits") {
+            anyhow::anyhow!(
+                "Image too large for in-process decode (over 2 GiB during preprocessing): {}. \
+                 Run `maki generate-previews --upgrade` so the AI path can use the smaller \
+                 preview, then retry.",
+                path.display()
+            )
+        } else {
+            anyhow::Error::from(e).context(format!("Failed to decode image: {}", path.display()))
+        }
+    })?;
 
     let resized = img.resize_exact(
         image_size as u32,

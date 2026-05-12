@@ -281,7 +281,13 @@ impl PreviewGenerator {
     fn generate_image(&self, dest: &Path, source: &Path, max_edge: u32, quality: u8, manual_rotation: Option<u16>) -> Result<()> {
         let mut reader = image::ImageReader::open(source)
             .with_context(|| format!("Failed to open image {}", source.display()))?;
-        reader.no_limits();
+        // 2 GiB cap so a stray very-large outlier image can't blow the
+        // process while still letting medium-format 16-bit TIFFs (which
+        // decode to ~600 MB at 50-100 MP) through. See the matching cap
+        // in src/ai.rs:preprocess_image for the full rationale.
+        let mut limits = image::Limits::default();
+        limits.max_alloc = Some(2 * 1024 * 1024 * 1024);
+        reader.limits(limits);
         let img = reader.decode()
             .with_context(|| format!("Failed to decode image {}", source.display()))?;
 

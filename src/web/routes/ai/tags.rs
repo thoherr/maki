@@ -48,6 +48,25 @@ fn suggest_tags_inner(
     use crate::ai;
     use crate::device_registry::DeviceRegistry;
 
+    // Verbose timing prints. The suggest-tags hot path can hang (and on
+    // macOS, get killed by jetsam) inside CoreML's first-time model
+    // compilation or inside a stuck blocking_lock if a prior request is
+    // mid-flight. Without phase markers, the failure is opaque — the user
+    // sees a "Failed to fetch" in the browser and a `zsh: killed` on the
+    // CLI. With these markers, the last line printed before the kill
+    // names the phase responsible.
+    let verbose = state.verbosity.verbose();
+    let t_start = std::time::Instant::now();
+    macro_rules! vlog {
+        ($($t:tt)*) => {
+            if verbose {
+                eprintln!("[suggest-tags {}] {}",
+                    &asset_id[..8.min(asset_id.len())],
+                    format!($($t)*));
+            }
+        };
+    }
+
     let engine = state.query_engine();
     let details = engine.show(asset_id).map_err(|e| format!("{e:#}"))?;
 
@@ -64,6 +83,7 @@ fn suggest_tags_inner(
     let image_path = service
         .find_image_for_ai(&details, &preview_gen, &online_volumes)
         .ok_or_else(|| "No processable image found for this asset".to_string())?;
+    vlog!("image resolved: {} ({:?})", image_path.display(), t_start.elapsed());
 
     let ext = image_path
         .extension()
@@ -75,11 +95,17 @@ fn suggest_tags_inner(
 
     let model_dir = super::resolve_model_dir(&state.ai_config);
     let model_id = &state.ai_config.model;
+    vlog!("acquiring model lock…");
+    let t_lock = std::time::Instant::now();
     let model_guard = state.ai_model.blocking_lock();
+    vlog!("model lock acquired ({:?})", t_lock.elapsed());
     let mut model_opt = model_guard;
     if model_opt.is_none() {
+        vlog!("loading SigLIP model: {model_id} (provider={})", state.ai_config.execution_provider);
+        let t_load = std::time::Instant::now();
         let m = ai::SigLipModel::load_with_provider(&model_dir, model_id, state.verbosity, &state.ai_config.execution_provider)
             .map_err(|e| format!("Failed to load AI model: {e:#}"))?;
+        vlog!("model loaded ({:?})", t_load.elapsed());
         *model_opt = Some(m);
     }
     let model = model_opt.as_mut().unwrap();
@@ -94,6 +120,8 @@ fn suggest_tags_inner(
         let (l, e) = guard.as_ref().unwrap();
         (l.clone(), e.clone())
     } else {
+        vlog!("encoding {} labels (cold cache)…", labels.len());
+        let t_enc = std::time::Instant::now();
         let prompt_template = &state.ai_config.prompt;
         let prompted: Vec<String> = labels
             .iter()
@@ -102,14 +130,18 @@ fn suggest_tags_inner(
         let embs = model
             .encode_texts(&prompted)
             .map_err(|e| format!("Failed to encode labels: {e:#}"))?;
+        vlog!("labels encoded ({:?})", t_enc.elapsed());
         let mut guard = state.ai_label_cache.blocking_write();
         *guard = Some((labels.clone(), embs.clone()));
         (labels, embs)
     };
 
+    vlog!("encoding image…");
+    let t_img = std::time::Instant::now();
     let image_emb = model
         .encode_image(&image_path)
         .map_err(|e| format!("Failed to encode image: {e:#}"))?;
+    vlog!("image encoded ({:?})", t_img.elapsed());
 
     {
         let catalog = crate::catalog::Catalog::open_fast(&state.catalog_root);
@@ -148,6 +180,7 @@ fn suggest_tags_inner(
         })
         .collect();
 
+    vlog!("done: {} suggestions, total {:?}", result.len(), t_start.elapsed());
     Ok(result)
 }
 
