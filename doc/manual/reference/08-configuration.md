@@ -24,6 +24,8 @@ All sections and fields are optional. A missing file or an empty file is equival
 # maki catalog configuration
 ```
 
+The web UI's **Settings** entry (top nav, next to Maintain) opens a schema-driven form that edits this file directly — see [Settings Dialog](../user-guide/06-web-ui.md#settings-dialog). The form is generated from the underlying type definitions, so every option below appears as a widget. The previous `maki.toml` is copied to `maki.toml.bak` before each save. Hand-editing the file with a text editor remains fully supported and is the only way to add or rename hashmap-style sub-tables (e.g. `[import.profiles.<name>]`, `[vlm.model_config."<model>"]`).
+
 ---
 
 ## Top-Level Fields

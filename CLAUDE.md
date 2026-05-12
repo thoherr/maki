@@ -12,7 +12,7 @@ A digital asset manager designed for large collections of images and videos (ter
 - **Platforms**: macOS, Linux, Windows
 - **Interface**: CLI-first (`maki` command), web UI (`maki serve`)
 - **Catalog**: SQLite (cache/index), YAML sidecar files (source of truth)
-- **Key crates**: clap, sha2, serde, rusqlite, kamadak-exif, quick-xml, regex, image, imageproc, ab_glyph, lofty, uuid, axum, askama, tokio, tower-http, toml, glob-match; **optional (ai feature)**: ort, ndarray, tokenizers; **optional (ai-gpu feature)**: ort with CoreML execution provider
+- **Key crates**: clap, sha2, serde, rusqlite, kamadak-exif, quick-xml, regex, image, imageproc, ab_glyph, lofty, uuid, axum, askama, tokio, tower-http, toml, toml_edit, schemars, glob-match; **optional (ai feature)**: ort, ndarray, tokenizers; **optional (ai-gpu feature)**: ort with CoreML execution provider
 - **External tools**: dcraw/libraw (RAW previews), ffmpeg (video thumbnails), ffprobe (video metadata: duration, codec, resolution, framerate; included with ffmpeg), curl (AI model download, VLM calls)
 
 ## Architecture
