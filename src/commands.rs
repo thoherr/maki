@@ -23,6 +23,8 @@ use maki::query::QueryEngine;
 
 #[cfg(feature = "ai")]
 use crate::FacesCommands;
+#[cfg(feature = "ai")]
+use crate::AiCommands;
 use crate::{
     CollectionCommands, SavedSearchCommands, StackCommands, TagCommands, VolumeCommands,
 };
@@ -683,6 +685,112 @@ pub fn report_sanitized_tags(changes: &[(String, String)]) {
         }
     }
     eprintln!();
+}
+
+/// Dispatch `maki ai <subcommand>`.
+#[cfg(feature = "ai")]
+pub fn run_ai_command(cmd: AiCommands) -> anyhow::Result<()> {
+    match cmd {
+        AiCommands::ExportVocabulary { output, default } => {
+            run_ai_export_vocabulary(output, default)
+        }
+    }
+}
+
+/// `maki ai export-vocabulary [--default] [--output FILE]` —
+/// emit the AI vocabulary as YAML. See the `AiCommands::ExportVocabulary`
+/// doc-comment for behaviour.
+#[cfg(feature = "ai")]
+fn run_ai_export_vocabulary(output: Option<String>, default: bool) -> anyhow::Result<()> {
+    use std::io::Write;
+
+    const BUILTIN_DEFAULT: &str = include_str!("default-vocabulary.yaml");
+
+    let content = if default {
+        BUILTIN_DEFAULT.to_string()
+    } else {
+        // Try to load the user's active config. If we're outside a
+        // catalog (or there's no [ai].labels), fall back to the
+        // built-in default — same content the runtime would use.
+        let active_path: Option<std::path::PathBuf> = maki::config::find_catalog_root()
+            .ok()
+            .and_then(|root| maki::config::CatalogConfig::load(&root).ok())
+            .and_then(|c| c.ai.labels.map(std::path::PathBuf::from));
+
+        match active_path {
+            Some(p) => {
+                let ext = p
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if ext == "yaml" || ext == "yml" {
+                    // Verbatim — preserves the user's comments + key order.
+                    std::fs::read_to_string(&p)
+                        .map_err(|e| anyhow::anyhow!("read {}: {e}", p.display()))?
+                } else {
+                    // Convert flat .txt to YAML with identity mappings so
+                    // the user can start adding hierarchy without
+                    // reordering anything.
+                    convert_txt_to_yaml(&p)?
+                }
+            }
+            None => BUILTIN_DEFAULT.to_string(),
+        }
+    };
+
+    match output {
+        Some(path) => {
+            std::fs::write(&path, &content)
+                .map_err(|e| anyhow::anyhow!("write {path}: {e}"))?;
+            eprintln!("Wrote {} bytes to {path}", content.len());
+        }
+        None => {
+            std::io::stdout().write_all(content.as_bytes())?;
+        }
+    }
+    Ok(())
+}
+
+/// Read a flat `.txt` labels file and emit a YAML vocabulary with
+/// identity mappings (`label: null`). Drops blank lines / comments
+/// from the source the same way the runtime loader does.
+#[cfg(feature = "ai")]
+fn convert_txt_to_yaml(path: &std::path::Path) -> anyhow::Result<String> {
+    let vocab = maki::ai_vocabulary::load_from_path(path)?;
+    let mut out = String::new();
+    out.push_str(&format!(
+        "# Converted from {}\n",
+        path.display()
+    ));
+    out.push_str("# Identity mapping — each label suggests itself as a flat tag.\n");
+    out.push_str("# Edit values to add hierarchical paths, e.g.\n");
+    out.push_str("#   sunset: lighting|sunset\n");
+    out.push_str("#   wedding:\n");
+    out.push_str("#     - event|wedding\n");
+    out.push_str("#     - subject|people\n\n");
+    for label in &vocab.labels {
+        out.push_str(&format!("{}: null\n", yaml_quote_key(label)));
+    }
+    Ok(out)
+}
+
+/// Quote a YAML key only when it contains characters that would
+/// otherwise need escaping (spaces, punctuation, etc.). Bare
+/// identifiers are emitted unquoted to keep the output readable.
+#[cfg(feature = "ai")]
+fn yaml_quote_key(s: &str) -> String {
+    let needs_quotes = s.is_empty()
+        || s.chars().any(|c| !matches!(c,
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_'))
+        || s.starts_with('-');
+    if needs_quotes {
+        // Double-quoted YAML string with escaping for " and \.
+        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("\"{escaped}\"")
+    } else {
+        s.to_string()
+    }
 }
 
 /// Merge trailing asset IDs (from shell variable expansion) into query/asset.

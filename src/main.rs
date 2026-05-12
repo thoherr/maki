@@ -402,6 +402,11 @@ enum Commands {
     #[command(subcommand, display_order = 19)]
     Faces(FacesCommands),
 
+    /// AI utilities — vocabulary export and (future) model management
+    #[cfg(feature = "ai")]
+    #[command(subcommand, display_order = 20)]
+    Ai(AiCommands),
+
     /// Generate image descriptions using a vision-language model (VLM)
     #[cfg(feature = "pro")]
     #[command(display_order = 16)]
@@ -1705,6 +1710,39 @@ enum FacesCommands {
     Export,
 }
 
+/// AI utility commands. Grouped under `maki ai <subcommand>` so the
+/// top-level help isn't cluttered with niche per-feature flags.
+#[cfg(feature = "ai")]
+#[derive(Subcommand)]
+enum AiCommands {
+    /// Export the AI vocabulary (labels + hierarchical mapping) as YAML.
+    ///
+    /// Without flags, emits the *active* vocabulary — whatever
+    /// `[ai].labels` points to in `maki.toml`, or the built-in default
+    /// when no labels file is configured. With `--default`, always
+    /// emits the built-in default regardless of config.
+    ///
+    /// Use case: `maki ai export-vocabulary --default > my-labels.yaml`
+    /// gives you a curated starting point; edit the right-hand sides
+    /// to your own hierarchical taxonomy, point `[ai].labels` at the
+    /// result, and Suggest tags / auto-tag will apply your mapping.
+    ///
+    /// When the active vocabulary is a legacy `.txt` flat-list file,
+    /// the export converts it to YAML with identity mappings
+    /// (`label: null`) so you can start adding hierarchy without
+    /// reordering anything.
+    #[command(name = "export-vocabulary")]
+    ExportVocabulary {
+        /// Output file. Default: stdout (use shell redirection to save).
+        #[arg(long, short)]
+        output: Option<String>,
+
+        /// Emit the built-in default vocabulary instead of the active one.
+        #[arg(long)]
+        default: bool,
+    },
+}
+
 /// Print custom grouped help text through a pager.
 fn print_custom_help() {
     let version = env!("CARGO_PKG_VERSION");
@@ -2286,6 +2324,11 @@ faces/\n\
         #[cfg(feature = "ai")]
         Commands::Faces(cmd) => {
             run_faces_command(cmd, cli.json, cli.log, verbosity)?;
+            Ok(())
+        }
+        #[cfg(feature = "ai")]
+        Commands::Ai(cmd) => {
+            run_ai_command(cmd)?;
             Ok(())
         }
 
