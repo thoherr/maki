@@ -334,12 +334,37 @@ impl SigLipModel {
     }
 
     /// Encode a batch of text strings into embedding vectors.
+    ///
+    /// Internally chunks the input into mini-batches of `TEXT_BATCH_CHUNK`
+    /// labels so we never hand the ONNX text encoder a tensor large enough
+    /// to blow the heap. The Large variants of SigLIP (1024-dim, 24+
+    /// transformer layers) with the CoreML execution provider on Apple
+    /// Silicon will allocate intermediate activations proportional to
+    /// `batch * seq_len^2 * heads * layers` — feeding all 322 labels of a
+    /// real-world custom vocabulary in one call pushed the process past
+    /// 90 GB resident, OS swapped hard, jetsam killed it. Chunking keeps
+    /// peak intermediate memory bounded; the per-call overhead is a
+    /// handful of ONNX session invocations, which are dwarfed by the
+    /// text encoder's own work.
     pub fn encode_texts(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        const TEXT_BATCH_CHUNK: usize = 32;
         if texts.is_empty() {
             return Ok(Vec::new());
         }
+        let mut result = Vec::with_capacity(texts.len());
+        for chunk in texts.chunks(TEXT_BATCH_CHUNK) {
+            result.extend(self.encode_texts_chunk(chunk)?);
+        }
+        Ok(result)
+    }
 
-        let input_ids = tokenize_batch(&self.tokenizer, texts, self.spec.max_text_len, self.spec.pad_token_id)?;
+    /// Encode a single mini-batch of text strings — runs one ONNX text
+    /// session invocation on the whole `chunk` at once. Caller is
+    /// responsible for keeping `chunk.len()` small enough to fit the
+    /// active model + provider's intermediate-buffer budget; for the
+    /// Large multilingual SigLIP 2 variants on CoreML, ≤ 32 is safe.
+    fn encode_texts_chunk(&mut self, chunk: &[String]) -> Result<Vec<Vec<f32>>> {
+        let input_ids = tokenize_batch(&self.tokenizer, chunk, self.spec.max_text_len, self.spec.pad_token_id)?;
         let input_value = Tensor::from_array(input_ids)
             .context("Failed to create text input tensor")?;
         let outputs = self.text.run(
@@ -348,9 +373,8 @@ impl SigLipModel {
 
         let pooled = extract_pooled_embedding(&outputs, &self.text_outputs, "text", self.verbosity.debug)?;
         let shape_dim = pooled.len();
-        let batch_size = texts.len();
+        let batch_size = chunk.len();
 
-        // If the pooled output is [batch, dim], split into per-item embeddings
         let dim = shape_dim / batch_size;
         let mut result = Vec::with_capacity(batch_size);
         for i in 0..batch_size {
