@@ -2,6 +2,48 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.5.8 (2026-05-14)
+
+A focused web-UI release: **Review tags…** — an interception point in batch auto-tagging that surfaces every AI-suggested tag as a per-tag candidate set the user can prune before any tag is written. Solves the workflow complaint that motivated v4.5.7's hierarchical mapping: even with clean hierarchical suggestions, false positives still accumulate across dozens of vacation shots and the only remedy was hand-cleaning afterwards. Now the user reviews once, per tag, and false positives never land on disk.
+
+Tests: 798 + 249 standard, 918 + 277 pro (up from 797 / 249 / 915 / 277).
+
+### Review tags — per-tag candidate review
+
+A new **Review tags…** button on the browse toolbar (next to Auto-tag). On click, operates on the current selection if any, otherwise on every asset matching the live filter (resolved via the existing `/api/all-ids`).
+
+Flow:
+
+1. The button kicks off a new background job (`POST /api/maintain/suggest-tags-review`, `JobKind::SuggestTagsReview`) that loops every asset in scope and aggregates per-asset SigLIP suggestions into an inverted `tag → [(asset_id, confidence, source_label, existing)]` index. The collection pass runs at half the configured `[ai].threshold` so the review modal's confidence slider has range both above and below the user's normal auto-tag floor.
+2. The review modal opens **immediately** on POST return — in a "computing" phase with a progress bar that subscribes to the job's SSE stream. The model-load wait (30–60 s on first request) is labelled explicitly so the user knows the system isn't hung. Per-asset ticks update the bar live.
+3. On the terminal `done` event, the modal transitions to a two-pane review UI: tag list on the left (sorted by candidate count, each row showing the count + a mean-confidence bar), thumbnail grid on the right (pre-checked, with confidence overlay and a "from: skyscraper →" caption when the SigLIP label maps non-identity to the hierarchical tag). A threshold slider auto-toggles cells by confidence; a "skip already-tagged" filter hides assets that already carry the tag (or a descendant).
+4. **Apply** commits via the existing `POST /api/batch/tags` with `{asset_ids, tags: [tag], remove: false}` — no new commit endpoint. The row strikes through, the next un-reviewed tag opens. **Skip** advances without writing. **Close** exits the modal; the job keeps running server-side but the in-memory result drops on close (re-attach is out of scope for v1 — re-run if needed).
+
+The toast in the corner is intentionally suppressed for this job kind. The modal **is** the feedback surface — a small toast in the corner is too easy to miss when the AI model can take a full minute to warm up before the first per-asset tick arrives.
+
+### Internal refactor: SuggestContext
+
+The historical `suggest_tags_inner` (single-asset web endpoint) and `batch_auto_tag_inner` (multi-asset web endpoint) duplicated ~150 lines: model load, label encoding with cache check, per-asset image resolution, image encoding, embedding persistence, classification, vocabulary mapping, existing-tag check. Both are now thin wrappers over a `SuggestContext` that hoists the per-batch setup (model guard, encoded labels, vocabulary, threshold, online volumes) and exposes a single `suggestions_for(asset_id)` method that runs the per-asset loop body. The single-asset web endpoint builds a context for one asset; `batch_auto_tag_inner` loops and applies non-existing suggestions; `batch_suggest_tags_review_inner` loops and aggregates into the inverted index.
+
+A new `suggestions_with_meta_for` variant also returns the asset's preview URL + filename (derived from the same `engine.show()` call) so the review modal can render thumbnails without a second DB round-trip per asset.
+
+### Generic `Job.result` payload
+
+The existing `JobRegistry` already supported live progress via SSE and re-attachable per-job status, but the suggest-tags-review aggregate (a tag → candidates index, ~10–50 KB for typical batches) is too structured to ship through the per-tick SSE stream. `Job` gains an optional `result: Mutex<Option<serde_json::Value>>` field that producers populate before `finish` and a new `GET /api/jobs/{id}/result` endpoint returns it:
+
+- `200` with JSON body when a payload is set.
+- `204 No Content` when the job completed without setting a payload.
+- `425 Too Early` when the job is still running.
+- `404` when the job ID isn't in the registry.
+
+Generic by design — any future job that produces structured terminal output can use the same plumbing (e.g. a hypothetical "find duplicates in current selection" job that returns a cluster graph).
+
+### Misc
+
+- `Job.set_result_round_trips_payload` regression test.
+- Two `TagBucket` unit tests covering mean/max confidence accumulation and the empty-bucket case.
+- Tagging guide gains a new "Reviewing suggestions before committing (web UI)" subsection under the *Phase 5: Enrich* section.
+
 ## v4.5.7 (2026-05-12)
 
 A mixed release. Headline feature is **hierarchical AI tagging** — the SigLIP zero-shot classifier still produces flat labels under the hood, but a new vocabulary YAML format maps each label to the canonical hierarchical tag(s) MAKI applies, eliminating the post-suggestion cleanup pass users had been doing by hand. Headline fix is the **`encode_texts` chunking that stopped Suggest tags from OOM-killing the server** on real-world custom vocabularies. Plus comment-preserving config saves, a writeback bugfix, and several smaller refinements.
