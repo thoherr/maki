@@ -1,0 +1,60 @@
+{# Tag-suggestion review modal.
+
+   Opened by the browse-page "Review tags…" button after the
+   /api/maintain/suggest-tags-review job finishes. The toast's onDone
+   callback hands the job_id to window.makiTagReview.open(jobId), which
+   fetches the inverted `tag → candidates` payload from
+   /api/jobs/{jobId}/result and renders this two-pane layout:
+
+     - Left: tag list sorted by candidate count, with a filter input
+       and per-row count + mean-confidence bar. Clicking a row picks
+       it as the active tag, the right pane renders its candidates.
+     - Right: thumbnail grid of candidate assets for the active tag,
+       each pre-checked with confidence overlay. Threshold slider
+       auto-unchecks below X; "skip already-tagged" hides assets that
+       already carry the tag.
+
+   "Apply <tag>" hits the existing POST /api/batch/tags with the
+   selected asset_ids + [tag]. On success the row strikes through and
+   the next un-applied row is selected. "Skip" advances without applying.
+
+   Mounted from base.html alongside the maintain dialog so any page
+   can re-attach to a finished review job (page-reload survival).
+   The result payload lives on Job.result in-memory; a server restart
+   drops it.
+#}
+<div id="tag-review-overlay" class="import-overlay" style="display:none">
+    <div class="import-modal tag-review-modal" id="tag-review-modal" role="dialog" aria-labelledby="tag-review-title" aria-modal="true">
+        <div class="import-header">
+            <h2 id="tag-review-title">Review tag suggestions</h2>
+            <button type="button" class="import-close" id="tag-review-close" aria-label="Close">&times;</button>
+        </div>
+        <div id="tag-review-stats" class="tag-review-stats">Loading…</div>
+        <div class="tag-review-body" id="tag-review-body">
+            <aside class="tag-review-tags">
+                <input type="text" id="tag-review-tag-filter" placeholder="Filter tags…" autocomplete="off">
+                <ul id="tag-review-tag-list" class="tag-review-tag-list"></ul>
+            </aside>
+            <section class="tag-review-grid-pane" id="tag-review-grid-pane">
+                <div class="tag-review-grid-header">
+                    <label class="tag-review-threshold">
+                        Threshold
+                        <input type="range" id="tag-review-threshold" min="0" max="1" step="0.01" value="0.6">
+                        <span id="tag-review-threshold-val">0.60</span>
+                    </label>
+                    <label class="tag-review-skip-existing">
+                        <input type="checkbox" id="tag-review-skip-existing"> Skip already-tagged
+                    </label>
+                    <span class="tag-review-grid-count" id="tag-review-grid-count"></span>
+                </div>
+                <div id="tag-review-grid" class="tag-review-grid"></div>
+                <div class="tag-review-grid-footer">
+                    <span class="tag-review-selection" id="tag-review-selection-count">0 of 0 selected</span>
+                    <button type="button" class="batch-btn" id="tag-review-close-bottom">Close</button>
+                    <button type="button" class="batch-btn" id="tag-review-skip">Skip</button>
+                    <button type="button" class="batch-btn batch-btn-primary" id="tag-review-apply">Apply</button>
+                </div>
+            </section>
+        </div>
+    </div>
+</div>

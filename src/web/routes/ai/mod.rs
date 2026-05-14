@@ -16,12 +16,14 @@
 
 mod embed;
 mod faces;
+mod review;
 mod similarity;
 mod stroll;
 mod tags;
 
 pub use embed::*;
 pub use faces::*;
+pub use review::*;
 pub use similarity::*;
 pub use stroll::*;
 pub use tags::*;

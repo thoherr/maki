@@ -1,0 +1,360 @@
+<script>
+// Tag-suggestion review modal.
+//
+// API: window.makiTagReview.open(jobId)
+//   Fetches /api/jobs/{jobId}/result, renders the two-pane review UI,
+//   and lets the user apply (or skip) each suggested tag's candidate
+//   set via the existing POST /api/batch/tags endpoint.
+//
+// The payload shape produced by /api/maintain/suggest-tags-review is:
+//   {asset_count, threshold_used, tags: [...], per_asset: {...}, assets: {...}}
+// where each tag carries
+//   {tag, asset_count, mean_confidence, max_confidence, candidates: [...]}
+// and each candidate
+//   {asset_id, confidence, source_label, existing}
+// `assets` maps asset_id → {preview_url, name} so the grid can render
+// thumbnails without a second API round-trip.
+(function() {
+    var overlay = document.getElementById('tag-review-overlay');
+    if (!overlay) return;
+
+    var modal = document.getElementById('tag-review-modal');
+    var closeBtn = document.getElementById('tag-review-close');
+    var statsEl = document.getElementById('tag-review-stats');
+    var tagFilterInput = document.getElementById('tag-review-tag-filter');
+    var tagListEl = document.getElementById('tag-review-tag-list');
+    var gridPane = document.getElementById('tag-review-grid-pane');
+    var gridEl = document.getElementById('tag-review-grid');
+    var thresholdInput = document.getElementById('tag-review-threshold');
+    var thresholdVal = document.getElementById('tag-review-threshold-val');
+    var skipExistingInput = document.getElementById('tag-review-skip-existing');
+    var gridCountEl = document.getElementById('tag-review-grid-count');
+    var selectionCountEl = document.getElementById('tag-review-selection-count');
+    var skipBtn = document.getElementById('tag-review-skip');
+    var applyBtn = document.getElementById('tag-review-apply');
+
+    // ── State ────────────────────────────────────────────────────────────
+    var payload = null;                  // raw result from /api/jobs/{id}/result
+    var tags = [];                       // [{tag, candidates, ...}] sorted by count
+    var assets = {};                     // asset_id → {preview_url, name}
+    var activeTagIdx = -1;               // index into `tags`, -1 when none selected
+    var checkedByTag = {};               // tag → Set of asset_ids the user has explicitly toggled
+    var tagState = {};                   // tag → 'pending' | 'applied' | 'skipped'
+
+    function close() {
+        overlay.style.display = 'none';
+        payload = null;
+        tags = [];
+        assets = {};
+        activeTagIdx = -1;
+        checkedByTag = {};
+        tagState = {};
+        tagListEl.innerHTML = '';
+        gridEl.innerHTML = '';
+        statsEl.textContent = '';
+    }
+    closeBtn.addEventListener('click', close);
+    var closeBtnBottom = document.getElementById('tag-review-close-bottom');
+    if (closeBtnBottom) closeBtnBottom.addEventListener('click', close);
+    overlay.addEventListener('click', function(e) {
+        if (e.target === overlay) close();
+    });
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && overlay.style.display !== 'none') close();
+    });
+
+    // ── Open / load ─────────────────────────────────────────────────────
+    function open(jobId) {
+        overlay.style.display = 'flex';
+        statsEl.textContent = 'Loading…';
+        tagListEl.innerHTML = '';
+        gridEl.innerHTML = '';
+        fetch('/api/jobs/' + encodeURIComponent(jobId) + '/result')
+            .then(function(r) {
+                if (r.status === 204) throw new Error('Job produced no result payload');
+                if (!r.ok) return r.text().then(function(t) { throw new Error(t || ('HTTP ' + r.status)); });
+                return r.json();
+            })
+            .then(function(p) {
+                payload = p;
+                tags = (p.tags || []).slice();
+                assets = p.assets || {};
+                // Default threshold = ai_config.threshold (whatever the user
+                // has configured for normal auto-tag); the job ran at half
+                // that so the slider has room below the default line.
+                // payload.threshold_used is the *collection* threshold, not
+                // the display default — pick something in the middle if we
+                // don't know the user's normal value. The browse-page hand
+                // off doesn't currently pass it; use 2× threshold_used as
+                // a reasonable proxy ("apply only what auto-tag would have").
+                var defaultDisplay = Math.min(0.95, Math.max(0.2, (p.threshold_used || 0.3) * 2));
+                thresholdInput.value = defaultDisplay.toFixed(2);
+                thresholdVal.textContent = defaultDisplay.toFixed(2);
+                tags.forEach(function(t) { tagState[t.tag] = 'pending'; });
+                renderStats();
+                renderTagList();
+                if (tags.length > 0) {
+                    selectTag(0);
+                } else {
+                    gridEl.innerHTML = '<div class="tag-review-empty">No tag suggestions above the collection threshold. Try lowering <code>[ai].threshold</code> or re-running the review with a custom threshold.</div>';
+                }
+            })
+            .catch(function(err) {
+                statsEl.textContent = 'Failed to load: ' + err.message;
+            });
+    }
+
+    // ── Render: stats line + tag list ───────────────────────────────────
+    function renderStats() {
+        var n = tags.length;
+        var assetCount = payload.asset_count || 0;
+        var skipped = payload.skipped || 0;
+        var errCount = (payload.errors || []).length;
+        var parts = [n + ' suggested tag' + (n === 1 ? '' : 's') + ' across ' + assetCount + ' asset' + (assetCount === 1 ? '' : 's')];
+        if (skipped > 0) parts.push(skipped + ' skipped');
+        if (errCount > 0) parts.push(errCount + ' error' + (errCount === 1 ? '' : 's'));
+        statsEl.textContent = parts.join(' · ');
+    }
+
+    function renderTagList() {
+        var filter = (tagFilterInput.value || '').toLowerCase();
+        tagListEl.innerHTML = '';
+        tags.forEach(function(t, i) {
+            if (filter && t.tag.toLowerCase().indexOf(filter) === -1) return;
+            var li = document.createElement('li');
+            li.className = 'tag-review-tag-row' +
+                (i === activeTagIdx ? ' active' : '') +
+                (tagState[t.tag] === 'applied' ? ' applied' : '') +
+                (tagState[t.tag] === 'skipped' ? ' skipped' : '');
+            li.dataset.idx = String(i);
+            var bar = Math.round((t.mean_confidence || 0) * 100);
+            var displayTag = t.tag.replace(/\|/g, ' › ');
+            li.innerHTML =
+                '<div class="tag-review-tag-row-top">' +
+                    '<span class="tag-review-tag-name" title="' + escapeHtml(t.tag) + '">' + escapeHtml(displayTag) + '</span>' +
+                    '<span class="tag-review-tag-count">' + t.asset_count + '</span>' +
+                '</div>' +
+                '<div class="tag-review-tag-bar"><div class="tag-review-tag-bar-fill" style="width:' + bar + '%"></div></div>';
+            li.addEventListener('click', function() { selectTag(i); });
+            tagListEl.appendChild(li);
+        });
+        if (tagListEl.children.length === 0) {
+            tagListEl.innerHTML = '<li class="tag-review-tag-empty">No tags match filter</li>';
+        }
+    }
+
+    tagFilterInput.addEventListener('input', renderTagList);
+
+    // ── Tag selection + grid render ─────────────────────────────────────
+    function selectTag(i) {
+        if (i < 0 || i >= tags.length) return;
+        activeTagIdx = i;
+        renderTagList();
+        renderGrid();
+    }
+
+    function renderGrid() {
+        var t = tags[activeTagIdx];
+        if (!t) return;
+        var threshold = parseFloat(thresholdInput.value || '0.6');
+        var skipExisting = skipExistingInput.checked;
+
+        // Seed checked-set: candidates above threshold and (if skip-existing
+        // is on) not already tagged. The user can toggle individual cells
+        // afterwards; once they touch a cell the seed is replaced by the
+        // explicit set tracked in `checkedByTag[t.tag]`.
+        if (!checkedByTag[t.tag]) {
+            checkedByTag[t.tag] = new Set();
+            t.candidates.forEach(function(c) {
+                if (c.confidence >= threshold && !(skipExisting && c.existing)) {
+                    checkedByTag[t.tag].add(c.asset_id);
+                }
+            });
+        }
+        var checked = checkedByTag[t.tag];
+
+        gridEl.innerHTML = '';
+        var visibleCount = 0;
+        t.candidates.forEach(function(c) {
+            if (skipExisting && c.existing) return;
+            visibleCount++;
+            var meta = assets[c.asset_id] || {};
+            var cell = document.createElement('div');
+            cell.className = 'tag-review-cell' +
+                (c.existing ? ' is-existing' : '') +
+                (c.confidence < threshold ? ' below-threshold' : '');
+            cell.dataset.assetId = c.asset_id;
+            var isChecked = checked.has(c.asset_id);
+            var thumb = meta.preview_url
+                ? '<img loading="lazy" src="' + escapeAttr(meta.preview_url) + '" alt="">'
+                : '<div class="tag-review-thumb-missing">no preview</div>';
+            var sourceHint = (c.source_label && c.source_label !== t.tag.split('|').pop())
+                ? '<span class="tag-review-source" title="SigLIP label that mapped to this tag">' + escapeHtml(c.source_label) + '</span>'
+                : '';
+            var existingHint = c.existing
+                ? '<span class="tag-review-existing-hint" title="Asset already has this tag">already tagged</span>'
+                : '';
+            cell.innerHTML =
+                '<label class="tag-review-cell-label">' +
+                    '<input type="checkbox"' + (isChecked ? ' checked' : '') + '>' +
+                    '<a href="/asset/' + encodeURIComponent(c.asset_id) + '" target="_blank" rel="noopener" class="tag-review-thumb-link" title="Open asset in new tab">' +
+                        thumb +
+                    '</a>' +
+                    '<span class="tag-review-confidence">' + c.confidence.toFixed(2) + '</span>' +
+                    (meta.name ? '<span class="tag-review-name" title="' + escapeAttr(meta.name) + '">' + escapeHtml(meta.name) + '</span>' : '') +
+                    sourceHint +
+                    existingHint +
+                '</label>';
+            var input = cell.querySelector('input[type=checkbox]');
+            input.addEventListener('change', function() {
+                if (input.checked) checked.add(c.asset_id);
+                else checked.delete(c.asset_id);
+                updateSelectionCount();
+            });
+            // Clicking the thumbnail link shouldn't toggle the checkbox.
+            cell.querySelector('.tag-review-thumb-link').addEventListener('click', function(e) {
+                e.stopPropagation();
+            });
+            gridEl.appendChild(cell);
+        });
+
+        gridCountEl.textContent = visibleCount + ' candidate' + (visibleCount === 1 ? '' : 's');
+        updateSelectionCount();
+        updateApplyButton();
+    }
+
+    function updateSelectionCount() {
+        var t = tags[activeTagIdx];
+        if (!t) { selectionCountEl.textContent = '0 of 0 selected'; return; }
+        var checked = checkedByTag[t.tag] || new Set();
+        var visible = 0;
+        t.candidates.forEach(function(c) {
+            if (skipExistingInput.checked && c.existing) return;
+            visible++;
+        });
+        selectionCountEl.textContent = checked.size + ' of ' + visible + ' selected';
+    }
+
+    function updateApplyButton() {
+        var t = tags[activeTagIdx];
+        if (!t) { applyBtn.disabled = true; applyBtn.textContent = 'Apply'; return; }
+        var displayTag = t.tag.split('|').pop();
+        applyBtn.disabled = (checkedByTag[t.tag] && checkedByTag[t.tag].size === 0);
+        applyBtn.textContent = 'Apply ' + displayTag;
+    }
+
+    // Threshold slider toggles below-threshold cells without re-rendering
+    // the whole grid (preserves user's explicit selections). Skip-existing
+    // checkbox reseeds the grid so excluded rows disappear.
+    thresholdInput.addEventListener('input', function() {
+        thresholdVal.textContent = parseFloat(thresholdInput.value).toFixed(2);
+        applyThresholdToVisibleCells();
+    });
+    skipExistingInput.addEventListener('change', function() {
+        // Reset this tag's checked-set so reseeding picks up the new filter.
+        var t = tags[activeTagIdx];
+        if (t) delete checkedByTag[t.tag];
+        renderGrid();
+    });
+
+    function applyThresholdToVisibleCells() {
+        var t = tags[activeTagIdx];
+        if (!t) return;
+        var threshold = parseFloat(thresholdInput.value || '0.6');
+        var checked = checkedByTag[t.tag];
+        if (!checked) return;
+        // Walk the DOM cells in order; the candidates array is already in
+        // confidence-descending order per server.
+        Array.prototype.forEach.call(gridEl.children, function(cell) {
+            var aid = cell.dataset.assetId;
+            var c = t.candidates.find(function(x) { return x.asset_id === aid; });
+            if (!c) return;
+            var input = cell.querySelector('input[type=checkbox]');
+            if (c.confidence < threshold) {
+                cell.classList.add('below-threshold');
+                if (input.checked) { input.checked = false; checked.delete(aid); }
+            } else {
+                cell.classList.remove('below-threshold');
+                if (!input.checked) { input.checked = true; checked.add(aid); }
+            }
+        });
+        updateSelectionCount();
+        updateApplyButton();
+    }
+
+    // ── Apply / Skip ────────────────────────────────────────────────────
+    skipBtn.addEventListener('click', function() {
+        var t = tags[activeTagIdx];
+        if (!t) return;
+        tagState[t.tag] = 'skipped';
+        advanceToNextPending();
+    });
+
+    applyBtn.addEventListener('click', function() {
+        var t = tags[activeTagIdx];
+        if (!t) return;
+        var checked = checkedByTag[t.tag];
+        if (!checked || checked.size === 0) return;
+        var assetIds = Array.from(checked);
+        applyBtn.disabled = true;
+        applyBtn.textContent = 'Applying…';
+        fetch('/api/batch/tags', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({asset_ids: assetIds, tags: [t.tag], remove: false})
+        })
+        .then(function(r) {
+            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            return r.json();
+        })
+        .then(function(_resp) {
+            tagState[t.tag] = 'applied';
+            // Mark all candidates for this tag as existing now, so the
+            // "skip already-tagged" filter on subsequent tags reflects
+            // the new state without a re-fetch.
+            assetIds.forEach(function(aid) {
+                (payload.per_asset[aid] || []).forEach(function(s) {
+                    if (s.tag === t.tag) s.existing = true;
+                });
+                // Also flip the existing flag on candidates in OTHER tags
+                // that reference this asset_id under the same tag (n/a here
+                // since we apply per-tag), but keep the per-asset map in
+                // sync just in case downstream code reads it.
+            });
+            advanceToNextPending();
+        })
+        .catch(function(err) {
+            alert('Apply failed: ' + err.message);
+            updateApplyButton();
+        });
+    });
+
+    function advanceToNextPending() {
+        // Pick the next tag in display order that is still pending.
+        for (var i = activeTagIdx + 1; i < tags.length; i++) {
+            if (tagState[tags[i].tag] === 'pending') { selectTag(i); return; }
+        }
+        // None after — wrap to start.
+        for (var j = 0; j < activeTagIdx; j++) {
+            if (tagState[tags[j].tag] === 'pending') { selectTag(j); return; }
+        }
+        // Nothing pending left.
+        renderTagList();
+        gridEl.innerHTML = '<div class="tag-review-empty">All tags reviewed. Close this dialog to return to the browse page.</div>';
+        selectionCountEl.textContent = '';
+        gridCountEl.textContent = '';
+        applyBtn.disabled = true;
+        applyBtn.textContent = 'Apply';
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────
+    function escapeHtml(s) {
+        return String(s || '').replace(/[&<>"]/g, function(c) {
+            return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
+        });
+    }
+    function escapeAttr(s) { return escapeHtml(s); }
+
+    window.makiTagReview = { open: open, close: close };
+})();
+</script>

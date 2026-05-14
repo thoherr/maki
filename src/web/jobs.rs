@@ -47,6 +47,15 @@ pub enum JobKind {
     Sync,
     Refresh,
     Cleanup,
+    /// Batch suggest-tags pass that collects per-asset suggestions into an
+    /// inverted-index payload for the review-modal UI. Distinct from
+    /// `AutoTag` because no tags are applied — the user picks per-tag
+    /// candidate sets after the job completes.
+    SuggestTagsReview,
+    /// Apply user-selected `(asset_id, tag)` pairs in the review-modal's
+    /// commit step. Mirrors `AutoTag` in surface but takes an explicit
+    /// list instead of computing one.
+    ApplyTags,
 }
 
 impl JobKind {
@@ -64,6 +73,8 @@ impl JobKind {
             JobKind::Sync => "Sync",
             JobKind::Refresh => "Refresh",
             JobKind::Cleanup => "Cleanup",
+            JobKind::SuggestTagsReview => "Suggest tags",
+            JobKind::ApplyTags => "Apply tags",
         }
     }
 }
@@ -102,6 +113,13 @@ pub struct Job {
     /// (see `COMPLETED_HISTORY_CAP`) so re-attached clients still see the
     /// final state — without that, a page reload mid-completion would lose it.
     pub completed: std::sync::atomic::AtomicBool,
+    /// Optional structured result payload. Distinct from `progress`, which
+    /// reflects the latest per-tick event. Jobs that produce a payload too
+    /// large or too structured to ship through the SSE stream (e.g. the
+    /// suggest-tags-review aggregation) stash it here for clients to fetch
+    /// via `GET /api/jobs/{id}/result` once `completed` is true. `None`
+    /// for jobs that have no terminal payload beyond the progress snapshot.
+    pub result: Mutex<Option<serde_json::Value>>,
 }
 
 impl Job {
@@ -147,6 +165,15 @@ impl Job {
     pub fn is_completed(&self) -> bool {
         self.completed.load(std::sync::atomic::Ordering::Acquire)
     }
+
+    /// Stash a structured result payload for later retrieval via
+    /// `GET /api/jobs/{id}/result`. Call before [`Self::finish`] so the
+    /// payload is in place when clients re-attach on the terminal event.
+    pub fn set_result(&self, payload: serde_json::Value) {
+        if let Ok(mut slot) = self.result.lock() {
+            *slot = Some(payload);
+        }
+    }
 }
 
 /// Registry of running and recently-completed jobs.
@@ -190,6 +217,7 @@ impl JobRegistry {
             recent_events: Mutex::new(VecDeque::with_capacity(RECENT_EVENTS_CAP)),
             progress: Mutex::new(serde_json::json!({})),
             completed: std::sync::atomic::AtomicBool::new(false),
+            result: Mutex::new(None),
         });
         let mut inner = self.inner.lock().unwrap();
         inner.jobs.insert(id, job.clone());
@@ -355,6 +383,17 @@ mod tests {
         let _newer_other = reg.start(JobKind::Import);
         let found = reg.latest(JobKind::Embed).unwrap();
         assert_eq!(found.id, target.id);
+    }
+
+    #[test]
+    fn set_result_round_trips_payload() {
+        let reg = JobRegistry::new();
+        let job = reg.start(JobKind::SuggestTagsReview);
+        assert!(job.result.lock().unwrap().is_none());
+        let payload = serde_json::json!({"tags": [{"tag": "x", "count": 3}]});
+        job.set_result(payload.clone());
+        let got = job.result.lock().unwrap().clone();
+        assert_eq!(got, Some(payload));
     }
 
     #[test]

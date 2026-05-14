@@ -126,6 +126,7 @@
         {% if ai_enabled %}
         <span class="batch-sep"></span>
         <button class="batch-btn" id="batch-autotag">Auto-tag</button>
+        <button class="batch-btn" id="batch-review-tags" title="Compute AI tag suggestions for selected assets and review each suggested tag's candidate set before applying">Review tags…</button>
         <button class="batch-btn" id="batch-embed" title="Generate visual-similarity embeddings (no tags applied)">Embed</button>
         <button class="batch-btn" id="batch-detect-faces">Detect faces</button>
         {% endif %}
@@ -1275,6 +1276,60 @@ window.onFilterChange = onFilterChange;
             .catch(function(err) {
                 alert('Auto-tag failed: ' + err.message);
             });
+        });
+    }
+
+    var reviewTagsBtn = document.getElementById('batch-review-tags');
+    if (reviewTagsBtn) {
+        reviewTagsBtn.addEventListener('click', function() {
+            if (batchBusy) return;
+            // No-selection path: review every asset matching the current
+            // filter (same /api/all-ids URL the Shift-Cmd-A selection uses).
+            // Selected path: review just the chosen subset.
+            var startReview = function(ids) {
+                if (!ids || ids.length === 0) return;
+                if (!confirm('Compute tag suggestions for ' + ids.length + ' asset(s)?\n\nThis runs the AI classifier on each image (roughly 1–2 s per image on CPU; faster on GPU). No tags are applied — you review each suggested tag\'s candidate set in the next step.')) return;
+                fetch('/api/maintain/suggest-tags-review', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({asset_ids: ids})
+                })
+                .then(function(r) {
+                    if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+                    return r.json();
+                })
+                .then(function(data) {
+                    window.makiJob.watch(data.job_id, 'Suggest tags (' + ids.length + ')', {
+                        autoCloseMs: 0,
+                        onDone: function(evt) {
+                            if (evt.error) return;
+                            if (window.makiTagReview && window.makiTagReview.open) {
+                                window.makiTagReview.open(data.job_id);
+                            }
+                        }
+                    });
+                })
+                .catch(function(err) {
+                    alert('Suggest-tags failed: ' + err.message);
+                });
+            };
+
+            if (selected.size > 0) {
+                startReview(Array.from(selected));
+                return;
+            }
+            // No manual selection — pull every ID matching the live filter.
+            fetch('/api/all-ids' + window.location.search)
+                .then(function(r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function(data) {
+                    startReview(data.ids || []);
+                })
+                .catch(function(err) {
+                    alert('Could not resolve the current filter: ' + err.message);
+                });
         });
     }
 

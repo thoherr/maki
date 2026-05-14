@@ -5097,3 +5097,265 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     font-size: 0.85rem;
     word-break: break-word;
 }
+
+/* ── Tag-suggestion review modal ──────────────────────────────────────
+   Two-pane layout (tag list | candidate grid) for reviewing AI tag
+   suggestions across a batch of assets before applying. Reuses
+   .import-overlay/.import-modal for the chrome but widens significantly
+   (1200px max) so the grid has room to show a useful thumbnail count
+   without scrolling. Falls back gracefully on narrow viewports — the
+   modal still respects 90vw and the panes are flex-basis-driven so the
+   grid pane absorbs whatever space is left after the fixed-width tag
+   list. */
+.tag-review-modal {
+    max-width: 1200px;
+    width: 95vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+}
+.tag-review-stats {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+}
+.tag-review-body {
+    display: flex;
+    gap: 1rem;
+    flex: 1 1 auto;
+    min-height: 0;          /* allow children to shrink + scroll inside flex */
+}
+.tag-review-tags {
+    flex: 0 0 280px;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    padding-right: 0.75rem;
+}
+.tag-review-tags input[type="text"] {
+    width: 100%;
+    padding: 0.35rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-card);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+    box-sizing: border-box;
+}
+.tag-review-tag-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    overflow-y: auto;
+    flex: 1 1 auto;
+}
+.tag-review-tag-row {
+    padding: 0.45rem 0.5rem;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-bottom: 0.15rem;
+}
+.tag-review-tag-row:hover {
+    background: var(--badge-bg);
+}
+.tag-review-tag-row.active {
+    background: var(--primary);
+    color: #fff;
+}
+.tag-review-tag-row.active .tag-review-tag-count {
+    color: rgba(255, 255, 255, 0.85);
+}
+.tag-review-tag-row.applied {
+    opacity: 0.45;
+    text-decoration: line-through;
+}
+.tag-review-tag-row.skipped {
+    opacity: 0.55;
+    font-style: italic;
+}
+.tag-review-tag-row-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    align-items: center;
+}
+.tag-review-tag-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.tag-review-tag-count {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    flex-shrink: 0;
+}
+.tag-review-tag-bar {
+    height: 3px;
+    background: var(--badge-bg);
+    border-radius: 2px;
+    margin-top: 0.25rem;
+    overflow: hidden;
+}
+.tag-review-tag-row.active .tag-review-tag-bar {
+    background: rgba(255, 255, 255, 0.25);
+}
+.tag-review-tag-bar-fill {
+    height: 100%;
+    background: var(--primary);
+    transition: width 0.2s ease;
+}
+.tag-review-tag-row.active .tag-review-tag-bar-fill {
+    background: #fff;
+}
+.tag-review-tag-empty {
+    padding: 0.45rem 0.5rem;
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 0.82rem;
+}
+
+.tag-review-grid-pane {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.tag-review-grid-header {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    margin-bottom: 0.5rem;
+    flex-wrap: wrap;
+    font-size: 0.85rem;
+}
+.tag-review-threshold {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--text-muted);
+}
+.tag-review-threshold input[type="range"] {
+    width: 140px;
+}
+.tag-review-threshold span {
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    min-width: 2.5em;
+}
+.tag-review-skip-existing {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: var(--text-muted);
+}
+.tag-review-grid-count {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+}
+.tag-review-grid {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.5rem;
+    padding: 0.25rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-card);
+}
+.tag-review-cell {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.25rem;
+    background: var(--bg);
+    transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+.tag-review-cell.below-threshold {
+    opacity: 0.45;
+}
+.tag-review-cell.is-existing {
+    border-color: var(--success, #6fae6e);
+}
+.tag-review-cell-label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    cursor: pointer;
+    margin: 0;          /* override .import-modal label */
+    font-weight: normal;
+    color: var(--text);
+}
+.tag-review-cell-label input[type="checkbox"] {
+    align-self: flex-start;
+    margin: 0 0 0.2rem 0;
+}
+.tag-review-thumb-link {
+    display: block;
+    line-height: 0;
+}
+.tag-review-thumb-link img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    border-radius: 3px;
+    background: var(--badge-bg);
+}
+.tag-review-thumb-missing {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--badge-bg);
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    border-radius: 3px;
+}
+.tag-review-confidence {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+.tag-review-name {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.tag-review-source {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-style: italic;
+}
+.tag-review-existing-hint {
+    font-size: 0.7rem;
+    color: var(--success, #6fae6e);
+}
+.tag-review-grid-footer {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+.tag-review-selection {
+    margin-right: auto;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+.tag-review-empty {
+    padding: 2rem;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+.tag-review-empty code {
+    background: var(--badge-bg);
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+}

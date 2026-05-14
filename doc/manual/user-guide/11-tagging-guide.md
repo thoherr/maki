@@ -659,6 +659,20 @@ maki auto-tag "path:Capture/2024-08-15" --apply --log
 
 Review suggestions in the web UI -- accept good ones, dismiss bad ones, and adjust your label vocabulary or threshold if needed.
 
+### Reviewing suggestions before committing (web UI)
+
+`maki auto-tag --apply` is unconditional: every suggestion above the configured threshold is written to every matching asset. For a curated collection -- a vacation set, a wedding shoot, anything where false positives accumulate noticeably -- the **Review tags…** button on the browse toolbar gives you a per-tag confirmation step without forcing you to select assets one by one.
+
+Flow:
+
+1. Filter the browse page down to the assets you want to review (or select a subset). Click **Review tags…**.
+2. MAKI computes AI suggestions for every asset in scope -- roughly 1-2 s per image on CPU, faster with the `ai-gpu` feature. Progress shows in the toast, same as Embed or Auto-tag.
+3. When the job finishes, the review modal opens. The left pane lists every suggested tag sorted by candidate count (most-suggested first). The right pane shows the candidate thumbnails for the selected tag, all pre-checked, each with its confidence score and -- when the AI's underlying label differs from the hierarchical tag MAKI mapped it to -- a small "from: *skyscraper*" hint.
+4. Uncheck false positives. Drag the **Threshold** slider to bulk-toggle by confidence. Tick **Skip already-tagged** to hide assets that already carry the tag.
+5. Click **Apply *building*** to write the tag to the checked set. The row strikes through and the next un-reviewed tag opens. Use **Skip** to leave a tag for later.
+
+The collection pass runs at half your configured `[ai].threshold` so the slider has room to drag both above and below your normal auto-tag floor. Suggestions are held in server memory on the job's record (page-reload survival within the session), so you can close the modal, finish another task, and reopen the review via the toast badge -- a server restart drops them.
+
 ---
 
 ## Do's and Don'ts

@@ -544,6 +544,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/jobs", axum::routing::get(routes::jobs_list_api))
         .route("/api/jobs/{id}", axum::routing::get(routes::job_status_api))
         .route("/api/jobs/{id}/progress", axum::routing::get(routes::job_progress_sse))
+        .route("/api/jobs/{id}/result", axum::routing::get(routes::job_result_api))
         .route("/api/calendar", axum::routing::get(routes::calendar_api))
         .route("/api/map", axum::routing::get(routes::map_api))
         .route("/api/facets", axum::routing::get(routes::facets_api))
@@ -597,6 +598,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             .route(
                 "/api/batch/auto-tag",
                 axum::routing::post(routes::batch_auto_tag),
+            )
+            .route(
+                "/api/maintain/suggest-tags-review",
+                axum::routing::post(routes::start_suggest_tags_review_api),
             )
             .route(
                 "/api/asset/{id}/embed",

@@ -51,6 +51,35 @@ pub async fn job_status_api(
     .into_response()
 }
 
+/// GET /api/jobs/{id}/result — fetch a job's structured result payload.
+///
+/// For jobs that produce a payload too large or too structured to fit
+/// inside the SSE progress stream (the suggest-tags-review aggregation,
+/// future similar jobs), the producer calls `Job::set_result` before
+/// `finish`; clients fetch it here once the toast hits `done`.
+///
+/// - 404 if the job isn't in the registry.
+/// - 425 Too Early if the job is still running.
+/// - 204 No Content if the job completed without a payload.
+/// - 200 with JSON body when a payload is set.
+pub async fn job_result_api(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let job = match state.jobs.get(&id) {
+        Some(j) => j,
+        None => return (StatusCode::NOT_FOUND, "job not found").into_response(),
+    };
+    if !job.is_completed() {
+        return (StatusCode::TOO_EARLY, "job not yet complete").into_response();
+    }
+    let payload = job.result.lock().ok().and_then(|p| p.clone());
+    match payload {
+        Some(v) => Json(v).into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
 /// GET /api/jobs/{id}/progress — SSE stream of per-job progress events.
 ///
 /// On connect: replays the ring buffer (up to `RECENT_EVENTS_CAP` recent

@@ -153,6 +153,10 @@
 {% include "config_form_js.html" %}
 {% include "job_toast.html" %}
 {% include "job_toast_js.html" %}
+{% if ai_enabled %}
+{% include "tag_review.html" %}
+{% include "tag_review_js.html" %}
+{% endif %}
 <script>
 // ── Nav: Catalog dropdown ────────────────────────────────────────────────
 // Click trigger to toggle; click outside or Escape to close. Click on any
