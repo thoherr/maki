@@ -119,12 +119,18 @@ fn run_writeback(
         Some(&callback),
     )?;
 
+    let skipped_offline: Vec<String> = result
+        .skipped_offline_volumes
+        .iter()
+        .cloned()
+        .collect();
     Ok(serde_json::json!({
         "written": result.written,
         "skipped": result.skipped,
         "failed": result.failed,
         "errors": result.errors,
         "dry_run": result.dry_run,
+        "skipped_offline_volumes": skipped_offline,
     }))
 }
 

@@ -9539,12 +9539,15 @@ fn writeback_preserves_pending_when_volume_offline() {
     std::fs::rename(&removable, &stashed).unwrap();
 
     // Manual flush. Should report the recipe as skipped (offline) and
-    // — crucially — leave the pending flag intact.
+    // — crucially — leave the pending flag intact. The stdout summary
+    // should also name the offline volume so the user knows which
+    // drive to reconnect.
     maki()
         .current_dir(&root)
         .args(["writeback"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("offline volumes: removable"));
 
     // Bring the volume back so `maki status` can see the file again
     // when it walks the catalog.

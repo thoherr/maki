@@ -97,8 +97,15 @@
                                                         parts.push(evt.removed_assets + ' assets removed');
         if (typeof evt.removed_previews === 'number' && evt.removed_previews > 0)
                                                         parts.push(evt.removed_previews + ' previews removed');
-        if (typeof evt.skipped === 'number' && evt.skipped > 0)
-                                                        parts.push(evt.skipped + ' skipped');
+        if (typeof evt.skipped === 'number' && evt.skipped > 0) {
+            var skippedLine = evt.skipped + ' skipped';
+            // Writeback can additionally name the offline volumes that
+            // caused the skip so the user knows which drives to mount.
+            if (Array.isArray(evt.skipped_offline_volumes) && evt.skipped_offline_volumes.length > 0) {
+                skippedLine += ' (offline: ' + evt.skipped_offline_volumes.join(', ') + ')';
+            }
+            parts.push(skippedLine);
+        }
         if (typeof evt.failed === 'number' && evt.failed > 0)
                                                         parts.push(evt.failed + ' failed');
         if (evt.errors && evt.errors.length > 0)        parts.push(evt.errors.length + ' error(s)');

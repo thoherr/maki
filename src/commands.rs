@@ -5454,7 +5454,16 @@ pub fn run_writeback_command(
         let mut parts = Vec::new();
         parts.push(format!("{} written", result.written));
         if result.skipped > 0 {
-            parts.push(format!("{} skipped", result.skipped));
+            let mut s = format!("{} skipped", result.skipped);
+            if !result.skipped_offline_volumes.is_empty() {
+                let labels: Vec<&str> = result
+                    .skipped_offline_volumes
+                    .iter()
+                    .map(String::as_str)
+                    .collect();
+                s.push_str(&format!(" (offline volumes: {})", labels.join(", ")));
+            }
+            parts.push(s);
         }
         if result.failed > 0 {
             parts.push(format!("{} failed", result.failed));

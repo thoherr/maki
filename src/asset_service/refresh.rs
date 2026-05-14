@@ -474,12 +474,17 @@ impl AssetService {
                 .filter(|v| v.is_online)
                 .map(|v| (v.id, v.mount_point.clone()))
                 .collect();
+            let volume_labels: HashMap<uuid::Uuid, String> = all_volumes
+                .iter()
+                .map(|v| (v.id, v.label.clone()))
+                .collect();
 
             let wb_result = engine.writeback_process(
                 pending_for_writeback,
                 &catalog,
                 &metadata_store,
                 &online,
+                &volume_labels,
                 &content_store,
                 None, // no additional asset filter, already filtered above
                 None, // no asset ID set filter

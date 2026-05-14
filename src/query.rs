@@ -322,6 +322,13 @@ pub struct WritebackResult {
     pub errors: Vec<String>,
     /// Whether this was a dry run.
     pub dry_run: bool,
+    /// Sorted, deduped labels of offline volumes that held at least one
+    /// skipped recipe. Surfaced in the CLI summary as
+    /// "(offline volumes: foo, bar)" so the user knows which drives to
+    /// reconnect before the next flush. Empty when nothing was skipped
+    /// due to an offline volume.
+    #[serde(skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub skipped_offline_volumes: std::collections::BTreeSet<String>,
 }
 
 // ═══ QUERY ENGINE STRUCT ═══
@@ -3119,6 +3126,13 @@ impl QueryEngine {
             .filter(|v| v.is_online)
             .map(|v| (v.id, v.mount_point.clone()))
             .collect();
+        // Map of UUID → label for ALL volumes (including offline ones)
+        // so the writeback summary can name offline drives the user
+        // needs to reconnect.
+        let volume_labels: HashMap<uuid::Uuid, String> = volumes
+            .iter()
+            .map(|v| (v.id, v.label.clone()))
+            .collect();
         let content_store = ContentStore::new(&self.catalog_root);
 
         // Resolve volume filter to volume ID
@@ -3165,16 +3179,22 @@ impl QueryEngine {
             catalog.list_pending_writeback_recipes(volume_id_filter.as_deref())?
         };
 
-        self.writeback_process(pending_recipes, &catalog, &store, &online, &content_store, asset_filter, asset_id_set, mirror_tags, dry_run, log, callback)
+        self.writeback_process(pending_recipes, &catalog, &store, &online, &volume_labels, &content_store, asset_filter, asset_id_set, mirror_tags, dry_run, log, callback)
     }
 
     /// Process a list of recipes for writeback. Each tuple is (recipe_id, asset_id, volume_id, relative_path).
+    ///
+    /// `volume_labels` maps volume UUID → user-facing label across ALL
+    /// volumes (online + offline). Used to surface offline-volume names
+    /// in the result summary so users know which drives to reconnect
+    /// before re-running. Pass an empty map to fall back to UUIDs.
     pub fn writeback_process(
         &self,
         recipes: Vec<(String, String, String, String)>,
         catalog: &Catalog,
         store: &MetadataStore,
         online: &HashMap<uuid::Uuid, PathBuf>,
+        volume_labels: &HashMap<uuid::Uuid, String>,
         content_store: &ContentStore,
         asset_filter: Option<&str>,
         asset_id_set: Option<&HashSet<String>>,
@@ -3244,9 +3264,14 @@ impl QueryEngine {
                     Some(mp) => mp.as_path(),
                     None => {
                         result.skipped += 1;
+                        let label = volume_labels
+                            .get(&vol_uuid)
+                            .cloned()
+                            .unwrap_or_else(|| vol_uuid.to_string());
                         if log {
-                            eprintln!("{rel_path} — skipped (volume offline)");
+                            eprintln!("{rel_path} — skipped (volume offline: {label})");
                         }
+                        result.skipped_offline_volumes.insert(label);
                         continue;
                     }
                 };
