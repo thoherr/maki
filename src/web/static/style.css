@@ -1391,6 +1391,51 @@ nav .nav-dropdown-menu a:hover {
     opacity: 1;
     background: var(--hover-bg);
 }
+
+/* Pending-writeback marker (the ↻ glyph next to a recipe row or
+   location whose XMP file is out of sync with the catalog).
+   Pairs an explicit, instant-appearing tooltip with the `cursor: help`
+   affordance — the native `title` attribute relies on a 1-2 s browser
+   delay that users routinely mistake for "no help available". The
+   tooltip is positioned absolutely above the marker and uses
+   `data-tip` so it can carry the longer explanation without bloating
+   the visible glyph. Tooltip is also shown on `:focus-within` so
+   keyboard users tabbing through the page can read it. */
+.pending-writeback-marker {
+    position: relative;
+    color: #e67e22;
+    cursor: help;
+    display: inline-block;
+    outline: none;
+}
+.pending-writeback-marker::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    transform: translateX(-25%);
+    background: var(--bg-card, #2b2b2b);
+    color: var(--text, #eaeaea);
+    border: 1px solid var(--border, #555);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    width: max-content;
+    max-width: 320px;
+    white-space: normal;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    z-index: 50;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.1s ease-out;
+}
+.pending-writeback-marker:hover::after,
+.pending-writeback-marker:focus::after {
+    opacity: 1;
+    visibility: visible;
+}
 .preview-indicator {
     background: none;
     border: none;
