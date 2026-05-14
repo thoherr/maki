@@ -244,6 +244,23 @@ def load_vocab(path: Path | None, use_default: bool) -> dict:
 # ── Command emission ────────────────────────────────────────────────────
 
 
+def shell_quote(s: str) -> str:
+    """`shlex.quote()` with one extra paranoia: always quote tokens that
+    start with `=`.
+
+    zsh's `EQUALS` option (default on, default shell on macOS) treats
+    an unquoted token starting with `=` as a command lookup — `=cat`
+    expands to `/bin/cat`, and the whole tag-rename invocation falls
+    apart. POSIX-shell-aware `shlex.quote()` doesn't escape `=`
+    because POSIX shells don't treat it specially, so we have to
+    force-quote here to stay portable across zsh and sh.
+    """
+    q = shlex.quote(s)
+    if q == s and s.startswith("="):
+        return f"'{s}'"
+    return q
+
+
 def is_identity(label: str, target: str) -> bool:
     """A mapping that leaves the tag flat (no rename needed).
 
@@ -276,7 +293,7 @@ def emit_commands(vocab: dict, apply: bool) -> list[str]:
             # `=` constrains the rename to the whole-path match — won't
             # touch `Foo|child` tags that happen to share the leaf name.
             cmds.append(
-                f"maki tag rename {shlex.quote('=' + label)} "
+                f"maki tag rename {shell_quote('=' + label)} "
                 f"{shlex.quote(target)}{suffix}"
             )
         elif isinstance(target, list):
@@ -287,7 +304,7 @@ def emit_commands(vocab: dict, apply: bool) -> list[str]:
                 continue
             quoted_targets = " ".join(shlex.quote(t) for t in targets)
             cmds.append(
-                f"maki tag split {shlex.quote('=' + label)} "
+                f"maki tag split {shell_quote('=' + label)} "
                 f"{quoted_targets}{suffix}"
             )
         else:
