@@ -3361,17 +3361,30 @@ impl QueryEngine {
                 }
             }
 
-            // Save sidecar with cleared pending flags — but only for
-            // recipes that actually completed. A multi-variant asset
-            // with one offline variant must keep its overall pending
-            // state so the offline recipe still gets flushed later.
+            // Save sidecar for recipes that actually completed. A
+            // multi-variant asset with one offline variant must keep its
+            // overall pending state so the offline recipe still gets
+            // flushed later — `cleared_recipe_ids` is exactly that set
+            // (offline/missing recipes hit the `continue` paths above
+            // and never landed in it).
+            //
+            // We must NOT gate on `r.pending_writeback` here. The
+            // file_changed branch above already pre-cleared the
+            // in-memory flag (so the sidecar save would carry the new
+            // state); a `&& r.pending_writeback` guard at this point
+            // sees the already-cleared value, decides "nothing to do",
+            // and skips `store.save()` — leaving the YAML stuck on
+            // `pending_writeback: true` while SQLite + XMP are in sync.
+            // Source of truth (YAML) diverges silently, and a later
+            // `rebuild-catalog` would reintroduce a phantom pending
+            // flag on a recipe whose disk file is already current.
             if !dry_run && !cleared_recipe_ids.is_empty() {
                 let mut any_changed = false;
                 for r in &mut asset.recipes {
-                    if cleared_recipe_ids.contains(&r.id.to_string())
-                        && r.pending_writeback
-                    {
-                        r.pending_writeback = false;
+                    if cleared_recipe_ids.contains(&r.id.to_string()) {
+                        if r.pending_writeback {
+                            r.pending_writeback = false;
+                        }
                         any_changed = true;
                     }
                 }

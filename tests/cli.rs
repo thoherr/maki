@@ -9587,6 +9587,98 @@ fn writeback_preserves_pending_when_volume_offline() {
     );
 }
 
+/// Regression: when `maki writeback` succeeds at flushing a recipe to
+/// disk, the YAML sidecar must be re-saved with `pending_writeback:
+/// false`. The earlier post-fix at the per-asset sidecar-save loop
+/// gated saves on `r.pending_writeback`, but the file_changed branch
+/// inside the per-recipe loop had already pre-cleared the in-memory
+/// flag (so the sidecar save would carry the new state). The guard
+/// then saw the already-cleared value, decided "nothing to do", and
+/// skipped the save — leaving the YAML stuck on `pending_writeback:
+/// true` while the SQLite catalog and XMP file on disk were in sync.
+/// A subsequent `rebuild-catalog` (which trusts YAML as the source of
+/// truth) would reintroduce a phantom pending flag on a recipe whose
+/// disk file is already current.
+#[test]
+#[cfg(feature = "pro")]
+fn writeback_clears_yaml_pending_flag_on_success() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    create_test_file(&root, "photos/WB_OK.ARW", b"raw-online-success");
+    create_test_file(
+        &root,
+        "photos/WB_OK.xmp",
+        b"<x:xmpmeta><rdf:RDF><rdf:Description xmp:Rating=\"1\"/></rdf:RDF></x:xmpmeta>",
+    );
+    maki()
+        .current_dir(&root)
+        .args(["import", root.join("photos").to_str().unwrap()])
+        .assert()
+        .success();
+
+    let out = maki()
+        .current_dir(&root)
+        .args(["search", "-q", ""])
+        .output()
+        .unwrap();
+    let asset_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    assert!(!asset_id.is_empty(), "search returned no asset after import");
+
+    // Edit while writeback is auto-off (the default test catalog state).
+    // The edit marks the recipe pending_writeback in both SQLite and YAML.
+    maki()
+        .current_dir(&root)
+        .args(["edit", &asset_id, "--rating", "5"])
+        .assert()
+        .success();
+
+    // Sanity check: YAML reports pending before the flush.
+    let sidecar = root
+        .join("metadata")
+        .join(&asset_id[..2])
+        .join(format!("{asset_id}.yaml"));
+    let yaml_before = std::fs::read_to_string(&sidecar).unwrap();
+    assert!(
+        yaml_before.contains("pending_writeback: true"),
+        "Sidecar must report pending after edit. Got:\n{yaml_before}"
+    );
+
+    // Manual flush — the recipe is online and writable, so the XMP file
+    // gets the rating bump and the catalog clears the pending flag.
+    maki()
+        .current_dir(&root)
+        .args(["writeback"])
+        .assert()
+        .success();
+
+    // YAML must reflect the cleared state — this is the regression.
+    let yaml_after = std::fs::read_to_string(&sidecar).unwrap();
+    assert!(
+        !yaml_after.contains("pending_writeback: true"),
+        "Sidecar must NOT have pending_writeback: true after a successful \
+         writeback. The YAML is the source of truth — a stale flag here \
+         would reintroduce a phantom pending state on the next \
+         `rebuild-catalog`. Got:\n{yaml_after}"
+    );
+
+    // Belt-and-suspenders: SQLite agrees the flag is cleared (status
+    // should no longer mention pending writeback).
+    maki()
+        .current_dir(&root)
+        .args(["status"])
+        .assert()
+        .stdout(predicate::str::contains("pending XMP writeback").not());
+
+    // And the XMP file on disk reflects the new rating.
+    let xmp_path = root.join("photos/WB_OK.xmp");
+    let xmp_after = std::fs::read_to_string(&xmp_path).unwrap();
+    assert!(
+        xmp_after.contains("Rating=\"5\"") || xmp_after.contains("Rating='5'"),
+        "XMP must have been written with Rating=5. Got: {xmp_after}"
+    );
+}
+
 #[test]
 #[cfg(feature = "pro")]
 fn sync_metadata_dry_run() {
