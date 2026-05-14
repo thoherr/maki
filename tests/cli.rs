@@ -9682,6 +9682,99 @@ fn writeback_clears_yaml_pending_flag_on_success() {
     );
 }
 
+/// Regression: `dc:subject` must contain the flat components of EVERY
+/// hierarchical tag, not just the subject facet. CaptureOne / Lightroom
+/// users with multi-facet vocabularies (person, location, event,
+/// project, …) expect every component leaf to land in dc:subject so
+/// downstream tools can search them as plain keywords. The hierarchical
+/// `lr:hierarchicalSubject` list always carries the full ancestor
+/// paths regardless of facet.
+#[test]
+#[cfg(feature = "pro")]
+fn writeback_flat_tags_cover_all_facets() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let xmp_path = root.join("photos/FACETS.xmp");
+    create_test_file(&root, "photos/FACETS.ARW", b"raw-facets");
+    create_test_file(
+        &root,
+        "photos/FACETS.xmp",
+        b"<x:xmpmeta><rdf:RDF><rdf:Description xmp:Rating=\"1\"/></rdf:RDF></x:xmpmeta>",
+    );
+    maki()
+        .current_dir(&root)
+        .args(["import", root.join("photos").to_str().unwrap()])
+        .assert()
+        .success();
+
+    let out = maki()
+        .current_dir(&root)
+        .args(["search", "-q", ""])
+        .output()
+        .unwrap();
+    let asset_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    assert!(!asset_id.is_empty(), "search returned no asset after import");
+
+    // Tag across four distinct facets. Each tag is hierarchical so the
+    // writeback flattener has something to split per facet.
+    maki()
+        .current_dir(&root)
+        .args([
+            "tag",
+            &asset_id,
+            "subject|nature|tree",
+            "person|family|alice",
+            "event|wedding|2024",
+            "location|france|paris",
+        ])
+        .assert()
+        .success();
+
+    maki()
+        .current_dir(&root)
+        .args(["writeback"])
+        .assert()
+        .success();
+
+    let xmp = std::fs::read_to_string(&xmp_path).unwrap();
+
+    // Every facet's leaf component (and the intermediate / root
+    // components, since the tag command auto-expands ancestors) should
+    // land in dc:subject as a separate <rdf:li>.
+    let expected_flat = [
+        "subject", "nature", "tree",
+        "person", "family", "alice",
+        "event", "wedding", "2024",
+        "location", "france", "paris",
+    ];
+    for tag in expected_flat {
+        let needle = format!("<rdf:li>{tag}</rdf:li>");
+        assert!(
+            xmp.contains(&needle),
+            "dc:subject missing flat component {tag}. \
+             Cross-facet flat-tag writeback must cover every facet, not \
+             just subject. Got:\n{xmp}"
+        );
+    }
+
+    // Hierarchical block must carry the full ancestor path for each
+    // facet — this is what Lightroom uses to render the tag tree.
+    let expected_hier = [
+        "subject|nature|tree",
+        "person|family|alice",
+        "event|wedding|2024",
+        "location|france|paris",
+    ];
+    for path in expected_hier {
+        let needle = format!("<rdf:li>{path}</rdf:li>");
+        assert!(
+            xmp.contains(&needle),
+            "lr:hierarchicalSubject missing path {path}. Got:\n{xmp}"
+        );
+    }
+}
+
 #[test]
 #[cfg(feature = "pro")]
 fn sync_metadata_dry_run() {
