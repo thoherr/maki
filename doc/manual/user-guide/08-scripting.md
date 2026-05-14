@@ -231,6 +231,23 @@ with open("ratings.csv") as f:
             print(f"  {asset_id[:8]}: FAILED — {result.stderr.strip()}")
 ```
 
+### Example: Align Flat Tags to the AI Vocabulary *(Pro)*
+
+Read the AI vocabulary YAML and emit `maki tag rename` / `maki tag split` commands that move flat catalog tags (e.g. `dog`, `sunset`, `concert`) into their canonical hierarchical home (`subject|animal|domestic`, …). Full script: `scripts/apply-vocabulary.py`. Covered in detail under [Maintenance → Aligning Flat Tags](07-maintenance.md#aligning-flat-tags-to-the-ai-vocabulary-pro).
+
+```bash
+# Preview commands against the active vocabulary
+python3 scripts/apply-vocabulary.py
+
+# Generate apply-mode commands and execute
+python3 scripts/apply-vocabulary.py --apply | sh
+
+# Test a candidate vocab file before adopting it in [ai].labels
+python3 scripts/apply-vocabulary.py path/to/my-labels.yaml
+```
+
+Run after editing `my-labels.yaml` or after a batch import that brought in flat keywords from external XMP sidecars.
+
 ---
 
 ## Real-World Example: Fix Orphaned XMP Files

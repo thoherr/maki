@@ -360,6 +360,15 @@ Order matters: writeback first ensures MAKI edits land in the XMP files. Then re
 maki writeback --log --time --json
 ```
 
+When recipes are skipped because their volume is offline, the summary names the offline volumes so you know which drives to reconnect before re-running:
+
+```
+Writeback: 0 written, 1 skipped (offline volumes: Archive 2025)
+  → Reconnect "Archive 2025" and re-run `maki writeback`.
+```
+
+With `--json`, the same information is available as a `skipped_offline_volumes` array on the result object.
+
 
 ## Sync Metadata *(Pro)*
 

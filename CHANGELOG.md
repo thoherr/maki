@@ -2,6 +2,58 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.5.9 (2026-05-14)
+
+Bug-fix and quality-of-life patch on top of v4.5.8's Review-tags feature.
+
+Tests: 798 + 249 standard, 918 + 279 pro (up from 798 / 249 / 918 / 277).
+
+### Writeback: clear pending_writeback in YAML on successful flush
+
+The web UI's "Write back to XMP" button and the `maki writeback` CLI were leaving the YAML sidecar's `pending_writeback: true` flag in place after successfully flushing an online recipe — even though SQLite and the XMP file on disk were both correctly in sync. A subsequent `maki rebuild-catalog`, which trusts YAML as the source of truth, would silently reintroduce a phantom pending flag on a recipe whose disk file is already current.
+
+The v4.5.6 fix correctly tracked per-recipe success in a `cleared_recipe_ids: HashSet<String>` and gated the after-loop sidecar save on it — but kept a `&& r.pending_writeback` guard inside the save loop. The `file_changed` branch in the per-recipe loop had already pre-cleared the in-memory flag (so the sidecar save would carry the new state), and the stale guard then saw the already-cleared value, set `any_changed = false`, and skipped `store.save()`. Net effect on a successful writeback: SQLite cleared ✓, XMP updated ✓, YAML stuck on `pending_writeback: true` ✗.
+
+Fix: drop the stale guard. `cleared_recipe_ids.contains(...)` is already the authoritative "this recipe succeeded" signal, and any recipe in that set warrants a sidecar save (the in-memory recipe has both an updated content_hash and a cleared pending flag that need to land on disk). New regression test `writeback_clears_yaml_pending_flag_on_success` reproduces the bug — verified to FAIL without the fix.
+
+### Writeback: name offline volumes in the skipped summary
+
+When a recipe is skipped because its volume is offline, the summary only said `N skipped` — the user had to guess (or grep `--log` output) which drive to reconnect. The summary now lists volume labels:
+
+```
+Writeback: 0 written, 1 skipped (offline volumes: Archive 2025)
+```
+
+`WritebackResult` gains a `skipped_offline_volumes: BTreeSet<String>` field populated with deduped, sorted volume labels of every offline volume that held at least one skipped recipe. Surfaced in four places: CLI summary, `--log` per-file lines (`X.xmp — skipped (volume offline: Archive 2025)`), `--json` (new optional `skipped_offline_volumes` array field), and the web Maintain dialog's writeback toast.
+
+### `scripts/apply-vocabulary.py` — flat-to-hierarchical tag migration
+
+New maintenance helper that reads the AI vocabulary YAML and emits `maki tag rename` / `maki tag split` commands to convert flat catalog tags into their hierarchical home per the vocabulary mapping. Driven by the same `my-labels.yaml` format used by `[ai].labels`:
+
+```yaml
+sunset:                                       # → emits `tag split`
+  - subject|nature|sky
+  - technique|lighting|golden hour
+concert: subject|performing arts|concert      # → emits `tag rename`
+landscape: landscape                          # skipped (identity)
+weather: null                                 # skipped (no mapping)
+```
+
+Two recurring situations this catches:
+
+1. **Vocabulary growth.** Adding `dog: subject|animal|domestic` only steers *future* AI suggestions — assets previously tagged with the bare `dog` keep the flat form. The script aligns them on demand.
+2. **Inbound imports.** Sidecar XMP from Lightroom / CaptureOne typically arrives flat (`sunset`, `concert`, `landscape`). The script promotes them to your canonical hierarchy in one pass.
+
+Dry-run by default. Three vocab sources: explicit YAML file argument, `--default` (built-in), or no args (active `[ai].labels`). Ships its own minimal vocab parser so there's no PyYAML dependency on the user's box. Rename commands use the `=` whole-path marker so the move only touches the bare flat form — `something|label` collisions on the same leaf stay intact. Documented in [Maintenance → Aligning Flat Tags to the AI Vocabulary](doc/manual/user-guide/07-maintenance.md#aligning-flat-tags-to-the-ai-vocabulary-pro).
+
+### Asset detail page: real tooltip on pending-writeback marker
+
+The ↻ glyph next to a recipe with staged-but-unflushed XMP edits had `cursor:help` plus a `title` attribute. Browsers do show that title — but with a 1–2 s delay that users routinely mistake for "no tooltip", especially since the cursor change implies help is imminent. Replaced with a CSS-driven instant tooltip (visible on hover or keyboard focus) plus an `aria-label` for screen readers. Text expanded from "Pending writeback" to a one-sentence explanation of what the marker means and how to flush it ("Write back to XMP" button below, or `maki writeback`).
+
+### Cross-facet flat-tag writeback contract lock
+
+Added regression test `writeback_flat_tags_cover_all_facets` that creates an asset with hierarchical tags across four facets (subject, person, event, location), runs `maki writeback`, and asserts every flat component lands in `dc:subject` and every hierarchical path lands in `lr:hierarchicalSubject`. The flattener in `query.rs` already iterates all facets via `.flat_map(|t| t.split('|'))`, but the contract had no test guarding against future facet-name special-casing. This test now fails CI if anyone introduces such a filter.
+
 ## v4.5.8 (2026-05-14)
 
 A focused web-UI release: **Review tags…** — an interception point in batch auto-tagging that surfaces every AI-suggested tag as a per-tag candidate set the user can prune before any tag is written. Solves the workflow complaint that motivated v4.5.7's hierarchical mapping: even with clean hierarchical suggestions, false positives still accumulate across dozens of vacation shots and the only remedy was hand-cleaning afterwards. Now the user reviews once, per tag, and false positives never land on disk.
