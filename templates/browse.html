@@ -1299,15 +1299,16 @@ window.onFilterChange = onFilterChange;
                     return r.json();
                 })
                 .then(function(data) {
-                    window.makiJob.watch(data.job_id, 'Suggest tags (' + ids.length + ')', {
-                        autoCloseMs: 0,
-                        onDone: function(evt) {
-                            if (evt.error) return;
-                            if (window.makiTagReview && window.makiTagReview.open) {
-                                window.makiTagReview.open(data.job_id);
-                            }
-                        }
-                    });
+                    // Open the review modal immediately in its "computing"
+                    // phase — it subscribes to the job's progress stream
+                    // itself and transitions to the review UI on `done`.
+                    // No corner toast for this job kind: the modal IS
+                    // the feedback surface, which matters because the AI
+                    // model can take 30–60 s to load on first request
+                    // and a small toast in the corner is easy to miss.
+                    if (window.makiTagReview && window.makiTagReview.open) {
+                        window.makiTagReview.open(data.job_id);
+                    }
                 })
                 .catch(function(err) {
                     alert('Suggest-tags failed: ' + err.message);

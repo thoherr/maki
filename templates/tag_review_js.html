@@ -21,6 +21,10 @@
     var modal = document.getElementById('tag-review-modal');
     var closeBtn = document.getElementById('tag-review-close');
     var statsEl = document.getElementById('tag-review-stats');
+    var computingEl = document.getElementById('tag-review-computing');
+    var progressFillEl = document.getElementById('tag-review-progress-fill');
+    var progressTextEl = document.getElementById('tag-review-progress-text');
+    var bodyEl = document.getElementById('tag-review-body');
     var tagFilterInput = document.getElementById('tag-review-tag-filter');
     var tagListEl = document.getElementById('tag-review-tag-list');
     var gridPane = document.getElementById('tag-review-grid-pane');
@@ -40,18 +44,33 @@
     var activeTagIdx = -1;               // index into `tags`, -1 when none selected
     var checkedByTag = {};               // tag → Set of asset_ids the user has explicitly toggled
     var tagState = {};                   // tag → 'pending' | 'applied' | 'skipped'
+    var currentJobId = null;             // job ID we're currently watching
+    var progressEs = null;               // EventSource for live progress (computing phase)
+
+    function showComputingPhase() {
+        computingEl.style.display = '';
+        bodyEl.style.display = 'none';
+    }
+    function showReviewPhase() {
+        computingEl.style.display = 'none';
+        bodyEl.style.display = '';
+    }
 
     function close() {
         overlay.style.display = 'none';
+        if (progressEs) { progressEs.close(); progressEs = null; }
         payload = null;
         tags = [];
         assets = {};
         activeTagIdx = -1;
         checkedByTag = {};
         tagState = {};
+        currentJobId = null;
         tagListEl.innerHTML = '';
         gridEl.innerHTML = '';
         statsEl.textContent = '';
+        progressFillEl.style.width = '0%';
+        progressTextEl.textContent = 'Starting…';
     }
     closeBtn.addEventListener('click', close);
     var closeBtnBottom = document.getElementById('tag-review-close-bottom');
@@ -64,11 +83,92 @@
     });
 
     // ── Open / load ─────────────────────────────────────────────────────
+    //
+    // Two entry paths: (1) job is still running — modal opens in the
+    // "computing" phase, subscribes to /api/jobs/{id}/progress for live
+    // status, transitions to the review phase on the terminal `done`
+    // event; (2) job already finished — go straight to fetching
+    // /api/jobs/{id}/result. We probe /api/jobs/{id} once on open to
+    // decide which path; from then on SSE drives the transition.
     function open(jobId) {
-        overlay.style.display = 'flex';
-        statsEl.textContent = 'Loading…';
+        if (currentJobId === jobId && overlay.style.display !== 'none') return;
+        // Reset state from any prior session.
+        if (progressEs) { progressEs.close(); progressEs = null; }
+        currentJobId = jobId;
+        payload = null;
+        tags = [];
+        assets = {};
+        activeTagIdx = -1;
+        checkedByTag = {};
+        tagState = {};
         tagListEl.innerHTML = '';
         gridEl.innerHTML = '';
+        progressFillEl.style.width = '0%';
+        progressTextEl.textContent = 'Starting AI model — this may take 30–60 s on the first request.';
+
+        overlay.style.display = 'flex';
+        statsEl.textContent = 'Computing suggestions…';
+        showComputingPhase();
+
+        fetch('/api/jobs/' + encodeURIComponent(jobId))
+            .then(function(r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function(meta) {
+                if (meta.completed) {
+                    loadResult(jobId);
+                } else {
+                    subscribeToProgress(jobId);
+                }
+            })
+            .catch(function(err) {
+                statsEl.textContent = 'Failed to attach to job: ' + err.message;
+            });
+    }
+
+    function subscribeToProgress(jobId) {
+        progressEs = new EventSource('/api/jobs/' + encodeURIComponent(jobId) + '/progress');
+        progressEs.onmessage = function(e) {
+            var evt;
+            try { evt = JSON.parse(e.data); } catch (_) { return; }
+            if (evt.done) {
+                if (progressEs) { progressEs.close(); progressEs = null; }
+                if (evt.error) {
+                    statsEl.textContent = 'Failed: ' + evt.error;
+                    progressTextEl.textContent = 'Failed: ' + evt.error;
+                    return;
+                }
+                // Slight delay so the "100%" frame renders before the
+                // phase swap — keeps the transition from feeling abrupt.
+                progressFillEl.style.width = '100%';
+                progressTextEl.textContent = 'Finalising — fetching results…';
+                setTimeout(function() { loadResult(jobId); }, 150);
+                return;
+            }
+            // Per-asset tick: update bar + text. The job emits
+            // {phase, processed, total, asset, status} for each asset.
+            if (typeof evt.processed === 'number' && typeof evt.total === 'number' && evt.total > 0) {
+                var pct = (evt.processed / evt.total) * 100;
+                progressFillEl.style.width = pct.toFixed(1) + '%';
+                var line = 'Computing suggestions: ' + evt.processed + ' / ' + evt.total;
+                if (evt.status && evt.status !== 'starting' && evt.status !== 'ok') {
+                    line += ' (' + evt.status + ')';
+                }
+                progressTextEl.textContent = line;
+            } else if (evt.status === 'starting') {
+                progressTextEl.textContent = 'Loading AI model — this may take 30–60 s on the first request.';
+            }
+        };
+        progressEs.onerror = function() {
+            // Don't tear down — broadcast disconnects do happen mid-job
+            // (especially during model load when the server is busy). Show
+            // a soft hint; the browser will auto-reconnect.
+            progressTextEl.textContent = 'Reconnecting to job stream…';
+        };
+    }
+
+    function loadResult(jobId) {
         fetch('/api/jobs/' + encodeURIComponent(jobId) + '/result')
             .then(function(r) {
                 if (r.status === 204) throw new Error('Job produced no result payload');
@@ -82,15 +182,14 @@
                 // Default threshold = ai_config.threshold (whatever the user
                 // has configured for normal auto-tag); the job ran at half
                 // that so the slider has room below the default line.
-                // payload.threshold_used is the *collection* threshold, not
-                // the display default — pick something in the middle if we
-                // don't know the user's normal value. The browse-page hand
-                // off doesn't currently pass it; use 2× threshold_used as
-                // a reasonable proxy ("apply only what auto-tag would have").
+                // payload.threshold_used is the *collection* threshold;
+                // 2× threshold_used reproduces the user's normal auto-tag
+                // floor as the default slider position.
                 var defaultDisplay = Math.min(0.95, Math.max(0.2, (p.threshold_used || 0.3) * 2));
                 thresholdInput.value = defaultDisplay.toFixed(2);
                 thresholdVal.textContent = defaultDisplay.toFixed(2);
                 tags.forEach(function(t) { tagState[t.tag] = 'pending'; });
+                showReviewPhase();
                 renderStats();
                 renderTagList();
                 if (tags.length > 0) {

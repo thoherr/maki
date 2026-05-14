@@ -30,6 +30,22 @@
             <button type="button" class="import-close" id="tag-review-close" aria-label="Close">&times;</button>
         </div>
         <div id="tag-review-stats" class="tag-review-stats">Loading…</div>
+        {# Computing phase: shown while the suggest-tags-review job is still
+           running on the server. Subscribes to the job's progress SSE so
+           the user gets continuous feedback (especially important on first
+           run, when the AI model may take 30-60 s to load before the first
+           per-asset tick arrives). Hidden once the job emits `done: true`
+           and the modal transitions to the review-body phase below. #}
+        <div id="tag-review-computing" class="tag-review-computing" style="display:none">
+            <div class="tag-review-progress-bar">
+                <div class="tag-review-progress-fill" id="tag-review-progress-fill"></div>
+            </div>
+            <div class="tag-review-progress-text" id="tag-review-progress-text">Starting AI model — this may take 30–60 s on the first request.</div>
+            <p class="tag-review-computing-hint">
+                MAKI is computing tag suggestions for every asset in scope (roughly 1–2 s per image after the model is warm).
+                The job runs server-side; you can close this dialog without cancelling it, but the results are only reviewable while this window stays open.
+            </p>
+        </div>
         <div class="tag-review-body" id="tag-review-body">
             <aside class="tag-review-tags">
                 <input type="text" id="tag-review-tag-filter" placeholder="Filter tags…" autocomplete="off">
