@@ -983,6 +983,61 @@ maki search "copies:3+"
 The [web UI backup page](06-web-ui.md#backup-status-page) provides a visual dashboard with volume distribution charts and gap analysis.
 
 
+## Aligning Flat Tags to the AI Vocabulary *(Pro)*
+
+The AI vocabulary file (`[ai] labels = "my-labels.yaml"`) maps each flat label the SigLIP classifier sees to its canonical hierarchical home in your catalog. For new assets, MAKI applies the hierarchical form directly. But two situations still leave flat tags behind:
+
+- **Vocabulary growth.** When you add a new mapping (`dog: subject|animal|domestic`), assets previously tagged with the bare `dog` keep the flat form. The mapping only steers *future* AI suggestions.
+- **Inbound imports.** Sidecar XMP from Lightroom / CaptureOne typically arrives as flat keywords. MAKI imports them as-is, so `sunset`, `concert`, `landscape` land flat in the catalog.
+
+The `scripts/apply-vocabulary.py` helper reads the vocabulary YAML and emits the `maki tag rename` / `maki tag split` commands needed to move every flat label into its hierarchical home. Run it whenever the vocabulary changes or after a batch of flat-tagged imports.
+
+### How it works
+
+For each entry in the vocabulary:
+
+- `label: tag` — emits `maki tag rename =label tag` (whole-path match so it touches only the flat form, not `something|label`).
+- `label: [tag1, tag2]` — emits `maki tag split =label tag1 tag2` (one-to-many fan-out).
+- `label: null` or identity (`label: label`) — skipped, no rename needed.
+
+The script doesn't query the catalog — it emits every command for every mapping. Tags that don't exist in your catalog are no-ops at execution time (MAKI reports "no assets found" and moves on), so the output is safe to run unconditionally. Ancestor paths (`subject`, `subject|nature`, …) are auto-expanded by `maki tag rename` itself, so you don't need to spell them out.
+
+### Workflow
+
+```bash
+# 1. Review what would change — dry-run by default
+python3 scripts/apply-vocabulary.py
+
+# 2. Save for review, then execute
+python3 scripts/apply-vocabulary.py --apply > apply-vocab.sh
+less apply-vocab.sh
+sh apply-vocab.sh
+```
+
+The script picks up your active `[ai] labels` automatically via `maki ai export-vocabulary`. Three other ways to scope it:
+
+```bash
+# Built-in default vocabulary
+python3 scripts/apply-vocabulary.py --default
+
+# Explicit file (e.g. test a candidate before adopting it)
+python3 scripts/apply-vocabulary.py path/to/my-labels.yaml
+
+# Pipe straight to sh — fine for the recurring case once you trust your vocab
+python3 scripts/apply-vocabulary.py --apply | sh
+```
+
+After running the script, the dc:subject XMP keyword list still reflects every flat component (`subject`, `nature`, `landscape`, …) because `maki tag rename` writes back through the same hierarchical/flat pair MAKI uses everywhere — Lightroom and CaptureOne see the full keyword set.
+
+### When to run
+
+Run after any of these:
+
+- Editing `my-labels.yaml` (adding mappings, splitting flat labels, promoting branches).
+- A batch import that brought in flat keywords from external XMP sidecars.
+- Periodically — quarterly, or alongside `maki verify` — as a hygiene pass that catches drift.
+
+
 ## Recommended Maintenance Workflow
 
 A practical schedule for keeping your catalog healthy:
@@ -1055,7 +1110,21 @@ maki backup-status
 
 See [Storage Hygiene](#storage-hygiene) above for the full workflow.
 
-### 5. Nuclear option: rebuild
+### 5. After editing the AI vocabulary or importing flat-tagged sidecars *(Pro)*
+
+When `my-labels.yaml` grows or external XMP sidecars bring in flat keywords, align the catalog to the vocabulary:
+
+```bash
+# Preview
+python3 scripts/apply-vocabulary.py
+
+# Execute
+python3 scripts/apply-vocabulary.py --apply | sh
+```
+
+See [Aligning Flat Tags to the AI Vocabulary](#aligning-flat-tags-to-the-ai-vocabulary-pro) above for the full workflow.
+
+### 6. Nuclear option: rebuild
 
 If the catalog seems fundamentally out of sync -- searches return wrong results, show displays stale data -- rebuild from the sidecar files:
 
@@ -1088,10 +1157,13 @@ maki cleanup --volume "Archive 2025" --apply
 # 6. Check for accidental duplicates on this volume
 maki duplicates --same-volume --volume "Archive 2025"
 
-# 7. Verify backup coverage across all volumes
+# 7. Align flat tags from any imported sidecars to your hierarchy (Pro)
+python3 scripts/apply-vocabulary.py --apply | sh
+
+# 8. Verify backup coverage across all volumes
 maki backup-status
 
-# 8. Confirm everything looks good
+# 9. Confirm everything looks good
 maki stats --volumes
 ```
 
