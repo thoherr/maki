@@ -961,11 +961,14 @@ select.badge {
    was `> span:first-child`, which broke when the negate toggle was
    inserted before the label.) */
 .tag-chip > span { margin-right: 0.25rem; }
-/* Negate toggle (`+` / `−`) — sits before the label. Faint when the
-   chip is positive (default), prominent red when the chip is negated.
-   When active, the chip's whole background gains a red tint and the
-   label gets a strikethrough so the negated state is obvious at a
-   glance, not just from the small toggle. */
+/* Negate toggle (`+` / `−`) — sits before the label. Faint plain text
+   when the chip is positive (default). When active, the toggle becomes
+   a small filled red badge with a white minus — reads like a
+   "no-entry" icon and stays legible against the chip's red-tinted
+   background (where a plain red `−` on light red was too low-contrast
+   to spot). Strikethrough on the label is the secondary cue so the
+   negated state is obvious at a glance even before the toggle
+   registers. */
 .tag-chip .tag-negate-toggle {
     background: none;
     border: none;
@@ -980,8 +983,19 @@ select.badge {
 }
 .tag-chip .tag-negate-toggle:hover { opacity: 0.9; }
 .tag-chip .tag-negate-toggle.active {
-    color: var(--danger, #c0392b);
+    background: var(--danger, #c0392b);
+    color: #fff;
     opacity: 1;
+    border-radius: 50%;
+    width: 1.05rem;
+    height: 1.05rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    padding: 0;
+    margin: 0 0.25rem 0 0;
+    line-height: 1;
 }
 .tag-chip.negated {
     background: color-mix(in srgb, var(--danger, #c0392b) 14%, var(--tag-bg));
