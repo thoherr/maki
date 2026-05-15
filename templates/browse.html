@@ -47,6 +47,8 @@
     <a class="saved-search-chip" href="/?{{ ss.url_params }}">{{ ss.name }}</a>
     {% endfor %}
     <button class="save-search-btn" id="save-search-btn" title="Save current search">&#9733; Save</button>
+    <button class="clear-search-btn" id="clear-search-btn" title="Clear all filters and remembered state" style="display:none">&times; Clear</button>
+    <span class="restored-filter-pill" id="restored-filter-pill" style="display:none" title="Filter was restored from your previous browsing session. Click Clear above to reset.">Restored from last session</span>
     <a class="ss-manage-link" href="/saved-searches">Manage&hellip;</a>
 </div>
 
@@ -3136,6 +3138,211 @@ window.damFacets = (function() {
 
     init();
     return { toggle: toggle, fetchFacets: fetchFacets, isOpen: isOpen };
+})();
+
+// --- Remember last browse filter (gated by [browse] remember_latest_filter) ---
+//
+// Persists the most-recently-viewed filter to localStorage and restores
+// it when the user lands on bare `/` (no query params). Goal: curating
+// sessions where the user bounces between detail and browse views can
+// resume exactly where they left off — even if assets were retagged or
+// deleted while away — by remembering the asset IDs visible on the saved
+// page and recomputing the right page from where those IDs land in the
+// current result set.
+//
+// Storage shape (single key, JSON):
+//   { search, page, ids, ts }
+// where `search` is the URL search-string (e.g. "?tag=wedding&sort=date_desc"),
+// `page` is the page number on save, `ids` is the array of asset IDs that
+// were visible on that page, and `ts` is an epoch timestamp for future
+// staleness checks.
+(function() {
+    var LS_KEY = 'maki-browse-last-filter';
+    // Surface URL marker the restore step adds so the page knows to
+    // display the "Restored from last session" pill. Stripped from the
+    // visible URL immediately after pickup so a refresh doesn't re-show
+    // the pill.
+    var RESTORED_PARAM = '_restored';
+
+    var rememberEnabled = null; // set asynchronously from /api/build-info
+
+    function isBareBrowse() {
+        return window.location.pathname === '/' && window.location.search === '';
+    }
+
+    function isJustRestored() {
+        var p = new URLSearchParams(window.location.search);
+        return p.has(RESTORED_PARAM);
+    }
+
+    function stripRestoredMarker() {
+        var url = new URL(window.location.href);
+        url.searchParams.delete(RESTORED_PARAM);
+        // Use replaceState so the visible URL no longer carries the
+        // marker (otherwise refresh would show the pill twice).
+        window.history.replaceState({}, '', url.toString());
+    }
+
+    function readSaved() {
+        try {
+            var raw = localStorage.getItem(LS_KEY);
+            return raw ? JSON.parse(raw) : null;
+        } catch (e) { return null; }
+    }
+
+    function clearSaved() {
+        try { localStorage.removeItem(LS_KEY); } catch (e) {}
+    }
+
+    function writeSaved(state) {
+        try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {}
+    }
+
+    // Strip the page param from a URL search-string so we can hold the
+    // filter+sort in one key and recompute page on restore. Also strips
+    // the restore marker if present (defense in depth).
+    function searchWithoutPage(searchStr) {
+        var p = new URLSearchParams(searchStr);
+        p.delete('page');
+        p.delete(RESTORED_PARAM);
+        var s = p.toString();
+        return s ? '?' + s : '';
+    }
+
+    // Save the current view's state. Called on every results-swap. We
+    // skip saving when the view is "bare" (no filter active) so a stray
+    // visit doesn't overwrite a richer saved state with the empty view.
+    function saveCurrentState() {
+        if (rememberEnabled === false) return;
+        var search = searchWithoutPage(window.location.search);
+        if (!search) {
+            // Bare view — nothing to remember.
+            return;
+        }
+        var meta = document.getElementById('results-meta');
+        var page = meta ? parseInt(meta.dataset.page || '1', 10) : 1;
+        var ids = Array.prototype.map.call(
+            document.querySelectorAll('.asset-card'),
+            function(c) { return c.getAttribute('data-asset-id'); }
+        );
+        writeSaved({ search: search, page: page, ids: ids, ts: Date.now() });
+    }
+
+    // Restore handler — runs once on bare-`/` page load. Fetches the
+    // current ID ordering under the saved filter+sort, finds the first
+    // surviving saved ID, and navigates to its page. If no saved IDs
+    // are still present (everything got retagged or deleted), falls
+    // back to page 1.
+    function tryRestore() {
+        if (!isBareBrowse()) return;
+        var saved = readSaved();
+        if (!saved || !saved.search) return;
+
+        fetch('/api/all-ids' + saved.search)
+            .then(function(r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function(data) {
+                var currentIds = data.ids || [];
+                if (currentIds.length === 0) {
+                    // Filter no longer matches anything — fall through to
+                    // the normal default view rather than restore-to-empty.
+                    clearSaved();
+                    return;
+                }
+                var idIndex = new Map();
+                currentIds.forEach(function(id, i) { idIndex.set(id, i); });
+                // Find first remembered ID still present. Preserves the
+                // "greatest overlap" intuition — we land on the page that
+                // contains the asset the user was closest to last time.
+                var perPage = data.per_page || Math.ceil(currentIds.length / (data.total_pages || 1)) || 60;
+                var position = -1;
+                for (var i = 0; i < (saved.ids || []).length; i++) {
+                    var pos = idIndex.get(saved.ids[i]);
+                    if (pos !== undefined) { position = pos; break; }
+                }
+                var page = position >= 0 ? Math.floor(position / perPage) + 1 : 1;
+                var target = saved.search + (saved.search.indexOf('?') === 0 ? '&' : '?') + 'page=' + page + '&' + RESTORED_PARAM + '=1';
+                // Use replace() so the bare-`/` entry doesn't sit in the
+                // browser history right next to the restored URL — back
+                // button should leave the site, not return to an empty
+                // landing that immediately bounces back.
+                window.location.replace('/' + target);
+            })
+            .catch(function() {
+                // Restore is best-effort. If /api/all-ids errors (network
+                // blip, server restart mid-call), drop into the normal
+                // default view.
+            });
+    }
+
+    function showRestoredPill() {
+        var pill = document.getElementById('restored-filter-pill');
+        if (pill) pill.style.display = '';
+    }
+
+    // Show/hide the Clear button based on whether there's anything to
+    // clear: an active filter on the page OR a saved filter in storage.
+    function refreshClearButtonVisibility() {
+        var btn = document.getElementById('clear-search-btn');
+        if (!btn) return;
+        var hasUrlFilter = window.location.search !== '' &&
+            window.location.search !== '?' + RESTORED_PARAM + '=1';
+        var hasSaved = readSaved() !== null;
+        btn.style.display = (hasUrlFilter || hasSaved) ? '' : 'none';
+    }
+
+    function wireClearButton() {
+        var btn = document.getElementById('clear-search-btn');
+        if (!btn) return;
+        btn.addEventListener('click', function() {
+            clearSaved();
+            // Navigate to bare `/`. The page reload starts the restore
+            // path with an empty localStorage, so nothing comes back.
+            window.location.href = '/';
+        });
+    }
+
+    // /api/build-info gates the feature. If it returns
+    // `remember_latest_filter: false`, we skip saving + restoring
+    // entirely. (The Clear button can still wipe stale state from a
+    // previous "on" setting — flipping the config off shouldn't strand
+    // a forgotten filter in storage.)
+    fetch('/api/build-info')
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(info) {
+            rememberEnabled = info && info.remember_latest_filter !== false;
+            if (!rememberEnabled) return;
+            if (isBareBrowse()) {
+                tryRestore();
+            } else {
+                // URL already carries a filter → capture it for next
+                // visit. Covers direct-link navigation (e.g. opening a
+                // saved-search chip) where no htmx swap fires.
+                saveCurrentState();
+            }
+        })
+        .catch(function() { rememberEnabled = false; });
+
+    // On every results swap, persist the now-current state. htmx:afterSwap
+    // fires after hx-push-url has updated window.location, so the captured
+    // URL reflects the latest filter + page.
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target && e.detail.target.id === 'results') {
+            if (rememberEnabled) saveCurrentState();
+            refreshClearButtonVisibility();
+        }
+    });
+
+    // Show the pill once, then strip the URL marker so a refresh
+    // doesn't re-flash it.
+    if (isJustRestored()) {
+        showRestoredPill();
+        stripRestoredMarker();
+    }
+    refreshClearButtonVisibility();
+    wireClearButton();
 })();
 
 // --- Browse context for detail page navigation ---

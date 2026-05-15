@@ -249,6 +249,11 @@ pub struct AppState {
     /// Lightbox slideshow loop-after-last-asset toggle. Initial state of
     /// the loop button in the lightbox toolbar.
     pub slideshow_loop: bool,
+    /// When `true`, the browse page persists the most-recently-viewed
+    /// filter to localStorage and a bare-`/` visit restores it (with
+    /// a Clear pill so the state is visible). Surfaced via
+    /// `/api/build-info` and consumed by `browse.html`.
+    pub remember_latest_filter: bool,
     pub vlm_config: crate::config::VlmConfig,
     #[cfg(feature = "ai")]
     pub ai_model: tokio::sync::Mutex<Option<crate::ai::SigLipModel>>,
@@ -310,6 +315,7 @@ impl AppState {
             default_filter,
             slideshow_seconds: browse_cfg.slideshow_seconds.max(1),
             slideshow_loop: browse_cfg.slideshow_loop,
+            remember_latest_filter: browse_cfg.remember_latest_filter,
             verbosity,
             vlm_enabled,
             vlm_config,
@@ -349,6 +355,7 @@ impl AppState {
             default_filter,
             slideshow_seconds: browse_cfg.slideshow_seconds.max(1),
             slideshow_loop: browse_cfg.slideshow_loop,
+            remember_latest_filter: browse_cfg.remember_latest_filter,
             verbosity,
             vlm_enabled,
             vlm_config,

@@ -427,6 +427,39 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
     border-color: var(--primary);
     color: var(--primary);
 }
+/* Clear-filter button — sits next to the Save button on the saved-
+   searches row. Visible only when there is something to clear (a
+   filter is active or a remembered filter was just restored), so it
+   doesn't add noise to the empty-state browse view. */
+.clear-search-btn {
+    padding: 0.2rem 0.5rem;
+    font-size: 0.8rem;
+    border: 1px dashed var(--border);
+    border-radius: 1rem;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.15s, color 0.15s;
+}
+.clear-search-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+/* "Restored from last session" pill — visible only on the visit that
+   actually triggered the restore. Lets the user see (and dismiss via
+   Clear) that the page is showing remembered state instead of the
+   default view. */
+.restored-filter-pill {
+    display: inline-block;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.78rem;
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
+    border-radius: 1rem;
+    white-space: nowrap;
+}
 
 /* Results grid */
 .results-grid {

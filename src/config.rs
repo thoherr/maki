@@ -653,10 +653,23 @@ pub struct BrowseConfig {
     /// the first (`true`) or stop and pause (`false`).
     #[serde(default = "default_slideshow_loop")]
     pub slideshow_loop: bool,
+    /// When `true`, the browse page remembers the most-recently-viewed
+    /// filter (filter + sort + page + asset IDs visible on that page)
+    /// in localStorage, and a bare-`/` visit restores it. A small
+    /// "Restored from last session" pill appears with a Clear button
+    /// so the user can see and dismiss the restored state. Designed
+    /// for curating sessions where you bounce between detail and
+    /// browse views and want to return exactly where you left off
+    /// even if assets were retagged/deleted in the meantime — page is
+    /// recomputed by finding the first remembered asset ID still in
+    /// the (possibly-changed) result set.
+    #[serde(default = "default_remember_latest_filter")]
+    pub remember_latest_filter: bool,
 }
 
 fn default_slideshow_seconds() -> u32 { 5 }
 fn default_slideshow_loop() -> bool { true }
+fn default_remember_latest_filter() -> bool { true }
 
 impl Default for BrowseConfig {
     fn default() -> Self {
@@ -664,6 +677,7 @@ impl Default for BrowseConfig {
             default_filter: None,
             slideshow_seconds: default_slideshow_seconds(),
             slideshow_loop: default_slideshow_loop(),
+            remember_latest_filter: default_remember_latest_filter(),
         }
     }
 }

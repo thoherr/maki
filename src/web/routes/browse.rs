@@ -761,6 +761,7 @@ pub async fn all_ids_api(
             "ids": ids,
             "total": total,
             "total_pages": total_pages,
+            "per_page": per_page,
         }))
     })
     .await;

@@ -702,6 +702,7 @@ Controls default browsing behavior for both the CLI `maki search` and the web UI
 | `default_filter` | string | *(none)* | Search filter applied to all browse, search, and stroll views. Uses the same syntax as the search bar. |
 | `slideshow_seconds` | integer | `5` | Initial advance interval (seconds) for the lightbox slideshow. The user can bump it at runtime with `+`/`-` while the slideshow is running (range clamped to 1–60). |
 | `slideshow_loop` | bool | `true` | Initial loop-after-last state of the lightbox slideshow. When `true`, the slideshow wraps from the last visible asset back to the first; when `false`, it stops at the last asset. Toggle button in the lightbox toolbar overrides this per-session. |
+| `remember_latest_filter` | bool | `true` | When `true`, the browse page persists the most-recently-viewed filter (filter + sort + page + visible asset IDs) to `localStorage` and restores it on a bare-`/` visit. A "Restored from last session" pill appears with a Clear button so the state is visible and dismissable. Page is recomputed by finding the first remembered asset still in the (possibly-changed) result set — survives intervening retags and deletions without landing on a stale page. Set `false` to disable persistence entirely. |
 
 The default filter is AND'd with whatever the user types — it acts as a persistent base filter. In the web UI, a toggle next to the search bar lets you temporarily disable it.
 

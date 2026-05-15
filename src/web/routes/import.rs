@@ -312,6 +312,7 @@ pub async fn build_info_api(
         "pro": pro,
         "slideshow_seconds": state.slideshow_seconds,
         "slideshow_loop": state.slideshow_loop,
+        "remember_latest_filter": state.remember_latest_filter,
     })).into_response()
 }
 
