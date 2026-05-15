@@ -2,6 +2,34 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.5.10 (2026-05-15)
+
+Browse-page QoL release. Two features and one small fix on top of v4.5.9, all browser-side.
+
+Tests: 798 + 249 standard, 918 + 279 pro (unchanged from v4.5.9 — all changes are JS/CSS or simple server-side routing).
+
+### Remember the last filter across visits
+
+Curating sessions where the user bounces between detail and grid views previously dropped them at page 1 of the default view every time they returned to `/`. They had to retype the query (or save it as a saved-search first). Now the browse page persists `{search, page, ids, ts}` to `localStorage` on every `htmx:afterSwap`, and a bare-`/` visit restores it.
+
+Page restoration is asset-ID-aware, not naive: on restore, `/api/all-ids?<saved-search>` returns the current ordered ID list under the saved filter+sort, and the script walks the remembered IDs to find the first one still present. The current page is computed from that ID's position. Result: returning to a half-curated set lands on the same view even when intervening retags or deletions changed the result count. Falls back to page 1 if every remembered ID is gone.
+
+A "Restored from last session" pill appears next to the saved-search chips on the visit that triggered the restore (then auto-strips via `history.replaceState` so a refresh doesn't re-flash it). A `× Clear` button next to the Save-search button wipes both the active filter and the saved state, landing on the default view.
+
+Gated by `[browse] remember_latest_filter = true` (default on). Surfaced through `/api/build-info` alongside the existing slideshow toggles. `/api/all-ids` now also returns `per_page` so the JS computes pages directly instead of inferring from totals.
+
+### Per-chip negate toggle on tag filter
+
+Each tag chip on the browse filter bar now carries a `+`/`−` toggle on its left that flips the chip between include (default) and exclude. Negated chips route into the search's `tags_exclude` (NOT) clause instead of `tags`, equivalent to typing `-tag:foo` in the query field but reachable directly from the chip — useful for the common "show me everything under `subject|animal` *except* cat" pattern.
+
+Wire format: leading `-` on the chip's `data-tag` value (outermost prefix, before the existing `=` / `/` / `^` mode/case markers). The form's `getSelectedTags().join(",")` carries `data-tag` through to the URL's `tag=` param; `build_parsed_search` now detects per-item leading `-` and pushes into `parsed.tags_exclude`. `SearchOptions.tags_exclude` is the same slot the `parse_search_query` path uses for `-tag:foo` in the q field — so this is a routing change in `build_parsed_search`, not a new filter type.
+
+Visually distinctive when active: a filled red badge with a white minus inside (reads as a "no-entry" stop icon, stays legible against the chip's red-tinted background); the chip's whole background gains a red tint; the label gets a strikethrough. Three cues so the polarity reads from across the page, not just from the small toggle. `stripTagPrefixes` parses leading `-` so URL→chip restore (initial load AND popstate) round-trips correctly.
+
+### apply-vocabulary.py: zsh-safe quoting
+
+`scripts/apply-vocabulary.py` was emitting bare `=label` tokens for the `OLD_TAG` argument of `maki tag rename`. zsh's `EQUALS` option (on by default, default shell on macOS) treats an unquoted token starting with `=` as a command-path lookup — `=cat` expanded to `/bin/cat`, breaking the emitted invocation. Added a `shell_quote()` wrapper that wraps `shlex.quote()` and always single-quotes tokens starting with `=`, regardless of whether POSIX shell rules would require it. Output is now `maki tag rename '=cat' 'subject|animal|domestic'` — zsh leaves the `'=cat'` literal alone.
+
 ## v4.5.9 (2026-05-14)
 
 Bug-fix and quality-of-life patch on top of v4.5.8's Review-tags feature.
