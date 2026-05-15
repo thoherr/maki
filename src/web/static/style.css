@@ -956,8 +956,41 @@ select.badge {
     margin: 0.15rem;
 }
 /* Give the label a little breathing room on its right, then the toggles
-   stick together. The label is the first child (direct <span>). */
-.tag-chip > span:first-child { margin-right: 0.25rem; }
+   stick together. The label is the only direct <span> child — the
+   negate / mode / case / remove buttons surround it. (Previously this
+   was `> span:first-child`, which broke when the negate toggle was
+   inserted before the label.) */
+.tag-chip > span { margin-right: 0.25rem; }
+/* Negate toggle (`+` / `−`) — sits before the label. Faint when the
+   chip is positive (default), prominent red when the chip is negated.
+   When active, the chip's whole background gains a red tint and the
+   label gets a strikethrough so the negated state is obvious at a
+   glance, not just from the small toggle. */
+.tag-chip .tag-negate-toggle {
+    background: none;
+    border: none;
+    color: var(--tag-text);
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 0 0.15rem 0 0;
+    margin: 0 0.1rem 0 -0.15rem;
+    opacity: 0.4;
+    line-height: 1;
+}
+.tag-chip .tag-negate-toggle:hover { opacity: 0.9; }
+.tag-chip .tag-negate-toggle.active {
+    color: var(--danger, #c0392b);
+    opacity: 1;
+}
+.tag-chip.negated {
+    background: color-mix(in srgb, var(--danger, #c0392b) 14%, var(--tag-bg));
+    color: var(--tag-text);
+}
+.tag-chip.negated > span {
+    text-decoration: line-through;
+    text-decoration-color: color-mix(in srgb, var(--danger, #c0392b) 70%, transparent);
+}
 .tag-chip .tag-link {
     color: inherit;
     text-decoration: none;

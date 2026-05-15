@@ -37,26 +37,33 @@
     // Mode is tri-state: "desc" (default, include descendants), "path"
     // (whole-path match, `=`), or "exact" (leaf-only at any level, `/`).
     // Case-sensitivity toggles orthogonally via `^`.
+    // Negation toggles orthogonally via leading `-` — server-side this
+    // routes the chip into `tags_exclude` (NOT) instead of `tags` (AND).
     function updateChipDataTag(chip, name) {
         var mode = chip.getAttribute('data-mode') || 'desc';
         var caseSensitive = chip.getAttribute('data-case') === '1';
+        var negated = chip.getAttribute('data-negated') === '1';
         var modePrefix = (mode === 'path') ? '=' : (mode === 'exact') ? '/' : '';
-        var prefix = modePrefix + (caseSensitive ? '^' : '');
+        // `-` always outermost so the server's per-item negation parse
+        // (in build_parsed_search) catches it before mode/case prefixes.
+        var prefix = (negated ? '-' : '') + modePrefix + (caseSensitive ? '^' : '');
         chip.setAttribute('data-tag', prefix + name);
     }
 
-    // Strip `=`, `/`, and `^` prefix markers from a raw tag name (user may
-    // type them manually in the input field).
+    // Strip `-`, `=`, `/`, and `^` prefix markers from a raw tag name (user may
+    // type them manually in the input field, or it may come from a URL
+    // restore where the chip was previously negated).
     function stripTagPrefixes(raw) {
-        var mode = 'desc', caseSensitive = false, name = raw;
+        var mode = 'desc', caseSensitive = false, negated = false, name = raw;
         var changed = true;
         while (changed) {
             changed = false;
-            if (name.charAt(0) === '=') { mode = 'path'; name = name.substring(1); changed = true; }
+            if (name.charAt(0) === '-') { negated = true; name = name.substring(1); changed = true; }
+            else if (name.charAt(0) === '=') { mode = 'path'; name = name.substring(1); changed = true; }
             else if (name.charAt(0) === '/') { mode = 'exact'; name = name.substring(1); changed = true; }
             else if (name.charAt(0) === '^') { caseSensitive = true; name = name.substring(1); changed = true; }
         }
-        return { name: name, mode: mode, caseSensitive: caseSensitive };
+        return { name: name, mode: mode, caseSensitive: caseSensitive, negated: negated };
     }
 
     function addTag(raw) {
@@ -75,11 +82,38 @@
         if (existingNames.indexOf(name) !== -1) return;
 
         var chip = document.createElement('span');
-        chip.className = 'tag-chip';
+        chip.className = 'tag-chip' + (parsed.negated ? ' negated' : '');
         chip.setAttribute('data-name', name);
         chip.setAttribute('data-mode', parsed.mode);
         chip.setAttribute('data-case', parsed.caseSensitive ? '1' : '0');
+        chip.setAttribute('data-negated', parsed.negated ? '1' : '0');
         updateChipDataTag(chip, name);
+
+        // Negate toggle: flips the chip between include (`tag:foo`) and
+        // exclude (`-tag:foo`) semantics. Sits first because it changes
+        // the chip's polarity — a more fundamental modifier than the
+        // mode (descendants vs whole-path vs leaf) and case toggles.
+        var negateToggle = document.createElement('button');
+        negateToggle.type = 'button';
+        negateToggle.className = 'tag-negate-toggle';
+        function renderNegate() {
+            var neg = chip.getAttribute('data-negated') === '1';
+            negateToggle.textContent = neg ? '−' : '+';  // − vs +
+            negateToggle.classList.toggle('active', neg);
+            chip.classList.toggle('negated', neg);
+            negateToggle.title = neg
+                ? 'Excluding: assets with this tag are hidden — click to include'
+                : 'Including: assets with this tag are shown — click to exclude';
+        }
+        renderNegate();
+        negateToggle.onclick = function() {
+            var neg = chip.getAttribute('data-negated') === '1';
+            chip.setAttribute('data-negated', neg ? '0' : '1');
+            updateChipDataTag(chip, name);
+            renderNegate();
+            onFilterChange();
+        };
+        chip.appendChild(negateToggle);
 
         var label = document.createElement('span');
         label.textContent = tagToDisplay(name);

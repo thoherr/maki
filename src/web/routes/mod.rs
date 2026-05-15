@@ -299,9 +299,20 @@ pub(super) fn build_parsed_search(params: &SearchParams, state: &AppState) -> Br
     // "comma = OR" behaviour for the dedicated `tag=` URL param. Power users
     // who want OR can still type `tag:a,b` in the q field — that goes through
     // parse_search_query, which preserves the comma as one entry → catalog OR.
+    //
+    // A leading `-` on a chip-list entry negates it — the entry routes into
+    // `tags_exclude` (server-side NOT-clause) instead of `tags`. Mirrors the
+    // `-tag:foo` syntax users can type in the q field, surfaced via the
+    // browse-page chip's negate toggle. The remaining mode/case prefixes
+    // (`=`, `/`, `^`) are downstream of negation in the chip's wire format
+    // (`-=foo`, `-^foo`, etc.) — strip the `-` first, pass the rest through.
     if !tag.is_empty() {
         for t in tag.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-            parsed.tags.push(t.to_string());
+            if t.starts_with('-') && t.len() > 1 {
+                parsed.tags_exclude.push(t[1..].to_string());
+            } else {
+                parsed.tags.push(t.to_string());
+            }
         }
     }
     if !fmt.is_empty() { parsed.formats.push(fmt.to_string()); }
