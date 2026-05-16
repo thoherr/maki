@@ -5453,6 +5453,14 @@ pub fn run_writeback_command(
         }
         let mut parts = Vec::new();
         parts.push(format!("{} written", result.written));
+        if result.already_in_sync > 0 {
+            // Distinct from "written": these recipes had the catalog's
+            // values already on disk (typical case after an external
+            // rsync from a primary volume to a registered backup
+            // volume). No file writes happened; the pending flag cleared
+            // and any drifted content_hash was reconciled in-place.
+            parts.push(format!("{} already in sync", result.already_in_sync));
+        }
         if result.skipped > 0 {
             let mut s = format!("{} skipped", result.skipped);
             if !result.skipped_offline_volumes.is_empty() {

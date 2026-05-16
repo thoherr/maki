@@ -314,6 +314,14 @@ pub struct TagFixUnicodeResult {
 pub struct WritebackResult {
     /// Number of XMP files written (or that would be written in dry-run).
     pub written: u32,
+    /// Number of recipes whose XMP on disk already matched the catalog
+    /// (no file write needed). Surfaces the "external sync got here
+    /// first" case — typically after an `rsync` from a primary volume
+    /// to a backup volume that's a registered MAKI volume. The
+    /// catalog's stored content_hash is silently reconciled if the
+    /// disk content was externally modified to match what we'd have
+    /// written, so a subsequent `verify` won't flag stale hashes.
+    pub already_in_sync: u32,
     /// Number of recipes skipped (volume offline or file missing).
     pub skipped: u32,
     /// Number of recipes that failed.
@@ -3373,17 +3381,59 @@ impl QueryEngine {
                             eprintln!("Warning: could not re-hash {}: {e}", full_path.display());
                         }
                     }
+                    result.written += 1;
+                    if log {
+                        eprintln!("{rel_path} — written");
+                    }
+                    if let Some(cb) = callback {
+                        cb(rel_path, "written");
+                    }
+                } else {
+                    // file_changed=false reached this point only because every
+                    // xmp_reader::update_* returned Ok(false) — the XMP on
+                    // disk already carries the values we would have written.
+                    // This is the "external sync got here first" path: a
+                    // common case after the user rsyncs ARCHIVE → BACKUP
+                    // outside of MAKI between curating and running
+                    // `maki writeback`. The pending flag clears below (no
+                    // action needed here), but the catalog's stored
+                    // content_hash for this recipe may be stale because
+                    // rsync replaced the file on disk while we still
+                    // remembered the pre-rsync hash. Re-hash and reconcile
+                    // so a subsequent `maki verify` doesn't flag every
+                    // synced recipe as a mismatch.
+                    match content_store.hash_file(&full_path) {
+                        Ok(disk_hash) => {
+                            let stored_hash = asset
+                                .recipes
+                                .iter()
+                                .find(|r| r.id.to_string() == *recipe_id)
+                                .map(|r| r.content_hash.clone());
+                            if stored_hash.as_deref() != Some(disk_hash.as_str()) {
+                                let _ = catalog
+                                    .update_recipe_content_hash(recipe_id, &disk_hash);
+                                if let Some(r) = asset.recipes.iter_mut().find(|r| r.id.to_string() == *recipe_id) {
+                                    r.content_hash = disk_hash;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            // Hash failure here doesn't block the writeback — we
+                            // still clear pending below. Log so operators can see.
+                            eprintln!("Warning: could not re-hash {}: {e}", full_path.display());
+                        }
+                    }
+                    result.already_in_sync += 1;
+                    if log {
+                        eprintln!("{rel_path} — already in sync (no write)");
+                    }
+                    if let Some(cb) = callback {
+                        cb(rel_path, "already in sync");
+                    }
                 }
 
                 let _ = catalog.clear_pending_writeback(recipe_id);
                 cleared_recipe_ids.insert(recipe_id.clone());
-                result.written += 1;
-                if log {
-                    eprintln!("{rel_path} — written");
-                }
-                if let Some(cb) = callback {
-                    cb(rel_path, "written");
-                }
             }
 
             // Save sidecar for recipes that actually completed. A

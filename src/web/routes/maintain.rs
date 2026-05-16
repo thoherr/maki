@@ -126,6 +126,7 @@ fn run_writeback(
         .collect();
     Ok(serde_json::json!({
         "written": result.written,
+        "already_in_sync": result.already_in_sync,
         "skipped": result.skipped,
         "failed": result.failed,
         "errors": result.errors,

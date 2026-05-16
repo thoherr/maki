@@ -369,6 +369,34 @@ Writeback: 0 written, 1 skipped (offline volumes: Archive 2025)
 
 With `--json`, the same information is available as a `skipped_offline_volumes` array on the result object.
 
+### Using `rsync` alongside `maki writeback`
+
+A common backup pattern: keep the master files on one drive (say "Archive") and rsync them to a backup drive ("Archive-Backup") periodically. If both volumes are registered in MAKI, each asset has recipes on both volumes, and edits made while one drive is offline queue up as `pending_writeback` until that drive comes back online.
+
+The workflow that takes the least effort:
+
+```bash
+# 1. Curate normally. Master volume is online, backup is offline.
+#    MAKI edits flush inline to the master's XMP files; backup recipes
+#    accumulate pending_writeback.
+
+# 2. Bulk-sync the backup drive outside MAKI when ready:
+rsync -av --delete /Volumes/Archive/ /Volumes/Archive-Backup/
+
+# 3. Run a single writeback to reconcile:
+maki writeback
+```
+
+In step 3, MAKI walks every pending recipe on the backup volume, reads each XMP, and finds that the rsync already wrote the values MAKI was about to write. No file writes happen. The pending flag clears, and the recipe's stored `content_hash` is reconciled to match the rsync'd file. Output looks like:
+
+```
+Writeback: 0 written, 90000 already in sync
+```
+
+A subsequent `maki verify --volume Archive-Backup` runs cleanly against the now-accurate hashes — no false-positive mismatches. The `already_in_sync` counter on the JSON result and the web toast surfaces the same information.
+
+This works because MAKI's writeback is idempotent at the field level (the underlying `xmp_reader::update_*` primitives skip when nothing changed) and now also self-reconciles drifted content hashes on the no-write path. You don't need a separate "post-rsync refresh" step.
+
 
 ## Sync Metadata *(Pro)*
 

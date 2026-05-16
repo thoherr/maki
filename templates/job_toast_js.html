@@ -63,6 +63,8 @@
         // Maintain-job summaries (writeback / sync-metadata / verify).
         if (typeof evt.written === 'number' && evt.written > 0)
                                                         parts.push(evt.written + ' written');
+        if (typeof evt.already_in_sync === 'number' && evt.already_in_sync > 0)
+                                                        parts.push(evt.already_in_sync + ' already in sync');
         if (typeof evt.inbound === 'number' && evt.inbound > 0)
                                                         parts.push(evt.inbound + ' inbound');
         if (typeof evt.outbound === 'number' && evt.outbound > 0)

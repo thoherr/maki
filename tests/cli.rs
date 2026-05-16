@@ -9682,6 +9682,143 @@ fn writeback_clears_yaml_pending_flag_on_success() {
     );
 }
 
+/// Regression: when an XMP file on disk was already externally
+/// modified to match the catalog's pending values (typical case:
+/// user rsyncs a primary → backup volume between curating and
+/// running `maki writeback`), the writeback path must:
+///
+/// 1. NOT issue file writes (no churn, no timestamp changes)
+/// 2. Clear `pending_writeback` in both SQLite and YAML
+/// 3. Reconcile the recipe's stored `content_hash` with the
+///    now-different on-disk hash so a subsequent `maki verify`
+///    doesn't flag every synced recipe as a mismatch
+/// 4. Count under `already_in_sync` in the summary, not `written`
+#[test]
+#[cfg(feature = "pro")]
+fn writeback_reconciles_when_disk_already_matches_catalog() {
+    use sha2::Digest;
+
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Removable volume so we can simulate offline-during-edit, then
+    // rsync-while-offline, then bring back online before writeback.
+    let removable_dir = tempdir().unwrap();
+    let removable = removable_dir.path().canonicalize().unwrap();
+    maki()
+        .current_dir(&root)
+        .args(["volume", "add", "removable", removable.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let xmp_path = removable.join("WB_SYNC.xmp");
+    create_test_file(&removable, "WB_SYNC.ARW", b"raw-pre-sync");
+    create_test_file(
+        &removable,
+        "WB_SYNC.xmp",
+        b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\
+          <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+          <rdf:Description rdf:about=\"\" \
+            xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" \
+            xmp:Rating=\"1\"/>\
+          </rdf:RDF></x:xmpmeta>",
+    );
+    maki()
+        .current_dir(&root)
+        .args(["import", removable.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let asset_id = String::from_utf8_lossy(
+        &maki()
+            .current_dir(&root)
+            .args(["search", "-q", ""])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
+    assert!(!asset_id.is_empty());
+
+    // Take volume offline, edit the rating. Pending flag set; XMP on disk
+    // still has rating=1.
+    let stashed = removable.with_extension("offline");
+    std::fs::rename(&removable, &stashed).unwrap();
+    maki()
+        .current_dir(&root)
+        .args(["edit", &asset_id, "--rating", "5"])
+        .assert()
+        .success();
+
+    // Simulate external rsync: bring the volume "back online" with an XMP
+    // that already contains rating=5 (as if the user rsync'd it from a
+    // parallel master that had been written to). The pre-rsync hash the
+    // catalog still remembers is the rating=1 file; the post-rsync hash
+    // is whatever rating=5 hashes to — different.
+    std::fs::rename(&stashed, &removable).unwrap();
+    std::fs::write(
+        &xmp_path,
+        b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\
+          <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+          <rdf:Description rdf:about=\"\" \
+            xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" \
+            xmp:Rating=\"5\"/>\
+          </rdf:RDF></x:xmpmeta>",
+    )
+    .unwrap();
+
+    let rsynced_bytes = std::fs::read(&xmp_path).unwrap();
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(&rsynced_bytes);
+    let post_rsync_hash = format!("sha256:{:x}", hasher.finalize());
+    let mtime_before = std::fs::metadata(&xmp_path).unwrap().modified().unwrap();
+
+    // Run writeback. Should report "1 already in sync, 0 written" and
+    // touch nothing on disk.
+    maki()
+        .current_dir(&root)
+        .args(["writeback"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("1 already in sync")
+                .and(predicate::str::contains("0 written")),
+        );
+
+    let mtime_after = std::fs::metadata(&xmp_path).unwrap().modified().unwrap();
+    assert_eq!(
+        mtime_before, mtime_after,
+        "writeback must not write the file when disk already matches catalog"
+    );
+
+    // Pending flag cleared both in DB (status no longer reports it) and
+    // in the YAML sidecar (which would otherwise reintroduce it on a
+    // subsequent rebuild-catalog).
+    maki()
+        .current_dir(&root)
+        .args(["status"])
+        .assert()
+        .stdout(predicate::str::contains("pending XMP writeback").not());
+
+    let sidecar = root
+        .join("metadata")
+        .join(&asset_id[..2])
+        .join(format!("{asset_id}.yaml"));
+    let yaml = std::fs::read_to_string(&sidecar).unwrap();
+    assert!(
+        !yaml.contains("pending_writeback: true"),
+        "Sidecar must not have stale pending_writeback after no-op writeback. Got:\n{yaml}"
+    );
+
+    // Catalog's stored content_hash for the recipe must now match the
+    // post-rsync file — otherwise `maki verify` flags it.
+    assert!(
+        yaml.contains(&post_rsync_hash),
+        "Sidecar must carry the post-rsync content_hash. Expected {post_rsync_hash}. Got:\n{yaml}"
+    );
+}
+
 /// Regression: `dc:subject` must contain the flat components of EVERY
 /// hierarchical tag, not just the subject facet. CaptureOne / Lightroom
 /// users with multi-facet vocabularies (person, location, event,
