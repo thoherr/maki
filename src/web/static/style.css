@@ -909,6 +909,11 @@ select.badge {
     color: #856404;
     border-radius: var(--radius);
     font-size: 0.85rem;
+    /* Errors from the regenerate-preview endpoint can carry two
+       lines (one for the primary tier, one for the smart tier) when
+       they differ. `pre-line` keeps the `\n` separator as a break
+       while still collapsing other whitespace. */
+    white-space: pre-line;
 }
 [data-theme="dark"] .preview-error { background: #3d3200; color: #ffc107; }
 .htmx-indicator { display: none; }

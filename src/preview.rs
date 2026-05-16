@@ -330,8 +330,27 @@ impl PreviewGenerator {
                 }
             }
             if output.status.success() && !output.stdout.is_empty() {
-                let img = image::load_from_memory(&output.stdout)
-                    .context("Failed to decode dcraw output")?;
+                // Same 2 GiB allocation cap as generate_image — the
+                // embedded preview JPEG in a stitched panorama DNG can
+                // be enormous (full-res rather than a thumbnail), and
+                // the image crate's default 512 MiB cap rejects them
+                // with a generic "Decoding image failed" that bubbles
+                // up as an opaque 500 in the web UI.
+                let mut reader = image::ImageReader::new(
+                    std::io::Cursor::new(&output.stdout),
+                )
+                .with_guessed_format()
+                .context("Failed to read dcraw output header")?;
+                let mut limits = image::Limits::default();
+                limits.max_alloc = Some(2 * 1024 * 1024 * 1024);
+                reader.limits(limits);
+                let img = reader
+                    .decode()
+                    .with_context(|| format!(
+                        "Failed to decode the JPEG preview that dcraw extracted from {} \
+                         (the embedded preview may be malformed or larger than the 2 GiB cap)",
+                        source.display()
+                    ))?;
                 // Apply EXIF orientation from the embedded JPEG.
                 // Some cameras (e.g. Nikon Z9) store the embedded preview in sensor
                 // orientation with an EXIF tag indicating the correct rotation.
@@ -373,8 +392,22 @@ impl PreviewGenerator {
                 // dcraw_emu may already pixel-rotate the output, in which case
                 // the TIFF has no orientation tag and this is a no-op.
                 let tiff_exif = crate::exif_reader::extract(&temp_tiff);
-                let img = image::open(&temp_tiff).with_context(|| {
-                    format!("Failed to open dcraw_emu output {}", temp_tiff.display())
+                // 2 GiB cap, same as generate_image — stitched-panorama
+                // DNGs that go through dcraw_emu produce huge half-size
+                // TIFFs that can exceed the image crate's default
+                // 512 MiB cap. Without this raise, the decode fails
+                // with a generic error and bubbles up as a silent 500.
+                let mut reader = image::ImageReader::open(&temp_tiff)
+                    .with_context(|| format!("Failed to open dcraw_emu output {}", temp_tiff.display()))?;
+                let mut limits = image::Limits::default();
+                limits.max_alloc = Some(2 * 1024 * 1024 * 1024);
+                reader.limits(limits);
+                let img = reader.decode().with_context(|| {
+                    format!(
+                        "Failed to decode dcraw_emu output {} \
+                         (the TIFF may be larger than the 2 GiB cap)",
+                        temp_tiff.display()
+                    )
                 })?;
                 std::fs::remove_file(&temp_tiff).ok();
                 let img = if let Some(orient) = tiff_exif.orientation {

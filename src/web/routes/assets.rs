@@ -277,8 +277,38 @@ pub async fn generate_preview(
             }
         };
 
-        preview_gen.regenerate(content_hash, &source_path, format)?;
-        preview_gen.regenerate_smart(content_hash, &source_path, format)?;
+        // Regenerate both preview tiers. If either fails (commonly: dcraw
+        // can't extract a usable embedded preview from an oddly-formed
+        // DNG, dcraw_emu times out, ffmpeg missing, image-allocation
+        // limit hit on a huge stitched panorama), surface the message
+        // inline on the asset page via PreviewFragment.error rather than
+        // returning a bare 500 — htmx silently drops 500 response bodies
+        // and the user would otherwise just see "internal server error"
+        // with no clue what to do about it. The existing previews on
+        // disk (if any) stay rendered alongside the error so the user
+        // can still see *something* while diagnosing.
+        let regen_err = match preview_gen.regenerate(content_hash, &source_path, format) {
+            Ok(_) => None,
+            Err(e) => Some(format!("Preview regeneration failed: {e:#}")),
+        };
+        let smart_err = match preview_gen.regenerate_smart(content_hash, &source_path, format) {
+            Ok(_) => None,
+            Err(e) => Some(format!("Smart preview regeneration failed: {e:#}")),
+        };
+        // Log to server stderr so operators can diagnose without the
+        // user copying the error out of the UI. Only logs on failure.
+        if let Some(ref msg) = regen_err {
+            eprintln!("[preview] asset={asset_id}: {msg}");
+        }
+        if let Some(ref msg) = smart_err {
+            eprintln!("[preview] asset={asset_id}: {msg}");
+        }
+        let regen_error = match (regen_err, smart_err) {
+            (Some(a), Some(b)) if a == b => Some(a),
+            (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        };
 
         let is_video = details.asset_type == "video";
         if is_video {
@@ -317,7 +347,7 @@ pub async fn generate_preview(
             smart_preview_url: smart_url,
             has_smart_preview: has_smart,
             has_online_source: true,
-            error: None,
+            error: regen_error,
             is_video: details.asset_type == "video",
             video_url: if details.asset_type == "video" {
                 Some(crate::web::templates::video_url(content_hash))
