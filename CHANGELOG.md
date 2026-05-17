@@ -2,6 +2,141 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.5.11 (2026-05-17)
+
+Workflow-driven release focused on the catalog↔disk reconciliation paths.
+Three sync/writeback enhancements driven by real-world friction during a
+~90k-asset curating session, one preview-regeneration fix from a stitched-
+panorama DNG, and a latent Windows path-handling bug that the new sync
+test surfaced.
+
+Tests: 798 + 250 standard, 918 + 282 pro (up from 798 / 249 / 918 / 279).
+
+### Sync now handles re-exported media at the same path
+
+`maki sync --apply` used to error with `Hash mismatch at <path>: expected
+A, got B` and refuse to touch the catalog whenever a media variant file
+(JPEG, TIFF, …) was overwritten with different content at its existing
+path — the typical CaptureOne / Lightroom re-export case. The error
+accumulated in `result.errors` and nothing in the catalog moved, leaving
+the user with no in-MAKI way to fix it.
+
+`sync --apply` now mirrors the recipe-modified handling, adapted for the
+content-addressed variant model. For each modified media file:
+
+- Drops the stale `file_location` row at this path for the old hash.
+- Inserts a full variant for the new hash (not a stub), inheriting role +
+  original_filename from the previous variant. Format is re-derived from
+  the file extension; file_size from disk.
+- **EXIF / dimensions / embedded-XMP are extracted from the fresh bytes**
+  via the same `exif_reader::extract` + `embedded_xmp::extract_embedded_xmp`
+  paths `maki import` uses. A re-export usually carries updated exposure
+  / develop settings, and dimensions can shift if the export size changed
+  — both matter for facet queries.
+- **Previews are regenerated** in the same pass, keyed by the new hash, so
+  the asset is immediately viewable. No separate `maki refresh --media`
+  or `maki generate-previews` step.
+- Asset sidecar is updated: previous variant loses this location, new
+  variant added alongside.
+
+The previous variant stays in the catalog with whatever other locations
+it had (a backup volume that hasn't been rsynced yet still references the
+previous bytes). If it becomes truly locationless, `maki cleanup --apply`
+removes it and any orphaned preview keyed by the old hash.
+
+Without `--apply`, sync now reports `modified` for these files (same
+counter as recipes use) instead of pushing a confusing "Hash mismatch"
+error.
+
+### Writeback self-reconciles when XMP already matches catalog
+
+`maki writeback` walks pending recipes and writes the catalog's current
+values to each XMP. `xmp_reader::update_*` was already idempotent at the
+field level (skip if no change), but when every field returned
+`Ok(false)` — typical case after an external rsync from a primary volume
+to a registered backup volume — the catalog's stored `content_hash` for
+the recipe stayed stuck at the pre-rsync value. A subsequent
+`maki verify --volume Archive-Backup` would flag every rsync'd recipe as
+a hash mismatch.
+
+`writeback_process` now re-hashes the file on the no-write path and
+updates the catalog's stored hash if it drifted. The pending flag clears
+as before. New summary counter `already_in_sync` distinguishes these
+recipes from genuinely-written ones — the user's 90k-recipe rsync-then-
+writeback case now reports `0 written, 90000 already in sync` instead
+of misleadingly claiming 90000 file writes.
+
+Surfaces in four places: CLI summary (`0 written, 90000 already in sync`),
+`--log` per-file lines (`X.xmp — already in sync (no write)`), `--json`
+(new `already_in_sync` field), and the web Maintain dialog's writeback
+toast.
+
+### `[writeback] mirror_tags` config option
+
+When tag renames / splits / deletes / fix-unicode operations accumulate
+in the catalog before the next flush, the additive default writeback
+writes the new tags but leaves the old keywords stranded in XMP. A
+subsequent re-import absorbs them back into the catalog and silently
+undoes the rename. The user hit this on a 90k-image curating session
+followed by a re-import.
+
+New config slot:
+
+```toml
+[writeback]
+mirror_tags = true   # default: false
+```
+
+When `true`, every `maki writeback` (CLI) and every web Maintain →
+Writeback run defaults to mirror semantics — XMP keyword lists stay in
+lock-step with the catalog. No `--mirror-tags` flag needed.
+
+Default `false` keeps backward compatibility for mixed-tool workflows
+(Lightroom / CaptureOne / Bridge writing their own keywords MAKI
+shouldn't strip). CLI `--mirror-tags` and the dialog checkbox still
+work and OR with the config.
+
+### Preview regeneration: 2 GiB image cap + visible errors
+
+A user hit a silent failure regenerating previews of a stitched-panorama
+DNG. Two underlying problems, both fixed:
+
+- `generate_raw` used `image::load_from_memory()` and `image::open()` on
+  dcraw / dcraw_emu output with the image crate's default 512 MiB
+  allocation cap. Stitched-panorama DNGs (Capture One in this case) embed
+  a full-resolution preview JPEG rather than a thumbnail, and the
+  half-size TIFF dcraw_emu emits can easily exceed 512 MiB at panorama
+  dimensions. Both decode sites now use the same 2 GiB cap that
+  `generate_image` and the AI preprocess path already had.
+- The web `generate_preview` handler propagated regen errors via `?`,
+  returning 500. htmx silently drops 5xx response bodies, so the user
+  got "internal server error" with no detail. Errors now flow through
+  `PreviewFragment.error` and render inline in the existing
+  `.preview-error` block alongside any previews still on disk.
+
+### Sync path-separator fix on Windows
+
+`sync_inner` built each disk file's `relative_path` via
+`strip_prefix(mount_point).to_string_lossy()`. On Windows that returns
+backslash-separated; the catalog stores every `file_locations.relative_path`
+through `FileLocation::relative_path_str()`, which always emits forward
+slashes. So on Windows: sync looked up `exports\IMG_001.jpg`, catalog
+had `exports/IMG_001.jpg`, comparison missed, the file was classified as
+"new" and the catalog row as "missing".
+
+Pre-existing tests didn't catch this — the recipe-modified test used a
+root-level file with no separator; the move test used subdirs but
+exercised the move-detection code path, which still functionally worked
+(at the cost of silently writing backslashes into the catalog whenever a
+Windows user moved a subdir'd file). The new media-modified test was the
+first sync test that combined a subdir layout with the same-path-different-
+hash branch, which actually needs the path lookup to succeed.
+
+One-line fix at the strip_prefix call site normalizes `\` → `/`. All
+downstream comparisons against catalog-stored paths now line up; move
+detection on Windows for subdir'd content also writes correctly-
+normalized paths into the catalog going forward.
+
 ## v4.5.10 (2026-05-15)
 
 Browse-page QoL release. Two features and one small fix on top of v4.5.9, all browser-side.
