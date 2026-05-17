@@ -71,7 +71,16 @@ impl AssetService {
             }
 
             let relative_path = match file_path.strip_prefix(&volume.mount_point) {
-                Ok(rp) => rp.to_string_lossy().to_string(),
+                // Normalize the OS-native separator to forward slashes
+                // so the string matches the catalog's stored form
+                // (`FileLocation::relative_path_str` always emits `/`,
+                // regardless of platform). Without this, every Windows
+                // sync against subdirectory'd content saw the disk
+                // paths as `\`-separated and the catalog paths as
+                // `/`-separated, causing modified files to look like
+                // (new + missing) and silently breaking move detection
+                // for non-root paths.
+                Ok(rp) => rp.to_string_lossy().replace('\\', "/"),
                 Err(_) => {
                     result.errors.push(format!(
                         "File {} is not under volume mount point {}",
