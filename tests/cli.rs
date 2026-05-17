@@ -2569,6 +2569,103 @@ fn sync_detects_modified_recipe() {
         .stdout(predicate::str::contains("modified"));
 }
 
+/// `maki sync --apply` should handle the case where a media variant
+/// file (e.g. a JPEG export from CaptureOne) was overwritten with
+/// fresh content but kept the same path. Used to error with "Hash
+/// mismatch at <path>: expected A, got B" and refuse to touch the
+/// catalog. Now drops the stale file_location for the old hash,
+/// inserts a stub variant for the new hash (inheriting role +
+/// original_filename from the old variant), and attaches it to the
+/// asset's sidecar. The old variant becomes locationless and can be
+/// removed by `maki cleanup --apply`.
+#[test]
+fn sync_handles_modified_media_with_apply() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let jpeg = create_test_file(&root, "exports/IMG_001.jpg", b"first export bytes");
+    maki()
+        .current_dir(&root)
+        .args(["import", jpeg.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let asset_id = String::from_utf8_lossy(
+        &maki()
+            .current_dir(&root)
+            .args(["search", "-q", ""])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
+    assert!(!asset_id.is_empty(), "import should yield an asset");
+
+    // Re-export to the same path with different content — what
+    // CaptureOne does on a "Process Recipe" re-run.
+    std::fs::write(&jpeg, b"second export bytes - adjusted exposure").unwrap();
+
+    // Without --apply: sync reports the modification but doesn't
+    // touch the catalog. Used to be an error; now it's a Modified
+    // entry like a modified recipe.
+    let preview = maki()
+        .current_dir(&root)
+        .args(["sync", root.to_str().unwrap()])
+        .assert()
+        .success();
+    let preview_out = String::from_utf8_lossy(&preview.get_output().stdout);
+    assert!(
+        preview_out.contains("modified"),
+        "dry-run sync should report the modified media file. Got:\n{preview_out}"
+    );
+
+    // With --apply: catalog learns about the new hash. The asset
+    // gains a new variant entry for the new bytes; the old variant
+    // loses its location at this path.
+    maki()
+        .current_dir(&root)
+        .args(["sync", "--apply", root.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("modified"))
+        .stdout(predicate::str::contains("Hash mismatch").not());
+
+    // Sidecar reflects the new variant attached to the asset.
+    let sidecar = root
+        .join("metadata")
+        .join(&asset_id[..2])
+        .join(format!("{asset_id}.yaml"));
+    let yaml = std::fs::read_to_string(&sidecar).unwrap();
+
+    // Compute the expected new hash to match against the sidecar.
+    use sha2::Digest;
+    let mut h = sha2::Sha256::new();
+    h.update(b"second export bytes - adjusted exposure");
+    let new_hash = format!("sha256:{:x}", h.finalize());
+    assert!(
+        yaml.contains(&new_hash),
+        "Sidecar must reference the new content_hash {new_hash}. Got:\n{yaml}"
+    );
+
+    // A second sync run with no further changes should report no
+    // modifications — the catalog is already current.
+    let resync = maki()
+        .current_dir(&root)
+        .args(["sync", root.to_str().unwrap()])
+        .assert()
+        .success();
+    let resync_out = String::from_utf8_lossy(&resync.get_output().stdout);
+    assert!(
+        !resync_out.contains("modified"),
+        "Second sync after apply should be a no-op. Got:\n{resync_out}"
+    );
+    assert!(
+        !resync_out.contains("Hash mismatch"),
+        "Second sync should not report a hash mismatch. Got:\n{resync_out}"
+    );
+}
+
 #[test]
 fn sync_default_is_dry_run() {
     let dir = tempdir().unwrap();

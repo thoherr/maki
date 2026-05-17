@@ -178,6 +178,7 @@ With `--apply`, sync updates the catalog and sidecar files:
 
 - **Moved files**: The catalog path is updated to the new location (same content hash found at a different path, old path gone).
 - **Modified recipes**: Recipe hash is updated, and if it is an XMP file, metadata is re-extracted.
+- **Modified media**: A media file (JPEG, TIFF, …) at the same path now has a different hash — typical case: CaptureOne / Lightroom re-exported the file with new edits. The stale file_location is dropped, a stub variant for the new hash is inserted inheriting the previous variant's role and original_filename, and the asset's sidecar is updated to reference the new variant. The old variant becomes locationless and can be removed with `maki cleanup --apply`. Run `maki refresh --media` afterwards if you want the new variant's EXIF / dimensions populated.
 - **Missing files**: Reported but not removed (use `--remove-stale`).
 - **New files**: Reported but not imported. Run `maki import` separately.
 
@@ -204,7 +205,7 @@ Explicitly sets the volume context when auto-detection picks the wrong one.
 | unchanged | Hash matches at expected path | None |
 | moved | Known hash found at new path, old path gone | Path updated in catalog |
 | new | Unknown hash, not in catalog | Reported (run `maki import`) |
-| modified | Same path, different hash (recipe files) | Hash updated, XMP re-extracted |
+| modified | Same path, different hash | Recipe: hash updated + XMP re-extracted. Media variant: stale file_location dropped, stub variant for the new hash inserted (inheriting role + original_filename), asset's sidecar updated. Old variant becomes locationless; clean with `maki cleanup --apply`. |
 | missing | Catalog location exists but file is gone | Reported, or removed with `--remove-stale` |
 
 ### Monitoring flags

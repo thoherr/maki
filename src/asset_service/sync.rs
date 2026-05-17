@@ -149,11 +149,44 @@ impl AssetService {
                             }
                             on_file(file_path, SyncStatus::Unchanged, file_start.elapsed());
                         } else {
-                            // Content-addressed file changed — this shouldn't happen
-                            result.errors.push(format!(
-                                "Hash mismatch at {}: expected {}, got {}",
-                                relative_path, stored_hash, hash
-                            ));
+                            // Media file at the same path now has a different
+                            // content hash. Common case: CaptureOne / Lightroom
+                            // re-exported a JPEG over the previous one with new
+                            // edits applied. Mirrors the recipe-modified path —
+                            // the catalog catches up to the new on-disk state.
+                            //
+                            // Variants are content-addressed, so unlike recipes
+                            // we can't just swap the stored hash. Instead:
+                            //   - Drop the file_location row for the old hash.
+                            //   - Create a stub variant for the new hash,
+                            //     inheriting role/format/original_filename from
+                            //     the previous variant.
+                            //   - Insert a file_location for the new hash here.
+                            //   - Update the asset's sidecar so the new variant
+                            //     is attached and the old one loses this loc.
+                            //   - `maki cleanup --apply` removes the now-
+                            //     locationless old variant once the user is
+                            //     ready (we don't auto-cleanup here so users on
+                            //     multi-volume setups don't lose the old
+                            //     variant when a backup still has the previous
+                            //     bytes).
+                            result.modified += 1;
+                            if apply {
+                                if let Err(e) = self.apply_modified_media(
+                                    &catalog,
+                                    &metadata_store,
+                                    &stored_hash,
+                                    &hash,
+                                    volume,
+                                    file_path,
+                                    &relative_path,
+                                ) {
+                                    result.errors.push(format!(
+                                        "Failed to apply media change at {relative_path}: {e:#}"
+                                    ));
+                                }
+                            }
+                            on_file(file_path, SyncStatus::Modified, file_start.elapsed());
                         }
                     }
                     None => {
@@ -370,6 +403,117 @@ impl AssetService {
                 metadata_store.save(&asset)?;
             }
         }
+        Ok(())
+    }
+
+    /// Apply a "media file at same path, different content" change. The
+    /// previous variant's file_location at this path is dropped; a stub
+    /// variant for the new hash is inserted, inheriting role / format /
+    /// original_filename from the previous variant; a new file_location
+    /// row points at the new hash. The asset's sidecar gains the new
+    /// variant entry (with its single location) and the previous variant
+    /// loses this location (it stays in the asset if it had locations on
+    /// other volumes — e.g. a backup volume that hasn't been rsynced
+    /// yet still references the previous bytes).
+    ///
+    /// Source metadata (EXIF camera/lens/ISO/etc.) is not copied — those
+    /// values are read at import time from the file's bytes, and a
+    /// re-export usually carries fresh exposure / develop settings. Run
+    /// `maki refresh --media` to re-extract metadata for the new hash.
+    pub(super) fn apply_modified_media(
+        &self,
+        catalog: &Catalog,
+        metadata_store: &MetadataStore,
+        old_hash: &str,
+        new_hash: &str,
+        volume: &Volume,
+        file_path: &Path,
+        relative_path: &str,
+    ) -> Result<()> {
+        let vol_id_str = volume.id.to_string();
+
+        // Drop the old file_location row at this path. The old variant
+        // may still have other locations (other volumes); cleanup will
+        // remove the variant only once it's truly locationless.
+        catalog.delete_file_location(old_hash, &vol_id_str, relative_path)?;
+
+        // Find the asset that owned the old variant, plus the old
+        // variant's role / format / original_filename / file_size so the
+        // stub variant inherits a sensible context. If no owning asset
+        // is found (e.g. the old variant was already orphaned in some
+        // edge case), we still drop the stale location and report; the
+        // user can re-import to pick up the new file.
+        let asset_id_str = match catalog.find_asset_id_by_variant(old_hash)? {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+        let asset_uuid: Uuid = asset_id_str.parse()?;
+        let mut asset = metadata_store.load(asset_uuid)?;
+
+        // Inherit metadata from the old variant entry (if still present
+        // in the sidecar). Format is re-derived from the file extension
+        // — usually unchanged for a re-export but cheaper than reading
+        // it from the catalog.
+        let file_size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
+        let ext = file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let (inherited_role, inherited_filename) = asset
+            .variants
+            .iter()
+            .find(|v| v.content_hash == old_hash)
+            .map(|v| (v.role.clone(), v.original_filename.clone()))
+            .unwrap_or_else(|| {
+                (
+                    crate::models::variant::VariantRole::Export,
+                    file_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string(),
+                )
+            });
+
+        let new_location = crate::models::FileLocation {
+            volume_id: volume.id,
+            relative_path: PathBuf::from(relative_path),
+            verified_at: Some(chrono::Utc::now()),
+        };
+        let new_variant = crate::models::Variant {
+            content_hash: new_hash.to_string(),
+            asset_id: asset_uuid,
+            role: inherited_role,
+            format: ext,
+            file_size,
+            original_filename: inherited_filename,
+            source_metadata: std::collections::BTreeMap::new(),
+            locations: vec![new_location.clone()],
+        };
+
+        // SQLite side: insert variant + file_location for the new hash.
+        catalog.insert_variant(&new_variant)?;
+        catalog.insert_file_location(new_hash, &new_location)?;
+
+        // Sidecar side: drop the old variant's location at this path,
+        // add the new variant. We preserve the old variant entry in the
+        // sidecar even if its location list becomes empty — that mirrors
+        // the catalog's "locationless variant" state and lets `maki
+        // cleanup --apply` remove it explicitly when the user is ready.
+        for v in asset.variants.iter_mut() {
+            if v.content_hash == old_hash {
+                v.locations.retain(|loc| {
+                    !(loc.volume_id == volume.id
+                        && loc.relative_path.to_string_lossy() == relative_path)
+                });
+            }
+        }
+        if !asset.variants.iter().any(|v| v.content_hash == new_hash) {
+            asset.variants.push(new_variant);
+        }
+        metadata_store.save(&asset)?;
+        catalog.insert_asset(&asset)?;
         Ok(())
     }
 
