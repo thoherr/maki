@@ -9448,6 +9448,63 @@ fn writeback_mirror_tags_removes_stale_xmp_keywords() {
     );
 }
 
+/// `[writeback] mirror_tags = true` in maki.toml turns mirror-tags on
+/// by default for every `maki writeback`. The bug this protects
+/// against: a user renames a tag in MAKI, runs `maki writeback`
+/// without `--mirror-tags` (because they forgot, or because mirror-
+/// tags requires `--all` on the CLI), then re-imports — the old
+/// keyword still on the XMP file gets absorbed back into the catalog,
+/// silently undoing the rename. With the config flag on, every plain
+/// `maki writeback` does the keyword reconciliation.
+#[test]
+#[cfg(feature = "pro")]
+fn writeback_config_mirror_tags_default() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Turn on the config flag. `maki init` writes a default
+    // `[writeback]` section, so we replace the file rather than append.
+    let toml_path = root.join("maki.toml");
+    std::fs::write(&toml_path, "[writeback]\nmirror_tags = true\n").unwrap();
+
+    let xmp_path = root.join("photos/MT_CFG.xmp");
+    create_test_file(&root, "photos/MT_CFG.ARW", b"raw-mirror-tags-cfg");
+    create_test_file(
+        &root,
+        "photos/MT_CFG.xmp",
+        b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n  <rdf:RDF>\n    <rdf:Description xmp:Rating=\"3\">\n      <dc:subject>\n        <rdf:Bag>\n          <rdf:li>OldTag</rdf:li>\n        </rdf:Bag>\n      </dc:subject>\n    </rdf:Description>\n  </rdf:RDF>\n</x:xmpmeta>",
+    );
+    maki()
+        .current_dir(&root)
+        .args(["import", root.join("photos").to_str().unwrap()])
+        .assert()
+        .success();
+
+    maki()
+        .current_dir(&root)
+        .args(["tag", "rename", "OldTag", "NewTag", "--apply"])
+        .assert()
+        .success();
+
+    // Plain `maki writeback` — no --mirror-tags flag, no --all. With
+    // the config flag on, this should still strip OldTag from the XMP.
+    maki()
+        .current_dir(&root)
+        .args(["writeback"])
+        .assert()
+        .success();
+
+    let xmp_after = std::fs::read_to_string(&xmp_path).unwrap();
+    assert!(
+        xmp_after.contains("NewTag"),
+        "Plain writeback with config mirror_tags=true wrote NewTag. Got: {xmp_after}"
+    );
+    assert!(
+        !xmp_after.contains("OldTag"),
+        "Plain writeback with config mirror_tags=true removed stale OldTag. Got: {xmp_after}"
+    );
+}
+
 /// `--mirror-tags` requires `--all` (clap-level constraint). Using it
 /// alone should be rejected, since mirror mode without --all would only
 /// touch pending recipes — the rename/delete scenario it's designed for

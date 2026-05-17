@@ -5434,12 +5434,20 @@ pub fn run_writeback_command(
 
     let scope = engine.resolve_scope(query.as_deref(), asset.as_deref(), &asset_ids)?;
 
+    // `[writeback] mirror_tags` in maki.toml turns mirror-tags on by
+    // default for every writeback. The CLI `--mirror-tags` flag still
+    // takes effect on top (OR semantics); there's no need for a
+    // `--no-mirror-tags` opt-out because mirror semantics are
+    // idempotent at the keyword level — re-running adds nothing.
+    let cfg = maki::config::CatalogConfig::load(&catalog_root).unwrap_or_default();
+    let effective_mirror_tags = mirror_tags || cfg.writeback.mirror_tags;
+
     let result = engine.writeback(
         volume.as_deref(),
         None, // asset_filter replaced by scope
         scope.as_ref(),
         all,
-        mirror_tags,
+        effective_mirror_tags,
         dry_run,
         cli.log,
         None,

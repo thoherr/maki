@@ -108,12 +108,18 @@ fn run_writeback(
         }));
     };
 
+    // `[writeback] mirror_tags` in maki.toml turns mirror-tags on by
+    // default for every writeback. The dialog's `--mirror-tags`
+    // checkbox still takes effect on top (OR semantics).
+    let cfg = crate::config::CatalogConfig::load(&state.catalog_root).unwrap_or_default();
+    let effective_mirror_tags = req.mirror_tags || cfg.writeback.mirror_tags;
+
     let result = engine.writeback(
         req.volume.as_deref(),
         None,
         asset_id_set.as_ref(),
         req.all,
-        req.mirror_tags,
+        effective_mirror_tags,
         req.dry_run,
         false,
         Some(&callback),

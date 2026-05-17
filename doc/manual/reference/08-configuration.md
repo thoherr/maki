@@ -775,6 +775,27 @@ enabled = true   # auto-flush on every edit
 
 To rematerialise the catalog metadata onto disk for a specific asset set without changing the config, use `maki writeback --all <query>`. That writes every XMP in the matching set whether or not it's flagged pending — useful right after a large catalog-only restructuring (rename, split, rebuild).
 
+### mirror_tags
+
+- **Type:** boolean
+- **Default:** `false`
+
+When `true`, every `maki writeback` and every web Maintain → Writeback run defaults to **mirror mode**: the XMP's `dc:subject` and `lr:hierarchicalSubject` keyword lists are diffed against the asset's catalog tags and any stale entries are removed. Equivalent to passing `--mirror-tags` on the CLI for every invocation, but without the `--all` requirement (config-driven mirror mode applies to pending recipes only; CLI `--mirror-tags` still requires `--all` for explicit one-off cleanups).
+
+This matters when catalog-only tag changes accumulate (renames, splits, deletions, fix-unicode) before the next flush. The default additive behaviour writes the new tags but leaves the old keywords stranded on disk — a subsequent re-import would absorb them back into the catalog and silently undo the rename. With `mirror_tags = true`, every flush keeps the XMP in lock-step with the catalog.
+
+| `mirror_tags` | What `maki writeback` does to XMP keywords |
+|---------------|--------------------------------------------|
+| `false` *(default)* | Additive: catalog tags are written, XMP keywords from other sources are preserved. Safe for mixed-tool workflows where Lightroom / CaptureOne / Bridge may add their own keywords MAKI shouldn't strip. |
+| `true` | Mirror: catalog is the source of truth — XMP keywords not in the catalog are removed alongside the new tag write. Recommended when MAKI is the only writer of keywords on the affected files. |
+
+```toml
+[writeback]
+mirror_tags = true   # every writeback strips stale XMP keywords
+```
+
+The CLI `--mirror-tags` flag and this config flag are OR'd. A user with `mirror_tags = true` doesn't need the CLI flag; a user with the config off can still trigger a one-off destructive cleanup via `maki writeback --all --mirror-tags`.
+
 ---
 
 ## [cli] Section

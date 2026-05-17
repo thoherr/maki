@@ -603,11 +603,33 @@ pub struct WritebackConfig {
     /// onto disk on demand.
     #[serde(default)]
     pub enabled: bool,
+    /// Default `--mirror-tags` behaviour for `maki writeback` and the
+    /// web Maintain → Writeback dialog. When true, every writeback
+    /// reconciles the XMP's `dc:subject` + `lr:hierarchicalSubject`
+    /// keyword lists against the catalog's current tag set — entries
+    /// in the XMP that are no longer in the catalog get removed. This
+    /// matters when tag renames, splits, deletions, or unicode-fixes
+    /// have accumulated since the last flush: the additive default
+    /// would leave the OLD keywords stranded on disk alongside the new
+    /// ones, and a re-import would silently restore them to the
+    /// catalog.
+    ///
+    /// When false (default), writeback stays purely additive: it adds
+    /// the current catalog tags to each XMP but never removes any.
+    /// Safe for mixed-tool workflows where another app (Lightroom,
+    /// CaptureOne, …) may have written its own keywords that MAKI
+    /// shouldn't strip. Pass `--mirror-tags --all` on the CLI for a
+    /// one-off destructive cleanup pass instead.
+    #[serde(default)]
+    pub mirror_tags: bool,
 }
 
 impl Default for WritebackConfig {
     fn default() -> Self {
-        Self { enabled: false }
+        Self {
+            enabled: false,
+            mirror_tags: false,
+        }
     }
 }
 
