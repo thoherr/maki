@@ -2583,7 +2583,16 @@ fn sync_handles_modified_media_with_apply() {
     let dir = tempdir().unwrap();
     let root = init_catalog(dir.path());
 
-    let jpeg = create_test_file(&root, "exports/IMG_001.jpg", b"first export bytes");
+    // Real JPEGs so the EXIF and preview-regeneration paths exercise
+    // (raw byte strings would short-circuit both with errors). Use two
+    // different dimensions so the assertion that the variant's
+    // image_width / image_height got REFRESHED is meaningful — a CO
+    // re-export at a different output size is the classic case.
+    let jpeg = root.join("exports/IMG_001.jpg");
+    std::fs::create_dir_all(jpeg.parent().unwrap()).unwrap();
+    let img_v1 = image::DynamicImage::new_rgb8(400, 300);
+    img_v1.save(&jpeg).unwrap();
+
     maki()
         .current_dir(&root)
         .args(["import", jpeg.to_str().unwrap()])
@@ -2602,9 +2611,10 @@ fn sync_handles_modified_media_with_apply() {
     .to_string();
     assert!(!asset_id.is_empty(), "import should yield an asset");
 
-    // Re-export to the same path with different content — what
-    // CaptureOne does on a "Process Recipe" re-run.
-    std::fs::write(&jpeg, b"second export bytes - adjusted exposure").unwrap();
+    // Re-export to the same path at a different resolution — what
+    // CaptureOne does on a "Process Recipe" re-run with new size.
+    let img_v2 = image::DynamicImage::new_rgb8(800, 600);
+    img_v2.save(&jpeg).unwrap();
 
     // Without --apply: sync reports the modification but doesn't
     // touch the catalog. Used to be an error; now it's a Modified
@@ -2641,11 +2651,36 @@ fn sync_handles_modified_media_with_apply() {
     // Compute the expected new hash to match against the sidecar.
     use sha2::Digest;
     let mut h = sha2::Sha256::new();
-    h.update(b"second export bytes - adjusted exposure");
+    h.update(std::fs::read(&jpeg).unwrap());
     let new_hash = format!("sha256:{:x}", h.finalize());
     assert!(
         yaml.contains(&new_hash),
         "Sidecar must reference the new content_hash {new_hash}. Got:\n{yaml}"
+    );
+
+    // A preview file keyed by the new hash should exist on disk —
+    // sync regenerates previews from the fresh bytes so the asset is
+    // immediately viewable without a separate `maki refresh` /
+    // `maki generate-previews` step. (We can't easily assert EXIF
+    // values via the test JPEG without baking in an EXIF block, so
+    // preview existence is the end-to-end signal that the full
+    // "re-process this variant" path ran.)
+    let new_hash_hex = new_hash.trim_start_matches("sha256:");
+    let prefix = &new_hash_hex[..2];
+    let preview_dir = root.join("previews").join(prefix);
+    assert!(
+        preview_dir.exists(),
+        "Preview directory for new hash should exist: {}",
+        preview_dir.display()
+    );
+    let has_preview = std::fs::read_dir(&preview_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .any(|e| e.file_name().to_string_lossy().starts_with(new_hash_hex));
+    assert!(
+        has_preview,
+        "Preview file for new hash {new_hash_hex} should exist in {}",
+        preview_dir.display()
     );
 
     // A second sync run with no further changes should report no

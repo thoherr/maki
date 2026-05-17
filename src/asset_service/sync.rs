@@ -406,20 +406,21 @@ impl AssetService {
         Ok(())
     }
 
-    /// Apply a "media file at same path, different content" change. The
-    /// previous variant's file_location at this path is dropped; a stub
-    /// variant for the new hash is inserted, inheriting role / format /
-    /// original_filename from the previous variant; a new file_location
-    /// row points at the new hash. The asset's sidecar gains the new
-    /// variant entry (with its single location) and the previous variant
-    /// loses this location (it stays in the asset if it had locations on
-    /// other volumes — e.g. a backup volume that hasn't been rsynced
-    /// yet still references the previous bytes).
+    /// Apply a "media file at same path, different content" change.
+    /// Treats the re-exported file as a full new variant (not just a
+    /// stub): EXIF / dimensions / embedded-XMP are extracted from the
+    /// new bytes and the preview is regenerated, matching what `maki
+    /// import` would do for the same file. The previous variant's
+    /// file_location at this path is dropped; the new variant inherits
+    /// `role` and `original_filename` from the previous variant (CO
+    /// re-exports keep the same role=export and filename); format
+    /// re-derived from the file extension.
     ///
-    /// Source metadata (EXIF camera/lens/ISO/etc.) is not copied — those
-    /// values are read at import time from the file's bytes, and a
-    /// re-export usually carries fresh exposure / develop settings. Run
-    /// `maki refresh --media` to re-extract metadata for the new hash.
+    /// The previous variant stays in the catalog with whatever other
+    /// locations it had (a backup volume that hasn't been rsynced yet
+    /// still references the previous bytes). If it becomes truly
+    /// locationless across all volumes, `maki cleanup --apply` removes
+    /// it (and any orphaned previews/embeddings keyed by the old hash).
     pub(super) fn apply_modified_media(
         &self,
         catalog: &Catalog,
@@ -432,17 +433,13 @@ impl AssetService {
     ) -> Result<()> {
         let vol_id_str = volume.id.to_string();
 
-        // Drop the old file_location row at this path. The old variant
-        // may still have other locations (other volumes); cleanup will
-        // remove the variant only once it's truly locationless.
+        // Drop the old file_location row at this path.
         catalog.delete_file_location(old_hash, &vol_id_str, relative_path)?;
 
-        // Find the asset that owned the old variant, plus the old
-        // variant's role / format / original_filename / file_size so the
-        // stub variant inherits a sensible context. If no owning asset
-        // is found (e.g. the old variant was already orphaned in some
-        // edge case), we still drop the stale location and report; the
-        // user can re-import to pick up the new file.
+        // Find the asset that owned the old variant. If no owning asset
+        // is found (edge case: the old variant was already orphaned),
+        // we still drop the stale location and return; the user can
+        // re-import to pick up the new file.
         let asset_id_str = match catalog.find_asset_id_by_variant(old_hash)? {
             Some(id) => id,
             None => return Ok(()),
@@ -450,16 +447,16 @@ impl AssetService {
         let asset_uuid: Uuid = asset_id_str.parse()?;
         let mut asset = metadata_store.load(asset_uuid)?;
 
-        // Inherit metadata from the old variant entry (if still present
-        // in the sidecar). Format is re-derived from the file extension
-        // — usually unchanged for a re-export but cheaper than reading
-        // it from the catalog.
         let file_size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
         let ext = file_path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
+
+        // Inherit role + original_filename from the previous variant
+        // (still in the sidecar even though its file_location at this
+        // path is gone) — CO re-exports keep both unchanged.
         let (inherited_role, inherited_filename) = asset
             .variants
             .iter()
@@ -476,6 +473,13 @@ impl AssetService {
                 )
             });
 
+        // Re-extract EXIF / dimensions from the fresh bytes — same
+        // path that `maki import` takes. A re-export usually carries
+        // updated exposure / develop settings, so this matters for
+        // facet queries (camera / lens / ISO are typically unchanged
+        // but width / height may shift if the export size changed).
+        let exif_data = crate::exif_reader::extract(file_path);
+
         let new_location = crate::models::FileLocation {
             volume_id: volume.id,
             relative_path: PathBuf::from(relative_path),
@@ -485,10 +489,10 @@ impl AssetService {
             content_hash: new_hash.to_string(),
             asset_id: asset_uuid,
             role: inherited_role,
-            format: ext,
+            format: ext.clone(),
             file_size,
             original_filename: inherited_filename,
-            source_metadata: std::collections::BTreeMap::new(),
+            source_metadata: exif_data.source_metadata.into_iter().collect(),
             locations: vec![new_location.clone()],
         };
 
@@ -498,9 +502,11 @@ impl AssetService {
 
         // Sidecar side: drop the old variant's location at this path,
         // add the new variant. We preserve the old variant entry in the
-        // sidecar even if its location list becomes empty — that mirrors
-        // the catalog's "locationless variant" state and lets `maki
-        // cleanup --apply` remove it explicitly when the user is ready.
+        // sidecar even if its location list becomes empty — that
+        // mirrors the catalog's "locationless variant" state and lets
+        // `maki cleanup --apply` remove it explicitly when the user is
+        // ready (multi-volume setups may still have the old bytes on a
+        // backup drive that hasn't been rsynced yet).
         for v in asset.variants.iter_mut() {
             if v.content_hash == old_hash {
                 v.locations.retain(|loc| {
@@ -512,8 +518,37 @@ impl AssetService {
         if !asset.variants.iter().any(|v| v.content_hash == new_hash) {
             asset.variants.push(new_variant);
         }
+
+        // Embedded XMP (JPEG/TIFF) often carries keyword/description
+        // updates that should be merged into the catalog. Same path
+        // `maki import` and `maki refresh --media` use.
+        let embedded_xmp = crate::embedded_xmp::extract_embedded_xmp(file_path);
+        if !embedded_xmp.keywords.is_empty()
+            || embedded_xmp.description.is_some()
+            || !embedded_xmp.source_metadata.is_empty()
+        {
+            crate::asset_service::apply_xmp_data(
+                &embedded_xmp,
+                &mut asset,
+                new_hash,
+            );
+        }
+
         metadata_store.save(&asset)?;
         catalog.insert_asset(&asset)?;
+
+        // Regenerate previews for the new hash. The preview-by-hash
+        // path means an old preview keyed by old_hash stays on disk
+        // until cleanup; the new preview is what MAKI now serves for
+        // this asset.
+        let preview_gen = crate::preview::PreviewGenerator::new(
+            &self.catalog_root,
+            self.verbosity,
+            &self.preview_config,
+        );
+        let _ = preview_gen.generate(new_hash, file_path, &ext);
+        let _ = preview_gen.generate_smart(new_hash, file_path, &ext);
+
         Ok(())
     }
 
