@@ -740,7 +740,20 @@ Sections:
 
 - **Catalog** — schema version (with a migrate hint if stale), asset/variant/recipe/file-location counts, total size, and online/offline volume split.
 - **Cleanup** — locationless variants, orphaned assets, and orphaned derived files on disk (previews, smart previews, embeddings, face crops). Each non-zero count points at `maki cleanup --apply`. If everything's clean, prints `✓ no cleanup needed`.
-- **Pending work** — pending XMP writebacks (split by online/offline target volume; the hint reads `→ maki writeback` regardless of `[writeback] enabled`, since manual flush always works), assets without an embedding (AI builds), assets unscanned for faces (AI builds).
+- **Pending work** — every actionable backlog the catalog can detect, each line ending in a `→ <command>` hint:
+    - **Pending XMP writebacks**, split by online/offline target volume (hint: `→ maki writeback` regardless of `[writeback] enabled`, since manual flush always works). When the catalog has more than one registered volume, a per-volume breakdown follows the summary line so you can see exactly which drive is holding the queue:
+
+        ```
+        ✗ 103176 pending XMP writeback(s) on offline volume(s)  → mount the volumes, then `maki writeback`
+            └─ 92596 on MediaBackup-2 (offline)
+            └─ 10045 on Media (offline)
+            └─   535 on MediaPortable (offline)
+        ```
+
+        The breakdown is sorted most-pending first. Single-volume catalogs skip it (the top-level line already names the only volume).
+    - **Missing previews** — assets whose `best_variant_hash` has no preview file under `<catalog_root>/previews/` (hint: `→ maki generate-previews`).
+    - **Missing smart previews** — same shape for `<catalog_root>/smart-previews/` (hint: `→ maki generate-previews --smart`). Only reported when the smart-previews directory exists; users who haven't opted into smart previews don't see this line.
+    - **Assets without an embedding** (AI builds) and **assets unscanned for faces** (AI builds).
 - **Backup coverage** — how many assets have fewer than `--min-copies` distinct volume copies. Points at `maki backup-status --at-risk` to drill down.
 - **Volumes** — registered volumes sorted online-first with per-volume asset count, size, and purpose tag. `●` = online, `○` = offline.
 

@@ -241,7 +241,10 @@ Re-read changed recipes. \opt{--dry-run} \opt{--media} \\
 \opt{--reimport} — full re-extract \opt{--exif-only} — EXIF only
 
 \subsection{maki writeback \textit{[QUERY]} \pro}
-Write pending edits to XMP. \opt{--all} \opt{--dry-run}
+Write pending edits to XMP. \opt{--all} \opt{--mirror-tags} \opt{--force} \opt{--dry-run} \\
+\opt{--volume} \opt{--asset} \\
+\opt{--mirror-tags} drops XMP entries the catalog doesn't have (requires \opt{--all}). \\
+\opt{--force} rebuilds dc:subject + lr:hierarchicalSubject from catalog (more aggressive).
 
 \subsection{maki cleanup}
 Remove stale records. \opt{--apply} \opt{--list} \opt{--path}

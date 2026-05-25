@@ -460,6 +460,19 @@ Scope can be narrowed with a positional search query, `--asset`, or `--volume`. 
 **--mirror-tags** (requires `--all`)
 : Make XMP keyword lists exactly mirror the catalog. Without this flag, writeback is **additive**: catalog tags get pushed onto the XMP but XMP tags the catalog no longer has are left untouched. Renames, splits, deletions, and `tag fix-unicode` performed in MAKI therefore leave stale entries on disk — invisible drift that compounds across batches. With `--mirror-tags`, the writer reads the existing `dc:subject` and `lr:hierarchicalSubject`, diffs against the asset's catalog tags, and removes the stale entries before writing the current set. Pair with a query (`--mirror-tags --all "tag:NewName"` etc.) to scope a one-shot reconciliation; `--all` is required because the mirror operation is most useful as a broad sweep, not on the narrow pending-only default.
 
+**--force**
+: Rebuild the `dc:subject` and `lr:hierarchicalSubject` blocks from catalog state, discarding any pre-existing XMP entry. More aggressive than `--mirror-tags`: where `--mirror-tags` diffs against the catalog and only removes entries the catalog doesn't have, `--force` empties both blocks completely and re-adds the catalog's tags fresh. Use this when stale entries are stuck in a file that `--mirror-tags` doesn't catch — runaway entity-escape leftovers (`Bobby &amp;amp;amp;… the BigTones`), leaf-only entries stranded in `lr:hierarchicalSubject` from years of multi-tool roundtrips, manually corrupted XMP — or as a guaranteed "this file now matches catalog" escape hatch after metadata drift. Unlike `--all`, `--force` keeps the explicit scope (`--asset`, query, or `--volume`) but ignores the pending-flag filter. Combinable with `--all` if you want catalog-wide rebuild.
+
+Recovery workflow for a catalog with accumulated runaway-escape damage across multiple volumes:
+
+```bash
+maki writeback --all --force --volume MediaPortable
+maki writeback --all --force --volume Media
+maki writeback --all --force --volume Archive
+```
+
+One pass per volume sweeps every recipe's tag blocks fresh from catalog state.
+
 **--dry-run**
 : Report what would be written without modifying any files.
 
@@ -500,6 +513,13 @@ Reconcile XMP keyword lists with the catalog after large tag restructuring (rena
 ```bash
 maki writeback --all --mirror-tags
 maki writeback --all --mirror-tags "tag:NewName"   # scope to one tag's set
+```
+
+Rebuild XMP tag blocks from scratch — when `--mirror-tags` didn't catch some stale entries:
+
+```bash
+maki writeback --asset 016cc7dd --force
+maki writeback --all --force --volume MediaPortable   # whole-volume cleanup
 ```
 
 Preview what would be written:
