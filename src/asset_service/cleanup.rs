@@ -229,88 +229,16 @@ impl AssetService {
             for asset_id in &orphaned_ids {
                 let file_start = Instant::now();
                 let asset_id_path = PathBuf::from(asset_id);
-
-                // Collect variant hashes and face IDs before deleting DB records
-                let variant_hashes: Vec<String> = catalog.conn()
-                    .prepare("SELECT content_hash FROM variants WHERE asset_id = ?1")
-                    .and_then(|mut s| s.query_map(rusqlite::params![asset_id], |r| r.get(0))
-                        .and_then(|rows| rows.collect()))
-                    .unwrap_or_default();
-                let face_ids: Vec<String> = catalog.conn()
-                    .prepare("SELECT id FROM faces WHERE asset_id = ?1")
-                    .and_then(|mut s| s.query_map(rusqlite::params![asset_id], |r| r.get(0))
-                        .and_then(|rows| rows.collect()))
-                    .unwrap_or_default();
-
-                // Remove from stacks, collections, and faces before deleting the asset
-                let _ = stack_store.remove(&[asset_id.clone()]);
-                let _ = catalog.delete_collection_memberships_for_asset(asset_id);
-                let _ = catalog.conn().execute(
-                    "DELETE FROM faces WHERE asset_id = ?1",
-                    rusqlite::params![asset_id],
-                );
-                // Delete embedding DB records
-                let _ = catalog.conn().execute(
-                    "DELETE FROM embeddings WHERE asset_id = ?1",
-                    rusqlite::params![asset_id],
-                );
-
-                if let Err(e) = catalog.delete_recipes_for_asset(asset_id) {
-                    result.errors.push(format!(
-                        "Failed to delete recipes for orphaned asset {asset_id}: {e}"
-                    ));
+                if !self.purge_orphaned_asset(
+                    &catalog,
+                    &metadata_store,
+                    &stack_store,
+                    &preview_gen,
+                    asset_id,
+                    &mut result.errors,
+                ) {
                     continue;
                 }
-                if let Err(e) = catalog.delete_file_locations_for_asset(asset_id) {
-                    result.errors.push(format!(
-                        "Failed to delete locations for orphaned asset {asset_id}: {e}"
-                    ));
-                    continue;
-                }
-                if let Err(e) = catalog.delete_variants_for_asset(asset_id) {
-                    result.errors.push(format!(
-                        "Failed to delete variants for orphaned asset {asset_id}: {e}"
-                    ));
-                    continue;
-                }
-                if let Err(e) = catalog.delete_asset(asset_id) {
-                    result.errors.push(format!(
-                        "Failed to delete orphaned asset {asset_id}: {e}"
-                    ));
-                    continue;
-                }
-
-                // Delete sidecar YAML
-                if let Ok(uuid) = uuid::Uuid::parse_str(asset_id) {
-                    if let Err(e) = metadata_store.delete(uuid) {
-                        result.errors.push(format!(
-                            "Failed to delete sidecar for orphaned asset {asset_id}: {e}"
-                        ));
-                    }
-                }
-
-                // Delete derived files: previews, smart previews, embeddings, face crops
-                for hash in &variant_hashes {
-                    let _ = std::fs::remove_file(preview_gen.preview_path(hash));
-                    let _ = std::fs::remove_file(preview_gen.smart_preview_path(hash));
-                }
-                for face_id in &face_ids {
-                    let prefix = &face_id[..2.min(face_id.len())];
-                    let _ = std::fs::remove_file(
-                        self.catalog_root.join("faces").join(prefix).join(format!("{face_id}.jpg")),
-                    );
-                    let _ = std::fs::remove_file(
-                        self.catalog_root.join("embeddings").join("arcface").join(prefix).join(format!("{face_id}.bin")),
-                    );
-                }
-                // Delete SigLIP embedding binaries
-                for model in &["siglip-vit-b16-256", "siglip-vit-l16-256"] {
-                    let prefix = &asset_id[..2.min(asset_id.len())];
-                    let _ = std::fs::remove_file(
-                        self.catalog_root.join("embeddings").join(model).join(prefix).join(format!("{asset_id}.bin")),
-                    );
-                }
-
                 result.removed_assets += 1;
                 on_file(&asset_id_path, CleanupStatus::OrphanedAsset, file_start.elapsed());
             }
@@ -642,4 +570,121 @@ impl AssetService {
         Ok(result)
     }
 
+    /// Hard-purge a single orphaned asset (an asset whose variants have
+    /// all lost their last file location): remove it from stacks,
+    /// collections, faces, and embeddings; delete its catalog rows
+    /// (recipes, locations, variants, asset row), its sidecar YAML, and
+    /// all derived files (previews, smart previews, face crops, arcface
+    /// and SigLIP embedding binaries).
+    ///
+    /// Shared by `cleanup` (orphaned-assets pass) and `remove_volume`.
+    ///
+    /// Returns `true` when the asset row was fully removed; `false` when
+    /// one of the catalog deletes failed (the error is pushed to
+    /// `errors`; earlier steps may already have been applied). A
+    /// sidecar-delete failure is reported but still counts as removed,
+    /// matching historical behavior.
+    pub(super) fn purge_orphaned_asset(
+        &self,
+        catalog: &Catalog,
+        metadata_store: &MetadataStore,
+        stack_store: &crate::stack::StackStore,
+        preview_gen: &crate::preview::PreviewGenerator,
+        asset_id: &str,
+        errors: &mut Vec<String>,
+    ) -> bool {
+        // Collect variant hashes and face IDs before deleting DB records
+        let variant_hashes: Vec<String> = catalog.conn()
+            .prepare("SELECT content_hash FROM variants WHERE asset_id = ?1")
+            .and_then(|mut s| s.query_map(rusqlite::params![asset_id], |r| r.get(0))
+                .and_then(|rows| rows.collect()))
+            .unwrap_or_default();
+        let face_ids: Vec<String> = catalog.conn()
+            .prepare("SELECT id FROM faces WHERE asset_id = ?1")
+            .and_then(|mut s| s.query_map(rusqlite::params![asset_id], |r| r.get(0))
+                .and_then(|rows| rows.collect()))
+            .unwrap_or_default();
+
+        // Remove from stacks, collections, faces, and embeddings before
+        // deleting the asset
+        let _ = stack_store.remove(&[asset_id.to_string()]);
+        let _ = catalog.delete_collection_memberships_for_asset(asset_id);
+        let _ = catalog.conn().execute(
+            "DELETE FROM faces WHERE asset_id = ?1",
+            rusqlite::params![asset_id],
+        );
+        let _ = catalog.conn().execute(
+            "DELETE FROM embeddings WHERE asset_id = ?1",
+            rusqlite::params![asset_id],
+        );
+
+        if let Err(e) = catalog.delete_recipes_for_asset(asset_id) {
+            errors.push(format!(
+                "Failed to delete recipes for orphaned asset {asset_id}: {e}"
+            ));
+            return false;
+        }
+        if let Err(e) = catalog.delete_file_locations_for_asset(asset_id) {
+            errors.push(format!(
+                "Failed to delete locations for orphaned asset {asset_id}: {e}"
+            ));
+            return false;
+        }
+        if let Err(e) = catalog.delete_variants_for_asset(asset_id) {
+            errors.push(format!(
+                "Failed to delete variants for orphaned asset {asset_id}: {e}"
+            ));
+            return false;
+        }
+        if let Err(e) = catalog.delete_asset(asset_id) {
+            errors.push(format!(
+                "Failed to delete orphaned asset {asset_id}: {e}"
+            ));
+            return false;
+        }
+
+        // Delete sidecar YAML
+        if let Ok(uuid) = uuid::Uuid::parse_str(asset_id) {
+            if let Err(e) = metadata_store.delete(uuid) {
+                errors.push(format!(
+                    "Failed to delete sidecar for orphaned asset {asset_id}: {e}"
+                ));
+            }
+        }
+
+        // Delete derived files: previews, smart previews, face crops,
+        // arcface embedding binaries
+        for hash in &variant_hashes {
+            let _ = std::fs::remove_file(preview_gen.preview_path(hash));
+            let _ = std::fs::remove_file(preview_gen.smart_preview_path(hash));
+        }
+        for face_id in &face_ids {
+            let prefix = &face_id[..2.min(face_id.len())];
+            let _ = std::fs::remove_file(
+                self.catalog_root.join("faces").join(prefix).join(format!("{face_id}.jpg")),
+            );
+            let _ = std::fs::remove_file(
+                self.catalog_root.join("embeddings").join("arcface").join(prefix).join(format!("{face_id}.bin")),
+            );
+        }
+        // Delete per-asset embedding binaries for every model directory
+        // present on disk. Enumerating `embeddings/` at runtime (instead
+        // of a hardcoded model list) keeps this correct as new embedding
+        // models ship — the previous hardcoded two-entry list silently
+        // leaked binaries for the siglip2 models. The `arcface` dir is
+        // keyed by face ID (handled above), so `<asset_id>.bin` simply
+        // doesn't exist there.
+        let prefix = &asset_id[..2.min(asset_id.len())];
+        if let Ok(entries) = std::fs::read_dir(self.catalog_root.join("embeddings")) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    let _ = std::fs::remove_file(
+                        entry.path().join(prefix).join(format!("{asset_id}.bin")),
+                    );
+                }
+            }
+        }
+
+        true
+    }
 }
