@@ -151,6 +151,36 @@ impl Catalog {
         Ok(())
     }
 
+    /// Mark a single asset's face-scan status as done if it carries face
+    /// rows but its sidecar predates the `face_scan_status` field (legacy
+    /// upgrade fallback — pre-v4.4.3 sidecars). No-op otherwise.
+    pub fn backfill_face_scan_status(&self, asset_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE assets SET face_scan_status = 'done' \
+             WHERE id = ?1 AND face_scan_status IS NULL AND face_count > 0",
+            rusqlite::params![asset_id],
+        )?;
+        Ok(())
+    }
+
+    /// Bulk variant of [`Self::update_face_count`] +
+    /// [`Self::backfill_face_scan_status`]: recompute `face_count` for
+    /// every asset that has face rows, then mark legacy assets (sidecars
+    /// predating `face_scan_status`) as scanned. Used by rebuild-catalog
+    /// after restoring faces from YAML.
+    pub fn backfill_face_denormalization(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "UPDATE assets SET face_count = (
+                SELECT COUNT(*) FROM faces WHERE faces.asset_id = assets.id
+            ) WHERE id IN (SELECT DISTINCT asset_id FROM faces)",
+        )?;
+        self.conn.execute_batch(
+            "UPDATE assets SET face_scan_status = 'done' \
+             WHERE face_scan_status IS NULL AND face_count > 0",
+        )?;
+        Ok(())
+    }
+
     /// Mark an asset as having been scanned for faces (regardless of face count).
     /// Used by `maki faces detect` to avoid re-scanning zero-face assets on every run.
     pub fn mark_face_scan_done(&self, asset_id: &str) -> Result<()> {
