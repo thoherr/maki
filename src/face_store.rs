@@ -806,20 +806,9 @@ impl<'a> FaceStore<'a> {
     }
 }
 
-/// Convert a float embedding to a byte blob (little-endian).
-pub fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
-    embedding
-        .iter()
-        .flat_map(|f| f.to_le_bytes())
-        .collect()
-}
-
-/// Convert a byte blob back to a float embedding.
-pub fn blob_to_embedding(blob: &[u8]) -> Vec<f32> {
-    blob.chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
-}
+// Blob ↔ embedding conversion is shared with the SigLIP embedding store;
+// re-exported so existing `face_store::embedding_to_blob` paths keep working.
+pub use crate::embedding_store::{blob_to_embedding, embedding_to_blob};
 
 // ── YAML persistence for faces and people ────────────────────────────
 

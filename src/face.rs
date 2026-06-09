@@ -763,14 +763,8 @@ pub fn face_crop_exists(face_id: &str, catalog_root: &Path) -> bool {
         .exists()
 }
 
-/// L2-normalize a vector.
-fn l2_normalize(v: &[f32]) -> Vec<f32> {
-    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm < 1e-12 {
-        return v.to_vec();
-    }
-    v.iter().map(|x| x / norm).collect()
-}
+// L2 normalization is shared with the SigLIP pipeline in `crate::ai`.
+use crate::ai::l2_normalize;
 
 /// Canonical 5-point landmark positions for ArcFace's 112×112 template.
 /// Taken from the InsightFace reference implementation. Order matches
@@ -946,29 +940,6 @@ pub fn resolve_face_model_dir(config: &crate::config::AiConfig) -> std::path::Pa
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn l2_normalize_unit_vector() {
-        let v = vec![1.0, 0.0, 0.0];
-        let normed = l2_normalize(&v);
-        assert!((normed[0] - 1.0).abs() < 1e-6);
-        assert!((normed[1]).abs() < 1e-6);
-    }
-
-    #[test]
-    fn l2_normalize_scales() {
-        let v = vec![3.0, 4.0];
-        let normed = l2_normalize(&v);
-        assert!((normed[0] - 0.6).abs() < 1e-6);
-        assert!((normed[1] - 0.8).abs() < 1e-6);
-    }
-
-    #[test]
-    fn l2_normalize_zero_vector() {
-        let v = vec![0.0; 512];
-        let normed = l2_normalize(&v);
-        assert_eq!(normed, v);
-    }
 
     #[test]
     fn similarity_transform_identity_when_src_equals_dst() {

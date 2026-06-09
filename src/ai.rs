@@ -619,8 +619,8 @@ fn tokenize_batch(tokenizer: &Tokenizer, texts: &[String], max_text_len: usize, 
     Ok(input_ids)
 }
 
-/// L2-normalize a vector.
-fn l2_normalize(v: &[f32]) -> Vec<f32> {
+/// L2-normalize a vector. Shared with the face pipeline (`crate::face`).
+pub(crate) fn l2_normalize(v: &[f32]) -> Vec<f32> {
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm < 1e-12 {
         return v.to_vec();

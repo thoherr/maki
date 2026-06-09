@@ -82,6 +82,21 @@ where
     }
 }
 
+/// Append `HX-Trigger: pending-changed` to a successful HTML response
+/// from any metadata-edit endpoint (rating, description, name, label,
+/// tags). The asset detail page's recipes block listens for this event
+/// and refreshes itself so the pending_writeback markers update
+/// immediately — otherwise they're stale until the next full reload.
+pub(super) fn with_pending_trigger(html: String) -> axum::response::Response {
+    use axum::response::{Html, IntoResponse};
+    let mut resp = Html(html).into_response();
+    resp.headers_mut().insert(
+        "HX-Trigger",
+        axum::http::HeaderValue::from_static("pending-changed"),
+    );
+    resp
+}
+
 /// Resolve an asset ID prefix to its full ID, mapping "not found" to a
 /// uniform error.
 ///

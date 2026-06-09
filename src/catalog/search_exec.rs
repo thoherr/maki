@@ -6,6 +6,46 @@
 
 use super::*;
 
+/// Column list shared by every query that materializes a `SearchRow`.
+/// Aliases required: `a` = assets, `bv` = best variant, `s` = stacks.
+/// Order is load-bearing — `map_search_row` reads columns by index.
+const SEARCH_ROW_COLUMNS: &str = "a.id, a.name, a.asset_type, a.created_at, bv.original_filename, bv.format, \
+     a.tags, a.description, bv.content_hash, a.rating, a.color_label, \
+     a.primary_variant_format, a.variant_count, a.stack_id, s.member_count, \
+     a.preview_rotation, a.face_count, a.video_duration";
+
+/// Map a row produced by a `SEARCH_ROW_COLUMNS` SELECT into a `SearchRow`.
+fn map_search_row(row: &rusqlite::Row) -> rusqlite::Result<SearchRow> {
+    let tags_json: String = row.get(6)?;
+    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+    let rating_val: Option<i64> = row.get(9)?;
+    let variant_count_val: i64 = row.get(12)?;
+    let stack_member_count: Option<i64> = row.get(14)?;
+    let rotation_val: Option<i64> = row.get(15)?;
+    let face_count_val: i64 = row.get::<_, Option<i64>>(16)?.unwrap_or(0);
+    let video_duration: Option<f64> = row.get(17)?;
+    Ok(SearchRow {
+        asset_id: row.get(0)?,
+        name: row.get(1)?,
+        asset_type: row.get(2)?,
+        created_at: row.get(3)?,
+        original_filename: row.get(4)?,
+        format: row.get(5)?,
+        tags,
+        description: row.get(7)?,
+        content_hash: row.get(8)?,
+        rating: rating_val.map(|r| r as u8),
+        color_label: row.get(10)?,
+        primary_format: row.get(11)?,
+        variant_count: variant_count_val as u32,
+        stack_id: row.get(13)?,
+        stack_count: stack_member_count.map(|n| n as u32),
+        preview_rotation: rotation_val.map(|r| r as u16),
+        face_count: face_count_val as u32,
+        video_duration,
+    })
+}
+
 impl Catalog {
     // ═══ SEARCH EXECUTION ═══
 
@@ -72,28 +112,24 @@ impl Catalog {
                     inner.push_str(" JOIN file_locations fl ON v.content_hash = fl.content_hash");
                 }
                 inner.push_str(&where_clause);
-                inner.push_str(") SELECT a.id, a.name, a.asset_type, a.created_at, bv.original_filename, bv.format, \
-                     a.tags, a.description, bv.content_hash, a.rating, a.color_label, \
-                     a.primary_variant_format, a.variant_count, a.stack_id, s.member_count, \
-                     a.preview_rotation, a.face_count, a.video_duration \
+                inner.push_str(&format!(
+                    ") SELECT {SEARCH_ROW_COLUMNS} \
                      FROM matched m \
                      JOIN assets a ON a.id = m.id \
                      JOIN variants bv ON bv.content_hash = a.best_variant_hash \
-                     LEFT JOIN stacks s ON s.id = a.stack_id");
+                     LEFT JOIN stacks s ON s.id = a.stack_id"
+                ));
                 inner.push_str(&format!(" ORDER BY {}", opts.sort.to_sql()));
                 inner.push_str(" LIMIT ? OFFSET ?");
                 p.push(Box::new(opts.per_page as u64));
                 p.push(Box::new(offset));
                 inner
             } else {
-                let mut sql = String::from(
-                    "SELECT a.id, a.name, a.asset_type, a.created_at, bv.original_filename, bv.format, \
-                     a.tags, a.description, bv.content_hash, a.rating, a.color_label, \
-                     a.primary_variant_format, a.variant_count, a.stack_id, s.member_count, \
-                     a.preview_rotation, a.face_count, a.video_duration \
+                let mut sql = format!(
+                    "SELECT {SEARCH_ROW_COLUMNS} \
                      FROM assets a \
                      JOIN variants bv ON bv.content_hash = a.best_variant_hash \
-                     LEFT JOIN stacks s ON s.id = a.stack_id",
+                     LEFT JOIN stacks s ON s.id = a.stack_id"
                 );
                 sql.push_str(&where_clause);
                 sql.push_str(&format!(" ORDER BY {}", opts.sort.to_sql()));
@@ -108,36 +144,7 @@ impl Catalog {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             data_params.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&data_sql)?;
-        let rows = stmt.query_map(param_refs.as_slice(), |row| {
-            let tags_json: String = row.get(6)?;
-            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-            let rating_val: Option<i64> = row.get(9)?;
-            let variant_count_val: i64 = row.get(12)?;
-            let stack_member_count: Option<i64> = row.get(14)?;
-            let rotation_val: Option<i64> = row.get(15)?;
-            let face_count_val: i64 = row.get::<_, Option<i64>>(16)?.unwrap_or(0);
-            let video_duration: Option<f64> = row.get(17)?;
-            Ok(SearchRow {
-                asset_id: row.get(0)?,
-                name: row.get(1)?,
-                asset_type: row.get(2)?,
-                created_at: row.get(3)?,
-                original_filename: row.get(4)?,
-                format: row.get(5)?,
-                tags,
-                description: row.get(7)?,
-                content_hash: row.get(8)?,
-                rating: rating_val.map(|r| r as u8),
-                color_label: row.get(10)?,
-                primary_format: row.get(11)?,
-                variant_count: variant_count_val as u32,
-                stack_id: row.get(13)?,
-                stack_count: stack_member_count.map(|n| n as u32),
-                preview_rotation: rotation_val.map(|r| r as u16),
-                face_count: face_count_val as u32,
-                video_duration,
-            })
-        })?;
+        let rows = stmt.query_map(param_refs.as_slice(), |row| map_search_row(row))?;
 
         let mut results = Vec::new();
         for row in rows {
@@ -154,44 +161,16 @@ impl Catalog {
 
     /// Fetch a single asset as a SearchRow by asset ID.
     pub fn get_search_row(&self, asset_id: &str) -> Result<Option<SearchRow>> {
-        let sql = "SELECT a.id, a.name, a.asset_type, a.created_at, bv.original_filename, bv.format, \
-                   a.tags, a.description, bv.content_hash, a.rating, a.color_label, \
-                   a.primary_variant_format, a.variant_count, a.stack_id, s.member_count, \
-                   a.preview_rotation, a.face_count, a.video_duration \
-                   FROM assets a \
-                   JOIN variants bv ON bv.content_hash = a.best_variant_hash \
-                   LEFT JOIN stacks s ON s.id = a.stack_id \
-                   WHERE a.id = ?1";
-        let result = self.conn.query_row(sql, rusqlite::params![asset_id], |row| {
-            let tags_json: String = row.get(6)?;
-            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-            let rating_val: Option<i64> = row.get(9)?;
-            let variant_count_val: i64 = row.get(12)?;
-            let stack_member_count: Option<i64> = row.get(14)?;
-            let rotation_val: Option<i64> = row.get(15)?;
-            let face_count_val: i64 = row.get::<_, Option<i64>>(16)?.unwrap_or(0);
-            let video_duration: Option<f64> = row.get(17)?;
-            Ok(SearchRow {
-                asset_id: row.get(0)?,
-                name: row.get(1)?,
-                asset_type: row.get(2)?,
-                created_at: row.get(3)?,
-                original_filename: row.get(4)?,
-                format: row.get(5)?,
-                tags,
-                description: row.get(7)?,
-                content_hash: row.get(8)?,
-                rating: rating_val.map(|r| r as u8),
-                color_label: row.get(10)?,
-                primary_format: row.get(11)?,
-                variant_count: variant_count_val as u32,
-                stack_id: row.get(13)?,
-                stack_count: stack_member_count.map(|n| n as u32),
-                preview_rotation: rotation_val.map(|r| r as u16),
-                face_count: face_count_val as u32,
-                video_duration,
-            })
-        });
+        let sql = format!(
+            "SELECT {SEARCH_ROW_COLUMNS} \
+             FROM assets a \
+             JOIN variants bv ON bv.content_hash = a.best_variant_hash \
+             LEFT JOIN stacks s ON s.id = a.stack_id \
+             WHERE a.id = ?1"
+        );
+        let result = self
+            .conn
+            .query_row(&sql, rusqlite::params![asset_id], |row| map_search_row(row));
         match result {
             Ok(row) => Ok(Some(row)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),

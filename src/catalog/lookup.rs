@@ -308,42 +308,6 @@ impl Catalog {
         &self,
         variant_query: &str,
     ) -> Result<Vec<DuplicateEntry>> {
-        let mut stmt = self.conn.prepare(variant_query)?;
-
-        let entries: Vec<DuplicateEntry> = stmt
-            .query_map([], |row| {
-                Ok(DuplicateEntry {
-                    content_hash: row.get(0)?,
-                    original_filename: row.get(1)?,
-                    format: row.get(2)?,
-                    file_size: row.get(3)?,
-                    asset_name: row.get(4)?,
-                    asset_id: row.get(5)?,
-                    locations: Vec::new(),
-                    volume_count: 0,
-                    same_volume_groups: Vec::new(),
-                    preview_url: String::new(),
-                })
-            })?
-            .collect::<std::result::Result<_, _>>()?;
-
-        let mut lstmt = self.conn.prepare(
-            "SELECT fl.relative_path, vol.label, vol.id, vol.purpose, fl.verified_at \
-             FROM file_locations fl \
-             JOIN volumes vol ON fl.volume_id = vol.id \
-             WHERE fl.content_hash = ?1",
-        )?;
-
-        let entries: Vec<DuplicateEntry> = entries
-            .into_iter()
-            .map(|mut e| {
-                e.locations = Self::load_locations_for_hash(&mut lstmt, &e.content_hash);
-                Self::compute_duplicate_stats(&mut e);
-                e
-            })
-            .collect();
-
-        Ok(entries)
+        self.load_duplicate_entries_filtered(variant_query, &[])
     }
-
 }

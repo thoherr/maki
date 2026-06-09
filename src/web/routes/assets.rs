@@ -16,21 +16,7 @@ use crate::web::templates::{
 };
 use crate::web::AppState;
 
-/// Append `HX-Trigger: pending-changed` to a successful HTML response
-/// from any metadata-edit endpoint (rating, description, name, label,
-/// tags). The asset detail page's recipes block listens for this event
-/// and refreshes itself so the pending_writeback markers update
-/// immediately — otherwise they're stale until the next full reload.
-fn with_pending_trigger(html: String) -> Response {
-    let mut resp = Html(html).into_response();
-    resp.headers_mut().insert(
-        "HX-Trigger",
-        axum::http::HeaderValue::from_static("pending-changed"),
-    );
-    resp
-}
-
-use super::resolve_best_variant_idx;
+use super::{resolve_best_variant_idx, with_pending_trigger};
 
 #[derive(Debug, serde::Deserialize)]
 pub struct RatingForm {

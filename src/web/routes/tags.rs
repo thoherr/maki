@@ -11,20 +11,7 @@ use axum::{Form, Json};
 use crate::web::templates::{TagTreeEntry, TagsFragment, TagsPage};
 use crate::web::AppState;
 
-use super::{BatchError, BatchResult};
-
-/// Wrap a successful tag-edit response with the `pending-changed`
-/// HX-Trigger header so the asset detail page's recipes block
-/// refreshes its pending_writeback markers. Mirrors the helper of the
-/// same name in `routes::assets`.
-fn with_pending_trigger(html: String) -> Response {
-    let mut resp = Html(html).into_response();
-    resp.headers_mut().insert(
-        "HX-Trigger",
-        axum::http::HeaderValue::from_static("pending-changed"),
-    );
-    resp
-}
+use super::{with_pending_trigger, BatchError, BatchResult};
 
 #[derive(Debug, serde::Deserialize)]
 pub struct TagForm {

@@ -110,7 +110,7 @@ impl Catalog {
     }
 
     /// Like `load_duplicate_entries` but accepts dynamic params.
-    fn load_duplicate_entries_filtered(
+    pub(super) fn load_duplicate_entries_filtered(
         &self,
         variant_query: &str,
         params: &[Box<dyn rusqlite::types::ToSql>],
