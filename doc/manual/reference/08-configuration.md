@@ -797,6 +797,45 @@ The defaults come from `slideshow_seconds` and `slideshow_loop` in `[browse]`; r
 
 ---
 
+## [trash] Section
+
+Controls the trash/quarantine for destructive file operations. When
+enabled (the default), `maki delete --remove-files`, `maki dedup`, and
+the web duplicates page move files into `<catalog>/.trash/` instead of
+deleting them permanently — recoverable via `maki trash list` /
+`maki trash restore`.
+
+### enabled
+
+- **Type:** boolean
+- **Default:** `true`
+
+Set to `false` to delete files permanently everywhere (equivalent to
+passing `--no-trash` on every deleting command). Derived files
+(previews, embedding binaries, face crops) are never trashed — they
+are regenerable.
+
+### retention_days
+
+- **Type:** unsigned 32-bit integer
+- **Default:** `30`
+
+Default age cutoff for `maki trash empty`: files trashed less than
+this many days ago are kept unless `--all` is passed.
+
+```toml
+[trash]
+enabled = true
+retention_days = 30
+```
+
+Note: the trash lives on the catalog volume. Removing a file from
+another (media) volume copies it into the trash before deleting the
+original, which costs one copy for large files — `--no-trash` is the
+escape hatch when freeing space is the whole point.
+
+---
+
 ## [writeback] Section
 
 Controls whether metadata edits flow into the `.xmp` recipe files on your storage volumes **automatically** on every change.

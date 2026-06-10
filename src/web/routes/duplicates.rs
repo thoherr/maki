@@ -133,6 +133,7 @@ pub async fn dedup_resolve_api(
             prefer.as_deref(),
             min_copies,
             apply,
+            false, // no_trash: web auto-resolve always honors [trash] config
             |_, _, _, _| {},
         )?;
         Ok::<_, anyhow::Error>(dedup_result)
@@ -176,11 +177,14 @@ pub async fn dedup_remove_location_api(
             anyhow::bail!("volume '{}' is offline", vol.label);
         }
 
+        let trash = crate::trash::Trash::from_config(&state.catalog_root, false);
         let full_path = vol.mount_point.join(&req.relative_path);
         if full_path.exists() {
-            std::fs::remove_file(&full_path).map_err(|e| {
-                anyhow::anyhow!("failed to delete {}: {e}", full_path.display())
-            })?;
+            trash
+                .dispose(&full_path, &vol.label, &req.relative_path)
+                .map_err(|e| {
+                    anyhow::anyhow!("failed to delete {}: {e}", full_path.display())
+                })?;
         }
 
         catalog.delete_file_location(&req.content_hash, &req.volume_id, &req.relative_path)?;
@@ -215,7 +219,9 @@ pub async fn dedup_remove_location_api(
                     continue;
                 }
                 let recipe_full = vol.mount_point.join(recipe_path);
-                let _ = std::fs::remove_file(&recipe_full);
+                if recipe_full.exists() {
+                    let _ = trash.dispose(&recipe_full, &vol.label, recipe_path);
+                }
                 if let Err(e) = catalog.delete_recipe(recipe_id) {
                     eprintln!("Warning: failed to remove recipe {recipe_path}: {e}");
                 } else if let Err(e) = service.remove_sidecar_recipe(

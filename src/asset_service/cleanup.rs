@@ -342,17 +342,22 @@ impl AssetService {
     }
 
     /// Delete assets from the catalog. Report-only by default; `apply` executes deletion.
-    /// `remove_files` (requires `apply`) also deletes physical media and recipe files from disk.
+    /// `remove_files` (requires `apply`) also removes physical media and recipe
+    /// files from disk — moved into `<catalog_root>/.trash/` unless the trash
+    /// is disabled (`[trash] enabled = false` or `no_trash`), in which case
+    /// they are deleted permanently.
     pub fn delete_assets(
         &self,
         asset_ids: &[String],
         apply: bool,
         remove_files: bool,
+        no_trash: bool,
         on_asset: impl Fn(&str, &DeleteStatus, Duration),
     ) -> Result<DeleteResult> {
         let catalog = Catalog::open(&self.catalog_root)?;
         let metadata_store = MetadataStore::new(&self.catalog_root);
         let registry = DeviceRegistry::new(&self.catalog_root);
+        let trash = crate::trash::Trash::from_config(&self.catalog_root, no_trash);
         let preview_gen = crate::preview::PreviewGenerator::new(
             &self.catalog_root,
             self.verbosity,
@@ -374,6 +379,7 @@ impl AssetService {
             deleted: 0,
             not_found: Vec::new(),
             files_removed: 0,
+            files_trashed: 0,
             previews_removed: 0,
             dry_run: !apply,
             errors: Vec::new(),
@@ -416,13 +422,20 @@ impl AssetService {
                             if vol.is_online {
                                 let full_path = vol.mount_point.join(rel_path);
                                 if full_path.exists() {
-                                    if let Err(e) = std::fs::remove_file(&full_path) {
-                                        result.errors.push(format!(
-                                            "Failed to remove file {}: {e}",
-                                            full_path.display()
-                                        ));
-                                    } else {
-                                        result.files_removed += 1;
+                                    match trash.dispose(&full_path, &vol.label, rel_path) {
+                                        Ok(crate::trash::Disposition::Trashed(_)) => {
+                                            result.files_removed += 1;
+                                            result.files_trashed += 1;
+                                        }
+                                        Ok(crate::trash::Disposition::Deleted) => {
+                                            result.files_removed += 1;
+                                        }
+                                        Err(e) => {
+                                            result.errors.push(format!(
+                                                "Failed to remove file {}: {e}",
+                                                full_path.display()
+                                            ));
+                                        }
                                     }
                                 }
                             } else {
@@ -438,13 +451,20 @@ impl AssetService {
                             if vol.is_online {
                                 let full_path = vol.mount_point.join(rel_path);
                                 if full_path.exists() {
-                                    if let Err(e) = std::fs::remove_file(&full_path) {
-                                        result.errors.push(format!(
-                                            "Failed to remove recipe file {}: {e}",
-                                            full_path.display()
-                                        ));
-                                    } else {
-                                        result.files_removed += 1;
+                                    match trash.dispose(&full_path, &vol.label, rel_path) {
+                                        Ok(crate::trash::Disposition::Trashed(_)) => {
+                                            result.files_removed += 1;
+                                            result.files_trashed += 1;
+                                        }
+                                        Ok(crate::trash::Disposition::Deleted) => {
+                                            result.files_removed += 1;
+                                        }
+                                        Err(e) => {
+                                            result.errors.push(format!(
+                                                "Failed to remove recipe file {}: {e}",
+                                                full_path.display()
+                                            ));
+                                        }
                                     }
                                 }
                             }

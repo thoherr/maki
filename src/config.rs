@@ -604,6 +604,36 @@ fn is_default_contact_sheet(c: &ContactSheetDefaults) -> bool {
     *c == ContactSheetDefaults::default()
 }
 
+/// Trash / quarantine configuration for destructive file operations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TrashConfig {
+    /// When true (default), file-deleting operations (`delete
+    /// --remove-files`, `dedup`, the web duplicates page) move files
+    /// into `<catalog_root>/.trash/` instead of deleting them, so
+    /// mistakes are recoverable via `maki trash restore`. Set to false
+    /// (or pass `--no-trash`) to delete permanently.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Default age cutoff (days) for `maki trash empty`. Files trashed
+    /// less than this many days ago are kept unless `--all` is passed.
+    #[serde(default = "default_trash_retention_days")]
+    pub retention_days: u32,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_trash_retention_days() -> u32 {
+    30
+}
+
+impl Default for TrashConfig {
+    fn default() -> Self {
+        Self { enabled: true, retention_days: 30 }
+    }
+}
+
 /// XMP writeback configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct WritebackConfig {
@@ -769,6 +799,8 @@ pub struct CatalogConfig {
     #[serde(default)]
     pub writeback: WritebackConfig,
     #[serde(default)]
+    pub trash: TrashConfig,
+    #[serde(default)]
     pub cli: CliDefaults,
     #[serde(default)]
     pub group: GroupConfig,
@@ -788,6 +820,7 @@ impl Default for CatalogConfig {
             vlm: VlmConfig::default(),
             browse: BrowseConfig::default(),
             writeback: WritebackConfig::default(),
+            trash: TrashConfig::default(),
             cli: CliDefaults::default(),
             group: GroupConfig::default(),
         }
@@ -1060,6 +1093,7 @@ max_edge = 1000
             vlm: VlmConfig::default(),
             browse: BrowseConfig::default(),
             writeback: WritebackConfig::default(),
+            trash: TrashConfig::default(),
             cli: CliDefaults::default(),
             group: GroupConfig::default(),
         };
@@ -1212,6 +1246,7 @@ max_edge = 1000
             vlm: VlmConfig::default(),
             browse: BrowseConfig::default(),
             writeback: WritebackConfig::default(),
+            trash: TrashConfig::default(),
             cli: CliDefaults::default(),
             group: GroupConfig::default(),
         };

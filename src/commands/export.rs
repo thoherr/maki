@@ -458,6 +458,7 @@ pub fn run_dedup_command(
         path: Option<String>,
         min_copies: usize,
         apply: bool,
+        no_trash: bool,
         json: bool,
         log: bool,
         #[allow(unused_variables)] verbosity: maki::Verbosity,
@@ -481,6 +482,7 @@ pub fn run_dedup_command(
             effective_prefer.as_deref(),
             min_copies,
             apply,
+            no_trash,
             |filename, path, status, vol_label| {
                 match status {
                     DedupStatus::Keep => {
@@ -503,6 +505,7 @@ pub fn run_dedup_command(
             effective_prefer.as_deref(),
             min_copies,
             apply,
+            no_trash,
             |_, _, _, _| {},
         )?
     };
@@ -528,6 +531,12 @@ pub fn run_dedup_command(
                 recipe_msg,
                 format_size(result.bytes_freed),
             );
+            if result.files_trashed > 0 {
+                println!(
+                    "  {} file(s) moved to the trash — recoverable via `maki trash list` / `maki trash restore`.",
+                    result.files_trashed
+                );
+            }
             // Same trap as sync: removing redundant locations leaves
             // variants that no longer have any locations. They linger
             // — sometimes as the asset's selected best-preview variant

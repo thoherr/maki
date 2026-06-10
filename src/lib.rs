@@ -66,6 +66,7 @@ pub mod shell;
 pub mod stack;
 pub mod status;
 pub mod tag_util;
+pub mod trash;
 pub mod vlm;
 pub mod vocabulary;
 pub mod web;

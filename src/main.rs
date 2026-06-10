@@ -197,9 +197,14 @@ enum Commands {
         /// Execute deletion (default: report-only)
         #[arg(long)]
         apply: bool,
-        /// Also delete physical files from disk (requires --apply)
+        /// Also delete physical files from disk (requires --apply).
+        /// Files go to `<catalog>/.trash/` (recoverable via
+        /// `maki trash restore`) unless trash is disabled.
         #[arg(long)]
         remove_files: bool,
+        /// Delete files permanently instead of moving them to the trash
+        #[arg(long)]
+        no_trash: bool,
     },
 
     /// Add, remove, or rename tags
@@ -738,7 +743,7 @@ enum Commands {
     },
 
     /// Start the web UI server
-    #[command(display_order = 55)]
+    #[command(display_order = 56)]
     Serve {
         /// Port to listen on (default: 8080, or from maki.toml [serve] port)
         #[arg(long, display_order = 10)]
@@ -992,13 +997,31 @@ enum Commands {
         #[arg(long, display_order = 14, default_value = "1")]
         min_copies: usize,
 
-        /// Apply changes (delete files and remove location records)
+        /// Apply changes (delete files and remove location records).
+        /// Removed files go to `<catalog>/.trash/` (recoverable via
+        /// `maki trash restore`) unless trash is disabled.
         #[arg(long, display_order = 20)]
         apply: bool,
+
+        /// Delete files permanently instead of moving them to the trash
+        #[arg(long, display_order = 21)]
+        no_trash: bool,
+    },
+
+    /// Inspect, restore, or empty the catalog trash
+    ///
+    /// File-deleting operations (`delete --remove-files`, `dedup`, the
+    /// web duplicates page) move files into `<catalog>/.trash/` instead
+    /// of deleting them permanently (unless `[trash] enabled = false`
+    /// or `--no-trash`). This command manages that trash.
+    #[command(display_order = 45)]
+    Trash {
+        #[command(subcommand)]
+        command: TrashCommands,
     },
 
     /// Copy or move asset files to another volume
-    #[command(display_order = 45)]
+    #[command(display_order = 46)]
     Relocate {
         /// Asset IDs (reads from stdin if empty and no --query)
         asset_ids: Vec<String>,
@@ -1025,7 +1048,7 @@ enum Commands {
     },
 
     /// Update a file's catalog path after it was moved on disk
-    #[command(name = "update-location", display_order = 46)]
+    #[command(name = "update-location", display_order = 47)]
     UpdateLocation {
         /// Asset ID (or unique prefix)
         asset_id: String,
@@ -1044,7 +1067,7 @@ enum Commands {
     },
 
     /// Generate or regenerate preview thumbnails
-    #[command(display_order = 47)]
+    #[command(display_order = 48)]
     GeneratePreviews {
         /// Files or directories to generate previews for
         paths: Vec<String>,
@@ -1079,7 +1102,7 @@ enum Commands {
     },
 
     /// Fix variant roles (re-role non-RAW variants to Export in RAW+non-RAW groups)
-    #[command(display_order = 48)]
+    #[command(display_order = 49)]
     FixRoles {
         /// Files or directories to scope the fix
         paths: Vec<String>,
@@ -1098,7 +1121,7 @@ enum Commands {
     },
 
     /// Fix asset dates from variant EXIF metadata and file modification times
-    #[command(display_order = 49)]
+    #[command(display_order = 50)]
     FixDates {
         /// Search query to select assets (same syntax as `maki search`)
         #[arg(display_order = 1)]
@@ -1122,7 +1145,7 @@ enum Commands {
     },
 
     /// Re-attach recipe files that were imported as standalone assets
-    #[command(display_order = 50)]
+    #[command(display_order = 51)]
     FixRecipes {
         /// Search query to select assets (same syntax as `maki search`)
         #[arg(display_order = 1)]
@@ -1146,7 +1169,7 @@ enum Commands {
     },
 
     /// Create XMP sidecar files for assets with metadata but no existing recipe
-    #[command(name = "create-sidecars", display_order = 50)]
+    #[command(name = "create-sidecars", display_order = 51)]
     CreateSidecars {
         /// Search query to select assets (same syntax as `maki search`)
         #[arg(display_order = 1)]
@@ -1170,7 +1193,7 @@ enum Commands {
     },
 
     /// Rebuild SQLite catalog from sidecar files
-    #[command(display_order = 51)]
+    #[command(display_order = 52)]
     RebuildCatalog {
         /// Rebuild only a specific asset (by ID or prefix)
         #[arg(long)]
@@ -1178,11 +1201,11 @@ enum Commands {
     },
 
     /// Run database schema migrations
-    #[command(display_order = 52)]
+    #[command(display_order = 53)]
     Migrate,
 
     /// Open documentation in the browser
-    #[command(display_order = 55)]
+    #[command(display_order = 56)]
     Doc {
         /// Which document: manual, cheatsheet, filters, tagging (default: manual)
         #[arg(default_value = "manual")]
@@ -1190,7 +1213,7 @@ enum Commands {
     },
 
     /// Show MAKI license and third-party crate licenses
-    #[command(display_order = 56)]
+    #[command(display_order = 57)]
     Licenses {
         /// Show summary only (counts and where to find full text)
         #[arg(long)]
@@ -1198,7 +1221,7 @@ enum Commands {
     },
 
     /// Start an interactive asset management shell
-    #[command(display_order = 56)]
+    #[command(display_order = 57)]
     Shell {
         /// Script file to execute (instead of interactive mode)
         script: Option<String>,
@@ -1788,6 +1811,42 @@ enum AiCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum TrashCommands {
+    /// List every file currently in the trash
+    List,
+
+    /// Restore a trashed file to its original volume location
+    ///
+    /// PATH is the key shown by `maki trash list`
+    /// (`<date>/<volume>/<relative-path>`). The volume must be online.
+    /// The catalog is NOT updated — re-register the restored file with
+    /// `maki import <path>` or `maki refresh` afterwards.
+    Restore {
+        /// Trash path (`<date>/<volume>/<relative-path>`)
+        path: String,
+    },
+
+    /// Permanently delete trashed files
+    ///
+    /// Without flags, removes files older than `[trash] retention_days`
+    /// (default 30). `--older-than` overrides the cutoff; `--all`
+    /// empties everything.
+    Empty {
+        /// Remove files trashed at least this many days ago
+        #[arg(long, conflicts_with = "all")]
+        older_than: Option<u32>,
+
+        /// Empty the entire trash regardless of age
+        #[arg(long)]
+        all: bool,
+
+        /// Report what would be removed without deleting anything
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
 /// Print custom grouped help text through a pager.
 fn print_custom_help() {
     let version = env!("CARGO_PKG_VERSION");
@@ -1836,6 +1895,7 @@ Maintain:
   refresh            Re-read metadata from changed sidecar/recipe files{sync_metadata}{writeback}
   cleanup            Remove stale file location records (files no longer on disk)
   dedup              Remove same-volume duplicate file locations
+  trash              Inspect, restore, or empty the catalog trash
   relocate           Copy or move asset files to another volume
   update-location    Update a file's catalog path after it was moved on disk
   generate-previews  Generate or regenerate preview thumbnails
@@ -2259,10 +2319,12 @@ faces/\n\
             asset_ids,
             apply,
             remove_files,
+            no_trash,
         } => run_delete_command(
             asset_ids,
             apply,
             remove_files,
+            no_trash,
             cli.json,
             cli.log,
             verbosity,
@@ -2524,6 +2586,7 @@ faces/\n\
             path,
             min_copies,
             apply,
+            no_trash,
         } => run_dedup_command(
             volume,
             prefer,
@@ -2531,10 +2594,12 @@ faces/\n\
             path,
             min_copies,
             apply,
+            no_trash,
             cli.json,
             cli.log,
             verbosity,
         ),
+        Commands::Trash { command } => run_trash_command(command, cli.json),
         Commands::UpdateLocation {
             asset_id,
             from,

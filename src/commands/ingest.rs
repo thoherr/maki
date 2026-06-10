@@ -412,6 +412,7 @@ pub fn run_delete_command(
         asset_ids: Vec<String>,
         apply: bool,
         remove_files: bool,
+        no_trash: bool,
         json: bool,
         log: bool,
         #[allow(unused_variables)] verbosity: maki::Verbosity,
@@ -462,6 +463,7 @@ pub fn run_delete_command(
         &ids,
         apply,
         remove_files,
+        no_trash,
         |id, status, elapsed| {
             if show_log {
                 let short_id = &id[..8.min(id.len())];
@@ -520,6 +522,12 @@ pub fn run_delete_command(
                 parts.push(format!("{} previews removed", result.previews_removed));
             }
             println!("Delete complete: {}", parts.join(", "));
+            if result.files_trashed > 0 {
+                println!(
+                    "  {} file(s) moved to the trash — recoverable via `maki trash list` / `maki trash restore`.",
+                    result.files_trashed
+                );
+            }
         } else {
             let mut parts = vec![
                 format!("{} would be deleted", result.deleted),

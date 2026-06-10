@@ -519,6 +519,9 @@ pub struct DeleteResult {
     pub deleted: usize,
     pub not_found: Vec<String>,
     pub files_removed: usize,
+    /// How many of `files_removed` went to `<catalog_root>/.trash/`
+    /// (recoverable via `maki trash restore`) instead of being deleted.
+    pub files_trashed: usize,
     pub previews_removed: usize,
     pub dry_run: bool,
     pub errors: Vec<String>,
@@ -584,6 +587,9 @@ pub struct DedupResult {
     pub locations_to_remove: usize,
     pub locations_removed: usize,
     pub files_deleted: usize,
+    /// How many removed files (media + recipes) went to
+    /// `<catalog_root>/.trash/` instead of being deleted permanently.
+    pub files_trashed: usize,
     pub recipes_removed: usize,
     pub bytes_freed: u64,
     pub dry_run: bool,

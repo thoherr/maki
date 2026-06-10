@@ -1453,3 +1453,66 @@ pub fn run_relocate_command(
 
     Ok(())
 }
+
+/// Extracted body of `Commands::Trash`. See `run_import_command` for the
+/// extraction pattern.
+pub fn run_trash_command(cmd: TrashCommands, json: bool) -> anyhow::Result<()> {
+    let (catalog_root, config) = maki::config::load_config()?;
+    match cmd {
+        TrashCommands::List => {
+            let entries = maki::trash::Trash::list(&catalog_root)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&entries)?);
+            } else if entries.is_empty() {
+                println!("Trash is empty.");
+            } else {
+                let total: u64 = entries.iter().map(|e| e.size).sum();
+                for e in &entries {
+                    println!("{:>10}  {}", format_size(e.size), e.trash_path);
+                }
+                println!(
+                    "{} file(s), {} — restore with `maki trash restore <path>`, purge with `maki trash empty`.",
+                    entries.len(),
+                    format_size(total),
+                );
+            }
+        }
+        TrashCommands::Restore { path } => {
+            let target = maki::trash::Trash::restore(&catalog_root, &path)?;
+            if json {
+                println!("{}", serde_json::json!({"restored": target.display().to_string()}));
+            } else {
+                println!("Restored: {}", target.display());
+                println!(
+                    "  The catalog was not updated — re-register the file with `maki import` or `maki refresh`."
+                );
+            }
+        }
+        TrashCommands::Empty { older_than, all, dry_run } => {
+            let cutoff = if all {
+                None
+            } else {
+                Some(older_than.unwrap_or(config.trash.retention_days))
+            };
+            let result = maki::trash::Trash::empty(&catalog_root, cutoff, dry_run)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else if dry_run {
+                println!(
+                    "Trash empty (dry run): {} file(s), {} would be removed{}",
+                    result.files_removed,
+                    format_size(result.bytes_freed),
+                    cutoff.map(|d| format!(" (older than {d} days)")).unwrap_or_default(),
+                );
+            } else {
+                println!(
+                    "Trash emptied: {} file(s), {} freed{}",
+                    result.files_removed,
+                    format_size(result.bytes_freed),
+                    cutoff.map(|d| format!(" (older than {d} days)")).unwrap_or_default(),
+                );
+            }
+        }
+    }
+    Ok(())
+}

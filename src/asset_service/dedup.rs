@@ -21,11 +21,13 @@ impl AssetService {
         prefer: Option<&str>,
         min_copies: usize,
         apply: bool,
+        no_trash: bool,
         on_entry: impl Fn(&str, &str, DedupStatus, &str),
     ) -> Result<DedupResult> {
         let registry = DeviceRegistry::new(&self.catalog_root);
         let catalog = Catalog::open(&self.catalog_root)?;
         let metadata_store = MetadataStore::new(&self.catalog_root);
+        let trash = crate::trash::Trash::from_config(&self.catalog_root, no_trash);
 
         let filter_volume_id = if let Some(label) = volume_filter {
             let vol = registry.resolve_volume(label)?;
@@ -50,6 +52,7 @@ impl AssetService {
             locations_to_remove: 0,
             locations_removed: 0,
             files_deleted: 0,
+            files_trashed: 0,
             recipes_removed: 0,
             bytes_freed: 0,
             dry_run: !apply,
@@ -180,12 +183,16 @@ impl AssetService {
                         .collect::<Vec<_>>();
 
                     if apply {
-                        // Delete the physical file
+                        // Remove the physical file (into the trash unless disabled)
                         if let Some(vol) = vol_map.get(&vol_id) {
                             if vol.is_online {
                                 let full_path = vol.mount_point.join(&loc.relative_path);
-                                match std::fs::remove_file(&full_path) {
-                                    Ok(()) => {
+                                match trash.dispose(&full_path, &vol.label, &loc.relative_path) {
+                                    Ok(crate::trash::Disposition::Trashed(_)) => {
+                                        result.files_deleted += 1;
+                                        result.files_trashed += 1;
+                                    }
+                                    Ok(crate::trash::Disposition::Deleted) => {
                                         result.files_deleted += 1;
                                     }
                                     Err(e) => {
@@ -229,7 +236,13 @@ impl AssetService {
                             if let Some(vol) = vol_map.get(&vol_id) {
                                 if vol.is_online {
                                     let recipe_full = vol.mount_point.join(recipe_path);
-                                    let _ = std::fs::remove_file(&recipe_full);
+                                    if recipe_full.exists() {
+                                        if let Ok(crate::trash::Disposition::Trashed(_)) =
+                                            trash.dispose(&recipe_full, &vol.label, recipe_path)
+                                        {
+                                            result.files_trashed += 1;
+                                        }
+                                    }
                                 }
                             }
                             if let Err(e) = catalog.delete_recipe(recipe_id) {

@@ -27,7 +27,8 @@ use crate::FacesCommands;
 #[cfg(feature = "ai")]
 use crate::AiCommands;
 use crate::{
-    CollectionCommands, SavedSearchCommands, StackCommands, TagCommands, VolumeCommands,
+    CollectionCommands, SavedSearchCommands, StackCommands, TagCommands, TrashCommands,
+    VolumeCommands,
 };
 
 // `ai` and `faces` are fully feature-gated inside; gate the module

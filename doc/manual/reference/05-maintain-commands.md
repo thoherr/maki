@@ -739,6 +739,61 @@ maki --json dedup --apply | jq '{groups: .duplicates_found, removed: .locations_
 [duplicates](04-retrieve-commands.md#maki-duplicates) -- find duplicates without removing them.
 [cleanup](#maki-cleanup) -- remove stale locations for files that no longer exist on disk.
 [verify](#maki-verify) -- update `verified_at` timestamps used by the dedup heuristic.
+[trash](#maki-trash) -- removed files are recoverable from the trash.
+
+---
+
+## maki trash
+
+### NAME
+
+maki-trash -- inspect, restore, or empty the catalog trash
+
+### SYNOPSIS
+
+```
+maki trash list [--json]
+maki trash restore <DATE>/<VOLUME>/<RELATIVE-PATH>
+maki trash empty [--older-than DAYS | --all] [--dry-run]
+```
+
+### DESCRIPTION
+
+File-deleting operations — `maki delete --remove-files`, `maki dedup`,
+and the web UI duplicates page — move files into
+`<catalog>/.trash/<date>/<volume>/<relative-path>` instead of deleting
+them permanently, so a mistaken batch delete is recoverable. Derived
+files (previews, embedding binaries, face crops) are exempt: they are
+regenerable and never enter the trash.
+
+The mechanism is controlled by the `[trash]` section in `maki.toml`
+(`enabled`, default `true`; `retention_days`, default `30`). Every
+deleting command also accepts `--no-trash` to delete permanently on a
+per-run basis.
+
+**`list`** shows every trashed file with its size and restore key.
+
+**`restore`** moves a file back to its original location on its
+original volume (resolved by label; the volume must be online). The
+catalog is **not** updated — re-register the restored file with
+`maki import <path>` or `maki refresh`.
+
+**`empty`** permanently deletes trashed files older than the cutoff:
+`--older-than DAYS` overrides the configured `retention_days`;
+`--all` empties everything; `--dry-run` only reports.
+
+### NOTES
+
+The trash lives on the catalog volume. Removing a file from another
+(media) volume copies it into the trash before deleting the original —
+for very large files this costs one copy, which is the price of
+recoverability. When freeing disk space is the whole point, pass
+`--no-trash`.
+
+### SEE ALSO
+
+[delete](02-ingest-commands.md#maki-delete) -- delete assets (optionally with files).
+[dedup](#maki-dedup) -- remove same-volume duplicate copies.
 
 ---
 

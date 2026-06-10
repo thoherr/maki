@@ -131,10 +131,12 @@ pub async fn batch_delete(
     let preview_config = state.preview_config.clone();
     let json = super::spawn_catalog_blocking(move || {
         let service = crate::asset_service::AssetService::new(&catalog_root, state.verbosity, &preview_config);
-        let result = service.delete_assets(&req.asset_ids, true, req.remove_files, |_id, _status, _elapsed| {})?;
+        // no_trash = false: web batch delete always honors [trash] config
+        let result = service.delete_assets(&req.asset_ids, true, req.remove_files, false, |_id, _status, _elapsed| {})?;
         Ok::<_, anyhow::Error>(serde_json::json!({
             "deleted": result.deleted,
             "files_removed": result.files_removed,
+            "files_trashed": result.files_trashed,
             "previews_removed": result.previews_removed,
             "not_found": result.not_found,
             "errors": result.errors,

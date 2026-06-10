@@ -8290,6 +8290,105 @@ fn delete_remove_files() {
 }
 
 #[test]
+fn delete_remove_files_goes_to_trash_and_restores() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "del_trash.jpg", b"trash-me-file");
+    let file_path = file.clone();
+
+    maki()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = maki()
+        .current_dir(&root)
+        .args(["search", "--format", "ids", "del_trash"])
+        .output()
+        .unwrap();
+    let asset_id = String::from_utf8(output.stdout).unwrap().trim().to_string();
+
+    maki()
+        .current_dir(&root)
+        .args(["delete", "--apply", "--remove-files", &asset_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("moved to the trash"));
+
+    assert!(!file_path.exists(), "file removed from original location");
+    assert!(root.join(".trash").exists(), "trash directory created");
+
+    // List shows the file with a restore key
+    let list = maki()
+        .current_dir(&root)
+        .args(["trash", "list"])
+        .output()
+        .unwrap();
+    let list_out = String::from_utf8(list.stdout).unwrap();
+    assert!(list_out.contains("del_trash.jpg"), "list output: {list_out}");
+    let key = list_out
+        .lines()
+        .find(|l| l.contains("del_trash.jpg"))
+        .and_then(|l| l.split_whitespace().last())
+        .unwrap()
+        .to_string();
+
+    // Restore puts the file back on the volume
+    maki()
+        .current_dir(&root)
+        .args(["trash", "restore", &key])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Restored:"));
+    assert!(file_path.exists(), "file restored to original path");
+    assert_eq!(std::fs::read(&file_path).unwrap(), b"trash-me-file");
+
+    // Empty --all clears whatever remains
+    maki()
+        .current_dir(&root)
+        .args(["trash", "empty", "--all"])
+        .assert()
+        .success();
+    let list2 = maki()
+        .current_dir(&root)
+        .args(["trash", "list"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8(list2.stdout).unwrap().contains("Trash is empty"));
+}
+
+#[test]
+fn delete_no_trash_deletes_permanently() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "del_notrash.jpg", b"gone-for-good");
+    let file_path = file.clone();
+
+    maki()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+    let output = maki()
+        .current_dir(&root)
+        .args(["search", "--format", "ids", "del_notrash"])
+        .output()
+        .unwrap();
+    let asset_id = String::from_utf8(output.stdout).unwrap().trim().to_string();
+
+    maki()
+        .current_dir(&root)
+        .args(["delete", "--apply", "--remove-files", "--no-trash", &asset_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("moved to the trash").not());
+
+    assert!(!file_path.exists(), "file removed from disk");
+    assert!(!root.join(".trash").exists(), "no trash dir with --no-trash");
+}
+
+#[test]
 fn delete_remove_files_requires_apply() {
     let dir = tempdir().unwrap();
     let root = init_catalog(dir.path());
