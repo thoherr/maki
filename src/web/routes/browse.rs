@@ -496,9 +496,14 @@ pub async fn all_ids_api(
         let sort_str = bf.sort_str;
         let collapse_stacks = bf.collapse_stacks;
 
-        let resolved = ResolvedSearch::resolve(
+        // Select-all must see exactly the set the grid shows — including
+        // the AI text-query / similar: filters. Before v4.6.0 this
+        // endpoint skipped resolve_ai_filters, so select-all on a text
+        // search seeded the batch toolbar with the UNFILTERED result set.
+        let mut resolved = ResolvedSearch::resolve(
             &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
         );
+        resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
 
         let mut opts = parsed.to_search_options();
         resolved.apply(&mut opts);
@@ -514,7 +519,11 @@ pub async fn all_ids_api(
         opts.per_page = u32::MAX;
 
         let total = catalog.search_count(&opts)?;
-        let total_pages = if per_page > 0 {
+        // A similarity view renders as a single page in the grid; report
+        // total_pages consistently so the confirmation modal matches.
+        let total_pages = if resolved.has_similarity() {
+            1
+        } else if per_page > 0 {
             ((total as f64) / per_page as f64).ceil() as u32
         } else {
             1
@@ -548,26 +557,60 @@ pub async fn page_ids_api(
         let page = bf.page;
         let collapse_stacks = bf.collapse_stacks;
 
-        let resolved = ResolvedSearch::resolve(
+        // Same AI-filter parity as all_ids_api: page ID lists feed the
+        // lightbox and keyboard navigation, which must walk the set the
+        // grid actually shows.
+        let mut resolved = ResolvedSearch::resolve(
             &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
         );
+        resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
+        let has_similarity = resolved.has_similarity();
 
         let mut opts = parsed.to_search_options();
         resolved.apply(&mut opts);
 
         let per_page = state.per_page;
-        opts.sort = SearchSort::from_str(&sort_str);
-        opts.page = page;
-        opts.per_page = per_page;
+        // A similarity view renders as a single page sorted by score —
+        // mirror browse_page so navigation order matches the grid.
+        let effective_sort = if has_similarity && params.sort.is_none() {
+            "similarity_desc"
+        } else {
+            &sort_str
+        };
+        opts.sort = SearchSort::from_str(effective_sort);
+        opts.page = if has_similarity { 1 } else { page };
+        opts.per_page = if has_similarity { u32::MAX } else { per_page };
         opts.collapse_stacks = collapse_stacks;
 
         let total = catalog.search_count(&opts)?;
-        let total_pages = ((total as f64) / per_page as f64).ceil() as u32;
+        let total_pages = if has_similarity {
+            1
+        } else {
+            ((total as f64) / per_page as f64).ceil() as u32
+        };
         // Clamp page to the last available so callers (lightbox / browse-imported
         // links / external bookmarks) don't get an empty page after deletions.
         let page = if total_pages > 0 && page > total_pages { total_pages } else { page };
-        opts.page = page;
-        let rows = catalog.search_paginated(&opts)?;
+        opts.page = if has_similarity { 1 } else { page };
+        #[cfg_attr(not(feature = "ai"), allow(unused_mut))]
+        let mut rows = catalog.search_paginated(&opts)?;
+
+        // In-memory similarity ordering, same as browse_page's card sort.
+        #[cfg(feature = "ai")]
+        if has_similarity
+            && matches!(opts.sort, SearchSort::SimilarityDesc | SearchSort::SimilarityAsc)
+        {
+            let asc = matches!(opts.sort, SearchSort::SimilarityAsc);
+            rows.sort_by(|a, b| {
+                let sa = resolved.similarity_scores.get(&a.asset_id).copied().unwrap_or(0.0);
+                let sb = resolved.similarity_scores.get(&b.asset_id).copied().unwrap_or(0.0);
+                if asc {
+                    sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                } else {
+                    sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+                }
+            });
+        }
         let ids: Vec<String> = rows.iter().map(|r| r.asset_id.clone()).collect();
 
         Ok::<_, anyhow::Error>(serde_json::json!({
@@ -768,9 +811,13 @@ pub async fn facets_api(
         let parsed = bf.parsed;
         let collapse_stacks = bf.collapse_stacks;
 
-        let resolved = ResolvedSearch::resolve(
+        // Facet counts describe the result set the grid shows, so the AI
+        // text-query / similar: filters must be included — otherwise the
+        // dropdown counts contradict the visible results on a text search.
+        let mut resolved = ResolvedSearch::resolve(
             &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
         );
+        resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
 
         let mut opts = parsed.to_search_options();
         resolved.apply(&mut opts);

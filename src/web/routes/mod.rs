@@ -325,9 +325,15 @@ pub(super) enum EmptyFilterPolicy {
 ///    (volume/path-volume fallback, collection include/exclude IDs,
 ///    person-name intersection).
 /// 2. [`ResolvedSearch::resolve_ai_filters`] optionally runs the AI
-///    text-query (SigLIP) and `similar:` resolution — only browse_page
-///    and search_api call this; calendar/map/ids/facets never supported
-///    those filters and must not silently gain them.
+///    text-query (SigLIP) and `similar:` resolution. Called by every
+///    endpoint that must mirror the grid's visible result set:
+///    browse_page, search_api, all_ids_api / page_ids_api (selection
+///    and lightbox navigation — skipping it here was the v4.5.x
+///    "select-all on a text search selects the unfiltered set" trap),
+///    and facets_api (dropdown counts). Deliberately NOT called by
+///    calendar_api / map_api: the date-heatmap and map views have never
+///    supported text/similar filters, and extending them is a product
+///    decision, not a consistency fix.
 /// 3. [`ResolvedSearch::apply`] installs the borrowed slices into a
 ///    `SearchOptions` according to the handler's [`EmptyFilterPolicy`].
 pub(super) struct ResolvedSearch {
@@ -409,9 +415,14 @@ impl ResolvedSearch {
 
     /// Resolve the AI text-query (SigLIP lazy-load + embedding-index
     /// search) and `similar:` filters. Separate from [`Self::resolve`] on
-    /// purpose: only browse_page and search_api support these filters;
-    /// calling it from calendar/map/ids/facets would change their
-    /// behavior.
+    /// purpose: callers opt in per-endpoint. Everything that mirrors the
+    /// grid's visible result set calls it (browse_page, search_api,
+    /// all_ids_api, page_ids_api, facets_api); calendar_api / map_api
+    /// deliberately don't (see the struct doc).
+    ///
+    /// Each call re-encodes the text query (~tens of ms on CPU); the
+    /// model and embedding index themselves are cached in `AppState`
+    /// after first use.
     ///
     /// The non-AI variant is a no-op so callers don't need cfg blocks.
     #[cfg(feature = "ai")]
