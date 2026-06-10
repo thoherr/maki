@@ -8,6 +8,8 @@ pub mod jobs;
 mod routes;
 mod static_assets;
 pub mod templates;
+#[cfg(test)]
+mod tests;
 
 use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
