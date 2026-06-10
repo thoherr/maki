@@ -490,9 +490,19 @@ pub fn run_delete_command(
             for face_id in face_ids {
                 maki::face_store::delete_arcface_binary(&catalog_root, face_id);
             }
-            // Delete SigLIP embedding binary
-            maki::embedding_store::delete_embedding_binary(&catalog_root, "siglip-vit-b16-256", asset_id);
-            maki::embedding_store::delete_embedding_binary(&catalog_root, "siglip-vit-l16-256", asset_id);
+            // Delete per-asset embedding binaries for every model directory
+            // present on disk (a hardcoded model list here leaked binaries
+            // for newer models — same bug class as the orphan-purge fix).
+            // The arcface dir is keyed by face ID (handled above), so
+            // `<asset_id>.bin` simply doesn't exist there.
+            if let Ok(entries) = std::fs::read_dir(catalog_root.join("embeddings")) {
+                for entry in entries.flatten() {
+                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                        let model = entry.file_name().to_string_lossy().to_string();
+                        maki::embedding_store::delete_embedding_binary(&catalog_root, &model, asset_id);
+                    }
+                }
+            }
         }
         // Update faces/people YAML
         let catalog = maki::catalog::Catalog::open(&catalog_root)?;
