@@ -154,11 +154,15 @@ impl Trash {
                 let volume_label = vol_entry.file_name().to_string_lossy().to_string();
                 let vol_path = vol_entry.path();
                 collect_files(&vol_path, &mut |file: &Path| {
+                    // Forward slashes regardless of platform: the restore
+                    // key format is `<date>/<volume>/<relative-path>` and
+                    // `restore` parses it on '/'. (Windows produces
+                    // backslashes from strip_prefix otherwise.)
                     let relative_path = file
                         .strip_prefix(&vol_path)
                         .unwrap_or(file)
                         .to_string_lossy()
-                        .to_string();
+                        .replace('\\', "/");
                     let size = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
                     entries.push(TrashEntry {
                         date: date.clone(),
