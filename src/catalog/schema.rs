@@ -245,6 +245,86 @@ impl Catalog {
             );
         }
 
+        // ── v8 → v9: FTS5 free-text index ──
+        if current < 9 {
+            // Full-text index over name / best-variant filename /
+            // description / best-variant source metadata — the same four
+            // columns the free-text LIKE filter scanned. The TRIGRAM
+            // tokenizer gives index-accelerated SUBSTRING matching, so
+            // user-visible semantics stay identical to LIKE `%text%`
+            // (case-insensitive, mid-word matches like "91_47" in
+            // "Z91_4714"); queries shorter than 3 chars fall back to the
+            // LIKE path in `add_text_filters`.
+            //
+            // Maintenance is by TRIGGER, not by write-path discipline —
+            // a new write path can't forget the index. The assets-table
+            // triggers re-derive the row on every insert/update (the
+            // best-variant columns refresh automatically because
+            // `best_variant_hash` lives on the assets row); the variants
+            // triggers cover the import ordering where the variant row
+            // lands after the asset upsert.
+            let _ = self.conn.execute_batch(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS assets_fts USING fts5( \
+                   asset_id UNINDEXED, name, filename, description, metadata, \
+                   tokenize='trigram' \
+                 );
+                 CREATE TRIGGER IF NOT EXISTS assets_fts_asset_insert AFTER INSERT ON assets BEGIN \
+                   DELETE FROM assets_fts WHERE asset_id = new.id; \
+                   INSERT INTO assets_fts(asset_id, name, filename, description, metadata) \
+                   VALUES (new.id, IFNULL(new.name,''), \
+                           IFNULL((SELECT original_filename FROM variants WHERE content_hash = new.best_variant_hash), ''), \
+                           IFNULL(new.description,''), \
+                           IFNULL((SELECT source_metadata FROM variants WHERE content_hash = new.best_variant_hash), '')); \
+                 END;
+                 CREATE TRIGGER IF NOT EXISTS assets_fts_asset_update AFTER UPDATE ON assets BEGIN \
+                   DELETE FROM assets_fts WHERE asset_id = old.id; \
+                   INSERT INTO assets_fts(asset_id, name, filename, description, metadata) \
+                   VALUES (new.id, IFNULL(new.name,''), \
+                           IFNULL((SELECT original_filename FROM variants WHERE content_hash = new.best_variant_hash), ''), \
+                           IFNULL(new.description,''), \
+                           IFNULL((SELECT source_metadata FROM variants WHERE content_hash = new.best_variant_hash), '')); \
+                 END;
+                 CREATE TRIGGER IF NOT EXISTS assets_fts_asset_delete AFTER DELETE ON assets BEGIN \
+                   DELETE FROM assets_fts WHERE asset_id = old.id; \
+                 END;
+                 CREATE TRIGGER IF NOT EXISTS assets_fts_variant_insert AFTER INSERT ON variants BEGIN \
+                   DELETE FROM assets_fts WHERE asset_id = new.asset_id; \
+                   INSERT INTO assets_fts(asset_id, name, filename, description, metadata) \
+                   SELECT a.id, IFNULL(a.name,''), \
+                          IFNULL((SELECT original_filename FROM variants WHERE content_hash = a.best_variant_hash), ''), \
+                          IFNULL(a.description,''), \
+                          IFNULL((SELECT source_metadata FROM variants WHERE content_hash = a.best_variant_hash), '') \
+                   FROM assets a WHERE a.id = new.asset_id; \
+                 END;
+                 CREATE TRIGGER IF NOT EXISTS assets_fts_variant_update AFTER UPDATE ON variants BEGIN \
+                   DELETE FROM assets_fts WHERE asset_id = new.asset_id; \
+                   INSERT INTO assets_fts(asset_id, name, filename, description, metadata) \
+                   SELECT a.id, IFNULL(a.name,''), \
+                          IFNULL((SELECT original_filename FROM variants WHERE content_hash = a.best_variant_hash), ''), \
+                          IFNULL(a.description,''), \
+                          IFNULL((SELECT source_metadata FROM variants WHERE content_hash = a.best_variant_hash), '') \
+                   FROM assets a WHERE a.id = new.asset_id; \
+                 END;
+                 CREATE TRIGGER IF NOT EXISTS assets_fts_variant_delete AFTER DELETE ON variants BEGIN \
+                   DELETE FROM assets_fts WHERE asset_id = old.asset_id; \
+                   INSERT INTO assets_fts(asset_id, name, filename, description, metadata) \
+                   SELECT a.id, IFNULL(a.name,''), \
+                          IFNULL((SELECT original_filename FROM variants WHERE content_hash = a.best_variant_hash), ''), \
+                          IFNULL(a.description,''), \
+                          IFNULL((SELECT source_metadata FROM variants WHERE content_hash = a.best_variant_hash), '') \
+                   FROM assets a WHERE a.id = old.asset_id; \
+                 END;",
+            );
+            // Backfill (idempotent: clear first, then rebuild from base tables).
+            let _ = self.conn.execute_batch(
+                "DELETE FROM assets_fts;
+                 INSERT INTO assets_fts(asset_id, name, filename, description, metadata) \
+                 SELECT a.id, IFNULL(a.name,''), IFNULL(v.original_filename,''), \
+                        IFNULL(a.description,''), IFNULL(v.source_metadata,'') \
+                 FROM assets a LEFT JOIN variants v ON v.content_hash = a.best_variant_hash;",
+            );
+        }
+
         // Stamp the new schema version
         let _ = self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);

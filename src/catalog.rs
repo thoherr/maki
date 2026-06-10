@@ -687,7 +687,7 @@ fn next_date_bound(s: &str) -> String {
 }
 
 /// Current schema version. Bump this whenever `run_migrations()` changes.
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 
 // ═══ CATALOG STRUCT & CONNECTION ═══
 
@@ -909,6 +909,7 @@ mod tests {
             .prepare(
                 "SELECT name FROM sqlite_master \
                  WHERE type='table' AND name NOT LIKE 'sqlite_%' \
+                 AND name NOT LIKE 'assets_fts%' \
                  ORDER BY name",
             )
             .unwrap()
@@ -917,12 +918,25 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
 
-        // With --features ai, face detection adds 'faces' and 'people' tables
+        // With --features ai, face detection adds 'faces' and 'people' tables.
+        // The assets_fts FTS5 virtual table and its shadow tables are
+        // filtered out above (their internal layout is SQLite's business);
+        // its presence is asserted separately.
         #[cfg(feature = "ai")]
         let expected = vec!["assets", "collection_assets", "collections", "embeddings", "faces", "file_locations", "people", "recipes", "schema_version", "stacks", "variants", "volumes"];
         #[cfg(not(feature = "ai"))]
         let expected = vec!["assets", "collection_assets", "collections", "embeddings", "file_locations", "recipes", "schema_version", "stacks", "variants", "volumes"];
         assert_eq!(tables, expected);
+
+        let fts_exists: i64 = catalog
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assets_fts'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_exists, 1, "assets_fts virtual table must exist");
     }
 
     #[test]
@@ -3816,6 +3830,115 @@ mod tests {
         let results = catalog.search_paginated(&opts).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].original_filename, "DSCF0001.RAF");
+    }
+
+    #[test]
+    fn search_text_fts_substring_matches_mid_word() {
+        // The FTS5 trigram path must keep LIKE's substring semantics:
+        // mid-word fragments and fragments spanning separators match.
+        let catalog = setup_search_catalog();
+
+        for needle in ["unse", "nset_bea", "ach.jp"] {
+            let opts = SearchOptions {
+                text: Some(needle),
+                per_page: u32::MAX,
+                ..Default::default()
+            };
+            let results = catalog.search_paginated(&opts).unwrap();
+            assert_eq!(results.len(), 1, "substring '{needle}' must match");
+            assert_eq!(results[0].original_filename, "sunset_beach.jpg");
+        }
+    }
+
+    #[test]
+    fn search_text_fts_is_case_insensitive() {
+        let catalog = setup_search_catalog();
+        let opts = SearchOptions {
+            text: Some("SUNSET"),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        assert_eq!(catalog.search_paginated(&opts).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn search_text_fts_follows_updates() {
+        // Trigger-maintained index: renaming an asset must be reflected
+        // without any explicit FTS maintenance call.
+        let catalog = setup_search_catalog();
+        let opts = SearchOptions {
+            text: Some("freshly-renamed"),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        assert_eq!(catalog.search_paginated(&opts).unwrap().len(), 0);
+
+        let id: String = catalog
+            .conn
+            .query_row("SELECT id FROM assets LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        catalog
+            .conn
+            .execute(
+                "UPDATE assets SET name = 'freshly-renamed asset' WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .unwrap();
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), 1, "FTS must follow the rename via trigger");
+    }
+
+    #[test]
+    fn search_text_exclude_uses_fts() {
+        let catalog = setup_search_catalog();
+        // Excluding "sunset" must drop the sunset asset but keep others.
+        let all = catalog
+            .search_paginated(&SearchOptions { per_page: u32::MAX, ..Default::default() })
+            .unwrap()
+            .len();
+        let exclude = vec!["sunset".to_string()];
+        let opts = SearchOptions {
+            text_exclude: &exclude,
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert_eq!(results.len(), all - 1);
+        assert!(results.iter().all(|r| r.original_filename != "sunset_beach.jpg"));
+    }
+
+    #[test]
+    fn search_text_short_terms_fall_back_to_like() {
+        // Terms under 3 chars can't use the trigram index — the LIKE
+        // fallback must still find them.
+        let catalog = setup_search_catalog();
+        let opts = SearchOptions {
+            text: Some("su"),
+            per_page: u32::MAX,
+            ..Default::default()
+        };
+        let results = catalog.search_paginated(&opts).unwrap();
+        assert!(
+            results.iter().any(|r| r.original_filename == "sunset_beach.jpg"),
+            "2-char term must match via LIKE fallback"
+        );
+    }
+
+    #[test]
+    fn search_text_fts_quotes_are_literal() {
+        // User input must be treated as a substring, never FTS5 query
+        // syntax — operators and quotes can't error or change semantics.
+        let catalog = setup_search_catalog();
+        for hostile in ["a AND b", "name:x", "\"quoted\"", "x OR"] {
+            let opts = SearchOptions {
+                text: Some(hostile),
+                per_page: u32::MAX,
+                ..Default::default()
+            };
+            // Must not error; matches nothing in the fixture.
+            let results = catalog.search_paginated(&opts).unwrap();
+            assert!(results.is_empty(), "'{hostile}' should match nothing");
+        }
     }
 
     #[test]

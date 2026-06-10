@@ -703,17 +703,36 @@ impl Catalog {
     }
 
     /// Free-text filter on `name`, `original_filename`, `description`,
-    /// `source_metadata`. Negative terms wrap the same disjunction in `NOT (...)`
-    /// with `IFNULL` to coalesce nullable columns (NULL LIKE returns NULL,
-    /// which would make NOT(...) undefined).
+    /// `source_metadata`.
+    ///
+    /// Terms of 3+ characters go through the `assets_fts` FTS5 index
+    /// (trigram tokenizer → index-accelerated case-insensitive SUBSTRING
+    /// matching, semantically identical to the old `LIKE %text%` scan).
+    /// Shorter terms keep the LIKE scan — the trigram tokenizer needs at
+    /// least 3 characters to match. Negative terms wrap the same logic
+    /// in `NOT IN` / `NOT (...)` with `IFNULL` to coalesce nullable
+    /// columns (NULL LIKE returns NULL, which would make NOT(...)
+    /// undefined).
     fn add_text_filters(
         clauses: &mut Vec<String>,
         params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
         text: Option<&str>,
         text_exclude: &[String],
     ) {
+        // Quote as an FTS5 string literal so user input is a plain
+        // substring, never query syntax (AND/OR/NEAR/columns).
+        fn fts_literal(text: &str) -> String {
+            format!("\"{}\"", text.replace('"', "\"\""))
+        }
+
         if let Some(text) = text {
-            if !text.is_empty() {
+            if text.chars().count() >= 3 {
+                clauses.push(
+                    "a.id IN (SELECT asset_id FROM assets_fts WHERE assets_fts MATCH ?)"
+                        .to_string(),
+                );
+                params.push(Box::new(fts_literal(text)));
+            } else if !text.is_empty() {
                 clauses.push(
                     "(a.name LIKE ? OR bv.original_filename LIKE ? OR a.description LIKE ? OR bv.source_metadata LIKE ?)".to_string(),
                 );
@@ -725,14 +744,22 @@ impl Catalog {
             }
         }
         for term in text_exclude {
-            clauses.push(
-                "NOT (IFNULL(a.name,'') LIKE ? OR bv.original_filename LIKE ? OR IFNULL(a.description,'') LIKE ? OR bv.source_metadata LIKE ?)".to_string(),
-            );
-            let pattern = format!("%{term}%");
-            params.push(Box::new(pattern.clone()));
-            params.push(Box::new(pattern.clone()));
-            params.push(Box::new(pattern.clone()));
-            params.push(Box::new(pattern));
+            if term.chars().count() >= 3 {
+                clauses.push(
+                    "a.id NOT IN (SELECT asset_id FROM assets_fts WHERE assets_fts MATCH ?)"
+                        .to_string(),
+                );
+                params.push(Box::new(fts_literal(term)));
+            } else {
+                clauses.push(
+                    "NOT (IFNULL(a.name,'') LIKE ? OR bv.original_filename LIKE ? OR IFNULL(a.description,'') LIKE ? OR bv.source_metadata LIKE ?)".to_string(),
+                );
+                let pattern = format!("%{term}%");
+                params.push(Box::new(pattern.clone()));
+                params.push(Box::new(pattern.clone()));
+                params.push(Box::new(pattern.clone()));
+                params.push(Box::new(pattern));
+            }
         }
     }
 
