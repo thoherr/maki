@@ -648,7 +648,11 @@ pub fn update_label(path: &Path, label: Option<&str>) -> Result<bool> {
 
 /// Apply a label update to an XMP string, returning the modified string.
 fn update_label_in_string(content: &str, label: Option<&str>) -> String {
-    let label_str = label.unwrap_or("");
+    // Escape ONCE here — the raw label may contain XML-special
+    // characters (`R&D`, `19" rack`); injecting it verbatim into the
+    // attribute/element corrupted the document (property-test finding).
+    let label_escaped = label.map(|l| xml_escape(l)).unwrap_or_default();
+    let label_str = label_escaped.as_str();
 
     // Try attribute form: xmp:Label="..."
     let attr_re = Regex::new(r#"\s*xmp:Label="[^"]*""#).unwrap();
@@ -698,10 +702,17 @@ fn update_label_in_string(content: &str, label: Option<&str>) -> String {
 }
 
 /// Escape special XML characters in a string.
+/// Escape text for embedding in XML. Covers both element text and
+/// ATTRIBUTE values — `"` must be encoded because several fields
+/// (`xmp:Label`, `xmp:Rating`) are written as double-quoted attributes;
+/// an unescaped quote there truncates the attribute and corrupts the
+/// whole document (found by the property tests: a label like `19" rack`
+/// made `extract` lose every field in the file).
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Decode XML entity references that `xml_escape` would have produced,
@@ -913,7 +924,15 @@ fn handle_open_tag(
         b"Description" => {
             for attr in e.attributes().flatten() {
                 let key = local_name(attr.key.as_ref());
-                let val = String::from_utf8_lossy(&attr.value).to_string();
+                // Decode entity references — attribute values arrive raw
+                // from quick-xml, and labels can legitimately contain
+                // escaped quotes/ampersands (`19&quot; rack`, `R&amp;D`).
+                // Reading them undecoded breaks the write→read round
+                // trip (property-test finding).
+                let val = attr
+                    .unescape_value()
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|_| String::from_utf8_lossy(&attr.value).to_string());
                 match key.as_slice() {
                     b"Rating" => {
                         if !val.is_empty() && val != "0" {

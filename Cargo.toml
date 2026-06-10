@@ -55,3 +55,5 @@ sha2 = "0.10"
 # Web-layer test harness: drive the axum Router in-process (no socket)
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+# Property-based round-trip tests for the XMP reader/writer
+proptest = "1"
