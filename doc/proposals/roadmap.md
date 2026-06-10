@@ -18,7 +18,7 @@ sidecar write locking. Horizon 2 (v4.7–4.8): XMP writer rework (gates
 the Tier-1 IPTC/EXIF write-back below), tag provenance, FTS5, unified
 search pipeline. See `doc/proposals/roadmap-v4.6-horizons.md`.
 
-**Status:** Active — Horizon 1 in progress.
+**Status:** Active — Horizon 1 implemented on main (June 2026, unreleased): select-all/text-query fix, web test harness, `serve --read-only` + basic auth, trash + `maki trash`, `maki doctor`, sidecar write locking. Horizon 2 is next.
 
 **Complexity:** Per-item, see the document.
 
