@@ -2,6 +2,158 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.6.0 (2026-06-11)
+
+Trust-hardening release — Horizon 1 of the v4.6 roadmap
+(`doc/proposals/roadmap-v4.6-horizons.md`), preceded by a QA-driven
+refactor wave. The theme: harden what users trust MAKI with — their
+files and their metadata. Two new top-level commands (`maki doctor`,
+`maki trash`), a real trust boundary for `maki serve`, recoverable
+deletes, crash-safe sidecar writes, and the web layer's first
+automated test suite.
+
+Tests: 854 + 254 standard, 971 + 288 pro (up from 822 + 252 /
+942 + 286 at v4.5.17).
+
+### New: maki doctor — consistency checker
+
+The YAML sidecars are the source of truth; the SQLite catalog is a
+derived cache. Every write path is supposed to update both — that
+invariant was enforced purely by convention, and the v4.5.15
+`insert_recipe` bug showed how silently it can break. `maki doctor`
+makes it verifiable:
+
+- **Checks per asset**: presence both ways (sidecars without catalog
+  rows, phantom rows without sidecars, unreadable sidecars), all
+  metadata fields, the denormalized columns (recomputed with the same
+  helpers the write path uses), variant/file-location sets, and the
+  recipe set including per-recipe `content_hash` and
+  `pending_writeback` — the exact v4.5.15 divergence class.
+- **`--repair`** rebuilds the SQLite side from YAML for flagged
+  assets (faces, embeddings, collections/stacks preserved) and
+  deletes phantom rows. Sidecars are never edited.
+- **`--sample N`** spot-checks ~N evenly spaced assets on large
+  catalogs; presence checks always cover everything. `--json`,
+  `--log` supported. Disk-hash verification remains `maki verify`'s
+  job.
+
+### New: trash / quarantine for destructive operations
+
+File-deleting operations were permanent everywhere; a mistaken batch
+delete had no recovery path short of backups.
+
+- `maki delete --remove-files`, `maki dedup`, and the web duplicates
+  page now move files into `<catalog>/.trash/<date>/<volume>/<path>`
+  instead of unlinking them. Cross-device disposal (media volume →
+  catalog volume) falls back to copy+delete.
+- **`maki trash list`** shows every trashed file with its restore
+  key; **`maki trash restore`** moves a file back to its original
+  volume location (re-register with `maki import`/`maki refresh`);
+  **`maki trash empty [--older-than D | --all] [--dry-run]`** purges,
+  defaulting to the `[trash] retention_days` cutoff (30).
+- Config: `[trash] enabled = true` / `retention_days = 30`; per-run
+  `--no-trash` on delete and dedup deletes permanently (the escape
+  hatch when freeing space is the point).
+- Derived files (previews, embedding binaries, face crops) are never
+  trashed — they are regenerable.
+
+### New: serve --read-only and HTTP basic auth
+
+`maki serve` previously had no trust boundary: `--bind 0.0.0.0`
+exposed every write endpoint — including file-deleting ones — to the
+LAN with no authentication.
+
+- **`--read-only`** (or `[serve] read_only = true`): every mutating
+  request is rejected with 403. Enforcement is by HTTP method
+  (non-GET/HEAD), so it covers every current and future write
+  endpoint by construction. `/api/build-info` reports the flag so the
+  UI can adapt. Use case: "show photos to clients on the iPad".
+- **Basic auth** via `[serve] username` + `password`, enforced on
+  every route (pages, API, previews, static); the
+  `MAKI_SERVE_PASSWORD` environment variable overrides the config
+  password so it can stay out of maki.toml. Credential comparison via
+  SHA-256 digests.
+- Startup now warns loudly when binding to a non-loopback address
+  with neither protection enabled.
+
+### Sidecar write safety
+
+- `MetadataStore::save` writes atomically (temp file + rename) — a
+  crash mid-write or a concurrent reader can no longer produce/see a
+  truncated sidecar.
+- A cross-process advisory write lock (`metadata/.write.lock`)
+  serializes sidecar writes between concurrent maki processes
+  (`maki serve` + CLI is the common case). Held per-operation, so a
+  long import doesn't block web edits. Known limit: whole
+  load-modify-save sequences are not serialized — concurrent edits of
+  the same asset resolve last-writer-wins.
+
+### Web fixes
+
+- **Select-all honors text/similarity search.** `/api/all-ids` and
+  `/api/page-ids` (select-all-matching, lightbox/keyboard navigation)
+  skipped the AI filter pipeline — select-all on a `text:` or
+  `similar:` search seeded the batch toolbar with the UNFILTERED
+  result set, so a follow-up batch tag/rate/delete hit assets the
+  grid never showed. Both endpoints (and `/api/facets`, so dropdown
+  counts match the visible results) now resolve the AI filters;
+  page-ids mirrors the single-page similarity view including score
+  ordering. Calendar/map deliberately remain without text/similar
+  support.
+- **First automated web tests.** New in-process axum harness drives
+  the real router via `tower::oneshot` (no socket, ~0.2 s for the
+  suite). 18 tests lock the mutation contracts: status codes,
+  fragment rendering, the `pending-changed` HX-Trigger header, the
+  dual-store write (YAML + SQLite), and the new read-only/auth guard
+  matrix.
+
+### Bug fixes
+
+- **siglip2 embedding binaries leaked on delete and orphan purge.**
+  Both the orphaned-asset purge (cleanup/volume-remove) and
+  `maki delete`'s AI cleanup hardcoded the original two SigLIP model
+  names, so per-asset binaries of the newer
+  `siglip2-base-256-multi` / `siglip2-large-256-multi` models
+  survived deletion. All sites now enumerate the `embeddings/`
+  directory at runtime, so future models can't reintroduce the leak.
+
+### Internal: QA refactor wave
+
+A code-quality pass (DRY/SRP/doc audits) preceding the feature work;
+no behavior changes except where noted above. Highlights:
+
+- The four near-identical XMP field write-back loops (rating, tags,
+  description, label — the code region behind the v4.5.14–17 escape
+  bug train) consolidated into one generic engine in the new
+  `query/writeback.rs`; future fixes apply once instead of four
+  times.
+- `src/commands.rs` (7.3 kLOC flat file) split into `src/commands/`
+  with one submodule per command family; rebuild-catalog's raw
+  `face_count` SQL moved behind catalog methods.
+- The orphaned-asset purge deduplicated between cleanup and
+  volume-remove; the web layer's copy-pasted spawn_blocking triple
+  matches (40 handlers), job-launch skeletons (8 endpoints), and
+  search-enrichment blocks (7 handlers) each consolidated behind one
+  helper. Net effect of the wave: ~750 lines removed with test
+  parity.
+- Documentation: stale `doc/specification.md` writeback entry fixed,
+  command inventory corrected, `AppState::new`/`serve` parameter
+  groups documented, `insert_asset`'s variants-first invariant
+  documented, `component-specification.md` stamped with an as-of
+  banner.
+
+### Operator notes
+
+- After upgrading, `maki doctor` is the recommended first run on an
+  existing catalog — it reports (and `--repair` fixes) any
+  YAML↔SQLite drift accumulated under earlier versions.
+- Deletes now land in `<catalog>/.trash/` by default. If you rely on
+  `delete`/`dedup` to free disk space immediately, pass `--no-trash`
+  or set `[trash] enabled = false`.
+- If you expose the web UI beyond localhost, add `--read-only` or
+  `[serve] username`/`password` — the server now warns at startup if
+  you don't.
+
 ## v4.5.17 (2026-05-20)
 
 Workflow-driven release. Two threads:

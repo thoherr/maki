@@ -2,7 +2,7 @@
 
 Living document tracking planned enhancements. Previous proposals (all implemented or deferred) are in `archive/`. Active proposals are in `doc/proposals/`.
 
-Current version: **v4.5.17** (2026-05-20)
+Current version: **v4.6.0** (2026-06-11)
 
 ---
 
