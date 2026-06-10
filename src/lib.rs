@@ -54,6 +54,7 @@ pub mod config;
 pub mod contact_sheet;
 pub mod content_store;
 pub mod device_registry;
+pub mod doctor;
 pub mod embedded_xmp;
 pub mod exif_reader;
 pub mod format;

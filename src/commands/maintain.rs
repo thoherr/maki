@@ -1516,3 +1516,85 @@ pub fn run_trash_command(cmd: TrashCommands, json: bool) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+/// Extracted body of `Commands::Doctor`. See `run_import_command` for the
+/// extraction pattern.
+pub fn run_doctor_command(
+    sample: Option<usize>,
+    repair: bool,
+    json: bool,
+    log: bool,
+) -> anyhow::Result<()> {
+    let (catalog_root, _config) = maki::config::load_config()?;
+
+    let report = maki::doctor::run_doctor(&catalog_root, sample, repair, |asset_id, issue| {
+        if log {
+            let short_id = &asset_id[..8.min(asset_id.len())];
+            eprintln!("  {short_id} — {issue}");
+        }
+    })?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    let scope = if report.sampled {
+        format!(
+            "{} of {} assets checked (sampled)",
+            report.assets_checked, report.sidecars_total
+        )
+    } else {
+        format!("{} assets checked", report.assets_checked)
+    };
+
+    if report.healthy() {
+        println!("Doctor: no issues found — {scope}.");
+        return Ok(());
+    }
+
+    println!("Doctor: {} issue(s) found — {scope}.", report.issues());
+    if !report.missing_in_catalog.is_empty() {
+        println!(
+            "  {} sidecar(s) without a catalog row",
+            report.missing_in_catalog.len()
+        );
+    }
+    if !report.missing_sidecar.is_empty() {
+        println!(
+            "  {} catalog row(s) without a sidecar (phantom rows)",
+            report.missing_sidecar.len()
+        );
+    }
+    if !report.unreadable_sidecars.is_empty() {
+        println!(
+            "  {} unreadable sidecar file(s)",
+            report.unreadable_sidecars.len()
+        );
+    }
+    if !report.mismatched.is_empty() {
+        println!("  {} asset(s) with field mismatches:", report.mismatched.len());
+        // Aggregate by field so the summary reads as "what kind of drift"
+        // rather than a per-asset wall of text (use --log for per-asset).
+        let mut by_field: std::collections::BTreeMap<&str, usize> =
+            std::collections::BTreeMap::new();
+        for m in &report.mismatched {
+            for f in &m.fields {
+                *by_field.entry(f.as_str()).or_default() += 1;
+            }
+        }
+        for (field, count) in by_field {
+            println!("    {field}: {count}");
+        }
+    }
+
+    if repair {
+        println!("Repaired {} asset(s) from YAML sidecars.", report.repaired);
+        if !report.unreadable_sidecars.is_empty() {
+            println!("  Unreadable sidecars were NOT touched — inspect them manually.");
+        }
+    } else {
+        println!("Run `maki doctor --repair` to rebuild the SQLite side from the YAML sidecars.");
+    }
+    Ok(())
+}

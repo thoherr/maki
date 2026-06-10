@@ -23,6 +23,65 @@ Commands for integrity checks, disk reconciliation, metadata sync, file relocati
 
 ---
 
+## maki doctor
+
+### NAME
+
+maki-doctor -- check YAML-sidecar ↔ SQLite-catalog consistency
+
+### SYNOPSIS
+
+```
+maki [GLOBAL FLAGS] doctor [--sample N] [--repair]
+```
+
+### DESCRIPTION
+
+The YAML sidecars under `metadata/` are the source of truth; the
+SQLite catalog is a derived cache. Every write path is supposed to
+update both — `doctor` verifies that it actually happened, and can
+repair the catalog when it didn't.
+
+Checked per asset:
+
+- **Presence both ways** — sidecars without a catalog row, catalog
+  rows without a sidecar (phantom rows), unreadable sidecar files.
+- **Metadata fields** — name, date, type, tags, description, rating,
+  color label, preview rotation/variant.
+- **Denormalized columns** — `best_variant_hash`,
+  `primary_variant_format`, `variant_count`, `leaf_tag_count`,
+  recomputed from the sidecar with the same helpers the write path
+  uses.
+- **Variant, file-location, and recipe sets** — including each
+  recipe's `content_hash` and `pending_writeback` flag (the exact
+  divergence class behind the v4.5.15 stale-pending bug).
+- **face_count** against the faces table.
+
+`--repair` rebuilds the SQLite side from YAML for every flagged
+asset (faces, embeddings, and collection/stack memberships are
+preserved) and deletes phantom rows. Repair never edits sidecars.
+
+`--sample N` limits the field-by-field comparison to ~N evenly
+spaced assets for a fast probabilistic check on large catalogs; the
+presence checks always cover everything.
+
+With `--log`, each finding is printed per asset; the default summary
+aggregates mismatches by field. `--json` emits the full report.
+
+### NOTES
+
+Doctor checks **store consistency**, not disk integrity — verifying
+file content hashes on your volumes is `maki verify`'s job. Run
+doctor after interrupted operations, before major reorganisations, or
+whenever pending-writeback markers look wrong.
+
+### SEE ALSO
+
+[verify](#maki-verify) -- verify file content hashes on disk.
+[rebuild-catalog](#maki-rebuild-catalog) -- full rebuild of the SQLite catalog from sidecars.
+
+---
+
 ## maki verify
 
 ### NAME

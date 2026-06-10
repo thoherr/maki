@@ -766,6 +766,27 @@ enum Commands {
 
     // --- Maintenance ---
 
+    /// Check YAML-sidecar ↔ SQLite-catalog consistency
+    ///
+    /// The YAML sidecars are the source of truth; the SQLite catalog is
+    /// a derived cache. Doctor compares them field-by-field (metadata,
+    /// denormalized columns, variant/location/recipe sets including
+    /// pending-writeback flags) and finds orphans in both directions.
+    /// `--repair` rebuilds the SQLite side from YAML for flagged assets
+    /// and deletes catalog rows that have no sidecar. Disk-file hash
+    /// verification is `maki verify`'s job.
+    #[command(display_order = 39)]
+    Doctor {
+        /// Check only ~N evenly spaced assets (presence checks always
+        /// cover the full catalog)
+        #[arg(long, display_order = 10)]
+        sample: Option<usize>,
+
+        /// Rebuild the SQLite rows from YAML for every flagged asset
+        #[arg(long, display_order = 11)]
+        repair: bool,
+    },
+
     /// Check file integrity
     #[command(display_order = 40)]
     Verify {
@@ -1890,6 +1911,7 @@ Retrieve:
   licenses           Show MAKI license and third-party crate licenses
 
 Maintain:
+  doctor             Check YAML-sidecar ↔ SQLite-catalog consistency
   verify             Check file integrity
   sync               Sync catalog with disk changes (moved/modified/missing files)
   refresh            Re-read metadata from changed sidecar/recipe files{sync_metadata}{writeback}
@@ -2469,6 +2491,9 @@ faces/\n\
             cli.log,
             verbosity,
         ),
+        Commands::Doctor { sample, repair } => {
+            run_doctor_command(sample, repair, cli.json, cli.log)
+        }
         Commands::Verify {
             paths,
             volume,
