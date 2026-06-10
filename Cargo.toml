@@ -26,6 +26,7 @@ toml = "0.8"
 toml_edit = "0.22"
 schemars = { version = "0.8", features = ["uuid1"] }
 glob-match = "0.2"
+fs2 = "0.4"
 unicode-normalization = "0.1"
 rustyline = { version = "15", features = ["derive"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }

@@ -50,12 +50,65 @@ impl MetadataStore {
     }
 
     /// Write/update sidecar YAML for an asset.
+    ///
+    /// Writes are atomic (temp file + rename) and serialized across
+    /// processes via the sidecar write lock — see
+    /// [`Self::acquire_write_lock`].
     pub fn save(&self, asset: &Asset) -> Result<()> {
         let dir = self.shard_dir(asset.id);
         std::fs::create_dir_all(&dir)?;
         let yaml = serde_yaml::to_string(asset)?;
-        std::fs::write(self.sidecar_path(asset.id), yaml)?;
+
+        let _lock = self.acquire_write_lock()?;
+        // Atomic write: temp file + rename, so readers (and crashes mid-
+        // write) never see a truncated sidecar. The temp name is fixed
+        // per asset — safe because the write lock is held.
+        let tmp = dir.join(format!(".{}.tmp", asset.id));
+        std::fs::write(&tmp, yaml)?;
+        std::fs::rename(&tmp, self.sidecar_path(asset.id))?;
         Ok(())
+    }
+
+    /// Acquire the cross-process sidecar write lock
+    /// (`metadata/.write.lock`, advisory flock/LockFileEx via `fs2`).
+    /// Released when the returned handle drops.
+    ///
+    /// This serializes sidecar WRITES between concurrent maki processes
+    /// (`maki serve` + a CLI command is the common case), so two writers
+    /// can't interleave or torn-write files. It deliberately does NOT
+    /// serialize whole load-modify-save sequences — two processes
+    /// editing the same asset simultaneously still resolve
+    /// last-writer-wins (see roadmap-v4.6-horizons.md). Held
+    /// per-operation, not per-process, so a long-running import doesn't
+    /// freeze the web UI's metadata edits.
+    fn acquire_write_lock(&self) -> Result<std::fs::File> {
+        use fs2::FileExt;
+        const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+        std::fs::create_dir_all(&self.metadata_dir)?;
+        let lock_path = self.metadata_dir.join(".write.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)?;
+        let start = std::time::Instant::now();
+        loop {
+            match file.try_lock_exclusive() {
+                Ok(()) => return Ok(file),
+                Err(_) if start.elapsed() < TIMEOUT => {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                Err(e) => {
+                    anyhow::bail!(
+                        "could not acquire the sidecar write lock within {}s \
+                         (another maki process seems stuck holding {}): {e}",
+                        TIMEOUT.as_secs(),
+                        lock_path.display()
+                    );
+                }
+            }
+        }
     }
 
     /// Read sidecar YAML and return the asset.
@@ -80,9 +133,11 @@ impl MetadataStore {
         Ok(asset)
     }
 
-    /// Delete the sidecar YAML file for an asset.
+    /// Delete the sidecar YAML file for an asset. Serialized via the
+    /// same write lock as [`Self::save`].
     pub fn delete(&self, asset_id: Uuid) -> Result<()> {
         let path = self.sidecar_path(asset_id);
+        let _lock = self.acquire_write_lock()?;
         if path.exists() {
             std::fs::remove_file(&path)?;
         }
@@ -292,5 +347,70 @@ mod tests {
         assert_eq!(details.variants[0].content_hash, "sha256:sync1");
         assert_eq!(details.variants[0].locations.len(), 1);
         assert_eq!(details.variants[0].locations[0].relative_path, "photos/photo.jpg");
+    }
+
+    #[test]
+    fn concurrent_saves_produce_intact_sidecars() {
+        // Hammer the write lock: 8 threads saving interleaved assets
+        // (including repeated saves of the SAME asset) through separate
+        // MetadataStore instances. Every resulting sidecar must parse.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        let shared = Asset::new(crate::models::AssetType::Image, "sha256:lock-shared");
+        let shared_id = shared.id;
+
+        let mut handles = Vec::new();
+        for t in 0..8 {
+            let root = root.clone();
+            let shared = shared.clone();
+            handles.push(std::thread::spawn(move || {
+                let store = MetadataStore::new(&root);
+                for i in 0..25 {
+                    // Distinct asset per (thread, iteration)…
+                    let mut a = Asset::new(
+                        crate::models::AssetType::Image,
+                        &format!("sha256:lock-{t}-{i}"),
+                    );
+                    a.name = Some(format!("asset {t}-{i}"));
+                    a.tags = vec![format!("tag{t}"); 50];
+                    store.save(&a).unwrap();
+                    // …plus contention on one shared asset.
+                    let mut s = shared.clone();
+                    s.rating = Some(((t + i) % 5 + 1) as u8);
+                    s.tags = vec![format!("thread{t}-iter{i}"); 80];
+                    store.save(&s).unwrap();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let store = MetadataStore::new(&root);
+        let summaries = store.list().unwrap();
+        assert_eq!(summaries.len(), 8 * 25 + 1, "all sidecars present and parseable");
+        // The shared asset is intact (some thread's version, not a torn mix).
+        let s = store.load(shared_id).unwrap();
+        assert!(s.rating.is_some());
+        assert_eq!(s.tags.len(), 80);
+        let first = s.tags[0].clone();
+        assert!(s.tags.iter().all(|t| *t == first), "tags from a single writer");
+    }
+
+    #[test]
+    fn save_leaves_no_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MetadataStore::new(dir.path());
+        let a = Asset::new(crate::models::AssetType::Image, "sha256:tmpcheck");
+        store.save(&a).unwrap();
+        store.save(&a).unwrap();
+        let shard = dir.path().join("metadata").join(&a.id.to_string()[..2]);
+        let leftovers: Vec<_> = std::fs::read_dir(&shard)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 }
