@@ -174,9 +174,53 @@ Initial fan-out count for L2 transitive neighbors on the stroll page. Controls h
 
 Maximum value for the fan-out slider on the stroll page.
 
+### read_only
+
+- **Type:** boolean
+- **Default:** `false`
+
+Safe-sharing mode: the server rejects every mutating request (metadata
+edits, batch operations, jobs, file-deleting endpoints) with `403
+Forbidden`; browsing, search, previews, and the lightbox keep working.
+Enforcement is by HTTP method (anything other than GET/HEAD is
+rejected), so it covers every current and future write endpoint.
+
+Use this when exposing the catalog to other people or devices, e.g.
+"show photos to clients on the iPad":
+
+```bash
+maki serve --bind 0.0.0.0 --read-only
+```
+
+The `--read-only` flag and the config value are OR-ed — either one
+enables the mode.
+
+### username / password
+
+- **Type:** strings
+- **Default:** unset (no authentication)
+
+HTTP Basic-Auth credentials. Authentication is enforced on **every**
+route (pages, API, previews, static assets) once both values are
+non-empty. The password can also be supplied via the
+`MAKI_SERVE_PASSWORD` environment variable, which takes precedence
+over the config value — useful to keep the password out of
+`maki.toml`:
+
+```toml
+[serve]
+username = "thomas"
+# password via: MAKI_SERVE_PASSWORD=… maki serve
+```
+
+Combine with `read_only` for sharing, or use alone for full-access
+remote use. When binding to a non-loopback address with neither
+`read_only` nor authentication enabled, `maki serve` prints a warning
+at startup.
+
 ### CLI Override
 
-The `--port`, `--bind`, and `--per-page` flags on `maki serve` override the values from `maki.toml`:
+The `--port`, `--bind`, `--per-page`, and `--read-only` flags on `maki serve` override the values from `maki.toml`:
 
 ```bash
 maki serve --port 9090 --bind 0.0.0.0 --per-page 100
@@ -192,6 +236,9 @@ stroll_neighbors_max = 25
 stroll_fanout = 5
 stroll_fanout_max = 10
 stroll_discover_pool = 80
+read_only = false
+# username = "thomas"
+# password = "…"   # prefer MAKI_SERVE_PASSWORD env var
 ```
 
 ---

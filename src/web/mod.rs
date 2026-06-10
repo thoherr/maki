@@ -256,6 +256,16 @@ pub struct AppState {
     /// a Clear pill so the state is visible). Surfaced via
     /// `/api/build-info` and consumed by `browse.html`.
     pub remember_latest_filter: bool,
+    /// Safe-sharing mode: the guard middleware rejects every mutating
+    /// (non-GET/HEAD) request with 403. Effective value is
+    /// `--read-only` OR `[serve] read_only`. Surfaced via
+    /// `/api/build-info` so the UI can hide edit affordances.
+    pub read_only: bool,
+    /// HTTP Basic-Auth credentials, enforced by the guard middleware on
+    /// every route (pages, API, previews, SSE) when set. Loaded from
+    /// `[serve] username` + `[serve] password`, with `MAKI_SERVE_PASSWORD`
+    /// taking precedence over the config password.
+    pub basic_auth: Option<(String, String)>,
     pub vlm_config: crate::config::VlmConfig,
     #[cfg(feature = "ai")]
     pub ai_model: tokio::sync::Mutex<Option<crate::ai::SigLipModel>>,
@@ -309,16 +319,19 @@ impl AppState {
     /// panics if the catalog can't be opened, since the server is useless
     /// without it.
     #[cfg(feature = "ai")]
-    pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, ai_config: AiConfig, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Self {
+    pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, read_only: bool, ai_config: AiConfig, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Self {
         let preview_ext = preview_config.format.extension().to_string();
         let smart_on_demand = preview_config.generate_on_demand;
         let vlm_enabled = cfg!(feature = "pro") && check_vlm_at_startup(&vlm_config);
         let catalog_pool = Arc::new(CatalogPool::new(&catalog_root, 4).expect("Failed to open catalog pool"));
-        // Read slideshow config from disk once at startup; lightbox JS pulls
-        // these via /api/build-info. Loose load (default_filter is already
-        // passed in by caller) avoids growing the new() signature further.
-        let browse_cfg = crate::config::CatalogConfig::load(&catalog_root)
-            .map(|c| c.browse).unwrap_or_default();
+        // Read slideshow/serve config from disk once at startup; lightbox
+        // JS pulls the slideshow values via /api/build-info. Loose load
+        // (default_filter is already passed in by caller) avoids growing
+        // the new() signature further.
+        let cfg = crate::config::CatalogConfig::load(&catalog_root).unwrap_or_default();
+        let browse_cfg = cfg.browse;
+        let read_only = read_only || cfg.serve.read_only;
+        let basic_auth = Self::resolve_basic_auth(&cfg.serve);
         Self {
             catalog_root,
             catalog_pool,
@@ -339,6 +352,8 @@ impl AppState {
             slideshow_seconds: browse_cfg.slideshow_seconds.max(1),
             slideshow_loop: browse_cfg.slideshow_loop,
             remember_latest_filter: browse_cfg.remember_latest_filter,
+            read_only,
+            basic_auth,
             verbosity,
             vlm_enabled,
             vlm_config,
@@ -351,17 +366,36 @@ impl AppState {
         }
     }
 
+    /// Resolve the Basic-Auth credentials from `[serve]` config:
+    /// `MAKI_SERVE_PASSWORD` overrides the config password; auth is only
+    /// enabled when both username and password are non-empty.
+    fn resolve_basic_auth(serve_cfg: &crate::config::ServeConfig) -> Option<(String, String)> {
+        let username = serve_cfg.username.clone().unwrap_or_default();
+        let password = std::env::var("MAKI_SERVE_PASSWORD")
+            .ok()
+            .filter(|p| !p.is_empty())
+            .or_else(|| serve_cfg.password.clone())
+            .unwrap_or_default();
+        if username.is_empty() || password.is_empty() {
+            None
+        } else {
+            Some((username, password))
+        }
+    }
+
     /// Non-AI variant of [`AppState::new`] — identical except `ai_config`
     /// and the lazy AI model/index fields are absent. See the AI variant
     /// for the parameter-group documentation.
     #[cfg(not(feature = "ai"))]
-    pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Self {
+    pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, read_only: bool, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Self {
         let preview_ext = preview_config.format.extension().to_string();
         let smart_on_demand = preview_config.generate_on_demand;
         let vlm_enabled = cfg!(feature = "pro") && check_vlm_at_startup(&vlm_config);
         let catalog_pool = Arc::new(CatalogPool::new(&catalog_root, 4).expect("Failed to open catalog pool"));
-        let browse_cfg = crate::config::CatalogConfig::load(&catalog_root)
-            .map(|c| c.browse).unwrap_or_default();
+        let cfg = crate::config::CatalogConfig::load(&catalog_root).unwrap_or_default();
+        let browse_cfg = cfg.browse;
+        let read_only = read_only || cfg.serve.read_only;
+        let basic_auth = Self::resolve_basic_auth(&cfg.serve);
         Self {
             catalog_root,
             catalog_pool,
@@ -382,6 +416,8 @@ impl AppState {
             slideshow_seconds: browse_cfg.slideshow_seconds.max(1),
             slideshow_loop: browse_cfg.slideshow_loop,
             remember_latest_filter: browse_cfg.remember_latest_filter,
+            read_only,
+            basic_auth,
             verbosity,
             vlm_enabled,
             vlm_config,
@@ -719,7 +755,75 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/smart-preview/{prefix}/{file}", axum::routing::get(routes::serve_smart_preview))
         .route("/video/{hash}", axum::routing::get(routes::serve_video))
         .layer(axum::middleware::from_fn_with_state(state.clone(), log_request))
+        // Outermost layer: auth + read-only run before anything else,
+        // including the static-asset and preview services.
+        .layer(axum::middleware::from_fn_with_state(state.clone(), guard_request))
         .with_state(state)
+}
+
+/// Access-guard middleware: HTTP Basic-Auth (when configured) and
+/// read-only enforcement.
+///
+/// Read-only is enforced by METHOD, not by an endpoint list: every
+/// mutating route in MAKI uses POST/PUT/DELETE and every GET/HEAD route
+/// is side-effect-free, so rejecting non-GET/HEAD is complete by
+/// construction — a newly added write endpoint can't be forgotten.
+async fn guard_request(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::{header, HeaderValue, Method, StatusCode};
+    use axum::response::IntoResponse;
+
+    if let Some((ref user, ref pass)) = state.basic_auth {
+        let expected = format!("Basic {}", base64_encode(format!("{user}:{pass}").as_bytes()));
+        let provided = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        // Compare digests rather than strings so the comparison time
+        // doesn't leak the match-prefix length.
+        use sha2::{Digest, Sha256};
+        if Sha256::digest(provided.as_bytes()) != Sha256::digest(expected.as_bytes()) {
+            let mut resp =
+                (StatusCode::UNAUTHORIZED, "Authentication required").into_response();
+            resp.headers_mut().insert(
+                header::WWW_AUTHENTICATE,
+                HeaderValue::from_static("Basic realm=\"MAKI\", charset=\"UTF-8\""),
+            );
+            return resp;
+        }
+    }
+
+    if state.read_only && req.method() != Method::GET && req.method() != Method::HEAD {
+        return (
+            StatusCode::FORBIDDEN,
+            "This MAKI server runs in read-only mode; metadata edits and jobs are disabled.",
+        )
+            .into_response();
+    }
+
+    next.run(req).await
+}
+
+/// Minimal standard-alphabet base64 encoder (RFC 4648, with padding).
+/// Only used to build the expected `Authorization: Basic …` value —
+/// not worth a crate dependency.
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { ALPHABET[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { ALPHABET[n as usize & 63] as char } else { '=' });
+    }
+    out
 }
 
 async fn log_request(
@@ -797,8 +901,8 @@ fn check_vlm_at_startup(vlm_config: &crate::config::VlmConfig) -> bool {
 /// pool's per-request connections then use `open_fast`), warm the
 /// dropdown caches, and listen on `bind:port` until SIGINT/SIGTERM.
 #[cfg(feature = "ai")]
-pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config: PreviewConfig, log: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, ai_config: AiConfig, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Result<()> {
-    let state = Arc::new(AppState::new(catalog_root, preview_config, log, dedup_prefer, per_page, stroll_neighbors, stroll_neighbors_max, stroll_fanout, stroll_fanout_max, stroll_discover_pool, ai_config, vlm_config, default_filter, verbosity));
+pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config: PreviewConfig, log: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, read_only: bool, ai_config: AiConfig, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Result<()> {
+    let state = Arc::new(AppState::new(catalog_root, preview_config, log, dedup_prefer, per_page, stroll_neighbors, stroll_neighbors_max, stroll_fanout, stroll_fanout_max, stroll_discover_pool, read_only, ai_config, vlm_config, default_filter, verbosity));
 
     // Verify catalog is accessible and warm dropdown caches
     {
@@ -811,6 +915,7 @@ pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config:
         state.dropdown_cache.get_people(&catalog);
     }
 
+    report_access_protection(&state, bind);
     let app = build_router(state);
 
     let addr: SocketAddr = format!("{bind}:{port}").parse()?;
@@ -826,8 +931,8 @@ pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config:
 
 /// Non-AI variant of [`serve`] — identical except `ai_config` is absent.
 #[cfg(not(feature = "ai"))]
-pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config: PreviewConfig, log: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Result<()> {
-    let state = Arc::new(AppState::new(catalog_root, preview_config, log, dedup_prefer, per_page, stroll_neighbors, stroll_neighbors_max, stroll_fanout, stroll_fanout_max, stroll_discover_pool, vlm_config, default_filter, verbosity));
+pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config: PreviewConfig, log: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, read_only: bool, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Result<()> {
+    let state = Arc::new(AppState::new(catalog_root, preview_config, log, dedup_prefer, per_page, stroll_neighbors, stroll_neighbors_max, stroll_fanout, stroll_fanout_max, stroll_discover_pool, read_only, vlm_config, default_filter, verbosity));
 
     // Verify catalog is accessible and warm dropdown caches
     {
@@ -838,6 +943,7 @@ pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config:
         state.dropdown_cache.get_collections(&catalog);
     }
 
+    report_access_protection(&state, bind);
     let app = build_router(state);
 
     let addr: SocketAddr = format!("{bind}:{port}").parse()?;
@@ -849,6 +955,23 @@ pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config:
         .await?;
 
     Ok(())
+}
+
+/// Log the active protection state and warn loudly when the server is
+/// about to expose write access beyond the local machine.
+fn report_access_protection(state: &AppState, bind: &str) {
+    if state.read_only {
+        eprintln!("Read-only mode: metadata edits and jobs are disabled.");
+    }
+    if state.basic_auth.is_some() {
+        eprintln!("Basic authentication: enabled.");
+    }
+    let loopback = matches!(bind, "127.0.0.1" | "localhost" | "::1");
+    if !loopback && !state.read_only && state.basic_auth.is_none() {
+        eprintln!("WARNING: binding to {bind} without --read-only or authentication.");
+        eprintln!("WARNING: anyone who can reach this address can edit metadata and delete files.");
+        eprintln!("WARNING: consider --read-only, or [serve] username/password in maki.toml.");
+    }
 }
 
 async fn shutdown_signal() {

@@ -39,8 +39,18 @@ struct TestServer {
 
 impl TestServer {
     fn new() -> Self {
+        Self::new_with(false, "")
+    }
+
+    /// `read_only` enables safe-sharing mode; a non-empty `maki_toml` is
+    /// written to the catalog root before `AppState` loads config (used
+    /// to exercise the `[serve]` auth settings through the real path).
+    fn new_with(read_only: bool, maki_toml: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
+        if !maki_toml.is_empty() {
+            std::fs::write(root.join("maki.toml"), maki_toml).unwrap();
+        }
 
         let asset_id;
         {
@@ -87,6 +97,7 @@ impl TestServer {
             3,
             9,
             200,
+            read_only,
             crate::config::AiConfig::default(),
             vlm_config,
             None,
@@ -104,6 +115,7 @@ impl TestServer {
             3,
             9,
             200,
+            read_only,
             vlm_config,
             None,
             crate::Verbosity::quiet(),
@@ -365,6 +377,100 @@ async fn all_ids_returns_seeded_asset() {
         .collect();
     assert!(ids.contains(&srv.asset_id), "ids: {ids:?}");
     assert_eq!(json["total"], 1);
+}
+
+// ─── Access guards: read-only mode + basic auth ─────────────────────
+
+#[tokio::test]
+async fn read_only_blocks_mutations_but_allows_reads() {
+    let srv = TestServer::new_with(true, "");
+
+    let (status, _, _) = srv.get("/").await;
+    assert_eq!(status, StatusCode::OK, "reads must work in read-only mode");
+
+    let (status, _, _) = srv
+        .form(Method::PUT, &format!("/api/asset/{}/rating", srv.asset_id), "rating=4")
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _, _) = srv
+        .json(Method::POST, "/api/maintain/writeback", "{}")
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "job launches must be blocked too");
+
+    // Nothing may have changed in either store.
+    let (sidecar, row) = srv.asset_from_both_stores();
+    assert_eq!(sidecar.rating, Some(2), "sidecar untouched");
+    assert_eq!(row.rating, Some(2), "catalog untouched");
+}
+
+#[tokio::test]
+async fn read_only_from_config_file() {
+    let srv = TestServer::new_with(false, "[serve]\nread_only = true\n");
+    let (status, _, _) = srv
+        .form(Method::PUT, &format!("/api/asset/{}/rating", srv.asset_id), "rating=4")
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "[serve] read_only must enforce like the flag");
+}
+
+#[tokio::test]
+async fn basic_auth_gates_every_route() {
+    let srv = TestServer::new_with(
+        false,
+        "[serve]\nusername = \"thomas\"\npassword = \"secret\"\n",
+    );
+
+    // No credentials → 401 with the challenge header, on pages and API alike.
+    for uri in ["/", "/api/all-ids", "/static/style.css"] {
+        let (status, headers, _) = srv.get(uri).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri} must require auth");
+        assert!(
+            headers.get("WWW-Authenticate").is_some(),
+            "{uri} must send the Basic challenge"
+        );
+    }
+
+    // Wrong credentials → 401. base64("thomas:wrong") = dGhvbWFzOndyb25n
+    let router = build_router(srv.state.clone());
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/")
+        .header("authorization", "Basic dGhvbWFzOndyb25n")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // Correct credentials → 200. base64("thomas:secret") = dGhvbWFzOnNlY3JldA==
+    let router = build_router(srv.state.clone());
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/")
+        .header("authorization", "Basic dGhvbWFzOnNlY3JldA==")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn build_info_reports_read_only() {
+    let srv = TestServer::new_with(true, "");
+    let (status, _, body) = srv.get("/api/build-info").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["read_only"], true);
+}
+
+#[test]
+fn base64_encode_matches_known_vectors() {
+    // RFC 4648 test vectors plus the credential shape used by basic auth.
+    assert_eq!(super::base64_encode(b""), "");
+    assert_eq!(super::base64_encode(b"f"), "Zg==");
+    assert_eq!(super::base64_encode(b"fo"), "Zm8=");
+    assert_eq!(super::base64_encode(b"foo"), "Zm9v");
+    assert_eq!(super::base64_encode(b"foobar"), "Zm9vYmFy");
+    assert_eq!(super::base64_encode(b"thomas:secret"), "dGhvbWFzOnNlY3JldA==");
 }
 
 #[tokio::test]

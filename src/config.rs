@@ -103,6 +103,20 @@ pub struct ServeConfig {
     pub stroll_fanout_max: u32,
     #[serde(default = "default_stroll_discover_pool")]
     pub stroll_discover_pool: u32,
+    /// Reject every mutating (non-GET/HEAD) request. Safe-sharing mode
+    /// for exposing the UI to other people or devices. Also settable
+    /// per-run via `maki serve --read-only`.
+    #[serde(default)]
+    pub read_only: bool,
+    /// HTTP Basic-Auth username. Auth is enforced when BOTH username and
+    /// password resolve to non-empty values.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// HTTP Basic-Auth password. Prefer the `MAKI_SERVE_PASSWORD`
+    /// environment variable over storing the password in maki.toml —
+    /// the env var takes precedence when set.
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 fn default_port() -> u16 {
@@ -148,6 +162,9 @@ impl Default for ServeConfig {
             stroll_fanout: 5,
             stroll_fanout_max: 10,
             stroll_discover_pool: 80,
+            read_only: false,
+            username: None,
+            password: None,
         }
     }
 }

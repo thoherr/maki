@@ -260,6 +260,10 @@ pub async fn build_info_api(
         "slideshow_seconds": state.slideshow_seconds,
         "slideshow_loop": state.slideshow_loop,
         "remember_latest_filter": state.remember_latest_filter,
+        // Safe-sharing mode: the JS layer can hide edit affordances when
+        // the server rejects mutations anyway (enforced server-side by
+        // the guard middleware regardless of what the UI shows).
+        "read_only": state.read_only,
     })).into_response()
 }
 

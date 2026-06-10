@@ -747,6 +747,16 @@ enum Commands {
         /// Address to bind to (default: 127.0.0.1, or from maki.toml [serve] bind)
         #[arg(long, display_order = 11)]
         bind: Option<String>,
+
+        /// Safe-sharing mode: reject every metadata edit, job, and
+        /// file-deleting request (all non-GET requests return 403).
+        /// Combine with `--bind` to let other people or devices browse
+        /// the catalog without write access. Can be made permanent via
+        /// `[serve] read_only = true` in maki.toml; HTTP basic auth is
+        /// available via `[serve] username`/`password` (password may
+        /// also come from the MAKI_SERVE_PASSWORD environment variable).
+        #[arg(long, display_order = 12)]
+        read_only: bool,
     },
 
     // --- Maintenance ---
@@ -2661,9 +2671,11 @@ faces/\n\
         Commands::Serve {
             port,
             bind,
+            read_only,
         } => run_serve_command(
             port,
             bind,
+            read_only,
             cli.json,
             cli.log,
             verbosity,
