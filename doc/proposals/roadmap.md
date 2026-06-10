@@ -8,6 +8,20 @@ Current version: **v4.5.17** (2026-05-20)
 
 ## Active Proposals
 
+### v4.6.x ff. Horizons — Trust Hardening & Foundation Rework
+
+The sequenced plan for the post-v4.5.17 cycle, derived from the June
+2026 QA loop and the v4.5.x bug-history analysis. Horizon 1 (v4.6.x):
+select-all/text-query fix, web test harness, `serve --read-only` +
+basic auth, trash/quarantine, `maki doctor` consistency checker,
+sidecar write locking. Horizon 2 (v4.7–4.8): XMP writer rework (gates
+the Tier-1 IPTC/EXIF write-back below), tag provenance, FTS5, unified
+search pipeline. See `doc/proposals/roadmap-v4.6-horizons.md`.
+
+**Status:** Active — Horizon 1 in progress.
+
+**Complexity:** Per-item, see the document.
+
 ### Manual Translation (i18n)
 
 Produce the MAKI user manual in English and German from a single source using inline language markers. See `doc/proposals/manual-i18n.md`.
