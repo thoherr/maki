@@ -9,7 +9,16 @@ use super::*;
 impl Catalog {
     // ═══ ASSET CRUD ═══
 
-    /// Insert an asset into the catalog.
+    /// Insert (or upsert) an asset into the catalog.
+    ///
+    /// **Invariant: `asset.variants` must be populated before calling.**
+    /// The denormalized columns (`best_variant_hash`,
+    /// `primary_variant_format`, `variant_count`, `latitude`/`longitude`,
+    /// `video_duration`/`video_codec`) are computed here from the variant
+    /// list — inserting an asset and filling its variants in afterwards
+    /// leaves them empty/stale. This is the known trap in test setup:
+    /// `setup_search_catalog()` / `setup_metadata_catalog()` populate
+    /// `asset.variants` first for exactly this reason.
     pub fn insert_asset(&self, asset: &Asset) -> Result<()> {
         let tags_json = serde_json::to_string(&asset.tags)?;
         let best_hash = crate::models::variant::compute_best_variant_hash_with_override(

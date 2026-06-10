@@ -1,5 +1,15 @@
 # Component Specification
 
+> **As of: v4.4.x (March 2026).** This document has not been
+> systematically updated for the v4.5.x cycle. Known gaps include the
+> `recipes.pending_writeback` flow (offline-volume tracking +
+> `maki writeback`), the JobRegistry-based web jobs (import dry-run,
+> maintain operations, SSE re-attach), the recipes-fragment endpoint
+> (`GET /api/asset/{id}/recipes-fragment`), and newer denormalized
+> columns (`face_count`, `leaf_tag_count`, `video_duration`/`video_codec`).
+> For current behavior consult `doc/specification.md`, the reference
+> manual under `doc/manual/`, and `CHANGELOG.md`.
+
 ## Data Model
 
 ### Asset

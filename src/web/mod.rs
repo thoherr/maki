@@ -285,6 +285,27 @@ pub struct ImportJobSummary {
 }
 
 impl AppState {
+    /// Build the shared application state for `maki serve`.
+    ///
+    /// All values arrive pre-resolved (maki.toml merged with CLI flags)
+    /// from the serve command. Parameter groups:
+    /// - `catalog_root`, `preview_config`, `verbosity` — catalog location
+    ///   and preview generation settings
+    /// - `log_requests` — per-request stderr logging (`--log`)
+    /// - `dedup_prefer` — `[dedup] prefer` heuristic for auto-resolve on
+    ///   the duplicates page
+    /// - `per_page` — browse results per page (`[serve] per_page`)
+    /// - `stroll_*` — stroll-page tuning (`[serve] stroll_*`); the `_max`
+    ///   values cap what the UI sliders may request
+    /// - `ai_config`, `vlm_config` — `[ai]` / `[vlm]` model and endpoint
+    ///   settings (the VLM endpoint is probed once here; AI models are
+    ///   lazy-loaded on first use)
+    /// - `default_filter` — `[browse] default_filter`, applied when no
+    ///   query is given
+    ///
+    /// Opens the SQLite connection pool (4 pre-opened connections) —
+    /// panics if the catalog can't be opened, since the server is useless
+    /// without it.
     #[cfg(feature = "ai")]
     pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, ai_config: AiConfig, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Self {
         let preview_ext = preview_config.format.extension().to_string();
@@ -328,6 +349,9 @@ impl AppState {
         }
     }
 
+    /// Non-AI variant of [`AppState::new`] — identical except `ai_config`
+    /// and the lazy AI model/index fields are absent. See the AI variant
+    /// for the parameter-group documentation.
     #[cfg(not(feature = "ai"))]
     pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Self {
         let preview_ext = preview_config.format.extension().to_string();
@@ -764,7 +788,12 @@ fn check_vlm_at_startup(vlm_config: &crate::config::VlmConfig) -> bool {
     }
 }
 
-/// Start the web server.
+/// Start the `maki serve` web server: build the [`AppState`] (see
+/// [`AppState::new`] for the parameter groups — `serve` forwards them
+/// verbatim, adding only `bind`/`port`), open the catalog once with
+/// `Catalog::open` (which runs any pending schema migrations — the
+/// pool's per-request connections then use `open_fast`), warm the
+/// dropdown caches, and listen on `bind:port` until SIGINT/SIGTERM.
 #[cfg(feature = "ai")]
 pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config: PreviewConfig, log: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, ai_config: AiConfig, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Result<()> {
     let state = Arc::new(AppState::new(catalog_root, preview_config, log, dedup_prefer, per_page, stroll_neighbors, stroll_neighbors_max, stroll_fanout, stroll_fanout_max, stroll_discover_pool, ai_config, vlm_config, default_filter, verbosity));
@@ -793,7 +822,7 @@ pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config:
     Ok(())
 }
 
-/// Start the web server.
+/// Non-AI variant of [`serve`] — identical except `ai_config` is absent.
 #[cfg(not(feature = "ai"))]
 pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config: PreviewConfig, log: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Result<()> {
     let state = Arc::new(AppState::new(catalog_root, preview_config, log, dedup_prefer, per_page, stroll_neighbors, stroll_neighbors_max, stroll_fanout, stroll_fanout_max, stroll_discover_pool, vlm_config, default_filter, verbosity));
