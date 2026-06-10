@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use askama::Template;
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 
 use crate::cli_output::format_size;
@@ -14,9 +13,9 @@ use crate::web::templates::{AnalyticsPage, BackupPage, FormatGroup, FormatOption
 use crate::web::AppState;
 
 /// GET /api/stats — catalog stats as JSON.
-pub async fn stats_api(State(state): State<Arc<AppState>>) -> Response {
+pub async fn stats_api(State(state): State<Arc<AppState>>) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let stats = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
         let (assets, variants, recipes, total_size, _locs) = catalog.stats_overview()?;
         Ok::<_, anyhow::Error>(serde_json::json!({
@@ -26,19 +25,14 @@ pub async fn stats_api(State(state): State<Arc<AppState>>) -> Response {
             "total_size": total_size,
         }))
     })
-    .await;
-
-    match result {
-        Ok(Ok(stats)) => axum::Json(stats).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(axum::Json(stats).into_response())
 }
 
 /// GET /stats — stats HTML page.
-pub async fn stats_page(State(state): State<Arc<AppState>>) -> Response {
+pub async fn stats_page(State(state): State<Arc<AppState>>) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
         let registry = DeviceRegistry::new(&state.catalog_root);
         let vol_list = registry.list()?;
@@ -58,19 +52,14 @@ pub async fn stats_page(State(state): State<Arc<AppState>>) -> Response {
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 /// GET /analytics — analytics dashboard page.
-pub async fn analytics_page(State(state): State<Arc<AppState>>) -> Response {
+pub async fn analytics_page(State(state): State<Arc<AppState>>) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
         let data = catalog.build_analytics(15)?;
         let tmpl = AnalyticsPage {
@@ -80,19 +69,14 @@ pub async fn analytics_page(State(state): State<Arc<AppState>>) -> Response {
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 /// GET /backup — backup status dashboard.
-pub async fn backup_page(State(state): State<Arc<AppState>>) -> Response {
+pub async fn backup_page(State(state): State<Arc<AppState>>) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
         let registry = DeviceRegistry::new(&state.catalog_root);
         let vol_list = registry.list()?;
@@ -120,13 +104,8 @@ pub async fn backup_page(State(state): State<Arc<AppState>>) -> Response {
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 /// Classify a format extension into a group key.

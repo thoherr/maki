@@ -12,19 +12,14 @@ use crate::web::templates::{SavedSearchEntry, SavedSearchesPage};
 use crate::web::AppState;
 
 /// GET /api/saved-searches — list all saved searches as JSON.
-pub async fn list_saved_searches(State(state): State<Arc<AppState>>) -> Response {
+pub async fn list_saved_searches(State(state): State<Arc<AppState>>) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let searches = super::spawn_catalog_blocking(move || {
         let file = crate::saved_search::load(&state.catalog_root)?;
         Ok::<_, anyhow::Error>(file.searches)
     })
-    .await;
-
-    match result {
-        Ok(Ok(searches)) => Json(searches).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(searches).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -40,9 +35,9 @@ pub struct CreateSavedSearchRequest {
 pub async fn create_saved_search(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateSavedSearchRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let mut file = crate::saved_search::load(&state.catalog_root)?;
         let entry = crate::saved_search::SavedSearch {
             name: req.name.clone(),
@@ -58,13 +53,8 @@ pub async fn create_saved_search(
         crate::saved_search::save(&state.catalog_root, &file)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"status": "saved", "name": req.name}))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// DELETE /api/saved-searches/{name} — delete a saved search.
@@ -99,9 +89,9 @@ pub async fn delete_saved_search(
 }
 
 /// GET /saved-searches — saved searches management page.
-pub async fn saved_searches_page(State(state): State<Arc<AppState>>) -> Response {
+pub async fn saved_searches_page(State(state): State<Arc<AppState>>) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let file = crate::saved_search::load(&state.catalog_root)?;
         let searches: Vec<SavedSearchEntry> = file
             .searches
@@ -121,13 +111,8 @@ pub async fn saved_searches_page(State(state): State<Arc<AppState>>) -> Response
         let tmpl = SavedSearchesPage { searches, ai_enabled: state.ai_enabled, vlm_enabled: state.vlm_enabled };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]

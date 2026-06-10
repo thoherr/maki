@@ -28,9 +28,9 @@ use serde::Deserialize;
 use super::super::AppState;
 
 /// GET /api/config — current values + raw on-disk TOML.
-pub async fn get_config_api(State(state): State<Arc<AppState>>) -> Response {
+pub async fn get_config_api(State(state): State<Arc<AppState>>) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let path = state.catalog_root.join("maki.toml");
         let raw = std::fs::read_to_string(&path).unwrap_or_default();
         let config = crate::config::CatalogConfig::load(&state.catalog_root)
@@ -41,13 +41,8 @@ pub async fn get_config_api(State(state): State<Arc<AppState>>) -> Response {
             "path": path.display().to_string(),
         }))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// GET /api/config/schema — JSON Schema for `CatalogConfig`.

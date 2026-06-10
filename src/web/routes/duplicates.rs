@@ -25,9 +25,9 @@ pub struct DuplicatesParams {
 pub async fn duplicates_page(
     State(state): State<Arc<AppState>>,
     Query(params): Query<DuplicatesParams>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
         let mode = params.mode.as_deref().unwrap_or("all");
 
@@ -96,15 +96,8 @@ pub async fn duplicates_page(
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -121,9 +114,9 @@ pub struct DedupResolveRequest {
 pub async fn dedup_resolve_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DedupResolveRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let dedup = super::spawn_catalog_blocking(move || {
         let service = state.asset_service();
         let min_copies = req.min_copies.unwrap_or(1);
         let dry_run = req.dry_run.unwrap_or(false);
@@ -144,15 +137,8 @@ pub async fn dedup_resolve_api(
         )?;
         Ok::<_, anyhow::Error>(dedup_result)
     })
-    .await;
-
-    match result {
-        Ok(Ok(dedup)) => Json(dedup).into_response(),
-        Ok(Err(e)) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(dedup).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]

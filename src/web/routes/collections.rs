@@ -11,9 +11,9 @@ use axum::Json;
 use crate::web::AppState;
 
 /// GET /collections — collections HTML page.
-pub async fn collections_page(State(state): State<Arc<AppState>>) -> Response {
+pub async fn collections_page(State(state): State<Arc<AppState>>) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
         let col_store = crate::collection::CollectionStore::new(catalog.conn());
         let collections = col_store.list()?;
@@ -24,13 +24,8 @@ pub async fn collections_page(State(state): State<Arc<AppState>>) -> Response {
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -80,21 +75,16 @@ pub async fn create_collection_api(
 }
 
 /// GET /api/collections — list all collections as JSON.
-pub async fn list_collections_api(State(state): State<Arc<AppState>>) -> Response {
+pub async fn list_collections_api(State(state): State<Arc<AppState>>) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let collections = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
         let col_store = crate::collection::CollectionStore::new(catalog.conn());
         let collections = col_store.list()?;
         Ok::<_, anyhow::Error>(collections)
     })
-    .await;
-
-    match result {
-        Ok(Ok(collections)) => Json(collections).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(collections).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -107,9 +97,9 @@ pub struct BatchCollectionRequest {
 pub async fn batch_remove_from_collection(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchCollectionRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
         let col_store = crate::collection::CollectionStore::new(catalog.conn());
         let removed = col_store.remove_assets(&req.collection, &req.asset_ids)?;
@@ -121,22 +111,17 @@ pub async fn batch_remove_from_collection(
             "collection": req.collection,
         }))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// POST /api/batch/collection — add assets to a collection.
 pub async fn batch_add_to_collection(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchCollectionRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
         let col_store = crate::collection::CollectionStore::new(catalog.conn());
         let added = col_store.add_assets(&req.collection, &req.asset_ids)?;
@@ -148,13 +133,8 @@ pub async fn batch_add_to_collection(
             "collection": req.collection,
         }))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 #[derive(serde::Deserialize)]
@@ -166,9 +146,9 @@ pub struct BatchAutoGroupRequest {
 pub async fn batch_auto_group(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchAutoGroupRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let result = engine.auto_group(&req.asset_ids, false)?;
         Ok::<_, anyhow::Error>(serde_json::json!({
@@ -177,13 +157,8 @@ pub async fn batch_auto_group(
             "variants_moved": result.total_variants_moved,
         }))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 #[derive(serde::Deserialize)]
@@ -196,9 +171,9 @@ pub struct BatchGroupRequest {
 pub async fn batch_group(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchGroupRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let result = engine.group_by_asset_ids(&req.asset_ids, req.target_id.as_deref())?;
         Ok::<_, anyhow::Error>(serde_json::json!({
@@ -207,11 +182,6 @@ pub async fn batch_group(
             "donors_removed": result.donors_removed,
         }))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }

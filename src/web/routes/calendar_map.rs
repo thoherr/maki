@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
@@ -34,9 +33,9 @@ pub struct CalendarParams {
 pub async fn calendar_api(
     State(state): State<Arc<AppState>>,
     Query(params): Query<CalendarParams>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
 
         let year = params.year.unwrap_or_else(|| {
@@ -114,15 +113,8 @@ pub async fn calendar_api(
             "years": years,
         }))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -147,9 +139,9 @@ pub struct MapParams {
 pub async fn map_api(
     State(state): State<Arc<AppState>>,
     Query(params): Query<MapParams>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
 
         let limit = params.limit.unwrap_or(10_000);
@@ -240,13 +232,6 @@ pub async fn map_api(
             "truncated": total > limit as u64,
         }))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }

@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use askama::Template;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use axum::{Form, Json};
 
@@ -28,9 +27,9 @@ pub async fn set_rating(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
     Form(form): Form<RatingForm>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let rating = form.rating.filter(|&r| r > 0);
         let new_rating = engine.set_rating(&asset_id, rating)?;
@@ -40,13 +39,8 @@ pub async fn set_rating(
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => with_pending_trigger(html),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(with_pending_trigger(html))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -59,9 +53,9 @@ pub async fn set_description(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
     Form(form): Form<DescriptionForm>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let description = form.description.filter(|s| !s.trim().is_empty());
         let new_desc = engine.set_description(&asset_id, description)?;
@@ -71,13 +65,8 @@ pub async fn set_description(
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => with_pending_trigger(html),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(with_pending_trigger(html))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -90,9 +79,9 @@ pub async fn set_name(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
     Form(form): Form<NameForm>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let name = form.name.filter(|s| !s.trim().is_empty());
         let new_name = engine.set_name(&asset_id, name)?;
@@ -111,13 +100,8 @@ pub async fn set_name(
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => with_pending_trigger(html),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(with_pending_trigger(html))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -130,9 +114,9 @@ pub async fn set_date(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
     Form(form): Form<DateForm>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let dt = crate::query::parse_date_input(&form.date)?;
         let date_str = engine.set_date(&asset_id, dt)?;
@@ -142,13 +126,8 @@ pub async fn set_date(
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 // --- Batch operations ---
@@ -176,11 +155,11 @@ pub struct BatchError {
 pub async fn batch_set_rating(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchRatingRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let log = state.log_requests;
     let count = req.asset_ids.len();
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let batch = super::spawn_catalog_blocking(move || {
         let start = std::time::Instant::now();
         let engine = state.query_engine();
         let rating = req.rating.filter(|&r| r > 0);
@@ -206,23 +185,18 @@ pub async fn batch_set_rating(
             errors,
         })
     })
-    .await;
-
-    match result {
-        Ok(Ok(batch)) => Json(batch).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(batch).into_response())
 }
 
 /// POST /api/asset/{id}/preview — regenerate preview + smart preview.
 pub async fn generate_preview(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let preview_ext = state.preview_ext.clone();
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
         let engine = state.query_engine();
         let details = engine.show(&asset_id)?;
@@ -357,23 +331,18 @@ pub async fn generate_preview(
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 /// POST /api/asset/{id}/rotate — cycle preview rotation 90° CW.
 pub async fn set_rotation(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let preview_ext = state.preview_ext.clone();
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let catalog = state.catalog()?;
 
@@ -488,13 +457,8 @@ pub async fn set_rotation(
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 /// POST /api/asset/{id}/preview-variant — set or clear the preview variant override.
@@ -502,21 +466,16 @@ pub async fn set_preview_variant(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
     Json(body): Json<serde_json::Value>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let content_hash = body.get("content_hash").and_then(|v| v.as_str());
         engine.set_preview_variant(&asset_id, content_hash)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"ok": true}))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// POST /api/asset/{id}/variant-role — change a variant's role.
@@ -524,9 +483,9 @@ pub async fn set_variant_role(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
     Json(body): Json<serde_json::Value>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let content_hash = body.get("content_hash").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing content_hash"))?;
@@ -535,13 +494,8 @@ pub async fn set_variant_role(
         engine.set_variant_role(&asset_id, content_hash, role)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"ok": true, "role": role}))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// GET /api/asset/{id}/recipes-fragment — render the recipes block
@@ -551,9 +505,9 @@ pub async fn set_variant_role(
 pub async fn recipes_fragment(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let details = engine.show(&asset_id)?;
         let registry = DeviceRegistry::new(&state.catalog_root);
@@ -566,22 +520,17 @@ pub async fn recipes_fragment(
         let tmpl = RecipesFragment::from_details(&details, &volume_online);
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 /// POST /api/asset/{id}/reimport-metadata — clear and re-extract metadata from source files.
 pub async fn reimport_metadata(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let tags = engine.reimport_metadata(&asset_id)?;
         state.dropdown_cache.invalidate_tags();
@@ -591,13 +540,8 @@ pub async fn reimport_metadata(
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -610,9 +554,9 @@ pub async fn set_label(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
     Form(form): Form<LabelForm>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let label_str = form.label.filter(|s| !s.trim().is_empty());
         let validated = match label_str {
@@ -629,13 +573,8 @@ pub async fn set_label(
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => with_pending_trigger(html),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(with_pending_trigger(html))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -648,11 +587,11 @@ pub struct BatchLabelRequest {
 pub async fn batch_set_label(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchLabelRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let log = state.log_requests;
     let count = req.asset_ids.len();
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let batch = super::spawn_catalog_blocking(move || {
         let start = std::time::Instant::now();
         let engine = state.query_engine();
         let label_str = req.label.filter(|s| !s.trim().is_empty());
@@ -685,11 +624,6 @@ pub async fn batch_set_label(
             errors,
         })
     })
-    .await;
-
-    match result {
-        Ok(Ok(batch)) => Json(batch).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(batch).into_response())
 }

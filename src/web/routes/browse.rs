@@ -134,11 +134,11 @@ pub async fn browse_page(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SearchParams>,
     headers: HeaderMap,
-) -> Response {
+) -> Result<Response, Response> {
     let is_htmx = headers.get("HX-Request").is_some();
     let preview_ext = state.preview_ext.clone();
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
 
         let bf = build_parsed_search(&params, &state);
@@ -424,20 +424,13 @@ pub async fn browse_page(
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => {
-            let mut resp = Html(html).into_response();
-            resp.headers_mut().insert(
-                axum::http::header::CACHE_CONTROL,
-                axum::http::HeaderValue::from_static("no-store"),
-            );
-            resp
-        }
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    let mut resp = Html(html).into_response();
+    resp.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(resp)
 }
 
 /// GET /api/search — redirects non-htmx requests, returns partial for htmx.
@@ -446,7 +439,7 @@ pub async fn search_api(
     Query(params): Query<SearchParams>,
     headers: HeaderMap,
     uri: Uri,
-) -> Response {
+) -> Result<Response, Response> {
     if headers.get("HX-Request").is_none() {
         let query_string = uri.query().unwrap_or("");
         let redirect_url = if query_string.is_empty() {
@@ -454,12 +447,12 @@ pub async fn search_api(
         } else {
             format!("/?{query_string}")
         };
-        return axum::response::Redirect::to(&redirect_url).into_response();
+        return Ok(axum::response::Redirect::to(&redirect_url).into_response());
     }
 
     let preview_ext = state.preview_ext.clone();
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
 
         let bf = build_parsed_search(&params, &state);
@@ -667,13 +660,8 @@ pub async fn search_api(
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 /// GET /api/all-ids — returns every asset ID matching the current search
@@ -689,9 +677,9 @@ pub async fn search_api(
 pub async fn all_ids_api(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SearchParams>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
 
         let bf = build_parsed_search(&params, &state);
@@ -764,22 +752,17 @@ pub async fn all_ids_api(
             "per_page": per_page,
         }))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// GET /api/page-ids — returns asset IDs for a given page.
 pub async fn page_ids_api(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SearchParams>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
 
         let bf = build_parsed_search(&params, &state);
@@ -851,13 +834,8 @@ pub async fn page_ids_api(
             "total_pages": total_pages,
         }))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1023,9 +1001,9 @@ pub struct FacetParams {
 pub async fn facets_api(
     State(state): State<Arc<AppState>>,
     Query(params): Query<FacetParams>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
 
         let search_params = SearchParams {
@@ -1094,13 +1072,8 @@ pub async fn facets_api(
         let facets = catalog.facet_counts(&opts)?;
         Ok::<_, anyhow::Error>(serde_json::json!(facets))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 // ─── Path autocomplete ──────────────────────────────────────────────
@@ -1131,9 +1104,9 @@ pub struct PathsParams {
 pub async fn paths_api(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PathsParams>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let raw_prefix = params.q.unwrap_or_default();
         // Wildcard short-circuit: the filter handles `*` patterns on the
         // server, and autocomplete would be nonsensical for them.
@@ -1190,13 +1163,8 @@ pub async fn paths_api(
 
         Ok(serde_json::json!(rows))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// Aggregate next-segment path completions for a prefix, deduping in SQL.

@@ -21,9 +21,9 @@ pub async fn split_asset(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
     Json(req): Json<SplitRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let result = engine.split(&asset_id, &req.variant_hashes)?;
         Ok::<_, anyhow::Error>(serde_json::json!({
@@ -31,13 +31,8 @@ pub async fn split_asset(
             "new_assets": result.new_assets,
         }))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 // --- Stack batch operations ---
@@ -104,9 +99,9 @@ pub async fn add_to_stack(
 pub async fn batch_unstack(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchStackRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
         let store = crate::stack::StackStore::new(catalog.conn());
         let removed = store.remove(&req.asset_ids)?;
@@ -116,13 +111,8 @@ pub async fn batch_unstack(
             "removed": removed,
         }))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// POST /api/batch/delete — delete selected assets from catalog.
@@ -136,10 +126,10 @@ pub struct BatchDeleteRequest {
 pub async fn batch_delete(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchDeleteRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let catalog_root = state.catalog_root.clone();
     let preview_config = state.preview_config.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let service = crate::asset_service::AssetService::new(&catalog_root, state.verbosity, &preview_config);
         let result = service.delete_assets(&req.asset_ids, true, req.remove_files, |_id, _status, _elapsed| {})?;
         Ok::<_, anyhow::Error>(serde_json::json!({
@@ -150,13 +140,8 @@ pub async fn batch_delete(
             "errors": result.errors,
         }))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// PUT /api/asset/{id}/stack-pick — set this asset as the stack pick.

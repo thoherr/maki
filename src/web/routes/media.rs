@@ -450,41 +450,33 @@ pub async fn open_terminal(
 pub async fn writeback_asset(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let wb = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
-        let catalog = state.catalog().map_err(|e| e.to_string())?;
-        let full_id = super::resolve_asset_id_or_err(&catalog, &asset_id)
-            .map_err(|e| format!("{e:#}"))?;
+        let catalog = state.catalog()?;
+        let full_id = super::resolve_asset_id_or_err(&catalog, &asset_id)?;
 
-        let wb_result = engine
-            .writeback(
-                None,
-                Some(&full_id),
-                None,
-                false,  // all: only pending recipes for this asset
-                false,  // force: respect pending flag
-                false,  // mirror_tags: web flush is incremental, never destructive
-                false,  // dry_run
-                false,  // log
-                None,
-            )
-            .map_err(|e| e.to_string())?;
-        Ok::<_, String>(wb_result)
+        let wb_result = engine.writeback(
+            None,
+            Some(&full_id),
+            None,
+            false,  // all: only pending recipes for this asset
+            false,  // force: respect pending flag
+            false,  // mirror_tags: web flush is incremental, never destructive
+            false,  // dry_run
+            false,  // log
+            None,
+        )?;
+        Ok::<_, anyhow::Error>(wb_result)
     })
-    .await;
-
-    match result {
-        Ok(Ok(wb)) => Json(serde_json::json!({
-            "written": wb.written,
-            "skipped": wb.skipped,
-            "failed": wb.failed,
-        }))
-        .into_response(),
-        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(serde_json::json!({
+        "written": wb.written,
+        "skipped": wb.skipped,
+        "failed": wb.failed,
+    }))
+    .into_response())
 }
 
 // --- VLM Describe ---
@@ -508,19 +500,14 @@ pub async fn vlm_describe_asset(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
     Json(body): Json<VlmDescribeRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result: Result<Result<VlmDescribeResponse, String>, _> =
-        tokio::task::spawn_blocking(move || {
-            vlm_describe_asset_inner(&state, &asset_id, body.mode.as_deref(), body.model.as_deref())
-        })
-        .await;
-
-    match result {
-        Ok(Ok(resp)) => Json(resp).into_response(),
-        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
+    let resp = super::spawn_catalog_blocking(move || {
+        vlm_describe_asset_inner(&state, &asset_id, body.mode.as_deref(), body.model.as_deref())
+            .map_err(|e| anyhow::anyhow!(e))
+    })
+    .await?;
+    Ok(Json(resp).into_response())
 }
 
 fn vlm_describe_asset_inner(

@@ -28,9 +28,9 @@ pub async fn add_tags(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
     Form(form): Form<TagForm>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let tags: Vec<String> = form
             .tags
@@ -46,13 +46,8 @@ pub async fn add_tags(
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => with_pending_trigger(html),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(with_pending_trigger(html))
 }
 
 /// DELETE /api/asset/{id}/tags?tag=... — remove tag, return tags fragment.
@@ -60,10 +55,10 @@ pub async fn remove_tag(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
     Query(query): Query<RemoveTagQuery>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
     let tag = query.tag;
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let result = engine.tag(&asset_id, &[tag], true)?;
         state.dropdown_cache.invalidate_tags();
@@ -73,22 +68,17 @@ pub async fn remove_tag(
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => with_pending_trigger(html),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(with_pending_trigger(html))
 }
 
 /// POST /api/asset/{id}/tags/clear — remove all tags, return tags fragment.
 pub async fn clear_tags(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let engine = state.query_engine();
         let details = engine.show(&asset_id)?;
         if details.tags.is_empty() {
@@ -106,13 +96,8 @@ pub async fn clear_tags(
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => with_pending_trigger(html),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(with_pending_trigger(html))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -275,7 +260,7 @@ pub struct ExportVocabularyQuery {
 pub async fn export_vocabulary_api(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ExportVocabularyQuery>,
-) -> Response {
+) -> Result<Response, Response> {
     let format = q.format.as_deref().unwrap_or("yaml").to_lowercase();
     let with_counts = q.counts.unwrap_or(0) != 0;
     let prune = q.prune.unwrap_or(0) != 0;
@@ -286,11 +271,11 @@ pub async fn export_vocabulary_api(
         "yaml" | "yml" => (Fmt::Yaml, "vocabulary.yaml", "application/x-yaml; charset=utf-8"),
         "text" | "txt" => (Fmt::Text, "vocabulary.txt", "text/plain; charset=utf-8"),
         "json" => (Fmt::Json, "vocabulary.json", "application/json; charset=utf-8"),
-        other => return (StatusCode::BAD_REQUEST, format!("unknown format '{other}': expected 'yaml', 'text', or 'json'")).into_response(),
+        other => return Ok((StatusCode::BAD_REQUEST, format!("unknown format '{other}': expected 'yaml', 'text', or 'json'")).into_response()),
     };
 
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let body = super::spawn_catalog_blocking(move || {
         let content: String = if default_only {
             // Built-in tree only — counts always 0, so the flag is moot.
             match fmt {
@@ -341,13 +326,7 @@ pub async fn export_vocabulary_api(
         };
         Ok::<_, anyhow::Error>(content)
     })
-    .await;
-
-    let body = match result {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    };
+    .await?;
 
     use axum::http::header;
     let response = (
@@ -361,13 +340,13 @@ pub async fn export_vocabulary_api(
         ],
         body,
     );
-    response.into_response()
+    Ok(response.into_response())
 }
 
 /// GET /api/tags — all tags as JSON (for autocomplete).
-pub async fn tags_api(State(state): State<Arc<AppState>>) -> Response {
+pub async fn tags_api(State(state): State<Arc<AppState>>) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let tags = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
         let mut tags = catalog.list_all_tags().unwrap_or_default();
         let vocab = crate::vocabulary::load_vocabulary(&state.catalog_root);
@@ -380,13 +359,8 @@ pub async fn tags_api(State(state): State<Arc<AppState>>) -> Response {
         tags.sort_by(|a, b| a.0.cmp(&b.0));
         Ok::<_, anyhow::Error>(tags)
     })
-    .await;
-
-    match result {
-        Ok(Ok(tags)) => axum::Json(tags).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(axum::Json(tags).into_response())
 }
 
 /// Build a tree of tag entries.
@@ -517,9 +491,9 @@ fn build_tag_tree(
 }
 
 /// GET /tags — tags HTML page.
-pub async fn tags_page(State(state): State<Arc<AppState>>) -> Response {
+pub async fn tags_page(State(state): State<Arc<AppState>>) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
         let tags = catalog.list_all_tags()?;
         let leaf_counts = catalog.list_leaf_tag_counts().unwrap_or_default();
@@ -533,13 +507,8 @@ pub async fn tags_page(State(state): State<Arc<AppState>>) -> Response {
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -553,11 +522,11 @@ pub struct BatchTagRequest {
 pub async fn batch_tags(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchTagRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let log = state.log_requests;
     let count = req.asset_ids.len();
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let batch = super::spawn_catalog_blocking(move || {
         let start = std::time::Instant::now();
         let engine = state.query_engine();
         let storage_tags: Vec<String> = req.tags.iter()
@@ -588,13 +557,8 @@ pub async fn batch_tags(
             errors,
         })
     })
-    .await;
-
-    match result {
-        Ok(Ok(batch)) => Json(batch).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(batch).into_response())
 }
 
 #[cfg(test)]
