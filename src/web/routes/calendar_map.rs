@@ -7,9 +7,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 
 use super::super::AppState;
-use super::{build_parsed_search, resolve_collection_ids, SearchParams};
-#[cfg(feature = "ai")]
-use super::intersect_name_groups;
+use super::{build_parsed_search, EmptyFilterPolicy, ResolvedSearch, SearchParams};
 
 #[derive(Debug, serde::Deserialize)]
 pub struct CalendarParams {
@@ -60,49 +58,15 @@ pub async fn calendar_api(
         };
         let bf = build_parsed_search(&search_params, &state);
         let parsed = bf.parsed;
-        let volume = bf.volume;
-        let path_volume_id = bf.path_volume_id;
         let collapse_stacks = bf.collapse_stacks;
 
+        let resolved = ResolvedSearch::resolve(
+            &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::MatchNothing,
+        );
+
         let mut opts = parsed.to_search_options();
-        if !volume.is_empty() {
-            opts.volume = Some(&volume);
-        }
-        if let Some(ref vid) = path_volume_id {
-            if opts.volume.is_none() {
-                opts.volume = Some(vid);
-            }
-        }
+        resolved.apply(&mut opts);
         opts.collapse_stacks = collapse_stacks;
-
-        let collection_ids;
-        if !parsed.collections.is_empty() {
-            collection_ids = resolve_collection_ids(&parsed.collections, catalog.conn());
-            opts.collection_asset_ids = Some(&collection_ids);
-        }
-
-        let collection_exclude_ids;
-        if !parsed.collections_exclude.is_empty() {
-            collection_exclude_ids = resolve_collection_ids(&parsed.collections_exclude, catalog.conn());
-            opts.collection_exclude_ids = Some(&collection_exclude_ids);
-        }
-
-        let person_ids;
-        if !parsed.persons.is_empty() {
-            #[cfg(feature = "ai")]
-            {
-                let face_store = crate::face_store::FaceStore::new(catalog.conn());
-                person_ids = intersect_name_groups(&parsed.persons, |name| {
-                    face_store.find_person_asset_ids(name).unwrap_or_default()
-                });
-                opts.person_asset_ids = Some(&person_ids);
-            }
-            #[cfg(not(feature = "ai"))]
-            {
-                person_ids = Vec::<String>::new();
-                opts.person_asset_ids = Some(&person_ids);
-            }
-        }
 
         let counts = catalog.calendar_counts(year, &opts)?;
         let years = catalog.calendar_years()?;
@@ -164,49 +128,15 @@ pub async fn map_api(
         };
         let bf = build_parsed_search(&search_params, &state);
         let parsed = bf.parsed;
-        let volume = bf.volume;
-        let path_volume_id = bf.path_volume_id;
         let collapse_stacks = bf.collapse_stacks;
 
+        let resolved = ResolvedSearch::resolve(
+            &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::MatchNothing,
+        );
+
         let mut opts = parsed.to_search_options();
-        if !volume.is_empty() {
-            opts.volume = Some(&volume);
-        }
-        if let Some(ref vid) = path_volume_id {
-            if opts.volume.is_none() {
-                opts.volume = Some(vid);
-            }
-        }
+        resolved.apply(&mut opts);
         opts.collapse_stacks = collapse_stacks;
-
-        let collection_ids;
-        if !parsed.collections.is_empty() {
-            collection_ids = resolve_collection_ids(&parsed.collections, catalog.conn());
-            opts.collection_asset_ids = Some(&collection_ids);
-        }
-
-        let collection_exclude_ids;
-        if !parsed.collections_exclude.is_empty() {
-            collection_exclude_ids = resolve_collection_ids(&parsed.collections_exclude, catalog.conn());
-            opts.collection_exclude_ids = Some(&collection_exclude_ids);
-        }
-
-        let person_ids;
-        if !parsed.persons.is_empty() {
-            #[cfg(feature = "ai")]
-            {
-                let face_store = crate::face_store::FaceStore::new(catalog.conn());
-                person_ids = intersect_name_groups(&parsed.persons, |name| {
-                    face_store.find_person_asset_ids(name).unwrap_or_default()
-                });
-                opts.person_asset_ids = Some(&person_ids);
-            }
-            #[cfg(not(feature = "ai"))]
-            {
-                person_ids = Vec::<String>::new();
-                opts.person_asset_ids = Some(&person_ids);
-            }
-        }
 
         let preview_ext = &state.preview_ext;
         let (markers, total) = catalog.map_markers(&opts, limit)?;

@@ -2,8 +2,8 @@
 //!
 //! Shared helpers (build_parsed_search, merge_search_params, resolve_collection_ids,
 //! intersect_name_groups, resolve_best_variant_idx, resolve_similar_filter,
-//! BrowseFilters, SearchParams) live in the parent routes module so sibling
-//! submodules (calendar_map, media, assets, ai) can reuse them.
+//! ResolvedSearch, BrowseFilters, SearchParams) live in the parent routes
+//! module so sibling submodules (calendar_map, media, assets, ai) can reuse them.
 
 use std::sync::Arc;
 
@@ -23,12 +23,9 @@ use crate::web::AppState;
 
 use super::stats::build_format_groups;
 use super::{
-    build_parsed_search, resolve_best_variant_idx, resolve_collection_ids, SearchParams,
+    build_parsed_search, resolve_best_variant_idx, EmptyFilterPolicy, ResolvedSearch,
+    SearchParams,
 };
-#[cfg(feature = "ai")]
-use super::intersect_name_groups;
-#[cfg(feature = "ai")]
-use super::resolve_similar_filter;
 
 /// Pair of "would-be-larger if we relaxed this constraint" deltas surfaced
 /// next to the result count on the browse page. Each component is the
@@ -143,8 +140,6 @@ pub async fn browse_page(
 
         let bf = build_parsed_search(&params, &state);
         let parsed = bf.parsed;
-        let volume = bf.volume;
-        let path_volume_id = bf.path_volume_id;
         let sort_str = bf.sort_str;
         let page = bf.page;
         let collapse_stacks = bf.collapse_stacks;
@@ -159,107 +154,15 @@ pub async fn browse_page(
         let person_str = bf.person;
         let nodefault = bf.nodefault;
 
+        let mut resolved = ResolvedSearch::resolve(
+            &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
+        );
+        resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
+
         let mut opts = parsed.to_search_options();
-        if !volume.is_empty() {
-            opts.volume = Some(&volume);
-        }
-        if let Some(ref vid) = path_volume_id {
-            if opts.volume.is_none() {
-                opts.volume = Some(vid);
-            }
-        }
+        resolved.apply(&mut opts);
 
-        // Default-initialize the lookup vecs so the count-delta helper below
-        // can take slices unconditionally. (Pre-existing sparse-init pattern
-        // relied on these only being accessed when populated.)
-        let collection_ids: Vec<String> = if !parsed.collections.is_empty() {
-            resolve_collection_ids(&parsed.collections, catalog.conn())
-        } else { Vec::new() };
-        if !collection_ids.is_empty() {
-            opts.collection_asset_ids = Some(&collection_ids);
-        }
-
-        let collection_exclude_ids: Vec<String> = if !parsed.collections_exclude.is_empty() {
-            resolve_collection_ids(&parsed.collections_exclude, catalog.conn())
-        } else { Vec::new() };
-        if !collection_exclude_ids.is_empty() {
-            opts.collection_exclude_ids = Some(&collection_exclude_ids);
-        }
-
-        #[cfg(feature = "ai")]
-        let person_ids: Vec<String> = if !parsed.persons.is_empty() {
-            let face_store = crate::face_store::FaceStore::new(catalog.conn());
-            intersect_name_groups(&parsed.persons, |name| {
-                face_store.find_person_asset_ids(name).unwrap_or_default()
-            })
-        } else { Vec::new() };
-        #[cfg(not(feature = "ai"))]
-        let person_ids: Vec<String> = Vec::new();
-        if !person_ids.is_empty() {
-            opts.person_asset_ids = Some(&person_ids);
-        }
-
-        #[cfg(feature = "ai")]
-        let text_query_ids;
-        #[cfg(feature = "ai")]
-        if let Some(ref text_q) = parsed.text_query {
-            let model_id = &state.ai_config.model;
-            let spec = crate::ai::get_model_spec(model_id);
-            if let Some(spec) = spec {
-                let model_dir = super::ai::resolve_model_dir(&state.ai_config);
-                let mut model_guard = state.ai_model.blocking_lock();
-                if model_guard.is_none() {
-                    if let Ok(m) = crate::ai::SigLipModel::load_with_provider(
-                        &model_dir, model_id, state.verbosity, &state.ai_config.execution_provider,
-                    ) {
-                        *model_guard = Some(m);
-                    }
-                }
-                if let Some(ref mut model) = *model_guard {
-                    if let Ok(embs) = model.encode_texts(&[text_q.clone()]) {
-                        let query_emb = &embs[0];
-                        let needs_load = state.ai_embedding_index.read().unwrap().is_none();
-                        if needs_load {
-                            if let Ok(index) = crate::embedding_store::EmbeddingIndex::load(
-                                catalog.conn(), model_id, spec.embedding_dim,
-                            ) {
-                                *state.ai_embedding_index.write().unwrap() = Some(index);
-                            }
-                        }
-                        let results = {
-                            let idx_guard = state.ai_embedding_index.read().unwrap();
-                            if let Some(ref idx) = *idx_guard {
-                                idx.search(query_emb, parsed.text_query_limit.unwrap_or(state.ai_config.text_limit), None)
-                            } else {
-                                Vec::new()
-                            }
-                        };
-                        text_query_ids = results.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
-                        opts.text_search_ids = Some(&text_query_ids);
-                    }
-                }
-            }
-        }
-
-        #[cfg(feature = "ai")]
-        let similar_ids;
-        #[cfg(feature = "ai")]
-        let similarity_scores: std::collections::HashMap<String, f32>;
-        #[cfg(feature = "ai")]
-        {
-            let (ids, scores) = resolve_similar_filter(&catalog, &state, &parsed)?;
-            similar_ids = ids;
-            similarity_scores = scores;
-            if !similar_ids.is_empty() {
-                opts.similar_asset_ids = Some(&similar_ids);
-            }
-        }
-
-        let has_similarity;
-        #[cfg(feature = "ai")]
-        { has_similarity = parsed.similar.is_some() && !similarity_scores.is_empty(); }
-        #[cfg(not(feature = "ai"))]
-        { has_similarity = false; }
+        let has_similarity = resolved.has_similarity();
 
         let per_page = if has_similarity { u32::MAX } else { state.per_page };
         let effective_sort = if has_similarity && params.sort.is_none() { "similarity_desc" } else { &sort_str };
@@ -291,11 +194,11 @@ pub async fn browse_page(
         let deltas = compute_count_deltas(&catalog, &mut opts, &DeltaContext {
             state: &state,
             params: &params,
-            collection_ids: &collection_ids,
-            collection_exclude_ids: &collection_exclude_ids,
-            person_ids: &person_ids,
-            volume: &volume,
-            path_volume_id: path_volume_id.as_deref(),
+            collection_ids: &resolved.collection_ids,
+            collection_exclude_ids: &resolved.collection_exclude_ids,
+            person_ids: &resolved.person_ids,
+            volume: &resolved.volume,
+            path_volume_id: resolved.path_volume_id.as_deref(),
             effective_sort,
             page,
             per_page,
@@ -308,9 +211,9 @@ pub async fn browse_page(
         let mut cards: Vec<AssetCard> = rows.iter().map(|r| AssetCard::from_row(r, &preview_ext)).collect();
 
         #[cfg(feature = "ai")]
-        if !similarity_scores.is_empty() {
+        if !resolved.similarity_scores.is_empty() {
             for card in &mut cards {
-                card.similarity = similarity_scores.get(&card.asset_id).copied();
+                card.similarity = resolved.similarity_scores.get(&card.asset_id).copied();
             }
             if matches!(opts.sort, SearchSort::SimilarityDesc | SearchSort::SimilarityAsc) {
                 cards.sort_by(|a, b| {
@@ -333,7 +236,7 @@ pub async fn browse_page(
                 asset_type: asset_type.to_string(),
                 tag: tag.to_string(),
                 format_filter: format_filter.to_string(),
-                volume: volume.to_string(),
+                volume: resolved.volume.clone(),
                 rating: rating_str.to_string(),
                 label: label_str.to_string(),
                 collection: collection_str.to_string(),
@@ -394,7 +297,7 @@ pub async fn browse_page(
             asset_type: asset_type.to_string(),
             tag: tag.to_string(),
             format_filter: format_filter.to_string(),
-            volume: volume.to_string(),
+            volume: resolved.volume.clone(),
             rating: rating_str.to_string(),
             label: label_str.to_string(),
             sort: effective_sort.to_string(),
@@ -457,8 +360,6 @@ pub async fn search_api(
 
         let bf = build_parsed_search(&params, &state);
         let parsed = bf.parsed;
-        let volume = bf.volume;
-        let path_volume_id = bf.path_volume_id;
         let sort_str = bf.sort_str;
         let page = bf.page;
         let collapse_stacks = bf.collapse_stacks;
@@ -473,107 +374,15 @@ pub async fn search_api(
         let person_str = bf.person;
         let path_str = bf.path;
 
+        let mut resolved = ResolvedSearch::resolve(
+            &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
+        );
+        resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
+
         let mut opts = parsed.to_search_options();
-        if !volume.is_empty() {
-            opts.volume = Some(&volume);
-        }
-        if let Some(ref vid) = path_volume_id {
-            if opts.volume.is_none() {
-                opts.volume = Some(vid);
-            }
-        }
+        resolved.apply(&mut opts);
 
-        // Default-initialize the lookup vecs so the count-delta helper below
-        // can take slices unconditionally. (Pre-existing sparse-init pattern
-        // relied on these only being accessed when populated.)
-        let collection_ids: Vec<String> = if !parsed.collections.is_empty() {
-            resolve_collection_ids(&parsed.collections, catalog.conn())
-        } else { Vec::new() };
-        if !collection_ids.is_empty() {
-            opts.collection_asset_ids = Some(&collection_ids);
-        }
-
-        let collection_exclude_ids: Vec<String> = if !parsed.collections_exclude.is_empty() {
-            resolve_collection_ids(&parsed.collections_exclude, catalog.conn())
-        } else { Vec::new() };
-        if !collection_exclude_ids.is_empty() {
-            opts.collection_exclude_ids = Some(&collection_exclude_ids);
-        }
-
-        #[cfg(feature = "ai")]
-        let person_ids: Vec<String> = if !parsed.persons.is_empty() {
-            let face_store = crate::face_store::FaceStore::new(catalog.conn());
-            intersect_name_groups(&parsed.persons, |name| {
-                face_store.find_person_asset_ids(name).unwrap_or_default()
-            })
-        } else { Vec::new() };
-        #[cfg(not(feature = "ai"))]
-        let person_ids: Vec<String> = Vec::new();
-        if !person_ids.is_empty() {
-            opts.person_asset_ids = Some(&person_ids);
-        }
-
-        #[cfg(feature = "ai")]
-        let text_query_ids;
-        #[cfg(feature = "ai")]
-        if let Some(ref text_q) = parsed.text_query {
-            let model_id = &state.ai_config.model;
-            let spec = crate::ai::get_model_spec(model_id);
-            if let Some(spec) = spec {
-                let model_dir = super::ai::resolve_model_dir(&state.ai_config);
-                let mut model_guard = state.ai_model.blocking_lock();
-                if model_guard.is_none() {
-                    if let Ok(m) = crate::ai::SigLipModel::load_with_provider(
-                        &model_dir, model_id, state.verbosity, &state.ai_config.execution_provider,
-                    ) {
-                        *model_guard = Some(m);
-                    }
-                }
-                if let Some(ref mut model) = *model_guard {
-                    if let Ok(embs) = model.encode_texts(&[text_q.clone()]) {
-                        let query_emb = &embs[0];
-                        let needs_load = state.ai_embedding_index.read().unwrap().is_none();
-                        if needs_load {
-                            if let Ok(index) = crate::embedding_store::EmbeddingIndex::load(
-                                catalog.conn(), model_id, spec.embedding_dim,
-                            ) {
-                                *state.ai_embedding_index.write().unwrap() = Some(index);
-                            }
-                        }
-                        let results = {
-                            let idx_guard = state.ai_embedding_index.read().unwrap();
-                            if let Some(ref idx) = *idx_guard {
-                                idx.search(query_emb, parsed.text_query_limit.unwrap_or(state.ai_config.text_limit), None)
-                            } else {
-                                Vec::new()
-                            }
-                        };
-                        text_query_ids = results.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
-                        opts.text_search_ids = Some(&text_query_ids);
-                    }
-                }
-            }
-        }
-
-        #[cfg(feature = "ai")]
-        let similar_ids;
-        #[cfg(feature = "ai")]
-        let similarity_scores: std::collections::HashMap<String, f32>;
-        #[cfg(feature = "ai")]
-        {
-            let (ids, scores) = resolve_similar_filter(&catalog, &state, &parsed)?;
-            similar_ids = ids;
-            similarity_scores = scores;
-            if !similar_ids.is_empty() {
-                opts.similar_asset_ids = Some(&similar_ids);
-            }
-        }
-
-        let has_similarity;
-        #[cfg(feature = "ai")]
-        { has_similarity = parsed.similar.is_some() && !similarity_scores.is_empty(); }
-        #[cfg(not(feature = "ai"))]
-        { has_similarity = false; }
+        let has_similarity = resolved.has_similarity();
 
         let per_page = if has_similarity { u32::MAX } else { state.per_page };
         let effective_sort = if has_similarity && params.sort.is_none() { "similarity_desc" } else { &sort_str };
@@ -600,11 +409,11 @@ pub async fn search_api(
         let deltas = compute_count_deltas(&catalog, &mut opts, &DeltaContext {
             state: &state,
             params: &params,
-            collection_ids: &collection_ids,
-            collection_exclude_ids: &collection_exclude_ids,
-            person_ids: &person_ids,
-            volume: &volume,
-            path_volume_id: path_volume_id.as_deref(),
+            collection_ids: &resolved.collection_ids,
+            collection_exclude_ids: &resolved.collection_exclude_ids,
+            person_ids: &resolved.person_ids,
+            volume: &resolved.volume,
+            path_volume_id: resolved.path_volume_id.as_deref(),
             effective_sort,
             page,
             per_page,
@@ -617,9 +426,9 @@ pub async fn search_api(
         let mut cards: Vec<AssetCard> = rows.iter().map(|r| AssetCard::from_row(r, &preview_ext)).collect();
 
         #[cfg(feature = "ai")]
-        if !similarity_scores.is_empty() {
+        if !resolved.similarity_scores.is_empty() {
             for card in &mut cards {
-                card.similarity = similarity_scores.get(&card.asset_id).copied();
+                card.similarity = resolved.similarity_scores.get(&card.asset_id).copied();
             }
             if matches!(opts.sort, SearchSort::SimilarityDesc | SearchSort::SimilarityAsc) {
                 cards.sort_by(|a, b| {
@@ -641,7 +450,7 @@ pub async fn search_api(
             asset_type,
             tag,
             format_filter,
-            volume: volume.to_string(),
+            volume: resolved.volume.clone(),
             rating: rating_str,
             label: label_str,
             collection: collection_str,
@@ -684,47 +493,15 @@ pub async fn all_ids_api(
 
         let bf = build_parsed_search(&params, &state);
         let parsed = bf.parsed;
-        let volume = bf.volume;
-        let path_volume_id = bf.path_volume_id;
         let sort_str = bf.sort_str;
         let collapse_stacks = bf.collapse_stacks;
 
+        let resolved = ResolvedSearch::resolve(
+            &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
+        );
+
         let mut opts = parsed.to_search_options();
-        if !volume.is_empty() {
-            opts.volume = Some(&volume);
-        }
-        if let Some(ref vid) = path_volume_id {
-            if opts.volume.is_none() {
-                opts.volume = Some(vid);
-            }
-        }
-
-        let collection_ids: Vec<String> = if !parsed.collections.is_empty() {
-            resolve_collection_ids(&parsed.collections, catalog.conn())
-        } else { Vec::new() };
-        if !collection_ids.is_empty() {
-            opts.collection_asset_ids = Some(&collection_ids);
-        }
-
-        let collection_exclude_ids: Vec<String> = if !parsed.collections_exclude.is_empty() {
-            resolve_collection_ids(&parsed.collections_exclude, catalog.conn())
-        } else { Vec::new() };
-        if !collection_exclude_ids.is_empty() {
-            opts.collection_exclude_ids = Some(&collection_exclude_ids);
-        }
-
-        #[cfg(feature = "ai")]
-        let person_ids: Vec<String> = if !parsed.persons.is_empty() {
-            let face_store = crate::face_store::FaceStore::new(catalog.conn());
-            intersect_name_groups(&parsed.persons, |name| {
-                face_store.find_person_asset_ids(name).unwrap_or_default()
-            })
-        } else { Vec::new() };
-        #[cfg(not(feature = "ai"))]
-        let person_ids: Vec<String> = Vec::new();
-        if !person_ids.is_empty() {
-            opts.person_asset_ids = Some(&person_ids);
-        }
+        resolved.apply(&mut opts);
 
         let per_page = state.per_page;
         opts.sort = SearchSort::from_str(&sort_str);
@@ -767,51 +544,16 @@ pub async fn page_ids_api(
 
         let bf = build_parsed_search(&params, &state);
         let parsed = bf.parsed;
-        let volume = bf.volume;
-        let path_volume_id = bf.path_volume_id;
         let sort_str = bf.sort_str;
         let page = bf.page;
         let collapse_stacks = bf.collapse_stacks;
 
+        let resolved = ResolvedSearch::resolve(
+            &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
+        );
+
         let mut opts = parsed.to_search_options();
-        if !volume.is_empty() {
-            opts.volume = Some(&volume);
-        }
-        if let Some(ref vid) = path_volume_id {
-            if opts.volume.is_none() {
-                opts.volume = Some(vid);
-            }
-        }
-
-        // Default-initialize the lookup vecs so the count-delta helper below
-        // can take slices unconditionally. (Pre-existing sparse-init pattern
-        // relied on these only being accessed when populated.)
-        let collection_ids: Vec<String> = if !parsed.collections.is_empty() {
-            resolve_collection_ids(&parsed.collections, catalog.conn())
-        } else { Vec::new() };
-        if !collection_ids.is_empty() {
-            opts.collection_asset_ids = Some(&collection_ids);
-        }
-
-        let collection_exclude_ids: Vec<String> = if !parsed.collections_exclude.is_empty() {
-            resolve_collection_ids(&parsed.collections_exclude, catalog.conn())
-        } else { Vec::new() };
-        if !collection_exclude_ids.is_empty() {
-            opts.collection_exclude_ids = Some(&collection_exclude_ids);
-        }
-
-        #[cfg(feature = "ai")]
-        let person_ids: Vec<String> = if !parsed.persons.is_empty() {
-            let face_store = crate::face_store::FaceStore::new(catalog.conn());
-            intersect_name_groups(&parsed.persons, |name| {
-                face_store.find_person_asset_ids(name).unwrap_or_default()
-            })
-        } else { Vec::new() };
-        #[cfg(not(feature = "ai"))]
-        let person_ids: Vec<String> = Vec::new();
-        if !person_ids.is_empty() {
-            opts.person_asset_ids = Some(&person_ids);
-        }
+        resolved.apply(&mut opts);
 
         let per_page = state.per_page;
         opts.sort = SearchSort::from_str(&sort_str);
@@ -1024,50 +766,15 @@ pub async fn facets_api(
         };
         let bf = build_parsed_search(&search_params, &state);
         let parsed = bf.parsed;
-        let volume = bf.volume;
-        let path_volume_id = bf.path_volume_id;
         let collapse_stacks = bf.collapse_stacks;
 
+        let resolved = ResolvedSearch::resolve(
+            &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
+        );
+
         let mut opts = parsed.to_search_options();
-        if !volume.is_empty() {
-            opts.volume = Some(&volume);
-        }
-        if let Some(ref vid) = path_volume_id {
-            if opts.volume.is_none() {
-                opts.volume = Some(vid);
-            }
-        }
+        resolved.apply(&mut opts);
         opts.collapse_stacks = collapse_stacks;
-
-        // Default-initialize the lookup vecs so the count-delta helper below
-        // can take slices unconditionally. (Pre-existing sparse-init pattern
-        // relied on these only being accessed when populated.)
-        let collection_ids: Vec<String> = if !parsed.collections.is_empty() {
-            resolve_collection_ids(&parsed.collections, catalog.conn())
-        } else { Vec::new() };
-        if !collection_ids.is_empty() {
-            opts.collection_asset_ids = Some(&collection_ids);
-        }
-
-        let collection_exclude_ids: Vec<String> = if !parsed.collections_exclude.is_empty() {
-            resolve_collection_ids(&parsed.collections_exclude, catalog.conn())
-        } else { Vec::new() };
-        if !collection_exclude_ids.is_empty() {
-            opts.collection_exclude_ids = Some(&collection_exclude_ids);
-        }
-
-        #[cfg(feature = "ai")]
-        let person_ids: Vec<String> = if !parsed.persons.is_empty() {
-            let face_store = crate::face_store::FaceStore::new(catalog.conn());
-            intersect_name_groups(&parsed.persons, |name| {
-                face_store.find_person_asset_ids(name).unwrap_or_default()
-            })
-        } else { Vec::new() };
-        #[cfg(not(feature = "ai"))]
-        let person_ids: Vec<String> = Vec::new();
-        if !person_ids.is_empty() {
-            opts.person_asset_ids = Some(&person_ids);
-        }
 
         let facets = catalog.facet_counts(&opts)?;
         Ok::<_, anyhow::Error>(serde_json::json!(facets))

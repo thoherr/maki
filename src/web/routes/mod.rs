@@ -290,6 +290,241 @@ pub(super) fn resolve_collection_ids(entries: &[String], conn: &rusqlite::Connec
     all_ids.into_iter().collect()
 }
 
+/// How `ResolvedSearch::apply` treats a filter that was present in the
+/// query but resolved to zero asset IDs.
+///
+/// The two policies encode a historical behavioral drift between the
+/// handler families — preserved verbatim by the dedup:
+/// - browse_page / search_api / all_ids_api / page_ids_api / facets_api
+///   installed the resolved list only when it was non-empty, so a
+///   collection/person filter that matched nothing was silently ignored
+///   (and in non-AI builds, person filters were always ignored).
+/// - calendar_api / map_api installed `Some(&ids)` whenever the filter
+///   was present in the parsed query, so a filter resolving to zero IDs
+///   matched nothing (and in non-AI builds, a person filter matched
+///   nothing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EmptyFilterPolicy {
+    /// Skip installing an empty resolved list — the filter is silently
+    /// ignored (browse/search/all-ids/page-ids/facets behavior).
+    Ignore,
+    /// Install the empty slice so the filter matches nothing
+    /// (calendar/map behavior).
+    MatchNothing,
+}
+
+/// Owned holder for the per-request "ParsedSearch → SearchOptions
+/// enrichment" results shared by the browse/search/calendar/map handlers.
+///
+/// `SearchOptions<'a>` borrows `&[String]` slices, so every handler used
+/// to keep ad-hoc owned locals alive around the `SearchOptions`
+/// construction — the same multi-step resolution block copy-pasted seven
+/// times. This struct owns those Vecs instead:
+///
+/// 1. [`ResolvedSearch::resolve`] runs the shared resolution
+///    (volume/path-volume fallback, collection include/exclude IDs,
+///    person-name intersection).
+/// 2. [`ResolvedSearch::resolve_ai_filters`] optionally runs the AI
+///    text-query (SigLIP) and `similar:` resolution — only browse_page
+///    and search_api call this; calendar/map/ids/facets never supported
+///    those filters and must not silently gain them.
+/// 3. [`ResolvedSearch::apply`] installs the borrowed slices into a
+///    `SearchOptions` according to the handler's [`EmptyFilterPolicy`].
+pub(super) struct ResolvedSearch {
+    pub(super) volume: String,
+    pub(super) path_volume_id: Option<String>,
+    pub(super) collection_ids: Vec<String>,
+    pub(super) collection_exclude_ids: Vec<String>,
+    pub(super) person_ids: Vec<String>,
+    /// `Some` once the text-query pipeline produced an ID list (installed
+    /// even when empty — an unmatched text query yields zero results).
+    /// `None` when no text query was given or the model/index failed to
+    /// load (filter silently ignored, matching the historical behavior).
+    #[cfg(feature = "ai")]
+    pub(super) text_query_ids: Option<Vec<String>>,
+    #[cfg(feature = "ai")]
+    pub(super) similar_ids: Vec<String>,
+    #[cfg(feature = "ai")]
+    pub(super) similarity_scores: std::collections::HashMap<String, f32>,
+    #[cfg(feature = "ai")]
+    similar_requested: bool,
+    has_collections: bool,
+    has_collection_excludes: bool,
+    has_persons: bool,
+    empty_filter_policy: EmptyFilterPolicy,
+}
+
+impl ResolvedSearch {
+    /// Run the shared resolution steps (collections, collection excludes,
+    /// person names) and capture the volume / path-volume fallback inputs.
+    pub(super) fn resolve(
+        catalog: &crate::catalog::Catalog,
+        parsed: &ParsedSearch,
+        volume: String,
+        path_volume_id: Option<String>,
+        empty_filter_policy: EmptyFilterPolicy,
+    ) -> Self {
+        let collection_ids: Vec<String> = if !parsed.collections.is_empty() {
+            resolve_collection_ids(&parsed.collections, catalog.conn())
+        } else {
+            Vec::new()
+        };
+        let collection_exclude_ids: Vec<String> = if !parsed.collections_exclude.is_empty() {
+            resolve_collection_ids(&parsed.collections_exclude, catalog.conn())
+        } else {
+            Vec::new()
+        };
+        #[cfg(feature = "ai")]
+        let person_ids: Vec<String> = if !parsed.persons.is_empty() {
+            let face_store = crate::face_store::FaceStore::new(catalog.conn());
+            intersect_name_groups(&parsed.persons, |name| {
+                face_store.find_person_asset_ids(name).unwrap_or_default()
+            })
+        } else {
+            Vec::new()
+        };
+        #[cfg(not(feature = "ai"))]
+        let person_ids: Vec<String> = Vec::new();
+
+        Self {
+            volume,
+            path_volume_id,
+            collection_ids,
+            collection_exclude_ids,
+            person_ids,
+            #[cfg(feature = "ai")]
+            text_query_ids: None,
+            #[cfg(feature = "ai")]
+            similar_ids: Vec::new(),
+            #[cfg(feature = "ai")]
+            similarity_scores: std::collections::HashMap::new(),
+            #[cfg(feature = "ai")]
+            similar_requested: false,
+            has_collections: !parsed.collections.is_empty(),
+            has_collection_excludes: !parsed.collections_exclude.is_empty(),
+            has_persons: !parsed.persons.is_empty(),
+            empty_filter_policy,
+        }
+    }
+
+    /// Resolve the AI text-query (SigLIP lazy-load + embedding-index
+    /// search) and `similar:` filters. Separate from [`Self::resolve`] on
+    /// purpose: only browse_page and search_api support these filters;
+    /// calling it from calendar/map/ids/facets would change their
+    /// behavior.
+    ///
+    /// The non-AI variant is a no-op so callers don't need cfg blocks.
+    #[cfg(feature = "ai")]
+    pub(super) fn resolve_ai_filters(
+        &mut self,
+        catalog: &crate::catalog::Catalog,
+        state: &AppState,
+        parsed: &ParsedSearch,
+    ) -> anyhow::Result<()> {
+        self.similar_requested = parsed.similar.is_some();
+        if let Some(ref text_q) = parsed.text_query {
+            let model_id = &state.ai_config.model;
+            let spec = crate::ai::get_model_spec(model_id);
+            if let Some(spec) = spec {
+                let model_dir = ai::resolve_model_dir(&state.ai_config);
+                let mut model_guard = state.ai_model.blocking_lock();
+                if model_guard.is_none() {
+                    if let Ok(m) = crate::ai::SigLipModel::load_with_provider(
+                        &model_dir, model_id, state.verbosity, &state.ai_config.execution_provider,
+                    ) {
+                        *model_guard = Some(m);
+                    }
+                }
+                if let Some(ref mut model) = *model_guard {
+                    if let Ok(embs) = model.encode_texts(&[text_q.clone()]) {
+                        let query_emb = &embs[0];
+                        let needs_load = state.ai_embedding_index.read().unwrap().is_none();
+                        if needs_load {
+                            if let Ok(index) = crate::embedding_store::EmbeddingIndex::load(
+                                catalog.conn(), model_id, spec.embedding_dim,
+                            ) {
+                                *state.ai_embedding_index.write().unwrap() = Some(index);
+                            }
+                        }
+                        let results = {
+                            let idx_guard = state.ai_embedding_index.read().unwrap();
+                            if let Some(ref idx) = *idx_guard {
+                                idx.search(query_emb, parsed.text_query_limit.unwrap_or(state.ai_config.text_limit), None)
+                            } else {
+                                Vec::new()
+                            }
+                        };
+                        self.text_query_ids =
+                            Some(results.into_iter().map(|(id, _)| id).collect());
+                    }
+                }
+            }
+        }
+        let (ids, scores) = resolve_similar_filter(catalog, state, parsed)?;
+        self.similar_ids = ids;
+        self.similarity_scores = scores;
+        Ok(())
+    }
+
+    /// No-op without the `ai` feature (text-query / `similar:` filters
+    /// don't exist in that build).
+    #[cfg(not(feature = "ai"))]
+    pub(super) fn resolve_ai_filters(
+        &mut self,
+        _catalog: &crate::catalog::Catalog,
+        _state: &AppState,
+        _parsed: &ParsedSearch,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// True when an active `similar:` filter produced scores — drives the
+    /// single-page similarity view in browse_page / search_api.
+    pub(super) fn has_similarity(&self) -> bool {
+        #[cfg(feature = "ai")]
+        {
+            self.similar_requested && !self.similarity_scores.is_empty()
+        }
+        #[cfg(not(feature = "ai"))]
+        {
+            false
+        }
+    }
+
+    /// Install the resolved borrowed slices into `opts`.
+    pub(super) fn apply<'a>(&'a self, opts: &mut crate::catalog::SearchOptions<'a>) {
+        if !self.volume.is_empty() {
+            opts.volume = Some(&self.volume);
+        }
+        if let Some(ref vid) = self.path_volume_id {
+            if opts.volume.is_none() {
+                opts.volume = Some(vid);
+            }
+        }
+        let install_empty = self.empty_filter_policy == EmptyFilterPolicy::MatchNothing;
+        if !self.collection_ids.is_empty() || (install_empty && self.has_collections) {
+            opts.collection_asset_ids = Some(&self.collection_ids);
+        }
+        if !self.collection_exclude_ids.is_empty()
+            || (install_empty && self.has_collection_excludes)
+        {
+            opts.collection_exclude_ids = Some(&self.collection_exclude_ids);
+        }
+        if !self.person_ids.is_empty() || (install_empty && self.has_persons) {
+            opts.person_asset_ids = Some(&self.person_ids);
+        }
+        #[cfg(feature = "ai")]
+        {
+            if let Some(ref ids) = self.text_query_ids {
+                opts.text_search_ids = Some(ids);
+            }
+            if !self.similar_ids.is_empty() {
+                opts.similar_asset_ids = Some(&self.similar_ids);
+            }
+        }
+    }
+}
+
 pub(super) fn build_parsed_search(params: &SearchParams, state: &AppState) -> BrowseFilters {
     let query = params.q.as_deref().unwrap_or("");
     let asset_type = params.asset_type.as_deref().unwrap_or("");
