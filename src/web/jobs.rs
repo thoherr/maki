@@ -302,6 +302,63 @@ impl Default for JobRegistry {
     }
 }
 
+/// Launch a background job with the standard lifecycle shared by the
+/// Maintain-dialog and import endpoints:
+///
+/// 1. Reject with `409 CONFLICT` (`conflict_msg`) if the latest job of
+///    this kind is still running.
+/// 2. Register the job, run `run` on the blocking pool.
+/// 3. Map the outcome to the terminal event — the closure's JSON on
+///    success, `{"error": …}` on failure — then `finish` + `mark_done`.
+/// 4. Respond immediately with `{"job_id", "status": "started"}`.
+///
+/// Progress reporting stays with the closure (it gets the `Job` handle).
+/// Endpoints that need a custom launch sequence — a "starting" progress
+/// emit before spawning, non-uniform terminal shapes, or deliberately no
+/// conflict gate (batch auto-tag/describe) — keep their own hand-rolled
+/// flow instead of forcing those differences through this helper.
+pub(crate) fn launch_job<F>(
+    state: &std::sync::Arc<super::AppState>,
+    kind: JobKind,
+    conflict_msg: &'static str,
+    run: F,
+) -> axum::response::Response
+where
+    F: FnOnce(&super::AppState, &std::sync::Arc<Job>) -> anyhow::Result<serde_json::Value>
+        + Send
+        + 'static,
+{
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    if let Some(latest) = state.jobs.latest(kind) {
+        if !latest.is_completed() {
+            return (StatusCode::CONFLICT, conflict_msg).into_response();
+        }
+    }
+
+    let job = state.jobs.start(kind);
+    let job_id = job.id.clone();
+    let state2 = state.clone();
+    let job_for_task = job.clone();
+
+    tokio::spawn(async move {
+        let state3 = state2.clone();
+        let job_inner = job_for_task.clone();
+        let result = tokio::task::spawn_blocking(move || run(&state3, &job_inner)).await;
+
+        let terminal = match result {
+            Ok(Ok(json)) => json,
+            Ok(Err(e)) => serde_json::json!({"error": format!("{e:#}")}),
+            Err(e) => serde_json::json!({"error": format!("{e}")}),
+        };
+        job_for_task.finish(terminal);
+        state2.jobs.mark_done(&job_for_task.id);
+    });
+
+    axum::Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

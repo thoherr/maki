@@ -51,35 +51,9 @@ pub async fn start_import_api(
     // hold a catalog handle and traverse the same workflow. The
     // registry keeps completed jobs around for re-attach, so a
     // dry-run finishing doesn't block the next live import.
-    if let Some(latest) = state.jobs.latest(JobKind::Import) {
-        if !latest.is_completed() {
-            return (StatusCode::CONFLICT, "An import is already running").into_response();
-        }
-    }
-
-    let job = state.jobs.start(JobKind::Import);
-    let job_id = job.id.clone();
-
-    let state2 = state.clone();
-    let job_for_task = job.clone();
-    tokio::spawn(async move {
-        let state3 = state2.clone();
-        let job_inner = job_for_task.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            run_import_with_progress(&state3, &req, &job_inner)
-        })
-        .await;
-
-        let terminal = match result {
-            Ok(Ok(json)) => json,
-            Ok(Err(e)) => serde_json::json!({"error": format!("{e:#}")}),
-            Err(e) => serde_json::json!({"error": format!("{e}")}),
-        };
-        job_for_task.finish(terminal);
-        state2.jobs.mark_done(&job_for_task.id);
-    });
-
-    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
+    crate::web::jobs::launch_job(&state, JobKind::Import, "An import is already running", move |state, job| {
+        run_import_with_progress(state, &req, job)
+    })
 }
 
 

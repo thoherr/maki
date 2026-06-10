@@ -59,35 +59,9 @@ pub async fn start_writeback_api(
         return (StatusCode::BAD_REQUEST, "--mirror-tags requires --all").into_response();
     }
 
-    if let Some(latest) = state.jobs.latest(JobKind::Writeback) {
-        if !latest.is_completed() {
-            return (StatusCode::CONFLICT, "A writeback is already running").into_response();
-        }
-    }
-
-    let job = state.jobs.start(JobKind::Writeback);
-    let job_id = job.id.clone();
-    let state2 = state.clone();
-    let job_for_task = job.clone();
-
-    tokio::spawn(async move {
-        let state3 = state2.clone();
-        let job_inner = job_for_task.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            run_writeback(&state3, &req, &job_inner)
-        })
-        .await;
-
-        let terminal = match result {
-            Ok(Ok(json)) => json,
-            Ok(Err(e)) => serde_json::json!({"error": format!("{e:#}")}),
-            Err(e) => serde_json::json!({"error": format!("{e}")}),
-        };
-        job_for_task.finish(terminal);
-        state2.jobs.mark_done(&job_for_task.id);
-    });
-
-    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
+    crate::web::jobs::launch_job(&state, JobKind::Writeback, "A writeback is already running", move |state, job| {
+        run_writeback(state, &req, job)
+    })
 }
 
 fn run_writeback(
@@ -166,35 +140,9 @@ pub async fn start_sync_metadata_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<StartSyncMetadataRequest>,
 ) -> Response {
-    if let Some(latest) = state.jobs.latest(JobKind::SyncMetadata) {
-        if !latest.is_completed() {
-            return (StatusCode::CONFLICT, "A sync-metadata job is already running").into_response();
-        }
-    }
-
-    let job = state.jobs.start(JobKind::SyncMetadata);
-    let job_id = job.id.clone();
-    let state2 = state.clone();
-    let job_for_task = job.clone();
-
-    tokio::spawn(async move {
-        let state3 = state2.clone();
-        let job_inner = job_for_task.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            run_sync_metadata(&state3, &req, &job_inner)
-        })
-        .await;
-
-        let terminal = match result {
-            Ok(Ok(json)) => json,
-            Ok(Err(e)) => serde_json::json!({"error": format!("{e:#}")}),
-            Err(e) => serde_json::json!({"error": format!("{e}")}),
-        };
-        job_for_task.finish(terminal);
-        state2.jobs.mark_done(&job_for_task.id);
-    });
-
-    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
+    crate::web::jobs::launch_job(&state, JobKind::SyncMetadata, "A sync-metadata job is already running", move |state, job| {
+        run_sync_metadata(state, &req, job)
+    })
 }
 
 fn run_sync_metadata(
@@ -278,35 +226,9 @@ pub async fn start_verify_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<StartVerifyRequest>,
 ) -> Response {
-    if let Some(latest) = state.jobs.latest(JobKind::Verify) {
-        if !latest.is_completed() {
-            return (StatusCode::CONFLICT, "A verify job is already running").into_response();
-        }
-    }
-
-    let job = state.jobs.start(JobKind::Verify);
-    let job_id = job.id.clone();
-    let state2 = state.clone();
-    let job_for_task = job.clone();
-
-    tokio::spawn(async move {
-        let state3 = state2.clone();
-        let job_inner = job_for_task.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            run_verify(&state3, &req, &job_inner)
-        })
-        .await;
-
-        let terminal = match result {
-            Ok(Ok(json)) => json,
-            Ok(Err(e)) => serde_json::json!({"error": format!("{e:#}")}),
-            Err(e) => serde_json::json!({"error": format!("{e}")}),
-        };
-        job_for_task.finish(terminal);
-        state2.jobs.mark_done(&job_for_task.id);
-    });
-
-    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
+    crate::web::jobs::launch_job(&state, JobKind::Verify, "A verify job is already running", move |state, job| {
+        run_verify(state, &req, job)
+    })
 }
 
 fn run_verify(
@@ -386,35 +308,9 @@ pub async fn start_generate_previews_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<StartGeneratePreviewsRequest>,
 ) -> Response {
-    if let Some(latest) = state.jobs.latest(JobKind::GeneratePreviews) {
-        if !latest.is_completed() {
-            return (StatusCode::CONFLICT, "A generate-previews job is already running").into_response();
-        }
-    }
-
-    let job = state.jobs.start(JobKind::GeneratePreviews);
-    let job_id = job.id.clone();
-    let state2 = state.clone();
-    let job_for_task = job.clone();
-
-    tokio::spawn(async move {
-        let state3 = state2.clone();
-        let job_inner = job_for_task.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            run_generate_previews(&state3, &req, &job_inner)
-        })
-        .await;
-
-        let terminal = match result {
-            Ok(Ok(json)) => json,
-            Ok(Err(e)) => serde_json::json!({"error": format!("{e:#}")}),
-            Err(e) => serde_json::json!({"error": format!("{e}")}),
-        };
-        job_for_task.finish(terminal);
-        state2.jobs.mark_done(&job_for_task.id);
-    });
-
-    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
+    crate::web::jobs::launch_job(&state, JobKind::GeneratePreviews, "A generate-previews job is already running", move |state, job| {
+        run_generate_previews(state, &req, job)
+    })
 }
 
 /// Catalog-mode preview generation: walks every asset (or one volume's
@@ -579,35 +475,9 @@ pub async fn start_sync_api(
         return (StatusCode::BAD_REQUEST, "remove_stale requires apply").into_response();
     }
 
-    if let Some(latest) = state.jobs.latest(JobKind::Sync) {
-        if !latest.is_completed() {
-            return (StatusCode::CONFLICT, "A sync job is already running").into_response();
-        }
-    }
-
-    let job = state.jobs.start(JobKind::Sync);
-    let job_id = job.id.clone();
-    let state2 = state.clone();
-    let job_for_task = job.clone();
-
-    tokio::spawn(async move {
-        let state3 = state2.clone();
-        let job_inner = job_for_task.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            run_sync(&state3, &req, &job_inner)
-        })
-        .await;
-
-        let terminal = match result {
-            Ok(Ok(json)) => json,
-            Ok(Err(e)) => serde_json::json!({"error": format!("{e:#}")}),
-            Err(e) => serde_json::json!({"error": format!("{e}")}),
-        };
-        job_for_task.finish(terminal);
-        state2.jobs.mark_done(&job_for_task.id);
-    });
-
-    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
+    crate::web::jobs::launch_job(&state, JobKind::Sync, "A sync job is already running", move |state, job| {
+        run_sync(state, &req, job)
+    })
 }
 
 fn run_sync(
@@ -698,35 +568,9 @@ pub async fn start_refresh_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<StartRefreshRequest>,
 ) -> Response {
-    if let Some(latest) = state.jobs.latest(JobKind::Refresh) {
-        if !latest.is_completed() {
-            return (StatusCode::CONFLICT, "A refresh job is already running").into_response();
-        }
-    }
-
-    let job = state.jobs.start(JobKind::Refresh);
-    let job_id = job.id.clone();
-    let state2 = state.clone();
-    let job_for_task = job.clone();
-
-    tokio::spawn(async move {
-        let state3 = state2.clone();
-        let job_inner = job_for_task.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            run_refresh(&state3, &req, &job_inner)
-        })
-        .await;
-
-        let terminal = match result {
-            Ok(Ok(json)) => json,
-            Ok(Err(e)) => serde_json::json!({"error": format!("{e:#}")}),
-            Err(e) => serde_json::json!({"error": format!("{e}")}),
-        };
-        job_for_task.finish(terminal);
-        state2.jobs.mark_done(&job_for_task.id);
-    });
-
-    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
+    crate::web::jobs::launch_job(&state, JobKind::Refresh, "A refresh job is already running", move |state, job| {
+        run_refresh(state, &req, job)
+    })
 }
 
 fn run_refresh(
@@ -807,35 +651,9 @@ pub async fn start_cleanup_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<StartCleanupRequest>,
 ) -> Response {
-    if let Some(latest) = state.jobs.latest(JobKind::Cleanup) {
-        if !latest.is_completed() {
-            return (StatusCode::CONFLICT, "A cleanup job is already running").into_response();
-        }
-    }
-
-    let job = state.jobs.start(JobKind::Cleanup);
-    let job_id = job.id.clone();
-    let state2 = state.clone();
-    let job_for_task = job.clone();
-
-    tokio::spawn(async move {
-        let state3 = state2.clone();
-        let job_inner = job_for_task.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            run_cleanup(&state3, &req, &job_inner)
-        })
-        .await;
-
-        let terminal = match result {
-            Ok(Ok(json)) => json,
-            Ok(Err(e)) => serde_json::json!({"error": format!("{e:#}")}),
-            Err(e) => serde_json::json!({"error": format!("{e}")}),
-        };
-        job_for_task.finish(terminal);
-        state2.jobs.mark_done(&job_for_task.id);
-    });
-
-    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
+    crate::web::jobs::launch_job(&state, JobKind::Cleanup, "A cleanup job is already running", move |state, job| {
+        run_cleanup(state, &req, job)
+    })
 }
 
 fn run_cleanup(
