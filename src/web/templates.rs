@@ -332,7 +332,7 @@ pub struct AssetPage {
     pub description: Option<String>,
     pub rating: Option<u8>,
     pub color_label: Option<String>,
-    pub tags: Vec<String>,
+    pub tags: Vec<TagChip>,
     pub primary_preview_url: Option<String>,
     pub smart_preview_url: Option<String>,
     pub has_smart_preview: bool,
@@ -552,7 +552,7 @@ impl AssetPage {
             description: details.description,
             rating: details.rating,
             color_label: details.color_label,
-            tags: details.tags,
+            tags: tag_chips(&details.tags, &details.tag_sources),
             primary_preview_url: preview,
             smart_preview_url: smart_preview,
             has_smart_preview,
@@ -659,7 +659,37 @@ pub struct PreviewFragment {
 #[template(path = "tags_fragment.html")]
 pub struct TagsFragment {
     pub asset_id: String,
-    pub tags: Vec<String>,
+    pub tags: Vec<TagChip>,
+}
+
+/// One tag chip on the asset detail page / tags fragment, with an
+/// optional provenance badge for machine-added tags (`auto` for SigLIP
+/// auto-tag, `vlm` for VLM describe, `xmp` for embedded-XMP import).
+/// User tags carry no badge — human curation is the default, not the
+/// exception.
+pub struct TagChip {
+    pub value: String,
+    pub badge: Option<&'static str>,
+}
+
+/// Build chips from a tag list + the asset's provenance map
+/// (`Asset::tag_sources` / `AssetDetails::tag_sources`; absent = user).
+pub fn tag_chips(
+    tags: &[String],
+    sources: &std::collections::BTreeMap<String, crate::models::TagSource>,
+) -> Vec<TagChip> {
+    use crate::models::TagSource;
+    tags.iter()
+        .map(|t| TagChip {
+            value: t.clone(),
+            badge: match sources.get(t) {
+                Some(TagSource::AutoTag) => Some("auto"),
+                Some(TagSource::Vlm) => Some("vlm"),
+                Some(TagSource::XmpImport) => Some("xmp"),
+                Some(TagSource::User) | None => None,
+            },
+        })
+        .collect()
 }
 
 #[derive(Template)]

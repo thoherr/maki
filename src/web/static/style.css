@@ -1026,6 +1026,22 @@ select.badge {
    was `> span:first-child`, which broke when the negate toggle was
    inserted before the label.) */
 .tag-chip > span { margin-right: 0.25rem; }
+
+/* Provenance badge on machine-added tags (auto-tag / vlm / xmp-import).
+   User tags carry no badge. */
+.tag-source-badge {
+    margin-left: 0.3rem;
+    padding: 0 0.3rem;
+    font-size: 0.62rem;
+    line-height: 1.3;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--tag-text) 14%, transparent);
+    color: var(--tag-text);
+    opacity: 0.75;
+    cursor: default;
+}
 /* Negate toggle (`+` / `−`) — sits before the label. Faint plain text
    when the chip is positive (default). When active, the toggle becomes
    a small filled red badge with a white minus — reads like a

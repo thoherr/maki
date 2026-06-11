@@ -61,6 +61,12 @@ impl TestServer {
             asset.name = Some("sunset photo".to_string());
             asset.tags = vec!["landscape".to_string()];
             asset.rating = Some(2);
+            // One machine-added tag for the provenance-badge tests; the
+            // "landscape" tag stays user-sourced (absent from the map).
+            asset.add_tags_with_source(
+                &["festival".to_string()],
+                crate::models::TagSource::Vlm,
+            );
             let variant = Variant {
                 content_hash: "sha256:webtest1".to_string(),
                 asset_id: asset.id,
@@ -361,6 +367,37 @@ async fn asset_page_renders() {
     let (status, _, body) = srv.get(&format!("/asset/{}", srv.asset_id)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("sunset_beach.jpg"), "asset page must show the variant");
+}
+
+#[tokio::test]
+async fn asset_page_shows_provenance_badge_on_machine_tags_only() {
+    let srv = TestServer::new();
+    let (status, _, body) = srv.get(&format!("/asset/{}", srv.asset_id)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains(">vlm</span>"), "vlm tag must carry a badge");
+    assert_eq!(
+        body.matches("tag-source-badge").count(),
+        1,
+        "exactly one badge — the user tag must not get one"
+    );
+}
+
+#[tokio::test]
+async fn tags_fragment_keeps_badges_after_edit() {
+    // Adding a user tag re-renders the fragment; the vlm badge on the
+    // pre-existing machine tag must survive (TagResult carries sources).
+    let srv = TestServer::new();
+    let (status, _, body) = srv
+        .form(
+            Method::POST,
+            &format!("/api/asset/{}/tags", srv.asset_id),
+            "tags=newone",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.contains("newone"));
+    assert!(body.contains(">vlm</span>"), "badge must survive the edit: {body}");
+    assert_eq!(body.matches("tag-source-badge").count(), 1);
 }
 
 #[tokio::test]

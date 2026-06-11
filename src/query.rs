@@ -219,6 +219,9 @@ pub struct TagResult {
     pub changed: Vec<String>,
     /// The full set of tags after the operation.
     pub current_tags: Vec<String>,
+    /// Provenance map for `current_tags` (absent = user) — lets the web
+    /// tags fragment render machine-tag badges without a second load.
+    pub tag_sources: std::collections::BTreeMap<String, crate::models::TagSource>,
 }
 
 /// Action taken for a single asset during tag rename.
@@ -1419,6 +1422,7 @@ impl QueryEngine {
         Ok(TagResult {
             changed,
             current_tags: asset.tags.clone(),
+            tag_sources: asset.tag_sources.clone(),
         })
     }
 

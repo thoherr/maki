@@ -42,7 +42,7 @@ pub async fn add_tags(
         state.dropdown_cache.invalidate_tags();
         let tmpl = TagsFragment {
             asset_id,
-            tags: result.current_tags,
+            tags: crate::web::templates::tag_chips(&result.current_tags, &result.tag_sources),
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
@@ -64,7 +64,7 @@ pub async fn remove_tag(
         state.dropdown_cache.invalidate_tags();
         let tmpl = TagsFragment {
             asset_id,
-            tags: result.current_tags,
+            tags: crate::web::templates::tag_chips(&result.current_tags, &result.tag_sources),
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
@@ -92,7 +92,7 @@ pub async fn clear_tags(
         state.dropdown_cache.invalidate_tags();
         let tmpl = TagsFragment {
             asset_id,
-            tags: result.current_tags,
+            tags: crate::web::templates::tag_chips(&result.current_tags, &result.tag_sources),
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })

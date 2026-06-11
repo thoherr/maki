@@ -534,9 +534,12 @@ pub async fn reimport_metadata(
         let engine = state.query_engine();
         let tags = engine.reimport_metadata(&asset_id)?;
         state.dropdown_cache.invalidate_tags();
+        // Reimport reports the new tag list; fetch the provenance map for
+        // the badges (reimported keywords carry the xmp-import source).
+        let details = engine.show(&asset_id)?;
         let tmpl = TagsFragment {
             asset_id,
-            tags,
+            tags: crate::web::templates::tag_chips(&tags, &details.tag_sources),
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
