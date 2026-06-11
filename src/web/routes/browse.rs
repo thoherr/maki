@@ -1,9 +1,11 @@
 //! Browse / search / asset-page / facets route handlers.
 //!
-//! Shared helpers (build_parsed_search, merge_search_params, resolve_collection_ids,
-//! intersect_name_groups, resolve_best_variant_idx, resolve_similar_filter,
-//! ResolvedSearch, BrowseFilters, SearchParams) live in the parent routes
-//! module so sibling submodules (calendar_map, media, assets, ai) can reuse them.
+//! Shared helpers (build_parsed_search, merge_search_params,
+//! resolve_best_variant_idx, resolve_similar_filter, ResolvedSearch,
+//! BrowseFilters, SearchParams) live in the parent routes module so sibling
+//! submodules (calendar_map, media, assets, ai) can reuse them; the
+//! collection/person name → asset-ID resolution itself is shared with the
+//! CLI via `crate::query::resolve`.
 
 use std::sync::Arc;
 
@@ -194,9 +196,9 @@ pub async fn browse_page(
         let deltas = compute_count_deltas(&catalog, &mut opts, &DeltaContext {
             state: &state,
             params: &params,
-            collection_ids: &resolved.collection_ids,
-            collection_exclude_ids: &resolved.collection_exclude_ids,
-            person_ids: &resolved.person_ids,
+            collection_ids: &resolved.filters.collection_ids,
+            collection_exclude_ids: &resolved.filters.collection_exclude_ids,
+            person_ids: &resolved.filters.person_ids,
             volume: &resolved.volume,
             path_volume_id: resolved.path_volume_id.as_deref(),
             effective_sort,
@@ -409,9 +411,9 @@ pub async fn search_api(
         let deltas = compute_count_deltas(&catalog, &mut opts, &DeltaContext {
             state: &state,
             params: &params,
-            collection_ids: &resolved.collection_ids,
-            collection_exclude_ids: &resolved.collection_exclude_ids,
-            person_ids: &resolved.person_ids,
+            collection_ids: &resolved.filters.collection_ids,
+            collection_exclude_ids: &resolved.filters.collection_exclude_ids,
+            person_ids: &resolved.filters.person_ids,
             volume: &resolved.volume,
             path_volume_id: resolved.path_volume_id.as_deref(),
             effective_sort,

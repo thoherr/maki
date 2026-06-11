@@ -51,6 +51,9 @@ use crate::models::volume::Volume;
 mod parse;
 pub use parse::*;
 
+mod resolve;
+pub use resolve::*;
+
 mod writeback;
 
 // ═══ FREE FUNCTIONS ═══
@@ -473,86 +476,19 @@ impl QueryEngine {
             opts.missing_asset_ids = Some(&missing_ids);
         }
 
-        // Pre-compute collection asset IDs (include)
-        let collection_ids;
-        if !parsed.collections.is_empty() {
-            let store = crate::collection::CollectionStore::new(catalog.conn());
-            // OR across all collection entries, then intersect
-            let mut all_ids = HashSet::new();
-            for col_entry in &parsed.collections {
-                for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    if let Ok(ids) = store.asset_ids_for_collection(col_name) {
-                        all_ids.extend(ids);
-                    }
-                }
-            }
-            collection_ids = all_ids.into_iter().collect::<Vec<_>>();
-            opts.collection_asset_ids = Some(&collection_ids);
-        }
-
-        // Pre-compute collection exclude IDs
-        let collection_exclude_ids;
-        if !parsed.collections_exclude.is_empty() {
-            let store = crate::collection::CollectionStore::new(catalog.conn());
-            let mut all_ids = HashSet::new();
-            for col_entry in &parsed.collections_exclude {
-                for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    if let Ok(ids) = store.asset_ids_for_collection(col_name) {
-                        all_ids.extend(ids);
-                    }
-                }
-            }
-            collection_exclude_ids = all_ids.into_iter().collect::<Vec<_>>();
-            opts.collection_exclude_ids = Some(&collection_exclude_ids);
-        }
-
-        // Pre-compute person asset IDs (include)
-        let person_ids;
-        if !parsed.persons.is_empty() {
-            #[cfg(feature = "ai")]
-            {
-                let face_store = crate::face_store::FaceStore::new(catalog.conn());
-                let mut all_ids = std::collections::HashSet::new();
-                for person_entry in &parsed.persons {
-                    for person_name in person_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                        if let Ok(ids) = face_store.find_person_asset_ids(person_name) {
-                            all_ids.extend(ids);
-                        }
-                    }
-                }
-                person_ids = all_ids.into_iter().collect::<Vec<_>>();
-                opts.person_asset_ids = Some(&person_ids);
-            }
-            #[cfg(not(feature = "ai"))]
-            {
-                person_ids = Vec::new();
-                opts.person_asset_ids = Some(&person_ids);
-            }
-        }
-
-        // Pre-compute person exclude IDs
-        let person_exclude_ids;
-        if !parsed.persons_exclude.is_empty() {
-            #[cfg(feature = "ai")]
-            {
-                let face_store = crate::face_store::FaceStore::new(catalog.conn());
-                let mut all_ids = std::collections::HashSet::new();
-                for person_entry in &parsed.persons_exclude {
-                    for person_name in person_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                        if let Ok(ids) = face_store.find_person_asset_ids(person_name) {
-                            all_ids.extend(ids);
-                        }
-                    }
-                }
-                person_exclude_ids = all_ids.into_iter().collect::<Vec<_>>();
-                opts.person_exclude_ids = Some(&person_exclude_ids);
-            }
-            #[cfg(not(feature = "ai"))]
-            {
-                person_exclude_ids = Vec::new();
-                opts.person_exclude_ids = Some(&person_exclude_ids);
-            }
-        }
+        // Resolve collection include/exclude and person include/exclude
+        // filters via the shared resolver (see `crate::query::resolve` for
+        // the CLI-vs-web drift matrix). The CLI installs resolved lists
+        // whenever the filter is present in the query — an unmatched filter
+        // matches nothing (MatchNothing) — and OR-unions separate person
+        // entries (AnyOf).
+        let resolved_filters = ResolvedFilterIds::resolve(
+            &catalog,
+            &parsed,
+            EmptyFilterPolicy::MatchNothing,
+            PersonCombine::AnyOf,
+        );
+        resolved_filters.apply(&mut opts);
 
         // Pre-compute similar asset IDs from embedding similarity search
         #[cfg(feature = "ai")]

@@ -13,9 +13,7 @@ use crate::query::normalize_path_for_search;
 use crate::web::templates::{CompareAsset, ComparePage};
 use crate::web::AppState;
 
-use super::{merge_search_params, resolve_collection_ids};
-#[cfg(feature = "ai")]
-use super::intersect_name_groups;
+use super::merge_search_params;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct CompareParams {
@@ -1018,28 +1016,21 @@ pub async fn export_zip(
                 }
             }
 
-            let collection_ids;
-            if !parsed.collections.is_empty() {
-                collection_ids = resolve_collection_ids(&parsed.collections, catalog.conn());
-                opts.collection_asset_ids = Some(&collection_ids);
-            }
-
-            let person_ids;
-            if !parsed.persons.is_empty() {
-                #[cfg(feature = "ai")]
-                {
-                    let face_store = crate::face_store::FaceStore::new(catalog.conn());
-                    person_ids = intersect_name_groups(&parsed.persons, |name| {
-                        face_store.find_person_asset_ids(name).unwrap_or_default()
-                    });
-                    opts.person_asset_ids = Some(&person_ids);
-                }
-                #[cfg(not(feature = "ai"))]
-                {
-                    person_ids = Vec::<String>::new();
-                    opts.person_asset_ids = Some(&person_ids);
-                }
-            }
+            // Shared collection/person ID resolution (crate::query::resolve).
+            // Export-zip historically installed collection-include and
+            // person-include whenever the filter was present, even when it
+            // resolved to nothing (MatchNothing), with web person semantics
+            // (AllOf) — but never applied `-collection:` / `-person:`
+            // excludes. Preserved verbatim by applying only the two include
+            // filters; the gap is documented in the resolver's drift matrix.
+            let resolved = crate::query::ResolvedFilterIds::resolve(
+                &catalog,
+                &parsed,
+                crate::query::EmptyFilterPolicy::MatchNothing,
+                crate::query::PersonCombine::AllOf,
+            );
+            resolved.apply_collections(&mut opts);
+            resolved.apply_persons(&mut opts);
 
             opts.per_page = u32::MAX;
             opts.page = 1;

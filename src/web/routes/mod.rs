@@ -240,78 +240,13 @@ pub(super) struct BrowseFilters {
 /// works across browse_page, search_api, page_ids_api, calendar_api, map_api,
 /// and facets_api. Each handler calls this, then adds handler-specific logic
 /// (template rendering, JSON formatting, etc.).
-/// Resolve a list of comma-OR'd / entry-ANDed name groups against a
-/// lookup function and return the asset IDs that match all entries.
-///
-/// Matches the catalog's tag semantics: comma within an entry is OR
-/// ("any of these names"), separate entries are AND ("must match all
-/// of these"). For person filters this means `person:Alice person:Bob`
-/// returns assets that contain BOTH Alice and Bob, while
-/// `person:Alice,Bob` returns assets that contain EITHER.
-///
-/// Returns an empty Vec when `entries` is empty (caller should not call
-/// this when there's no filter to apply).
-#[cfg(feature = "ai")]
-pub(super) fn intersect_name_groups<F>(entries: &[String], lookup: F) -> Vec<String>
-where
-    F: Fn(&str) -> Vec<String>,
-{
-    let mut current: Option<std::collections::HashSet<String>> = None;
-    for entry in entries {
-        let mut group: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for name in entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-            for id in lookup(name) {
-                group.insert(id);
-            }
-        }
-        current = match current {
-            None => Some(group),
-            Some(prev) => Some(prev.intersection(&group).cloned().collect()),
-        };
-    }
-    current.unwrap_or_default().into_iter().collect()
-}
-
-/// Resolve a list of comma-OR'd collection name entries to asset IDs.
-///
-/// Each entry may be a comma-separated list (OR within entry). Multiple calls
-/// are union'd (OR across entries) — collections don't AND like tags/persons.
-/// Returns a Vec of distinct asset IDs. Returns empty Vec on no matches.
-pub(super) fn resolve_collection_ids(entries: &[String], conn: &rusqlite::Connection) -> Vec<String> {
-    let col_store = crate::collection::CollectionStore::new(conn);
-    let mut all_ids = std::collections::HashSet::new();
-    for col_entry in entries {
-        for col_name in col_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-            if let Ok(ids) = col_store.asset_ids_for_collection(col_name) {
-                all_ids.extend(ids);
-            }
-        }
-    }
-    all_ids.into_iter().collect()
-}
-
-/// How `ResolvedSearch::apply` treats a filter that was present in the
-/// query but resolved to zero asset IDs.
-///
-/// The two policies encode a historical behavioral drift between the
-/// handler families — preserved verbatim by the dedup:
-/// - browse_page / search_api / all_ids_api / page_ids_api / facets_api
-///   installed the resolved list only when it was non-empty, so a
-///   collection/person filter that matched nothing was silently ignored
-///   (and in non-AI builds, person filters were always ignored).
-/// - calendar_api / map_api installed `Some(&ids)` whenever the filter
-///   was present in the parsed query, so a filter resolving to zero IDs
-///   matched nothing (and in non-AI builds, a person filter matched
-///   nothing).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EmptyFilterPolicy {
-    /// Skip installing an empty resolved list — the filter is silently
-    /// ignored (browse/search/all-ids/page-ids/facets behavior).
-    Ignore,
-    /// Install the empty slice so the filter matches nothing
-    /// (calendar/map behavior).
-    MatchNothing,
-}
+/// Re-exported from the shared resolver so handler code keeps using
+/// `super::EmptyFilterPolicy` unchanged. The collection/person name → asset-ID
+/// resolution itself (formerly local `resolve_collection_ids` /
+/// `intersect_name_groups` helpers) lives in `crate::query::resolve` now,
+/// shared with the CLI search path — see that module's drift matrix for the
+/// historical CLI-vs-web behavioral differences.
+pub(super) use crate::query::EmptyFilterPolicy;
 
 /// Owned holder for the per-request "ParsedSearch → SearchOptions
 /// enrichment" results shared by the browse/search/calendar/map handlers.
@@ -339,9 +274,10 @@ pub(super) enum EmptyFilterPolicy {
 pub(super) struct ResolvedSearch {
     pub(super) volume: String,
     pub(super) path_volume_id: Option<String>,
-    pub(super) collection_ids: Vec<String>,
-    pub(super) collection_exclude_ids: Vec<String>,
-    pub(super) person_ids: Vec<String>,
+    /// Collection/person ID resolution shared with the CLI search path.
+    /// The web layer always uses `PersonCombine::AllOf` (separate `person:`
+    /// entries intersect) — see `crate::query::resolve` for the drift matrix.
+    pub(super) filters: crate::query::ResolvedFilterIds,
     /// `Some` once the text-query pipeline produced an ID list (installed
     /// even when empty — an unmatched text query yields zero results).
     /// `None` when no text query was given or the model/index failed to
@@ -354,10 +290,6 @@ pub(super) struct ResolvedSearch {
     pub(super) similarity_scores: std::collections::HashMap<String, f32>,
     #[cfg(feature = "ai")]
     similar_requested: bool,
-    has_collections: bool,
-    has_collection_excludes: bool,
-    has_persons: bool,
-    empty_filter_policy: EmptyFilterPolicy,
 }
 
 impl ResolvedSearch {
@@ -370,34 +302,17 @@ impl ResolvedSearch {
         path_volume_id: Option<String>,
         empty_filter_policy: EmptyFilterPolicy,
     ) -> Self {
-        let collection_ids: Vec<String> = if !parsed.collections.is_empty() {
-            resolve_collection_ids(&parsed.collections, catalog.conn())
-        } else {
-            Vec::new()
-        };
-        let collection_exclude_ids: Vec<String> = if !parsed.collections_exclude.is_empty() {
-            resolve_collection_ids(&parsed.collections_exclude, catalog.conn())
-        } else {
-            Vec::new()
-        };
-        #[cfg(feature = "ai")]
-        let person_ids: Vec<String> = if !parsed.persons.is_empty() {
-            let face_store = crate::face_store::FaceStore::new(catalog.conn());
-            intersect_name_groups(&parsed.persons, |name| {
-                face_store.find_person_asset_ids(name).unwrap_or_default()
-            })
-        } else {
-            Vec::new()
-        };
-        #[cfg(not(feature = "ai"))]
-        let person_ids: Vec<String> = Vec::new();
+        let filters = crate::query::ResolvedFilterIds::resolve(
+            catalog,
+            parsed,
+            empty_filter_policy,
+            crate::query::PersonCombine::AllOf,
+        );
 
         Self {
             volume,
             path_volume_id,
-            collection_ids,
-            collection_exclude_ids,
-            person_ids,
+            filters,
             #[cfg(feature = "ai")]
             text_query_ids: None,
             #[cfg(feature = "ai")]
@@ -406,10 +321,6 @@ impl ResolvedSearch {
             similarity_scores: std::collections::HashMap::new(),
             #[cfg(feature = "ai")]
             similar_requested: false,
-            has_collections: !parsed.collections.is_empty(),
-            has_collection_excludes: !parsed.collections_exclude.is_empty(),
-            has_persons: !parsed.persons.is_empty(),
-            empty_filter_policy,
         }
     }
 
@@ -512,18 +423,14 @@ impl ResolvedSearch {
                 opts.volume = Some(vid);
             }
         }
-        let install_empty = self.empty_filter_policy == EmptyFilterPolicy::MatchNothing;
-        if !self.collection_ids.is_empty() || (install_empty && self.has_collections) {
-            opts.collection_asset_ids = Some(&self.collection_ids);
-        }
-        if !self.collection_exclude_ids.is_empty()
-            || (install_empty && self.has_collection_excludes)
-        {
-            opts.collection_exclude_ids = Some(&self.collection_exclude_ids);
-        }
-        if !self.person_ids.is_empty() || (install_empty && self.has_persons) {
-            opts.person_asset_ids = Some(&self.person_ids);
-        }
+        self.filters.apply_collections(opts);
+        self.filters.apply_collection_excludes(opts);
+        self.filters.apply_persons(opts);
+        // NOTE: `apply_person_excludes` is deliberately NOT called — the web
+        // layer has never supported `-person:` (the parsed exclude entries
+        // were silently dropped before the dedup, and installing them now
+        // would change result sets). Historical gap, documented in the
+        // `crate::query::resolve` drift matrix; the CLI does honor it.
         #[cfg(feature = "ai")]
         {
             if let Some(ref ids) = self.text_query_ids {
