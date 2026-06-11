@@ -23,7 +23,7 @@ See `doc/architecture-overview.md` for design decisions, `doc/component-specific
 
 ## Implemented Commands
 
-48 top-level commands (90 leaf commands counting subcommands): `init`, `volume` (add/list/combine/split/rename/remove/set-purpose), `import`, `delete`, `export`, `contact-sheet`, `describe`, `search`, `show`, `preview`, `tag` (rename/split/delete/clear/scan/expand-ancestors/fix-unicode/export-vocabulary), `edit`, `group`, `split`, `auto-group`, `auto-tag`, `embed`, `ai` (export-vocabulary), `faces` (detect/download/status/cluster/clean/similarity/dump-aligned/people/name/merge/delete-person/unassign/export), `stack` (create/add/remove/pick/dissolve/list/show/from-tag), `duplicates`, `dedup`, `trash` (list/restore/empty), `generate-previews`, `fix-roles`, `fix-dates`, `fix-recipes`, `create-sidecars`, `rebuild-catalog`, `doctor`, `migrate`, `relocate`, `update-location`, `verify`, `sync`, `sync-metadata`, `refresh`, `cleanup`, `writeback`, `backup-status`, `status`, `stats`, `serve`, `doc`, `licenses`, `saved-search` (save/list/run/delete), `collection` (create/list/show/add/remove/delete), `shell`
+48 top-level commands (90 leaf commands counting subcommands): `init`, `volume` (add/list/combine/split/rename/remove/set-purpose), `import`, `delete`, `export`, `contact-sheet`, `describe`, `search`, `show`, `preview`, `tag` (rename/split/delete/clear [`--source` provenance filter]/scan/expand-ancestors/fix-unicode/export-vocabulary), `edit`, `group`, `split`, `auto-group`, `auto-tag`, `embed`, `ai` (export-vocabulary), `faces` (detect/download/status/cluster/clean/similarity/dump-aligned/people/name/merge/delete-person/unassign/export), `stack` (create/add/remove/pick/dissolve/list/show/from-tag), `duplicates`, `dedup`, `trash` (list/restore/empty), `generate-previews`, `fix-roles`, `fix-dates`, `fix-recipes`, `create-sidecars`, `rebuild-catalog`, `doctor`, `migrate`, `relocate`, `update-location`, `verify`, `sync`, `sync-metadata`, `refresh`, `cleanup`, `writeback`, `backup-status`, `status`, `stats`, `serve`, `doc`, `licenses`, `saved-search` (save/list/run/delete), `collection` (create/list/show/add/remove/delete), `shell`
 
 See `doc/specification.md` for detailed command behavior, flags, and search filter documentation.
 
@@ -31,6 +31,9 @@ See `doc/specification.md` for detailed command behavior, flags, and search filt
 
 ### Dual Storage
 YAML sidecars are the source of truth; SQLite catalog is a derived cache rebuilt via `maki rebuild-catalog`. All write paths must update both stores.
+
+### Tag Provenance
+`Asset.tag_sources: BTreeMap<String, TagSource>` maps tag value → source (`user`/`xmp-import`/`auto-tag`/`vlm`); a tag absent from the map is `user`. Mutate tags only via `Asset::add_tags_with_source`/`remove_tags`/`rename_tag_value` (keeps the map consistent; `MetadataStore::save` self-heals stale entries). Mirrored in SQLite `assets.tag_sources` (schema v10), checked by doctor.
 
 ### Schema Migrations
 - **Version-guarded**: `run_migrations()` reads the stored version once and only executes blocks where `current < N`. On an up-to-date catalog, startup is a single SELECT query.

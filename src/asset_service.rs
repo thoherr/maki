@@ -907,12 +907,13 @@ fn apply_xmp_data(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant_h
     // tag like ` |München` collides with thousands of legitimately
     // hierarchical tags ending in `|München` and becomes impossible
     // to isolate without bespoke tooling — better to never let it in.
+    //
+    // Genuinely-new keywords are recorded with `xmp-import` provenance;
+    // tags already on the asset keep their existing source (a
+    // re-import must not demote a user tag).
     for raw in &merged {
-        for kw in crate::tag_util::normalize_tag_for_storage(raw).tags {
-            if !asset.tags.contains(&kw) {
-                asset.tags.push(kw);
-            }
-        }
+        let normalized = crate::tag_util::normalize_tag_for_storage(raw).tags;
+        asset.add_tags_with_source(&normalized, crate::models::TagSource::XmpImport);
     }
 
     if asset.description.is_none() {
@@ -955,13 +956,11 @@ fn apply_xmp_data(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant_h
 fn reapply_xmp_data(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant_hash: &str) {
     let merged = merge_hierarchical_keywords(&xmp.keywords, &xmp.hierarchical_keywords);
     // Same normaliser pass as `apply_xmp_data`; see comment there for
-    // why we don't trust XMP keywords verbatim.
+    // why we don't trust XMP keywords verbatim. New keywords get
+    // `xmp-import` provenance; existing tags keep their source.
     for raw in &merged {
-        for kw in crate::tag_util::normalize_tag_for_storage(raw).tags {
-            if !asset.tags.contains(&kw) {
-                asset.tags.push(kw);
-            }
-        }
+        let normalized = crate::tag_util::normalize_tag_for_storage(raw).tags;
+        asset.add_tags_with_source(&normalized, crate::models::TagSource::XmpImport);
     }
 
     if xmp.description.is_some() {
@@ -1353,6 +1352,34 @@ mod tests {
         assert_eq!(meta.get("rating").unwrap(), "5");
         assert_eq!(meta.get("label").unwrap(), "Red");
         assert_eq!(meta.get("exif_key").unwrap(), "exif_value");
+    }
+
+    #[test]
+    fn apply_xmp_data_records_xmp_import_source_for_new_tags_only() {
+        use crate::models::TagSource;
+        let mut asset = Asset::new(AssetType::Image, "sha256:xmp_source_test");
+        // Pre-existing user tag (absent from the provenance map = user).
+        asset.tags = vec!["existing_tag".to_string()];
+
+        let xmp = crate::xmp_reader::XmpData {
+            keywords: vec!["new_tag".to_string(), "existing_tag".to_string()],
+            hierarchical_keywords: vec![],
+            description: None,
+            source_metadata: Default::default(),
+        };
+
+        apply_xmp_data(&xmp, &mut asset, "sha256:xmp_source_test");
+
+        // The genuinely-new keyword carries xmp-import provenance…
+        assert_eq!(asset.tag_source("new_tag"), TagSource::XmpImport);
+        // …but the pre-existing tag is NOT demoted to xmp-import.
+        assert_eq!(asset.tag_source("existing_tag"), TagSource::User);
+        assert!(!asset.tag_sources.contains_key("existing_tag"));
+
+        // Re-applying (recipe modified) keeps the same semantics.
+        reapply_xmp_data(&xmp, &mut asset, "sha256:xmp_source_test");
+        assert_eq!(asset.tag_source("new_tag"), TagSource::XmpImport);
+        assert_eq!(asset.tag_source("existing_tag"), TagSource::User);
     }
 
     #[test]

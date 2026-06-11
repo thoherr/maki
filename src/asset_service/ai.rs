@@ -196,7 +196,7 @@ impl AssetService {
 
             if apply && !new_suggestions.is_empty() {
                 let new_tags: Vec<String> = new_suggestions.iter().map(|s| s.tag.clone()).collect();
-                match engine.tag(aid, &new_tags, false) {
+                match engine.tag_with_source(aid, &new_tags, false, crate::models::TagSource::AutoTag) {
                     Ok(_) => {
                         result.tags_applied += new_tags.len();
                     }

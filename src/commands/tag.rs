@@ -327,11 +327,18 @@ pub fn run_tag_command(
             }
             Ok(())
         }
-        Some(TagCommands::Clear { asset_id }) => {
+        Some(TagCommands::Clear { asset_id, source }) => {
             let catalog_root = maki::config::find_catalog_root()?;
             let engine = QueryEngine::new(&catalog_root);
 
-            // Load asset to get current tags, then remove all
+            // Optional provenance filter: only clear tags whose recorded
+            // source matches (tags absent from the map count as `user`).
+            let source_filter: Option<maki::models::TagSource> = match source.as_deref() {
+                Some(s) => Some(s.parse().map_err(|e: String| anyhow::anyhow!(e))?),
+                None => None,
+            };
+
+            // Load asset to get current tags, then remove the selection
             let catalog = maki::catalog::Catalog::open(&catalog_root)?;
             let full_id = catalog.resolve_asset_id(&asset_id)?
                 .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id}'"))?;
@@ -339,16 +346,29 @@ pub fn run_tag_command(
             let metadata_store = maki::metadata_store::MetadataStore::new(&catalog_root);
             let asset = metadata_store.load(uuid)?;
 
-            if asset.tags.is_empty() {
+            let tags_to_remove: Vec<String> = match source_filter {
+                Some(src) => asset.tags.iter()
+                    .filter(|t| asset.tag_source(t) == src)
+                    .cloned()
+                    .collect(),
+                None => asset.tags.clone(),
+            };
+
+            if tags_to_remove.is_empty() {
                 if cli.json {
-                    println!("{}", serde_json::json!({ "changed": [], "tags": [] }));
+                    println!("{}", serde_json::json!({ "changed": [], "tags": asset.tags }));
+                } else if let Some(src) = source_filter {
+                    if asset.tags.is_empty() {
+                        println!("Tags: (none)");
+                    } else {
+                        println!("No tags with source '{src}'.");
+                    }
                 } else {
                     println!("Tags: (none)");
                 }
                 return Ok(());
             }
 
-            let tags_to_remove = asset.tags.clone();
             let result = engine.tag(&asset_id, &tags_to_remove, true)?;
 
             if cli.json {
@@ -360,7 +380,10 @@ pub fn run_tag_command(
                 let display_removed: Vec<String> = result.changed.iter()
                     .map(|t| maki::tag_util::tag_storage_to_display(t))
                     .collect();
-                println!("Cleared {} tag(s): {}", display_removed.len(), display_removed.join(", "));
+                let scope = source_filter
+                    .map(|s| format!(" (source: {s})"))
+                    .unwrap_or_default();
+                println!("Cleared {} tag(s){}: {}", display_removed.len(), scope, display_removed.join(", "));
             }
             Ok(())
         }
@@ -410,9 +433,8 @@ pub fn run_tag_command(
                 }
 
                 if apply {
-                    for tag in &missing {
-                        asset_obj.tags.push(tag.clone());
-                    }
+                    // Ancestor expansion is structural; absent map entry = user.
+                    asset_obj.add_tags_with_source(&missing, maki::models::TagSource::User);
                     metadata_store.save(&asset_obj)?;
                     catalog.insert_asset(&asset_obj)?;
                 }

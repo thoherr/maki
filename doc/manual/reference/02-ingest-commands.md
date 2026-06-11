@@ -630,11 +630,13 @@ maki-tag-clear -- remove all tags from an asset
 
 ### SYNOPSIS
 
-    maki [GLOBAL FLAGS] tag clear <ASSET_ID>
+    maki [GLOBAL FLAGS] tag clear <ASSET_ID> [--source <SOURCE>]
 
 ### DESCRIPTION
 
 Removes all tags from the specified asset. This is equivalent to running `maki tag <id> --remove` with every tag the asset currently has, but without having to list them.
+
+With `--source`, only tags with the given provenance are removed. Every tag records where it came from: `user` (manual edits, configured import auto_tags), `xmp-import` (XMP keywords absorbed at import/reimport), `auto-tag` (SigLIP auto-tagger), or `vlm` (VLM describe). Tags created before provenance tracking count as `user`. This makes it easy to wipe machine-applied tags — for example before re-running auto-tag with a better model — without touching human curation. `maki show` annotates machine tags (`(auto-tag)`, `(vlm)`, `(xmp)`) so you can preview what a source-filtered clear would remove.
 
 If writeback is enabled, the tag removal is written back to XMP recipe files on disk.
 
@@ -643,10 +645,16 @@ If writeback is enabled, the tag removal is written back to XMP recipe files on 
 **ASSET_ID** (required)
 : Asset ID or unique prefix.
 
+### OPTIONS
+
+**--source** SOURCE
+: Only clear tags with this provenance source: `user`, `xmp-import`, `auto-tag`, or `vlm`. Without the flag, all tags are cleared.
+
 ### EXAMPLES
 
 ```bash
 maki tag clear a1b2c3d4
+maki tag clear a1b2c3d4 --source auto-tag   # drop machine tags, keep human curation
 ```
 
 ### SEE ALSO

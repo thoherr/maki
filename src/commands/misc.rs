@@ -261,8 +261,18 @@ pub fn run_show_command(
         println!("Type:  {}", details.asset_type);
         println!("Date:  {}", details.created_at);
         if !details.tags.is_empty() {
+            // Annotate machine-applied tags with their provenance; tags
+            // absent from tag_sources are user tags (no annotation).
             let display_tags: Vec<String> = details.tags.iter()
-                .map(|t| maki::tag_util::tag_storage_to_display(t))
+                .map(|t| {
+                    let display = maki::tag_util::tag_storage_to_display(t);
+                    match details.tag_sources.get(t) {
+                        Some(maki::models::TagSource::AutoTag) => format!("{display} (auto-tag)"),
+                        Some(maki::models::TagSource::Vlm) => format!("{display} (vlm)"),
+                        Some(maki::models::TagSource::XmpImport) => format!("{display} (xmp)"),
+                        Some(maki::models::TagSource::User) | None => display,
+                    }
+                })
                 .collect();
             println!("Tags:  {}", display_tags.join(", "));
         }

@@ -57,7 +57,17 @@ impl MetadataStore {
     pub fn save(&self, asset: &Asset) -> Result<()> {
         let dir = self.shard_dir(asset.id);
         std::fs::create_dir_all(&dir)?;
-        let yaml = serde_yaml::to_string(asset)?;
+        // Self-heal tag provenance: a mutation site that bypassed
+        // `Asset::remove_tags` must never persist source entries for
+        // tags that are gone (invariant: map keys ⊆ tags). Cheap in the
+        // common case — clone only when a stale key actually exists.
+        let yaml = if asset.has_stale_tag_sources() {
+            let mut pruned = asset.clone();
+            pruned.prune_tag_sources();
+            serde_yaml::to_string(&pruned)?
+        } else {
+            serde_yaml::to_string(asset)?
+        };
 
         let _lock = self.acquire_write_lock()?;
         // Atomic write: temp file + rename, so readers (and crashes mid-
@@ -396,6 +406,83 @@ mod tests {
         assert_eq!(s.tags.len(), 80);
         let first = s.tags[0].clone();
         assert!(s.tags.iter().all(|t| *t == first), "tags from a single writer");
+    }
+
+    #[test]
+    fn tag_sources_round_trip_through_sidecar() {
+        use crate::models::TagSource;
+        let dir = tempfile::tempdir().unwrap();
+        let store = MetadataStore::new(dir.path());
+
+        let mut asset = Asset::new(AssetType::Image, "sha256:provenance1");
+        asset.add_tags_with_source(&["manual".to_string()], TagSource::User);
+        asset.add_tags_with_source(&["from-xmp".to_string()], TagSource::XmpImport);
+        asset.add_tags_with_source(&["from-ai".to_string()], TagSource::AutoTag);
+        asset.add_tags_with_source(&["from-vlm".to_string()], TagSource::Vlm);
+        store.save(&asset).unwrap();
+
+        let loaded = store.load(asset.id).unwrap();
+        assert_eq!(loaded.tags, asset.tags);
+        assert_eq!(loaded.tag_sources, asset.tag_sources);
+        assert_eq!(loaded.tag_source("manual"), TagSource::User);
+        assert_eq!(loaded.tag_source("from-xmp"), TagSource::XmpImport);
+        assert_eq!(loaded.tag_source("from-ai"), TagSource::AutoTag);
+        assert_eq!(loaded.tag_source("from-vlm"), TagSource::Vlm);
+        // User tags stay out of the map.
+        assert!(!loaded.tag_sources.contains_key("manual"));
+    }
+
+    #[test]
+    fn old_sidecar_without_tag_sources_loads_and_stays_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MetadataStore::new(dir.path());
+
+        // Pre-provenance sidecar: has tags, no tag_sources key.
+        let mut asset = Asset::new(AssetType::Image, "sha256:legacy1");
+        asset.tags = vec!["old-tag".to_string()];
+        store.save(&asset).unwrap();
+        let path = dir
+            .path()
+            .join("metadata")
+            .join(&asset.id.to_string()[..2])
+            .join(format!("{}.yaml", asset.id));
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("tag_sources"), "{raw}");
+
+        // Loads with an empty map; every tag defaults to user.
+        let loaded = store.load(asset.id).unwrap();
+        assert!(loaded.tag_sources.is_empty());
+        assert_eq!(loaded.tag_source("old-tag"), crate::models::TagSource::User);
+
+        // A rewrite without tag changes stays free of the key
+        // (skip_serializing_if) — byte-identical sidecar.
+        store.save(&loaded).unwrap();
+        let rewritten = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(raw, rewritten);
+    }
+
+    #[test]
+    fn save_self_heals_stale_tag_sources() {
+        use crate::models::TagSource;
+        let dir = tempfile::tempdir().unwrap();
+        let store = MetadataStore::new(dir.path());
+
+        let mut asset = Asset::new(AssetType::Image, "sha256:stale1");
+        asset.add_tags_with_source(
+            &["keep".to_string(), "gone".to_string()],
+            TagSource::AutoTag,
+        );
+        // Simulate a mutation site that bypassed remove_tags.
+        asset.tags.retain(|t| t != "gone");
+        store.save(&asset).unwrap();
+
+        let loaded = store.load(asset.id).unwrap();
+        assert_eq!(loaded.tags, vec!["keep".to_string()]);
+        assert!(loaded.tag_sources.contains_key("keep"));
+        assert!(
+            !loaded.tag_sources.contains_key("gone"),
+            "save must never persist provenance for removed tags"
+        );
     }
 
     #[test]

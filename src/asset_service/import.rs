@@ -201,12 +201,9 @@ impl AssetService {
                     }
                     asset.name = Some(group.stem.clone());
 
-                    // Apply auto_tags (merge, no duplicates)
-                    for tag in auto_tags {
-                        if !asset.tags.contains(tag) {
-                            asset.tags.push(tag.clone());
-                        }
-                    }
+                    // Apply auto_tags (merge, no duplicates). Source is
+                    // `user`: the user configured these deliberately.
+                    asset.add_tags_with_source(auto_tags, crate::models::TagSource::User);
 
                     let variant = Variant {
                         content_hash: content_hash.clone(),
@@ -530,11 +527,8 @@ impl AssetService {
                     };
                     let mut asset = Asset::new(AssetType::Other, &content_hash);
                     asset.name = Some(filename.clone());
-                    for tag in auto_tags {
-                        if !asset.tags.contains(tag) {
-                            asset.tags.push(tag.clone());
-                        }
-                    }
+                    // Configured auto_tags are user curation (see above).
+                    asset.add_tags_with_source(auto_tags, crate::models::TagSource::User);
                     let variant = Variant {
                         content_hash: content_hash.clone(),
                         asset_id: asset.id,

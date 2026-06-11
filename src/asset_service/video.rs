@@ -363,7 +363,7 @@ impl AssetService {
                                     .collect();
 
                                 if !new_tags.is_empty() {
-                                    match engine.tag(&aid, &new_tags, false) {
+                                    match engine.tag_with_source(&aid, &new_tags, false, crate::models::TagSource::Vlm) {
                                         Ok(_) => {
                                             result.tags_applied += new_tags.len();
                                         }

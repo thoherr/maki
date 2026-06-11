@@ -325,6 +325,17 @@ impl Catalog {
             );
         }
 
+        // ── v9 → v10: tag provenance ──
+        if current < 10 {
+            // JSON object mapping tag value → source ("user" | "xmp-import"
+            // | "auto-tag" | "vlm"). Mirrors `Asset::tag_sources`; a tag
+            // absent from the object has source "user". Derived from the
+            // sidecar on every insert_asset, same as `tags`.
+            let _ = self.conn.execute_batch(
+                "ALTER TABLE assets ADD COLUMN tag_sources TEXT NOT NULL DEFAULT '{}'",
+            );
+        }
+
         // Stamp the new schema version
         let _ = self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);

@@ -245,6 +245,136 @@ fn tag_add_and_remove() {
 }
 
 #[test]
+fn tag_clear_source_removes_only_matching_provenance() {
+    // `tag clear --source xmp-import` must drop the tags that came in via
+    // XMP keyword import while leaving user tags alone; `maki show` must
+    // annotate them as `(xmp)` while they exist.
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    create_test_file(&root, "gig.jpg", b"gig data");
+    create_test_file(
+        &root,
+        "gig.xmp",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>ImportedKeyword</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#,
+    );
+
+    maki()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let asset_id = String::from_utf8_lossy(
+        &maki()
+            .current_dir(&root)
+            .args(["search", "-q", "", "--format", "ids"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
+    assert!(!asset_id.is_empty());
+
+    // Add a user tag alongside the imported keyword.
+    maki()
+        .current_dir(&root)
+        .args(["tag", &asset_id, "usertag"])
+        .assert()
+        .success();
+
+    // Human show output annotates the imported keyword's provenance.
+    maki()
+        .current_dir(&root)
+        .args(["show", &asset_id])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("ImportedKeyword (xmp)")
+                .and(predicate::str::contains("usertag (").not()),
+        );
+
+    // JSON show output carries the tag_sources object.
+    let show_json = String::from_utf8_lossy(
+        &maki()
+            .current_dir(&root)
+            .args(["show", &asset_id, "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .to_string();
+    let parsed: serde_json::Value = serde_json::from_str(&show_json).unwrap();
+    assert_eq!(
+        parsed["tag_sources"]["ImportedKeyword"],
+        serde_json::json!("xmp-import"),
+        "{show_json}"
+    );
+
+    // Bad source value is rejected.
+    maki()
+        .current_dir(&root)
+        .args(["tag", "clear", &asset_id, "--source", "bogus"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown tag source"));
+
+    // Clear only the xmp-import tags.
+    maki()
+        .current_dir(&root)
+        .args(["tag", "clear", &asset_id, "--source", "xmp-import"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("ImportedKeyword")
+                .and(predicate::str::contains("source: xmp-import")),
+        );
+
+    maki()
+        .current_dir(&root)
+        .args(["show", &asset_id])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("usertag")
+                .and(predicate::str::contains("ImportedKeyword").not()),
+        );
+
+    // A second source-filtered clear finds nothing to do.
+    maki()
+        .current_dir(&root)
+        .args(["tag", "clear", &asset_id, "--source", "xmp-import"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No tags with source 'xmp-import'"));
+
+    // Unfiltered clear still removes everything.
+    maki()
+        .current_dir(&root)
+        .args(["tag", "clear", &asset_id])
+        .assert()
+        .success();
+    maki()
+        .current_dir(&root)
+        .args(["show", &asset_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("usertag").not());
+}
+
+#[test]
 fn tag_split_replaces_one_tag_with_multiple() {
     let dir = tempdir().unwrap();
     let root = init_catalog(dir.path());

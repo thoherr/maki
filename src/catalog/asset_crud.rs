@@ -21,6 +21,7 @@ impl Catalog {
     /// `asset.variants` first for exactly this reason.
     pub fn insert_asset(&self, asset: &Asset) -> Result<()> {
         let tags_json = serde_json::to_string(&asset.tags)?;
+        let tag_sources_json = serde_json::to_string(&asset.tag_sources)?;
         let best_hash = crate::models::variant::compute_best_variant_hash_with_override(
             &asset.variants,
             asset.preview_variant.as_deref(),
@@ -42,13 +43,14 @@ impl Catalog {
         // intermediate DELETE that triggers FK constraint violations on
         // variants/faces/collection_assets referencing this asset.
         self.conn.execute(
-            "INSERT INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count, latitude, longitude, preview_rotation, preview_variant, video_duration, video_codec, face_scan_status, leaf_tag_count) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19) \
+            "INSERT INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count, latitude, longitude, preview_rotation, preview_variant, video_duration, video_codec, face_scan_status, leaf_tag_count, tag_sources) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20) \
              ON CONFLICT(id) DO UPDATE SET \
                name = excluded.name, \
                created_at = excluded.created_at, \
                asset_type = excluded.asset_type, \
                tags = excluded.tags, \
+               tag_sources = excluded.tag_sources, \
                description = excluded.description, \
                rating = excluded.rating, \
                color_label = excluded.color_label, \
@@ -83,6 +85,7 @@ impl Catalog {
                 video_codec,
                 asset.face_scan_status.as_deref(),
                 leaf_tag_count,
+                tag_sources_json,
             ],
         )?;
         Ok(())

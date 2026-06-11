@@ -482,7 +482,7 @@ fn batch_auto_tag_inner(
             continue;
         }
 
-        match ctx.engine.tag(aid, &new_tags, false) {
+        match ctx.engine.tag_with_source(aid, &new_tags, false, crate::models::TagSource::AutoTag) {
             Ok(_) => {
                 resp.tags_applied += new_tags.len() as u32;
                 resp.succeeded += 1;

@@ -588,7 +588,9 @@ fn vlm_describe_asset_inner(
             .cloned()
             .collect();
         if !new_tags.is_empty() {
-            engine.tag(&full_id, &new_tags, false).map_err(|e| e.to_string())?;
+            engine
+                .tag_with_source(&full_id, &new_tags, false, crate::models::TagSource::Vlm)
+                .map_err(|e| e.to_string())?;
         }
     }
 
@@ -897,7 +899,7 @@ fn batch_vlm_describe_inner(
                             .collect();
                         if !new_tags.is_empty() {
                             let count = new_tags.len();
-                            if let Err(e) = engine.tag(&full_id, &new_tags, false) {
+                            if let Err(e) = engine.tag_with_source(&full_id, &new_tags, false, crate::models::TagSource::Vlm) {
                                 result.errors.push(format!("{original_id}: {e}"));
                                 result.failed += 1;
                                 emit_progress(processed, &original_id, "error", result.descriptions_set, result.tags_applied);

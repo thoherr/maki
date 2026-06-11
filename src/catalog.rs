@@ -123,6 +123,10 @@ pub struct AssetDetails {
     pub asset_type: String,
     pub created_at: String,
     pub tags: Vec<String>,
+    /// Tag provenance (tag value → source); tags absent from the map are
+    /// user tags. Empty for pre-provenance assets.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub tag_sources: std::collections::BTreeMap<String, crate::models::TagSource>,
     pub description: Option<String>,
     pub rating: Option<u8>,
     pub color_label: Option<String>,
@@ -687,7 +691,7 @@ fn next_date_bound(s: &str) -> String {
 }
 
 /// Current schema version. Bump this whenever `run_migrations()` changes.
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 
 // ═══ CATALOG STRUCT & CONNECTION ═══
 
@@ -944,6 +948,54 @@ mod tests {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
         catalog.initialize().unwrap(); // should not error
+    }
+
+    #[test]
+    fn initialize_stamps_schema_version_10_with_tag_sources_column() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        assert_eq!(catalog.schema_version(), SCHEMA_VERSION);
+        assert_eq!(SCHEMA_VERSION, 10);
+        // v10 column exists and defaults to an empty JSON object.
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:v10");
+        catalog.insert_asset(&asset).unwrap();
+        let stored: String = catalog
+            .conn
+            .query_row(
+                "SELECT tag_sources FROM assets WHERE id = ?1",
+                rusqlite::params![asset.id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "{}");
+    }
+
+    #[test]
+    fn insert_asset_persists_tag_sources_column() {
+        use crate::models::TagSource;
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:prov-col");
+        asset.add_tags_with_source(&["robo".to_string()], TagSource::Vlm);
+        asset.add_tags_with_source(&["manual".to_string()], TagSource::User);
+        catalog.insert_asset(&asset).unwrap();
+
+        let details = catalog
+            .load_asset_details(&asset.id.to_string())
+            .unwrap()
+            .unwrap();
+        assert_eq!(details.tag_sources.get("robo"), Some(&TagSource::Vlm));
+        assert!(!details.tag_sources.contains_key("manual"));
+
+        // Upsert path keeps the column in sync.
+        asset.remove_tags(&["robo".to_string()]);
+        catalog.insert_asset(&asset).unwrap();
+        let details = catalog
+            .load_asset_details(&asset.id.to_string())
+            .unwrap()
+            .unwrap();
+        assert!(details.tag_sources.is_empty(), "{:?}", details.tag_sources);
     }
 
     #[test]

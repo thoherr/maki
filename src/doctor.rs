@@ -245,17 +245,19 @@ fn compare_asset(catalog: &Catalog, asset: &Asset) -> Result<Vec<String>> {
         Option<String>, // preview_variant
         i64,            // leaf_tag_count
         i64,            // face_count
+        String,         // tag_sources json
     ) = catalog.conn().query_row(
         "SELECT name, created_at, asset_type, tags, description, rating, color_label, \
          best_variant_hash, primary_variant_format, variant_count, preview_rotation, \
-         preview_variant, leaf_tag_count, COALESCE(face_count, 0) \
+         preview_variant, leaf_tag_count, COALESCE(face_count, 0), \
+         COALESCE(tag_sources, '{}') \
          FROM assets WHERE id = ?1",
         rusqlite::params![id],
         |r| {
             Ok((
                 r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?,
                 r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?, r.get(11)?,
-                r.get(12)?, r.get(13)?,
+                r.get(12)?, r.get(13)?, r.get(14)?,
             ))
         },
     )?;
@@ -273,6 +275,11 @@ fn compare_asset(catalog: &Catalog, asset: &Asset) -> Result<Vec<String>> {
     let stored_tags: Vec<String> = serde_json::from_str(&row.3).unwrap_or_default();
     if stored_tags != asset.tags {
         fields.push("tags".to_string());
+    }
+    let stored_tag_sources: std::collections::BTreeMap<String, crate::models::TagSource> =
+        serde_json::from_str(&row.14).unwrap_or_default();
+    if stored_tag_sources != asset.tag_sources {
+        fields.push("tag_sources".to_string());
     }
     if row.4 != asset.description {
         fields.push("description".to_string());
@@ -576,6 +583,43 @@ mod tests {
 
         let repaired = run_doctor(&root, None, true, |_, _| {}).unwrap();
         assert_eq!(repaired.repaired, 1);
+        let clean = run_doctor(&root, None, false, |_, _| {}).unwrap();
+        assert!(clean.healthy(), "{clean:?}");
+    }
+
+    #[test]
+    fn detects_and_repairs_tag_sources_divergence() {
+        let (_d, root) = setup();
+        let mut asset = seed_asset(&root, "sha256:doc-prov", "prov");
+        // Give the sidecar a machine tag with provenance, persist both stores.
+        asset.add_tags_with_source(
+            &["robo".to_string()],
+            crate::models::TagSource::AutoTag,
+        );
+        let store = MetadataStore::new(&root);
+        store.save(&asset).unwrap();
+        {
+            let catalog = Catalog::open_fast(&root).unwrap();
+            catalog.insert_asset(&asset).unwrap();
+            // Sabotage: wipe only the provenance column in SQLite.
+            catalog
+                .conn()
+                .execute(
+                    "UPDATE assets SET tag_sources = '{}' WHERE id = ?1",
+                    rusqlite::params![asset.id.to_string()],
+                )
+                .unwrap();
+        }
+
+        let report = run_doctor(&root, None, false, |_, _| {}).unwrap();
+        assert_eq!(report.mismatched.len(), 1, "{report:?}");
+        assert!(
+            report.mismatched[0].fields.contains(&"tag_sources".to_string()),
+            "{:?}",
+            report.mismatched[0].fields
+        );
+
+        run_doctor(&root, None, true, |_, _| {}).unwrap();
         let clean = run_doctor(&root, None, false, |_, _| {}).unwrap();
         assert!(clean.healthy(), "{clean:?}");
     }

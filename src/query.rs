@@ -805,7 +805,11 @@ impl QueryEngine {
             }
             for tag in &donor.tags {
                 if all_tags.insert(tag.clone()) {
-                    target.tags.push(tag.clone());
+                    // Carry the donor's provenance for tags new to the target.
+                    target.add_tags_with_source(
+                        std::slice::from_ref(tag),
+                        donor.tag_source(tag),
+                    );
                 }
             }
             for recipe in &donor.recipes {
@@ -957,7 +961,11 @@ impl QueryEngine {
             }
             for tag in &donor.tags {
                 if all_tags.insert(tag.clone()) {
-                    target.tags.push(tag.clone());
+                    // Carry the donor's provenance for tags new to the target.
+                    target.add_tags_with_source(
+                        std::slice::from_ref(tag),
+                        donor.tag_source(tag),
+                    );
                 }
             }
             for recipe in &donor.recipes {
@@ -1107,6 +1115,7 @@ impl QueryEngine {
                 created_at: source.created_at,
                 asset_type,
                 tags: source.tags.clone(),
+                tag_sources: source.tag_sources.clone(),
                 description: source.description.clone(),
                 rating: source.rating,
                 color_label: source.color_label.clone(),
@@ -1353,15 +1362,36 @@ impl QueryEngine {
 
     /// Add or remove tags on an asset. Updates both sidecar YAML and SQLite catalog.
     pub fn tag(&self, asset_id_prefix: &str, tags: &[String], remove: bool) -> Result<TagResult> {
+        self.tag_with_source(asset_id_prefix, tags, remove, crate::models::TagSource::User)
+    }
+
+    /// Like [`Self::tag`], but records the given provenance source for
+    /// genuinely-new tags. Machine pipelines (auto-tag, VLM describe)
+    /// route through this so their tags are distinguishable from human
+    /// curation. `source` is ignored on remove.
+    pub fn tag_with_source(
+        &self,
+        asset_id_prefix: &str,
+        tags: &[String],
+        remove: bool,
+        source: crate::models::TagSource,
+    ) -> Result<TagResult> {
         let catalog = Catalog::open(&self.catalog_root)?;
         let store = MetadataStore::new(&self.catalog_root);
         let online = Self::load_online_volumes(&self.catalog_root);
         let content_store = ContentStore::new(&self.catalog_root);
         let ctx = BatchContext { catalog, meta_store: store, online_volumes: online, content_store };
-        self.tag_inner(&ctx, asset_id_prefix, tags, remove)
+        self.tag_inner(&ctx, asset_id_prefix, tags, remove, source)
     }
 
-    fn tag_inner(&self, ctx: &BatchContext, asset_id_prefix: &str, tags: &[String], remove: bool) -> Result<TagResult> {
+    fn tag_inner(
+        &self,
+        ctx: &BatchContext,
+        asset_id_prefix: &str,
+        tags: &[String],
+        remove: bool,
+        source: crate::models::TagSource,
+    ) -> Result<TagResult> {
         let full_id = ctx.catalog
             .resolve_asset_id(asset_id_prefix)?
             .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id_prefix}'"))?;
@@ -1417,28 +1447,24 @@ impl QueryEngine {
             }
             let remove_set: std::collections::HashSet<&str> =
                 all_to_remove.iter().map(|s| s.as_str()).collect();
-            let mut actually_removed = Vec::new();
-            asset.tags.retain(|t| {
-                if remove_set.contains(t.as_str()) {
-                    actually_removed.push(t.clone());
-                    false
-                } else {
-                    true
-                }
-            });
+            let actually_removed: Vec<String> = asset.tags.iter()
+                .filter(|t| remove_set.contains(t.as_str()))
+                .cloned()
+                .collect();
+            // Removes from both the tag list and the provenance map.
+            asset.remove_tags(&all_to_remove);
             changed = actually_removed;
         } else {
             // Expand hierarchical tags to include all ancestor paths
             let expanded = crate::tag_util::expand_all_ancestors(effective_tags);
             let existing: std::collections::HashSet<String> =
                 asset.tags.iter().cloned().collect();
-            let mut added = Vec::new();
-            for tag in &expanded {
-                if !existing.contains(tag) {
-                    asset.tags.push(tag.clone());
-                    added.push(tag.clone());
-                }
-            }
+            let added: Vec<String> = expanded.iter()
+                .filter(|t| !existing.contains(*t))
+                .cloned()
+                .collect();
+            // Records `source` for the genuinely-new tags only.
+            asset.add_tags_with_source(&added, source);
             changed = added;
         }
 
@@ -1611,8 +1637,12 @@ impl QueryEngine {
 
             if apply {
                 // Build the list of tags to remove and tags to add.
+                // `renamed_pairs` tracks old → new value mappings so tag
+                // provenance carries over (a renamed machine tag stays a
+                // machine tag).
                 let mut tags_to_remove = Vec::new();
                 let mut tags_to_add = Vec::new();
+                let mut renamed_pairs: Vec<(String, String)> = Vec::new();
 
                 for tag in &asset.tags {
                     if cmp_eq(tag, old_tag) {
@@ -1620,6 +1650,7 @@ impl QueryEngine {
                         tags_to_remove.push(tag.clone());
                         if action == TagRenameAction::Renamed {
                             tags_to_add.push(new_tag.to_string());
+                            renamed_pairs.push((tag.clone(), new_tag.to_string()));
                         }
                     } else if !exact_only && cmp_starts(tag, &old_prefix) {
                         // Descendant: replace prefix (preserving the rest of the tag verbatim)
@@ -1629,6 +1660,7 @@ impl QueryEngine {
                         // prefix length (same as old_prefix.len() since case mapping preserves
                         // ASCII length, which is the only safe assumption here).
                         let new_descendant = format!("{}{}", new_prefix, &tag[old_prefix.len()..]);
+                        renamed_pairs.push((tag.clone(), new_descendant.clone()));
                         tags_to_add.push(new_descendant);
                     }
                 }
@@ -1649,11 +1681,23 @@ impl QueryEngine {
                     }
                 }
 
+                // Capture carried provenance before the removals drop the
+                // map entries: each renamed value keeps its old source.
+                let carried: Vec<(String, crate::models::TagSource)> = renamed_pairs
+                    .iter()
+                    .map(|(old, new)| (new.clone(), asset.tag_source(old)))
+                    .collect();
+
                 // Apply removals, then add expanded tags (dedup honors case_sensitive flag).
-                asset.tags.retain(|t| !tags_to_remove.iter().any(|r| r == t));
+                asset.remove_tags(&tags_to_remove);
                 for add in &expanded_adds {
                     if !asset.tags.iter().any(|t| cmp_eq(t, add)) {
-                        asset.tags.push(add.clone());
+                        let source = carried
+                            .iter()
+                            .find(|(new, _)| new == add)
+                            .map(|(_, s)| *s)
+                            .unwrap_or(crate::models::TagSource::User);
+                        asset.add_tags_with_source(std::slice::from_ref(add), source);
                     }
                 }
                 store.save(&asset)?;
@@ -1814,10 +1858,22 @@ impl QueryEngine {
             result.split += 1;
 
             if apply {
-                asset.tags.retain(|t| !tags_to_remove.iter().any(|r| r == t));
+                // Rename semantics for provenance: the split targets
+                // inherit the source of the tag being split (a machine
+                // tag split into two stays machine). With --keep the old
+                // tag survives, so its source is read but not removed.
+                let old_actual = asset.tags.iter()
+                    .find(|t| cmp_eq(t, old_tag))
+                    .cloned();
+                let carried_source = old_actual
+                    .as_deref()
+                    .map(|t| asset.tag_source(t))
+                    .unwrap_or(crate::models::TagSource::User);
+
+                asset.remove_tags(&tags_to_remove);
                 for add in &actually_new {
                     if !asset.tags.iter().any(|t| cmp_eq(t, add)) {
-                        asset.tags.push(add.clone());
+                        asset.add_tags_with_source(std::slice::from_ref(add), carried_source);
                     }
                 }
                 store.save(&asset)?;
@@ -1967,9 +2023,8 @@ impl QueryEngine {
             on_asset(&name, TagDeleteAction::Removed);
 
             if apply {
-                let remove_set: std::collections::HashSet<&str> =
-                    tags_to_remove.iter().map(|s| s.as_str()).collect();
-                asset.tags.retain(|t| !remove_set.contains(t.as_str()));
+                // Drops both the tag list entries and their provenance.
+                asset.remove_tags(&tags_to_remove);
                 store.save(&asset)?;
                 catalog.insert_asset(&asset)?;
 
@@ -2087,6 +2142,15 @@ impl QueryEngine {
 
             if apply {
                 asset.tags = nfc_tags.clone();
+                // Re-key provenance entries through the same NFC pass —
+                // a normalised tag keeps its source. On NFC/NFD dedup
+                // collisions the first (BTreeMap order) entry wins.
+                let old_sources = std::mem::take(&mut asset.tag_sources);
+                for (tag, source) in old_sources {
+                    let normalised = crate::tag_util::nfc(&tag);
+                    asset.tag_sources.entry(normalised).or_insert(source);
+                }
+                asset.prune_tag_sources();
                 store.save(&asset)?;
                 catalog.insert_asset(&asset)?;
 
@@ -2137,6 +2201,7 @@ impl QueryEngine {
         if !exif_only {
             // Clear asset-level metadata that comes from XMP sources
             asset.tags.clear();
+            asset.tag_sources.clear();
             asset.description = None;
             asset.rating = None;
             asset.color_label = None;
@@ -2793,7 +2858,7 @@ impl QueryEngine {
             Ok(c) => c,
             Err(e) => return asset_ids.iter().map(|_| Err(anyhow::anyhow!("{e:#}"))).collect(),
         };
-        asset_ids.iter().map(|id| self.tag_inner(&ctx, id, tags, remove)).collect()
+        asset_ids.iter().map(|id| self.tag_inner(&ctx, id, tags, remove, crate::models::TagSource::User)).collect()
     }
 
     /// Set rating on multiple assets using a single shared catalog connection.
@@ -3141,6 +3206,88 @@ mod tests {
         // Verify catalog
         let details = engine.show(&id).unwrap();
         assert!(details.tags.contains(&"new_tag".to_string()));
+    }
+
+    #[test]
+    fn tag_via_engine_records_user_source() {
+        let (dir, id) = setup_tag_env();
+        let engine = QueryEngine::new(dir.path());
+
+        engine.tag(&id, &["manual".to_string()], false).unwrap();
+
+        // User-source tags stay out of the provenance map (absent = user)
+        // in both stores.
+        let uuid: uuid::Uuid = id.parse().unwrap();
+        let asset = MetadataStore::new(dir.path()).load(uuid).unwrap();
+        assert!(asset.tag_sources.is_empty(), "{:?}", asset.tag_sources);
+        let details = engine.show(&id).unwrap();
+        assert!(details.tag_sources.is_empty());
+    }
+
+    #[test]
+    fn tag_with_source_records_machine_source_in_both_stores() {
+        use crate::models::TagSource;
+        let (dir, id) = setup_tag_env();
+        let engine = QueryEngine::new(dir.path());
+
+        engine
+            .tag_with_source(&id, &["machine".to_string()], false, TagSource::AutoTag)
+            .unwrap();
+
+        let uuid: uuid::Uuid = id.parse().unwrap();
+        let asset = MetadataStore::new(dir.path()).load(uuid).unwrap();
+        assert_eq!(asset.tag_source("machine"), TagSource::AutoTag);
+        // Pre-existing user tag is untouched.
+        assert_eq!(asset.tag_source("existing"), TagSource::User);
+        // SQLite column mirrors the sidecar (via load_asset_details).
+        let details = engine.show(&id).unwrap();
+        assert_eq!(details.tag_sources.get("machine"), Some(&TagSource::AutoTag));
+
+        // Removing the tag drops the provenance entry again.
+        engine.tag(&id, &["machine".to_string()], true).unwrap();
+        let asset = MetadataStore::new(dir.path()).load(uuid).unwrap();
+        assert!(asset.tag_sources.is_empty(), "{:?}", asset.tag_sources);
+    }
+
+    #[test]
+    fn tag_rename_carries_machine_source() {
+        use crate::models::TagSource;
+        let (dir, id) = setup_tag_env();
+        let engine = QueryEngine::new(dir.path());
+
+        engine
+            .tag_with_source(&id, &["robotag".to_string()], false, TagSource::Vlm)
+            .unwrap();
+        let result = engine.tag_rename("robotag", "better-tag", true, |_, _| {}).unwrap();
+        assert_eq!(result.renamed, 1);
+
+        let uuid: uuid::Uuid = id.parse().unwrap();
+        let asset = MetadataStore::new(dir.path()).load(uuid).unwrap();
+        assert!(asset.tags.contains(&"better-tag".to_string()));
+        assert_eq!(
+            asset.tag_source("better-tag"),
+            TagSource::Vlm,
+            "a renamed machine tag stays a machine tag"
+        );
+        assert!(!asset.tag_sources.contains_key("robotag"));
+    }
+
+    #[test]
+    fn tag_delete_drops_machine_source_entries() {
+        use crate::models::TagSource;
+        let (dir, id) = setup_tag_env();
+        let engine = QueryEngine::new(dir.path());
+
+        engine
+            .tag_with_source(&id, &["doomed".to_string()], false, TagSource::AutoTag)
+            .unwrap();
+        let result = engine.tag_delete("doomed", true, |_, _| {}).unwrap();
+        assert_eq!(result.removed, 1);
+
+        let uuid: uuid::Uuid = id.parse().unwrap();
+        let asset = MetadataStore::new(dir.path()).load(uuid).unwrap();
+        assert!(!asset.tags.contains(&"doomed".to_string()));
+        assert!(asset.tag_sources.is_empty(), "{:?}", asset.tag_sources);
     }
 
     // ── parse_search_query tests ──────────────────────────────────

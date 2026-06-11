@@ -1310,6 +1310,12 @@ enum TagCommands {
     Clear {
         /// Asset ID (or unique prefix)
         asset_id: String,
+
+        /// Only clear tags with this provenance source:
+        /// user, xmp-import, auto-tag, or vlm.
+        /// Without the flag, all tags are cleared.
+        #[arg(long)]
+        source: Option<String>,
     },
 
     /// Delete a tag from every asset that has it (cascades to descendants by default)
