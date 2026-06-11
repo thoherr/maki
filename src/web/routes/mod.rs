@@ -426,11 +426,9 @@ impl ResolvedSearch {
         self.filters.apply_collections(opts);
         self.filters.apply_collection_excludes(opts);
         self.filters.apply_persons(opts);
-        // NOTE: `apply_person_excludes` is deliberately NOT called — the web
-        // layer has never supported `-person:` (the parsed exclude entries
-        // were silently dropped before the dedup, and installing them now
-        // would change result sets). Historical gap, documented in the
-        // `crate::query::resolve` drift matrix; the CLI does honor it.
+        // `-person:` honored since v4.7.1 — see the drift matrix in
+        // `crate::query::resolve` for the history of this gap.
+        self.filters.apply_person_excludes(opts);
         #[cfg(feature = "ai")]
         {
             if let Some(ref ids) = self.text_query_ids {

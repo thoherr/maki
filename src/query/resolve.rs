@@ -11,22 +11,23 @@
 //! difference between the consumers is an explicit parameter or a documented
 //! call-site decision.
 //!
-//! # Drift matrix (historical behavior, preserved verbatim)
+//! # Drift matrix
 //!
 //! | Consumer | Empty-filter policy | Person combine | Person exclude | Collection exclude |
 //! |---|---|---|---|---|
 //! | CLI `QueryEngine::search` | `MatchNothing` | `AnyOf` (OR-union) | yes | yes |
-//! | Web browse family (browse_page, search_api, all_ids/page_ids, facets) | `Ignore` | `AllOf` (intersection) | **no** | yes |
-//! | Web calendar_api / map_api | `MatchNothing` | `AllOf` (intersection) | **no** | yes |
-//! | Web export-zip (`media.rs`) | `MatchNothing` | `AllOf` (intersection) | **no** | **no** |
+//! | Web browse family (browse_page, search_api, all_ids/page_ids, facets) | `Ignore` | `AllOf` (intersection) | yes (since v4.7.1) | yes |
+//! | Web calendar_api / map_api | `MatchNothing` | `AllOf` (intersection) | yes (since v4.7.1) | yes |
+//! | Web export-zip (`media.rs`) | `MatchNothing` | `AllOf` (intersection) | yes (since v4.7.1) | yes (since v4.7.1) |
 //!
-//! The two **no** columns look like plain gaps rather than design decisions:
-//! a `-person:Alice` query in the web UI is silently ignored (the CLI honors
-//! it), and the export-zip handler additionally ignores `-collection:` — so
-//! exporting a filtered browse view that uses `-collection:` can export
-//! *more* assets than the grid shows. Both are preserved here because fixing
-//! them would change result sets; the consumers opt out explicitly by calling
-//! the granular `apply_*` methods instead of [`ResolvedFilterIds::apply`].
+//! Historical note: until v4.7.0 the web layer silently ignored
+//! `-person:` and the export-zip handler additionally ignored
+//! `-collection:` — exporting a `-collection:`-filtered browse view
+//! could export *more* assets than the grid showed. Both gaps were
+//! documented when this module unified the three drifted copies, then
+//! closed: every consumer now honors all four filter kinds. The
+//! remaining (deliberate, user-visible) drift is the empty-filter
+//! policy and the person-combine semantics.
 //!
 //! Within a single filter entry, a comma is always OR (`person:Alice,Bob` =
 //! either) — all consumers agree on that. The drift is across *separate*

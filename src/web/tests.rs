@@ -473,6 +473,33 @@ fn base64_encode_matches_known_vectors() {
     assert_eq!(super::base64_encode(b"thomas:secret"), "dGhvbWFzOnNlY3JldA==");
 }
 
+#[cfg(feature = "ai")]
+#[tokio::test]
+async fn all_ids_honors_person_filters_including_exclude() {
+    // `-person:` was silently ignored by the web layer until v4.7.1 —
+    // this locks the closed gap end-to-end through the select-all path.
+    let srv = TestServer::new();
+    {
+        let catalog = Catalog::open_fast(&srv.root).unwrap();
+        crate::face_store::FaceStore::initialize(catalog.conn()).unwrap();
+        let fs = crate::face_store::FaceStore::new(catalog.conn());
+        fs.store_face("face-1", &srv.asset_id, 0.1, 0.1, 0.2, 0.2, &[0.5; 4], 0.9, "arcface")
+            .unwrap();
+        let pid = fs.create_person(Some("Alice")).unwrap();
+        fs.assign_face_to_person("face-1", &pid).unwrap();
+    }
+
+    let (status, _, body) = srv.get("/api/all-ids?q=person%3AAlice").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total"], 1, "positive person filter must match: {body}");
+
+    let (status, _, body) = srv.get("/api/all-ids?q=-person%3AAlice").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total"], 0, "-person: must exclude the asset: {body}");
+}
+
 #[tokio::test]
 async fn all_ids_respects_filters() {
     // The select-all backend must honor the same filters as the grid —

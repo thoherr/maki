@@ -1016,21 +1016,20 @@ pub async fn export_zip(
                 }
             }
 
-            // Shared collection/person ID resolution (crate::query::resolve).
-            // Export-zip historically installed collection-include and
-            // person-include whenever the filter was present, even when it
-            // resolved to nothing (MatchNothing), with web person semantics
-            // (AllOf) — but never applied `-collection:` / `-person:`
-            // excludes. Preserved verbatim by applying only the two include
-            // filters; the gap is documented in the resolver's drift matrix.
+            // Shared collection/person ID resolution (crate::query::resolve)
+            // with web person semantics (AllOf) and MatchNothing policy.
+            // All four filter kinds honored since v4.7.1 — historically
+            // export-zip ignored `-collection:` / `-person:` excludes, so
+            // an export of an exclude-filtered browse view could contain
+            // MORE assets than the grid showed (drift-matrix history in
+            // the resolver docs).
             let resolved = crate::query::ResolvedFilterIds::resolve(
                 &catalog,
                 &parsed,
                 crate::query::EmptyFilterPolicy::MatchNothing,
                 crate::query::PersonCombine::AllOf,
             );
-            resolved.apply_collections(&mut opts);
-            resolved.apply_persons(&mut opts);
+            resolved.apply(&mut opts);
 
             opts.per_page = u32::MAX;
             opts.page = 1;
