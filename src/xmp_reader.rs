@@ -4,14 +4,40 @@
 //! Also handles writeback: when `[writeback] enabled = true`, edits
 //! in MAKI flow back into the original XMP file on disk so other tools
 //! (Lightroom, Capture One) see them.
+//!
+//! # Writer architecture: locate + splice
+//!
+//! The writers (`update_rating`, `update_label`, `update_description`,
+//! `update_tags`, `update_hierarchical_subjects`) share a single
+//! XML-aware pass over the document ([`locate`]) that uses quick-xml —
+//! the same parser the reader uses — to produce byte-offset *spans* for
+//! everything a writer may touch: the `rdf:Description` start tags (with
+//! per-attribute value spans), and the property blocks inside them
+//! (`dc:subject`, `dc:description`, `lr:hierarchicalSubject`,
+//! element-form `xmp:Rating` / `xmp:Label`), identified by **namespace
+//! URI + local name** with in-scope `xmlns` resolution.
+//!
+//! Each writer then computes the new semantic state; if nothing changed
+//! it returns the input bytes unchanged (byte-stability — no SHA drift
+//! on no-op writebacks), otherwise it splices the affected span with a
+//! canonically rendered replacement and leaves every other byte of the
+//! document untouched (comments, CDATA, unrelated blocks, formatting).
+//!
+//! This replaced an earlier regex edit-in-place design that caused the
+//! v4.5.14–v4.5.17 bug train: regexes keyed on literal prefixes missed
+//! namespace-URI-equivalent bindings (`lightroom:` vs `lr:`), could
+//! match inside comments or text, and regex replacement strings expand
+//! `$n` sequences appearing in user text. Splicing is plain string
+//! concatenation on spans produced by a real XML parser, so reader and
+//! writer now share quick-xml as the single XML understanding.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::path::Path;
 
 use anyhow::Result;
 use quick_xml::events::Event;
 use quick_xml::Reader;
-use regex::Regex;
 
 /// Extracted metadata from an XMP sidecar file.
 pub struct XmpData {
@@ -64,6 +90,543 @@ pub fn extract(path: &Path) -> XmpData {
     parse_xmp(&content)
 }
 
+// ───────────────────────── XML-aware locator ─────────────────────────
+//
+// One quick-xml pass over the document produces byte-offset spans for
+// everything the writers below may need to touch. The writers then
+// splice replacements into those spans; no regex is involved.
+
+const NS_RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+const NS_DC: &str = "http://purl.org/dc/elements/1.1/";
+const NS_XMP: &str = "http://ns.adobe.com/xap/1.0/";
+const NS_LR: &str = "http://ns.adobe.com/lightroom/1.0/";
+
+/// An attribute on an `rdf:Description` start tag, with exact byte spans.
+#[derive(Debug)]
+struct AttrSpan {
+    /// Prefix part of the qname (`""` when unprefixed).
+    prefix: String,
+    /// Local part of the qname.
+    local: String,
+    /// Namespace URI the prefix resolves to, when a binding is in scope.
+    ns: Option<String>,
+    /// The whole attribute including all leading whitespace, through the
+    /// closing quote — the span to delete when removing the attribute.
+    full_span: Range<usize>,
+    /// The raw (undecoded) value bytes between the quotes — the span to
+    /// splice when replacing the value.
+    value_span: Range<usize>,
+}
+
+impl AttrSpan {
+    fn is_xmlns(&self) -> bool {
+        self.prefix == "xmlns" || (self.prefix.is_empty() && self.local == "xmlns")
+    }
+
+    /// Namespace-URI match with a literal-prefix fallback for documents
+    /// that use the conventional prefix without declaring it.
+    fn matches(&self, uri: &str, local: &str, fallback_prefix: &str) -> bool {
+        !self.is_xmlns()
+            && self.local == local
+            && (self.ns.as_deref() == Some(uri) || self.prefix == fallback_prefix)
+    }
+}
+
+/// A located `rdf:Description` element.
+#[derive(Debug)]
+struct DescriptionSpan {
+    /// Byte position just after `<rdf:Description` — the attribute /
+    /// xmlns injection point (matches the historical injection spot).
+    name_end: usize,
+    /// `<` through `>` (or `/>`) of the start tag.
+    start_span: Range<usize>,
+    /// Start of the `[ \t]*` indentation run before the start tag.
+    indent_start: usize,
+    self_closing: bool,
+    attrs: Vec<AttrSpan>,
+    /// Position of the `<` of the matching `</rdf:Description>`.
+    close_pos: Option<usize>,
+    /// Start of the indentation run before the close tag — the block
+    /// injection point.
+    close_indent_start: usize,
+}
+
+/// A located property block (direct child of an `rdf:Description`).
+#[derive(Debug)]
+struct PropBlock {
+    prefix: String,
+    local: String,
+    ns: Option<String>,
+    /// Full block: start of the leading `[ \t]*` indentation through the
+    /// `>` of the end tag (or `/>` for an empty element).
+    span: Range<usize>,
+    /// The `[ \t]*` indentation before the opening tag.
+    indent: String,
+    /// Raw (undecoded) text spans of each `rdf:li` item, document order.
+    items: Vec<Range<usize>>,
+    /// Raw text span of the element's own direct content (element-form
+    /// `xmp:Rating` / `xmp:Label`).
+    text_span: Range<usize>,
+    self_closing: bool,
+}
+
+impl PropBlock {
+    fn matches(&self, uri: &str, local: &str, fallback_prefixes: &[&str]) -> bool {
+        self.local == local
+            && (self.ns.as_deref() == Some(uri)
+                || fallback_prefixes.contains(&self.prefix.as_str()))
+    }
+
+    fn qname(&self) -> String {
+        if self.prefix.is_empty() {
+            self.local.clone()
+        } else {
+            format!("{}:{}", self.prefix, self.local)
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct XmpLayout {
+    descriptions: Vec<DescriptionSpan>,
+    props: Vec<PropBlock>,
+}
+
+impl XmpLayout {
+    /// First attribute (document order, across all rdf:Description tags)
+    /// bound to `uri` with the given local name.
+    fn find_attr(&self, uri: &str, local: &str, fallback_prefix: &str) -> Option<&AttrSpan> {
+        self.descriptions
+            .iter()
+            .flat_map(|d| d.attrs.iter())
+            .find(|a| a.matches(uri, local, fallback_prefix))
+    }
+
+    /// First property block (document order) bound to `uri` with the
+    /// given local name.
+    fn find_prop(&self, uri: &str, local: &str, fallback_prefixes: &[&str]) -> Option<&PropBlock> {
+        self.props
+            .iter()
+            .find(|p| p.matches(uri, local, fallback_prefixes))
+    }
+
+    /// Every `hierarchicalSubject` block bound to the Lightroom
+    /// namespace URI — any prefix (`lr:`, `lightroom:`, exotic ones).
+    fn lightroom_blocks(&self) -> Vec<&PropBlock> {
+        self.props
+            .iter()
+            .filter(|p| p.matches(NS_LR, "hierarchicalSubject", &["lr", "lightroom"]))
+            .collect()
+    }
+
+    /// First rdf:Description with a real end tag — the block injection
+    /// target (mirrors the historical "first `</rdf:Description>` in
+    /// document order" behavior).
+    fn injection_target(&self) -> Option<&DescriptionSpan> {
+        self.descriptions.iter().find(|d| d.close_pos.is_some())
+    }
+
+    /// First self-closing rdf:Description — conversion target when no
+    /// description has an end tag.
+    fn self_closing_target(&self) -> Option<&DescriptionSpan> {
+        self.descriptions.iter().find(|d| d.self_closing)
+    }
+}
+
+/// State for a property block whose end tag has not been seen yet.
+struct OpenProp {
+    depth: usize,
+    prefix: String,
+    local: String,
+    ns: Option<String>,
+    indent_start: usize,
+    tag_start: usize,
+    text_start: usize,
+    items: Vec<Range<usize>>,
+}
+
+/// Split a qname into (prefix, local) strings.
+fn split_qname(qname: &[u8]) -> (String, String) {
+    let s = String::from_utf8_lossy(qname);
+    match s.find(':') {
+        Some(pos) => (s[..pos].to_string(), s[pos + 1..].to_string()),
+        None => (String::new(), s.into_owned()),
+    }
+}
+
+/// Resolve a prefix against the in-scope xmlns declarations.
+fn resolve_prefix(ns_stack: &[Vec<(String, String)>], prefix: &str) -> Option<String> {
+    ns_stack.iter().rev().find_map(|scope| {
+        scope
+            .iter()
+            .rev()
+            .find(|(p, _)| p == prefix)
+            .map(|(_, uri)| uri.clone())
+    })
+}
+
+/// Collect the xmlns declarations on a start tag.
+fn xmlns_decls(e: &quick_xml::events::BytesStart<'_>) -> Vec<(String, String)> {
+    let mut decls = Vec::new();
+    for attr in e.attributes().flatten() {
+        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let prefix = if key == "xmlns" {
+            Some(String::new())
+        } else {
+            key.strip_prefix("xmlns:").map(str::to_string)
+        };
+        if let Some(p) = prefix {
+            let uri = attr
+                .unescape_value()
+                .map(|v| v.into_owned())
+                .unwrap_or_else(|_| String::from_utf8_lossy(&attr.value).into_owned());
+            decls.push((p, uri));
+        }
+    }
+    decls
+}
+
+/// Start of the `[ \t]*` indentation run immediately before `pos`.
+fn line_indent_start(content: &str, pos: usize) -> usize {
+    let bytes = content.as_bytes();
+    let mut i = pos;
+    while i > 0 && (bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
+        i -= 1;
+    }
+    i
+}
+
+/// Manually scan the raw bytes of a start tag for attributes with exact
+/// byte spans (quick-xml's attribute iterator does not expose offsets).
+fn scan_attributes(
+    content: &str,
+    tag_span: Range<usize>,
+    ns_stack: &[Vec<(String, String)>],
+) -> Vec<AttrSpan> {
+    let raw = content[tag_span.clone()].as_bytes();
+    let base = tag_span.start;
+    let len = raw.len();
+    let mut attrs = Vec::new();
+    // Skip '<' + qname.
+    let mut i = 1;
+    while i < len && !raw[i].is_ascii_whitespace() && raw[i] != b'>' && raw[i] != b'/' {
+        i += 1;
+    }
+    loop {
+        let ws_start = i;
+        while i < len && raw[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= len || raw[i] == b'>' || raw[i] == b'/' {
+            break;
+        }
+        let name_start = i;
+        while i < len
+            && raw[i] != b'='
+            && !raw[i].is_ascii_whitespace()
+            && raw[i] != b'>'
+            && raw[i] != b'/'
+        {
+            i += 1;
+        }
+        let name = &content[base + name_start..base + i];
+        while i < len && raw[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= len || raw[i] != b'=' {
+            break; // malformed / bare attribute — stop scanning
+        }
+        i += 1;
+        while i < len && raw[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= len || (raw[i] != b'"' && raw[i] != b'\'') {
+            break;
+        }
+        let quote = raw[i];
+        i += 1;
+        let v_start = i;
+        while i < len && raw[i] != quote {
+            i += 1;
+        }
+        if i >= len {
+            break; // unterminated value
+        }
+        let v_end = i;
+        i += 1;
+        let (prefix, local) = match name.find(':') {
+            Some(pos) => (name[..pos].to_string(), name[pos + 1..].to_string()),
+            None => (String::new(), name.to_string()),
+        };
+        // Attributes never inherit the default namespace.
+        let ns = if prefix.is_empty() {
+            None
+        } else {
+            resolve_prefix(ns_stack, &prefix)
+        };
+        attrs.push(AttrSpan {
+            prefix,
+            local,
+            ns,
+            full_span: base + ws_start..base + v_end + 1,
+            value_span: base + v_start..base + v_end,
+        });
+    }
+    attrs
+}
+
+/// Is this element one of the property blocks the writers care about?
+fn is_interesting_prop(local: &str, ns: Option<&str>, prefix: &str) -> bool {
+    match local {
+        "subject" | "description" => ns == Some(NS_DC) || prefix == "dc",
+        "hierarchicalSubject" => ns == Some(NS_LR) || prefix == "lr" || prefix == "lightroom",
+        "Rating" | "Label" => ns == Some(NS_XMP) || prefix == "xmp",
+        _ => false,
+    }
+}
+
+/// Handle a Start or Empty event during [`locate`].
+#[allow(clippy::too_many_arguments)]
+fn record_open(
+    content: &str,
+    start: usize,
+    end: usize,
+    e: &quick_xml::events::BytesStart<'_>,
+    elem_depth: usize,
+    self_closing: bool,
+    ns_stack: &[Vec<(String, String)>],
+    layout: &mut XmpLayout,
+    open_desc: &mut Option<(usize, usize)>,
+    open_prop: &mut Option<OpenProp>,
+    open_li: &mut Option<(usize, usize)>,
+) {
+    let qname_len = e.name().as_ref().len();
+    let (prefix, local) = split_qname(e.name().as_ref());
+    let ns = resolve_prefix(ns_stack, &prefix);
+
+    if open_desc.is_none()
+        && local == "Description"
+        && (ns.as_deref() == Some(NS_RDF) || prefix == "rdf")
+    {
+        let attrs = scan_attributes(content, start..end, ns_stack);
+        layout.descriptions.push(DescriptionSpan {
+            name_end: start + 1 + qname_len,
+            start_span: start..end,
+            indent_start: line_indent_start(content, start),
+            self_closing,
+            attrs,
+            close_pos: None,
+            close_indent_start: 0,
+        });
+        if !self_closing {
+            *open_desc = Some((elem_depth, layout.descriptions.len() - 1));
+        }
+        return;
+    }
+
+    let Some((desc_depth, _)) = *open_desc else {
+        return;
+    };
+
+    if open_prop.is_none()
+        && elem_depth == desc_depth + 1
+        && is_interesting_prop(&local, ns.as_deref(), &prefix)
+    {
+        let indent_start = line_indent_start(content, start);
+        if self_closing {
+            layout.props.push(PropBlock {
+                prefix,
+                local,
+                ns,
+                span: indent_start..end,
+                indent: content[indent_start..start].to_string(),
+                items: Vec::new(),
+                text_span: end..end,
+                self_closing: true,
+            });
+        } else {
+            *open_prop = Some(OpenProp {
+                depth: elem_depth,
+                prefix,
+                local,
+                ns,
+                indent_start,
+                tag_start: start,
+                text_start: end,
+                items: Vec::new(),
+            });
+        }
+        return;
+    }
+
+    if open_prop.is_some() && open_li.is_none() && local == "li" {
+        if self_closing {
+            if let Some(op) = open_prop.as_mut() {
+                op.items.push(end..end);
+            }
+        } else {
+            *open_li = Some((elem_depth, end));
+        }
+    }
+}
+
+/// Parse `content` once with quick-xml and locate every span the
+/// writers may need: rdf:Description start tags (with attribute spans)
+/// and the interesting property blocks inside them. Infallible —
+/// returns whatever was located before the first parse error.
+fn locate(content: &str) -> XmpLayout {
+    let mut layout = XmpLayout::default();
+    let mut reader = Reader::from_str(content);
+
+    let mut ns_stack: Vec<Vec<(String, String)>> = Vec::new();
+    let mut depth = 0usize;
+    // (element depth, index into layout.descriptions)
+    let mut open_desc: Option<(usize, usize)> = None;
+    let mut open_prop: Option<OpenProp> = None;
+    // (element depth, text start) of the current rdf:li
+    let mut open_li: Option<(usize, usize)> = None;
+
+    loop {
+        let start = usize::try_from(reader.buffer_position()).unwrap_or(usize::MAX);
+        let event = match reader.read_event() {
+            Ok(ev) => ev,
+            Err(_) => break,
+        };
+        let end = usize::try_from(reader.buffer_position()).unwrap_or(usize::MAX);
+        match event {
+            Event::Start(ref e) => {
+                ns_stack.push(xmlns_decls(e));
+                depth += 1;
+                record_open(
+                    content, start, end, e, depth, false, &ns_stack, &mut layout,
+                    &mut open_desc, &mut open_prop, &mut open_li,
+                );
+            }
+            Event::Empty(ref e) => {
+                ns_stack.push(xmlns_decls(e));
+                record_open(
+                    content, start, end, e, depth + 1, true, &ns_stack, &mut layout,
+                    &mut open_desc, &mut open_prop, &mut open_li,
+                );
+                ns_stack.pop();
+            }
+            Event::End(ref e) => {
+                let elem_depth = depth;
+                let (_, local) = split_qname(e.name().as_ref());
+                if open_li.is_some_and(|(d, _)| d == elem_depth) && local == "li" {
+                    let (_, text_start) = open_li.take().unwrap();
+                    if let Some(op) = open_prop.as_mut() {
+                        op.items.push(text_start..start);
+                    }
+                } else if open_prop
+                    .as_ref()
+                    .is_some_and(|op| op.depth == elem_depth && op.local == local)
+                {
+                    let op = open_prop.take().unwrap();
+                    layout.props.push(PropBlock {
+                        prefix: op.prefix,
+                        local: op.local,
+                        ns: op.ns,
+                        span: op.indent_start..end,
+                        indent: content[op.indent_start..op.tag_start].to_string(),
+                        items: op.items,
+                        text_span: op.text_start..start,
+                        self_closing: false,
+                    });
+                } else if open_desc.is_some_and(|(d, _)| d == elem_depth) && local == "Description"
+                {
+                    let (_, idx) = open_desc.take().unwrap();
+                    layout.descriptions[idx].close_pos = Some(start);
+                    layout.descriptions[idx].close_indent_start =
+                        line_indent_start(content, start);
+                }
+                depth = depth.saturating_sub(1);
+                ns_stack.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+
+    layout
+}
+
+// ───────────────────────── splice helpers ─────────────────────────
+
+/// Apply non-overlapping `(range, replacement)` edits, sorted by start.
+fn splice(content: &str, edits: Vec<(Range<usize>, String)>) -> String {
+    let mut out = String::with_capacity(content.len() + 256);
+    let mut last = 0;
+    for (range, replacement) in edits {
+        debug_assert!(range.start >= last, "splice edits must be sorted and non-overlapping");
+        out.push_str(&content[last..range.start]);
+        out.push_str(&replacement);
+        last = range.end;
+    }
+    out.push_str(&content[last..]);
+    out
+}
+
+/// Extend a block span to swallow the newline immediately before it, so
+/// removing the block doesn't leave a blank line behind.
+fn with_preceding_newline(content: &str, span: &Range<usize>) -> Range<usize> {
+    if content[..span.start].ends_with('\n') {
+        span.start - 1..span.end
+    } else {
+        span.clone()
+    }
+}
+
+/// Inject a rendered property block into the document: before the first
+/// `</rdf:Description>` when one exists, otherwise by converting the
+/// first self-closing `<rdf:Description …/>`. `render` receives the
+/// default block indentation (description indent + one space).
+/// `xmlns_attr` (e.g. ` xmlns:dc="…"`) is inserted right after the first
+/// `<rdf:Description` when the caller determined it is missing.
+/// `extra_edits` are applied alongside (block strips for the
+/// hierarchical collapse); when no rdf:Description exists, only the
+/// extra edits are applied.
+fn inject_block(
+    content: &str,
+    layout: &XmpLayout,
+    xmlns_attr: Option<&str>,
+    render: impl Fn(&str) -> String,
+    extra_edits: Vec<(Range<usize>, String)>,
+) -> String {
+    if let Some(target) = layout.injection_target() {
+        let close_pos = target.close_pos.unwrap();
+        let desc_indent = &content[target.close_indent_start..close_pos];
+        let mut block = render(&format!("{desc_indent} "));
+        block.push('\n');
+        let mut edits = extra_edits;
+        if let Some(ns) = xmlns_attr {
+            if let Some(first) = layout.descriptions.first() {
+                edits.push((first.name_end..first.name_end, ns.to_string()));
+            }
+        }
+        edits.push((target.close_indent_start..target.close_indent_start, block));
+        edits.sort_by_key(|(r, _)| r.start);
+        return splice(content, edits);
+    }
+
+    if let Some(target) = layout.self_closing_target() {
+        let desc_indent = &content[target.indent_start..target.start_span.start];
+        let attrs_raw = &content[target.name_end..target.start_span.end - 2];
+        let ns_part = xmlns_attr.unwrap_or("");
+        let block = render(&format!("{desc_indent} "));
+        let replacement = format!(
+            "{desc_indent}<rdf:Description{ns_part}{attrs_raw}>\n{block}\n{desc_indent}</rdf:Description>"
+        );
+        let mut edits = extra_edits;
+        edits.push((target.indent_start..target.start_span.end, replacement));
+        edits.sort_by_key(|(r, _)| r.start);
+        return splice(content, edits);
+    }
+
+    // No rdf:Description to inject into.
+    splice(content, extra_edits)
+}
+
 /// Update the `xmp:Rating` value in an XMP file on disk.
 ///
 /// Uses string-based find/replace to preserve all other XMP content byte-for-byte.
@@ -88,23 +651,25 @@ pub fn update_rating(path: &Path, rating: Option<u8>) -> Result<bool> {
 
 /// Apply a rating update to an XMP string, returning the modified string.
 fn update_rating_in_string(content: &str, rating_str: &str) -> String {
-    // Try attribute form: xmp:Rating="..."
-    let attr_re = Regex::new(r#"xmp:Rating="[^"]*""#).unwrap();
-    if attr_re.is_match(content) {
-        return attr_re
-            .replace(content, format!(r#"xmp:Rating="{rating_str}""#))
-            .into_owned();
+    let layout = locate(content);
+
+    // Attribute form: xmp:Rating="…"
+    if let Some(attr) = layout.find_attr(NS_XMP, "Rating", "xmp") {
+        if &content[attr.value_span.clone()] == rating_str {
+            return content.to_string();
+        }
+        return splice(content, vec![(attr.value_span.clone(), rating_str.to_string())]);
     }
 
-    // Try element form: <xmp:Rating>...</xmp:Rating>
-    let elem_re = Regex::new(r"<xmp:Rating>[^<]*</xmp:Rating>").unwrap();
-    if elem_re.is_match(content) {
-        return elem_re
-            .replace(
-                content,
-                format!("<xmp:Rating>{rating_str}</xmp:Rating>"),
-            )
-            .into_owned();
+    // Element form: <xmp:Rating>…</xmp:Rating>
+    if let Some(block) = layout
+        .find_prop(NS_XMP, "Rating", &["xmp"])
+        .filter(|b| !b.self_closing)
+    {
+        if &content[block.text_span.clone()] == rating_str {
+            return content.to_string();
+        }
+        return splice(content, vec![(block.text_span.clone(), rating_str.to_string())]);
     }
 
     // Neither form found — inject attribute if rating > 0
@@ -112,18 +677,14 @@ fn update_rating_in_string(content: &str, rating_str: &str) -> String {
         return content.to_string();
     }
 
-    // Inject xmp:Rating attribute into the first rdf:Description element
-    let desc_re = Regex::new(r"(<rdf:Description\b)").unwrap();
-    if desc_re.is_match(content) {
-        return desc_re
-            .replace(
-                content,
-                format!(r#"${{1}} xmp:Rating="{rating_str}""#),
-            )
-            .into_owned();
+    // Inject xmp:Rating attribute into the first rdf:Description element;
+    // no rdf:Description → return unchanged.
+    if let Some(desc) = layout.descriptions.first() {
+        return splice(
+            content,
+            vec![(desc.name_end..desc.name_end, format!(r#" xmp:Rating="{rating_str}""#))],
+        );
     }
-
-    // No rdf:Description found — can't inject, return unchanged
     content.to_string()
 }
 
@@ -146,30 +707,37 @@ pub fn update_tags(path: &Path, tags_to_add: &[String], tags_to_remove: &[String
     Ok(true)
 }
 
+/// Render a canonical `<qname><rdf:Bag>…` keyword block at the given
+/// indent (no trailing newline).
+fn render_bag_block(qname: &str, indent: &str, tags: &[String]) -> String {
+    let bag_indent = format!("{indent} ");
+    let li_indent = format!("{indent}  ");
+    let mut block = format!("{indent}<{qname}>\n{bag_indent}<rdf:Bag>\n");
+    for tag in tags {
+        block.push_str(&format!("{li_indent}<rdf:li>{}</rdf:li>\n", xml_escape(tag)));
+    }
+    block.push_str(&format!("{bag_indent}</rdf:Bag>\n{indent}</{qname}>"));
+    block
+}
+
 /// Apply tag add/remove operations to an XMP string, returning the modified string.
 fn update_tags_in_string(content: &str, tags_to_add: &[String], tags_to_remove: &[String]) -> String {
     let remove_set: HashSet<&str> = tags_to_remove.iter().map(|s| s.as_str()).collect();
+    let layout = locate(content);
 
-    // Match existing dc:subject block with rdf:Bag
-    let subject_re =
-        Regex::new(r"(?s)([ \t]*)<dc:subject>\s*<rdf:Bag>(.*?)</rdf:Bag>\s*</dc:subject>")
-            .unwrap();
-    let li_re = Regex::new(r"<rdf:li>([^<]*)</rdf:li>").unwrap();
-
-    if let Some(caps) = subject_re.captures(content) {
-        let full_match = caps.get(0).unwrap();
-        let indent = caps.get(1).unwrap().as_str();
-        let bag_content = caps.get(2).unwrap().as_str();
-
+    if let Some(block) = layout.find_prop(NS_DC, "subject", &["dc"]) {
         // Parse existing tags. `xml_unescape` is essential here — without
         // it `&amp;`-style entities are kept as literal text, never match
         // the catalog (which carries decoded `&`), and accumulate an extra
         // `&amp;` layer on every writeback (the `&` in `&amp;` gets
         // re-escaped to `&amp;amp;`, then `&amp;amp;amp;`, etc.).
-        let mut tags: Vec<String> = li_re
-            .captures_iter(bag_content)
-            .map(|c| xml_unescape(c.get(1).unwrap().as_str()))
+        let original: Vec<String> = block
+            .items
+            .iter()
+            .map(|span| xml_unescape(&content[span.clone()]))
             .collect();
+
+        let mut tags = original.clone();
 
         // Apply removals
         tags.retain(|t| !remove_set.contains(t.as_str()));
@@ -181,32 +749,23 @@ fn update_tags_in_string(content: &str, tags_to_add: &[String], tags_to_remove: 
             }
         }
 
+        // No semantic change — return the input bytes unchanged.
+        if tags == original {
+            return content.to_string();
+        }
+
         if tags.is_empty() {
             // Remove the entire dc:subject block including the preceding newline
-            let start = full_match.start();
-            let end = full_match.end();
-            let trim_start = if content[..start].ends_with('\n') {
-                start - 1
-            } else {
-                start
-            };
-            return format!("{}{}", &content[..trim_start], &content[end..]);
+            return splice(
+                content,
+                vec![(with_preceding_newline(content, &block.span), String::new())],
+            );
         }
 
-        // Rebuild with same indentation
-        let bag_indent = format!("{} ", indent);
-        let li_indent = format!("{}  ", indent);
-        let mut block = format!("{}<dc:subject>\n{}<rdf:Bag>\n", indent, bag_indent);
-        for tag in &tags {
-            block.push_str(&format!("{}<rdf:li>{}</rdf:li>\n", li_indent, xml_escape(tag)));
-        }
-        block.push_str(&format!("{}</rdf:Bag>\n{}</dc:subject>", bag_indent, indent));
-
-        return format!(
-            "{}{}{}",
-            &content[..full_match.start()],
-            block,
-            &content[full_match.end()..]
+        // Rebuild the block with the same indentation and element prefix.
+        return splice(
+            content,
+            vec![(block.span.clone(), render_bag_block(&block.qname(), &block.indent, &tags))],
         );
     }
 
@@ -215,66 +774,19 @@ fn update_tags_in_string(content: &str, tags_to_add: &[String], tags_to_remove: 
         return content.to_string();
     }
 
-    // Ensure xmlns:dc namespace is declared
-    let mut content = content.to_string();
-    if !content.contains("xmlns:dc") {
-        let desc_re = Regex::new(r#"(<rdf:Description\b)"#).unwrap();
-        if desc_re.is_match(&content) {
-            content = desc_re
-                .replace(
-                    &content,
-                    r#"${1} xmlns:dc="http://purl.org/dc/elements/1.1/""#,
-                )
-                .into_owned();
-        }
-    }
-
-    // Try to inject before </rdf:Description>
-    let close_re = Regex::new(r"([ \t]*)</rdf:Description>").unwrap();
-    if let Some(caps) = close_re.captures(&content) {
-        let m = caps.get(0).unwrap();
-        let desc_indent = caps.get(1).unwrap().as_str();
-        let indent = format!("{} ", desc_indent);
-        let bag_indent = format!("{}  ", desc_indent);
-        let li_indent = format!("{}   ", desc_indent);
-
-        let mut block = format!("{}<dc:subject>\n{}<rdf:Bag>\n", indent, bag_indent);
-        for tag in tags_to_add {
-            block.push_str(&format!("{}<rdf:li>{}</rdf:li>\n", li_indent, xml_escape(tag)));
-        }
-        block.push_str(&format!(
-            "{}</rdf:Bag>\n{}</dc:subject>\n",
-            bag_indent, indent
-        ));
-
-        return format!("{}{}{}", &content[..m.start()], block, &content[m.start()..]);
-    }
-
-    // Try to handle self-closing rdf:Description: convert /> to > and append
-    let self_close_re =
-        Regex::new(r"(?s)([ \t]*)<rdf:Description\b([^>]*?)/>").unwrap();
-    if let Some(caps) = self_close_re.captures(&content) {
-        let m = caps.get(0).unwrap();
-        let desc_indent = caps.get(1).unwrap().as_str();
-        let attrs = caps.get(2).unwrap().as_str();
-        let indent = format!("{} ", desc_indent);
-        let bag_indent = format!("{}  ", desc_indent);
-        let li_indent = format!("{}   ", desc_indent);
-
-        let mut block = format!("{}<rdf:Description{}>\n", desc_indent, attrs);
-        block.push_str(&format!("{}<dc:subject>\n{}<rdf:Bag>\n", indent, bag_indent));
-        for tag in tags_to_add {
-            block.push_str(&format!("{}<rdf:li>{}</rdf:li>\n", li_indent, xml_escape(tag)));
-        }
-        block.push_str(&format!(
-            "{}</rdf:Bag>\n{}</dc:subject>\n{}</rdf:Description>",
-            bag_indent, indent, desc_indent
-        ));
-
-        return format!("{}{}{}", &content[..m.start()], block, &content[m.end()..]);
-    }
-
-    content
+    // Ensure xmlns:dc is declared, then inject the block.
+    let xmlns_attr = if content.contains("xmlns:dc") {
+        None
+    } else {
+        Some(format!(r#" xmlns:dc="{NS_DC}""#))
+    };
+    inject_block(
+        content,
+        &layout,
+        xmlns_attr.as_deref(),
+        |indent| render_bag_block("dc:subject", indent, tags_to_add),
+        Vec::new(),
+    )
 }
 
 /// Update the `lr:hierarchicalSubject` keywords in an XMP file on disk.
@@ -320,38 +832,7 @@ pub fn update_hierarchical_subjects(
 
 /// Render a canonical `lr:hierarchicalSubject` block at the given indent.
 fn render_hierarchical_block(indent: &str, tags: &[String]) -> String {
-    let bag_indent = format!("{} ", indent);
-    let li_indent = format!("{}  ", indent);
-    let mut block = format!(
-        "{}<lr:hierarchicalSubject>\n{}<rdf:Bag>\n",
-        indent, bag_indent
-    );
-    for tag in tags {
-        block.push_str(&format!("{}<rdf:li>{}</rdf:li>\n", li_indent, xml_escape(tag)));
-    }
-    block.push_str(&format!(
-        "{}</rdf:Bag>\n{}</lr:hierarchicalSubject>",
-        bag_indent, indent
-    ));
-    block
-}
-
-/// Collect every prefix declared as bound to the Adobe Lightroom namespace URI.
-/// `lr` and `lightroom` are always included as fallbacks for files that declare
-/// the namespace on an ancestor element our scan doesn't cover.
-fn collect_lightroom_prefixes(content: &str) -> Vec<String> {
-    let mut prefixes: Vec<String> = vec!["lr".to_string(), "lightroom".to_string()];
-    let xmlns_re = Regex::new(
-        r#"xmlns:([A-Za-z_][A-Za-z0-9_.\-]*)\s*=\s*"http://ns\.adobe\.com/lightroom/1\.0/""#,
-    )
-    .unwrap();
-    for caps in xmlns_re.captures_iter(content) {
-        let p = caps.get(1).unwrap().as_str().to_string();
-        if !prefixes.contains(&p) {
-            prefixes.push(p);
-        }
-    }
-    prefixes
+    render_bag_block("lr:hierarchicalSubject", indent, tags)
 }
 
 /// Apply hierarchical subject add/remove operations to an XMP string.
@@ -365,11 +846,14 @@ fn collect_lightroom_prefixes(content: &str) -> Vec<String> {
 /// flat-name leaves leak back into the catalog on re-import.
 ///
 /// This function:
-/// 1. Detects every prefix bound to the Lightroom namespace.
-/// 2. Finds all `<prefix:hierarchicalSubject>` blocks.
-/// 3. If exactly one block exists and it is the canonical `lr:` form, edits
-///    it in place (preserves byte-equivalence for the common case).
-/// 4. Otherwise (zero blocks, multiple blocks, or a single non-canonical
+/// 1. Finds every `hierarchicalSubject` block whose prefix is bound to the
+///    Lightroom namespace URI (the locator resolves in-scope `xmlns`
+///    declarations; bare `lr:`/`lightroom:` prefixes are honored even
+///    without a declaration).
+/// 2. If exactly one block exists and it is the canonical `lr:` form, edits
+///    it in place — and returns the input bytes unchanged when the update
+///    is a semantic no-op.
+/// 3. Otherwise (zero blocks, multiple blocks, or a single non-canonical
 ///    block) strips every match, accumulates tags, and writes one canonical
 ///    `lr:` block.
 fn update_hierarchical_in_string(
@@ -379,68 +863,26 @@ fn update_hierarchical_in_string(
 ) -> String {
     let remove_set: HashSet<&str> = hier_to_remove.iter().map(|s| s.as_str()).collect();
 
-    let prefixes = collect_lightroom_prefixes(content);
-    let prefix_alt = prefixes
-        .iter()
-        .map(|p| regex::escape(p))
-        .collect::<Vec<_>>()
-        .join("|");
+    let layout = locate(content);
+    let blocks = layout.lightroom_blocks();
 
-    let block_re = Regex::new(&format!(
-        r"(?s)([ \t]*)<({px}):hierarchicalSubject>\s*<rdf:Bag>(.*?)</rdf:Bag>\s*</({px}):hierarchicalSubject>",
-        px = prefix_alt
-    ))
-    .unwrap();
-    let li_re = Regex::new(r"<rdf:li>([^<]*)</rdf:li>").unwrap();
-
-    // (start, end, indent, prefix) for every matched block, in file order.
-    let mut matches: Vec<(usize, usize, String, String)> = Vec::new();
+    // Union of entries across all blocks, decoded with `xml_unescape`
+    // (`&amp;` → `&`, etc.) so existing entries are compared against the
+    // catalog's decoded form, not the still-escaped on-disk form — see
+    // `xml_unescape` for the runaway-escape bug this prevents.
+    // `original_seq` keeps the raw entry sequence (duplicates included)
+    // for the semantic-change check.
     let mut accumulated_tags: Vec<String> = Vec::new();
-    for caps in block_re.captures_iter(content) {
-        let full = caps.get(0).unwrap();
-        let indent = caps.get(1).unwrap().as_str().to_string();
-        let prefix = caps.get(2).unwrap().as_str().to_string();
-        let bag = caps.get(3).unwrap().as_str();
-        for c in li_re.captures_iter(bag) {
-            // Decode XML entities (`&amp;` → `&`, etc.) so existing
-            // entries are compared against the catalog's decoded form,
-            // not the still-escaped on-disk form. See `xml_unescape`
-            // for the runaway-escape bug this prevents.
-            let t = xml_unescape(c.get(1).unwrap().as_str());
+    let mut original_seq: Vec<String> = Vec::new();
+    for block in &blocks {
+        for span in &block.items {
+            let t = xml_unescape(&content[span.clone()]);
             if !accumulated_tags.contains(&t) {
-                accumulated_tags.push(t);
+                accumulated_tags.push(t.clone());
             }
+            original_seq.push(t);
         }
-        matches.push((full.start(), full.end(), indent, prefix));
     }
-
-    // Fast path: exactly one canonical `lr:` block — edit in place.
-    if matches.len() == 1 && matches[0].3 == "lr" {
-        let (start, end, indent, _) = matches[0].clone();
-        let mut tags = accumulated_tags;
-        tags.retain(|t| !remove_set.contains(t.as_str()));
-        for tag in hier_to_add {
-            if !tags.iter().any(|t| t == tag) {
-                tags.push(tag.clone());
-            }
-        }
-
-        if tags.is_empty() {
-            let trim_start = if content[..start].ends_with('\n') {
-                start - 1
-            } else {
-                start
-            };
-            return format!("{}{}", &content[..trim_start], &content[end..]);
-        }
-
-        let block = render_hierarchical_block(&indent, &tags);
-        return format!("{}{}{}", &content[..start], block, &content[end..]);
-    }
-
-    // Slow path: zero blocks → fall through to inject; otherwise (multiple
-    // blocks, or single non-canonical prefix) → strip every match and
-    // re-inject a single canonical block.
 
     let mut tags = accumulated_tags;
     tags.retain(|t| !remove_set.contains(t.as_str()));
@@ -450,75 +892,64 @@ fn update_hierarchical_in_string(
         }
     }
 
-    if matches.is_empty() && hier_to_add.is_empty() {
+    // Fast path: exactly one canonical `lr:` block — edit in place.
+    if blocks.len() == 1 && blocks[0].prefix == "lr" {
+        let block = blocks[0];
+
+        // No semantic change — return the input bytes unchanged.
+        if tags == original_seq {
+            return content.to_string();
+        }
+
+        if tags.is_empty() {
+            return splice(
+                content,
+                vec![(with_preceding_newline(content, &block.span), String::new())],
+            );
+        }
+
+        return splice(
+            content,
+            vec![(block.span.clone(), render_hierarchical_block(&block.indent, &tags))],
+        );
+    }
+
+    // Slow path: zero blocks → fall through to inject; otherwise (multiple
+    // blocks, or single non-canonical prefix) → strip every match and
+    // re-inject a single canonical block.
+
+    if blocks.is_empty() && hier_to_add.is_empty() {
         return content.to_string();
     }
 
-    // Strip all matched blocks (reverse order to keep earlier offsets valid).
-    let preserved_indent = matches.first().map(|m| m.2.clone());
-    let mut stripped = content.to_string();
-    for (start, end, _, _) in matches.iter().rev() {
-        let trim_start = if stripped[..*start].ends_with('\n') {
-            *start - 1
-        } else {
-            *start
-        };
-        stripped.replace_range(trim_start..*end, "");
-    }
+    let preserved_indent = blocks.first().map(|b| b.indent.clone());
+    let strips: Vec<(Range<usize>, String)> = blocks
+        .iter()
+        .map(|b| (with_preceding_newline(content, &b.span), String::new()))
+        .collect();
 
     if tags.is_empty() {
-        return stripped;
+        return splice(content, strips);
     }
 
-    // From here on, work with `stripped` and inject a single canonical block.
-    let mut content = stripped;
-
-    // Ensure xmlns:lr namespace is declared
-    if !content.contains("xmlns:lr=") {
-        let desc_re = Regex::new(r#"(<rdf:Description\b)"#).unwrap();
-        if desc_re.is_match(&content) {
-            content = desc_re
-                .replace(
-                    &content,
-                    r#"${1} xmlns:lr="http://ns.adobe.com/lightroom/1.0/""#,
-                )
-                .into_owned();
-        }
-    }
-
-    // Try to inject before </rdf:Description>
-    let close_re = Regex::new(r"([ \t]*)</rdf:Description>").unwrap();
-    if let Some(caps) = close_re.captures(&content) {
-        let m = caps.get(0).unwrap();
-        let desc_indent = caps.get(1).unwrap().as_str();
-        let indent = preserved_indent
-            .clone()
-            .unwrap_or_else(|| format!("{} ", desc_indent));
-        let mut block = render_hierarchical_block(&indent, &tags);
-        block.push('\n');
-
-        return format!("{}{}{}", &content[..m.start()], block, &content[m.start()..]);
-    }
-
-    // Try self-closing rdf:Description
-    let self_close_re = Regex::new(r"(?s)([ \t]*)<rdf:Description\b([^>]*?)/>").unwrap();
-    if let Some(caps) = self_close_re.captures(&content) {
-        let m = caps.get(0).unwrap();
-        let desc_indent = caps.get(1).unwrap().as_str();
-        let attrs = caps.get(2).unwrap().as_str();
-        let indent = preserved_indent
-            .clone()
-            .unwrap_or_else(|| format!("{} ", desc_indent));
-
-        let mut block = format!("{}<rdf:Description{}>\n", desc_indent, attrs);
-        block.push_str(&render_hierarchical_block(&indent, &tags));
-        block.push('\n');
-        block.push_str(&format!("{}</rdf:Description>", desc_indent));
-
-        return format!("{}{}{}", &content[..m.start()], block, &content[m.end()..]);
-    }
-
-    content
+    // Ensure xmlns:lr is declared, then inject one canonical block.
+    let xmlns_attr = if content.contains("xmlns:lr=") {
+        None
+    } else {
+        Some(format!(r#" xmlns:lr="{NS_LR}""#))
+    };
+    inject_block(
+        content,
+        &layout,
+        xmlns_attr.as_deref(),
+        |default_indent| {
+            let indent = preserved_indent
+                .clone()
+                .unwrap_or_else(|| default_indent.to_string());
+            render_hierarchical_block(&indent, &tags)
+        },
+        strips,
+    )
 }
 
 /// Update the `dc:description` in an XMP file on disk.
@@ -536,41 +967,44 @@ pub fn update_description(path: &Path, description: Option<&str>) -> Result<bool
     Ok(true)
 }
 
+/// Render a canonical `dc:description` block at the given indent
+/// (no trailing newline).
+fn render_description_block(indent: &str, text: &str) -> String {
+    format!(
+        "{indent}<dc:description>\n{indent} <rdf:Alt>\n{indent}  <rdf:li xml:lang=\"x-default\">{}</rdf:li>\n{indent} </rdf:Alt>\n{indent}</dc:description>",
+        xml_escape(text)
+    )
+}
+
 /// Apply a description update to an XMP string, returning the modified string.
 fn update_description_in_string(content: &str, description: Option<&str>) -> String {
     let desc_text = description.unwrap_or("");
+    let layout = locate(content);
 
-    // Match existing dc:description block with rdf:Alt
-    let desc_re = Regex::new(
-        r"(?s)([ \t]*)<dc:description>\s*<rdf:Alt>\s*<rdf:li[^>]*>[^<]*</rdf:li>\s*</rdf:Alt>\s*</dc:description>"
-    ).unwrap();
-
-    if let Some(caps) = desc_re.captures(content) {
-        let full_match = caps.get(0).unwrap();
-
+    if let Some(block) = layout.find_prop(NS_DC, "description", &["dc"]) {
         if desc_text.is_empty() {
-            // Remove the entire dc:description block including the preceding newline
-            let start = full_match.start();
-            let end = full_match.end();
-            let trim_start = if content[..start].ends_with('\n') {
-                start - 1
-            } else {
-                start
-            };
-            return format!("{}{}", &content[..trim_start], &content[end..]);
+            // Remove the entire dc:description block including the
+            // preceding newline.
+            return splice(
+                content,
+                vec![(with_preceding_newline(content, &block.span), String::new())],
+            );
         }
 
-        // Replace inner rdf:li text
-        let li_re = Regex::new(r"(<rdf:li[^>]*>)[^<]*(</rdf:li>)").unwrap();
-        let replaced = li_re.replace(
-            full_match.as_str(),
-            format!("${{1}}{}{}", xml_escape(desc_text), "${2}"),
-        );
-        return format!(
-            "{}{}{}",
-            &content[..full_match.start()],
-            replaced,
-            &content[full_match.end()..]
+        if let Some(li_span) = block.items.first() {
+            // Replace only the rdf:li text — the block formatting and the
+            // original `<rdf:li …>` open tag stay byte-for-byte.
+            let escaped = xml_escape(desc_text);
+            if content[li_span.clone()] == escaped {
+                return content.to_string();
+            }
+            return splice(content, vec![(li_span.clone(), escaped)]);
+        }
+
+        // Degenerate block without an rdf:li — re-render it canonically.
+        return splice(
+            content,
+            vec![(block.span.clone(), render_description_block(&block.indent, desc_text))],
         );
     }
 
@@ -579,56 +1013,19 @@ fn update_description_in_string(content: &str, description: Option<&str>) -> Str
         return content.to_string();
     }
 
-    // Ensure xmlns:dc namespace is declared
-    let mut content = content.to_string();
-    if !content.contains("xmlns:dc") {
-        let ns_re = Regex::new(r#"(<rdf:Description\b)"#).unwrap();
-        if ns_re.is_match(&content) {
-            content = ns_re
-                .replace(
-                    &content,
-                    r#"${1} xmlns:dc="http://purl.org/dc/elements/1.1/""#,
-                )
-                .into_owned();
-        }
-    }
-
-    // Try to inject before </rdf:Description>
-    let close_re = Regex::new(r"([ \t]*)</rdf:Description>").unwrap();
-    if let Some(caps) = close_re.captures(&content) {
-        let m = caps.get(0).unwrap();
-        let desc_indent = caps.get(1).unwrap().as_str();
-        let indent = format!("{} ", desc_indent);
-        let alt_indent = format!("{}  ", desc_indent);
-        let li_indent = format!("{}   ", desc_indent);
-
-        let block = format!(
-            "{}<dc:description>\n{}<rdf:Alt>\n{}<rdf:li xml:lang=\"x-default\">{}</rdf:li>\n{}</rdf:Alt>\n{}</dc:description>\n",
-            indent, alt_indent, li_indent, xml_escape(desc_text), alt_indent, indent
-        );
-
-        return format!("{}{}{}", &content[..m.start()], block, &content[m.start()..]);
-    }
-
-    // Try to handle self-closing rdf:Description: convert /> to > and append
-    let self_close_re = Regex::new(r"(?s)([ \t]*)<rdf:Description\b([^>]*?)/>").unwrap();
-    if let Some(caps) = self_close_re.captures(&content) {
-        let m = caps.get(0).unwrap();
-        let desc_indent = caps.get(1).unwrap().as_str();
-        let attrs = caps.get(2).unwrap().as_str();
-        let indent = format!("{} ", desc_indent);
-        let alt_indent = format!("{}  ", desc_indent);
-        let li_indent = format!("{}   ", desc_indent);
-
-        let block = format!(
-            "{}<rdf:Description{}>\n{}<dc:description>\n{}<rdf:Alt>\n{}<rdf:li xml:lang=\"x-default\">{}</rdf:li>\n{}</rdf:Alt>\n{}</dc:description>\n{}</rdf:Description>",
-            desc_indent, attrs, indent, alt_indent, li_indent, xml_escape(desc_text), alt_indent, indent, desc_indent
-        );
-
-        return format!("{}{}{}", &content[..m.start()], block, &content[m.end()..]);
-    }
-
-    content
+    // Ensure xmlns:dc is declared, then inject the block.
+    let xmlns_attr = if content.contains("xmlns:dc") {
+        None
+    } else {
+        Some(format!(r#" xmlns:dc="{NS_DC}""#))
+    };
+    inject_block(
+        content,
+        &layout,
+        xmlns_attr.as_deref(),
+        |indent| render_description_block(indent, desc_text),
+        Vec::new(),
+    )
 }
 
 /// Update the `xmp:Label` value in an XMP file on disk.
@@ -651,53 +1048,54 @@ fn update_label_in_string(content: &str, label: Option<&str>) -> String {
     // Escape ONCE here — the raw label may contain XML-special
     // characters (`R&D`, `19" rack`); injecting it verbatim into the
     // attribute/element corrupted the document (property-test finding).
-    let label_escaped = label.map(|l| xml_escape(l)).unwrap_or_default();
-    let label_str = label_escaped.as_str();
+    let label_escaped = label.map(xml_escape).unwrap_or_default();
+    let layout = locate(content);
 
-    // Try attribute form: xmp:Label="..."
-    let attr_re = Regex::new(r#"\s*xmp:Label="[^"]*""#).unwrap();
-    if attr_re.is_match(content) {
-        if label_str.is_empty() {
-            // Remove the attribute (including leading whitespace)
-            return attr_re.replace(content, "").into_owned();
+    // Attribute form: xmp:Label="…"
+    if let Some(attr) = layout.find_attr(NS_XMP, "Label", "xmp") {
+        if label_escaped.is_empty() {
+            // Remove the attribute, including its leading whitespace.
+            return splice(content, vec![(attr.full_span.clone(), String::new())]);
         }
-        // Replace — use the version without leading \s* to preserve spacing
-        let replace_re = Regex::new(r#"xmp:Label="[^"]*""#).unwrap();
-        return replace_re
-            .replace(content, format!(r#"xmp:Label="{label_str}""#))
-            .into_owned();
+        if content[attr.value_span.clone()] == label_escaped {
+            return content.to_string();
+        }
+        return splice(content, vec![(attr.value_span.clone(), label_escaped)]);
     }
 
-    // Try element form: <xmp:Label>...</xmp:Label>
-    let elem_re = Regex::new(r"[ \t]*<xmp:Label>[^<]*</xmp:Label>\n?").unwrap();
-    if elem_re.is_match(content) {
-        if label_str.is_empty() {
-            // Remove the element
-            return elem_re.replace(content, "").into_owned();
+    // Element form: <xmp:Label>…</xmp:Label>
+    if let Some(block) = layout
+        .find_prop(NS_XMP, "Label", &["xmp"])
+        .filter(|b| !b.self_closing)
+    {
+        if label_escaped.is_empty() {
+            // Remove the element line: leading indent + element + one
+            // trailing newline.
+            let mut span = block.span.clone();
+            if content[span.end..].starts_with('\n') {
+                span.end += 1;
+            }
+            return splice(content, vec![(span, String::new())]);
         }
-        let replace_re = Regex::new(r"<xmp:Label>[^<]*</xmp:Label>").unwrap();
-        return replace_re
-            .replace(content, format!("<xmp:Label>{label_str}</xmp:Label>"))
-            .into_owned();
+        if content[block.text_span.clone()] == label_escaped {
+            return content.to_string();
+        }
+        return splice(content, vec![(block.text_span.clone(), label_escaped)]);
     }
 
     // Neither form found — inject attribute if label is non-empty
-    if label_str.is_empty() {
+    if label_escaped.is_empty() {
         return content.to_string();
     }
 
-    // Inject xmp:Label attribute into the first rdf:Description element
-    let desc_re = Regex::new(r"(<rdf:Description\b)").unwrap();
-    if desc_re.is_match(content) {
-        return desc_re
-            .replace(
-                content,
-                format!(r#"${{1}} xmp:Label="{label_str}""#),
-            )
-            .into_owned();
+    // Inject xmp:Label attribute into the first rdf:Description element;
+    // no rdf:Description → return unchanged.
+    if let Some(desc) = layout.descriptions.first() {
+        return splice(
+            content,
+            vec![(desc.name_end..desc.name_end, format!(r#" xmp:Label="{label_escaped}""#))],
+        );
     }
-
-    // No rdf:Description found — can't inject, return unchanged
     content.to_string()
 }
 
@@ -979,6 +1377,193 @@ fn handle_open_tag(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    // ── locator tests ────────────────────────────────────────
+
+    #[test]
+    fn locator_description_and_prop_spans_round_trip() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:lr="http://ns.adobe.com/lightroom/1.0/"
+    xmp:Rating="4"
+    xmp:Label="Blue">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>landscape</rdf:li>
+     <rdf:li>black &amp; white</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+   <lr:hierarchicalSubject>
+    <rdf:Bag>
+     <rdf:li>nature|sky</rdf:li>
+    </rdf:Bag>
+   </lr:hierarchicalSubject>
+   <dc:description>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">A sunset</rdf:li>
+    </rdf:Alt>
+   </dc:description>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let layout = locate(xmp);
+        assert_eq!(layout.descriptions.len(), 1);
+        let d = &layout.descriptions[0];
+        assert!(xmp[d.start_span.clone()].starts_with("<rdf:Description"));
+        assert!(xmp[d.start_span.clone()].ends_with('>'));
+        assert!(!d.self_closing);
+        assert_eq!(&xmp[d.name_end - 16..d.name_end], "<rdf:Description");
+        let close = d.close_pos.unwrap();
+        assert!(xmp[close..].starts_with("</rdf:Description>"));
+        assert_eq!(&xmp[d.close_indent_start..close], "  ");
+
+        // Attribute spans.
+        let rating = layout.find_attr(NS_XMP, "Rating", "xmp").unwrap();
+        assert_eq!(&xmp[rating.value_span.clone()], "4");
+        assert!(xmp[rating.full_span.clone()].ends_with(r#"xmp:Rating="4""#));
+        assert!(xmp[rating.full_span.clone()].starts_with('\n'));
+        assert_eq!(rating.ns.as_deref(), Some(NS_XMP));
+
+        // Subject block spans + decoded-comparable raw items.
+        let s = layout.find_prop(NS_DC, "subject", &["dc"]).unwrap();
+        assert_eq!(
+            &xmp[s.span.clone()],
+            "   <dc:subject>\n    <rdf:Bag>\n     <rdf:li>landscape</rdf:li>\n     <rdf:li>black &amp; white</rdf:li>\n    </rdf:Bag>\n   </dc:subject>"
+        );
+        assert_eq!(s.indent, "   ");
+        assert_eq!(s.items.len(), 2);
+        assert_eq!(&xmp[s.items[0].clone()], "landscape");
+        assert_eq!(&xmp[s.items[1].clone()], "black &amp; white");
+
+        // Lightroom + description blocks found by namespace URI.
+        assert_eq!(layout.lightroom_blocks().len(), 1);
+        let desc_block = layout.find_prop(NS_DC, "description", &["dc"]).unwrap();
+        assert_eq!(desc_block.items.len(), 1);
+        assert_eq!(&xmp[desc_block.items[0].clone()], "A sunset");
+    }
+
+    #[test]
+    fn locator_self_closing_description() {
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="5"/>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let layout = locate(xmp);
+        assert_eq!(layout.descriptions.len(), 1);
+        let d = &layout.descriptions[0];
+        assert!(d.self_closing);
+        assert!(d.close_pos.is_none());
+        assert!(xmp[d.start_span.clone()].ends_with("/>"));
+        let rating = layout.find_attr(NS_XMP, "Rating", "xmp").unwrap();
+        assert_eq!(&xmp[rating.value_span.clone()], "5");
+    }
+
+    #[test]
+    fn locator_finds_alien_lightroom_binding() {
+        // Namespace-URI matching: any prefix bound to the Lightroom URI
+        // is recognized; the conventional `lr`/`lightroom` prefixes are
+        // recognized even without a declaration in scope.
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:lrc="http://ns.adobe.com/lightroom/1.0/">
+   <lrc:hierarchicalSubject>
+    <rdf:Bag>
+     <rdf:li>nature|sky</rdf:li>
+    </rdf:Bag>
+   </lrc:hierarchicalSubject>
+   <lightroom:hierarchicalSubject>
+    <rdf:Bag>
+     <rdf:li>Bavaria</rdf:li>
+    </rdf:Bag>
+   </lightroom:hierarchicalSubject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let layout = locate(xmp);
+        let blocks = layout.lightroom_blocks();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].prefix, "lrc");
+        assert_eq!(blocks[1].prefix, "lightroom");
+    }
+
+    #[test]
+    fn locator_resolves_namespace_over_prefix() {
+        // A dc:subject written under an unconventional prefix bound to
+        // the Dublin Core URI is still located (the old regex writers
+        // keyed on the literal `dc:` prefix and missed this).
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dcx="http://purl.org/dc/elements/1.1/">
+   <dcx:subject>
+    <rdf:Bag>
+     <rdf:li>portrait</rdf:li>
+    </rdf:Bag>
+   </dcx:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        let layout = locate(xmp);
+        let block = layout.find_prop(NS_DC, "subject", &["dc"]).unwrap();
+        assert_eq!(block.prefix, "dcx");
+        assert_eq!(block.qname(), "dcx:subject");
+        assert_eq!(&xmp[block.items[0].clone()], "portrait");
+    }
+
+    #[test]
+    fn comment_between_blocks_survives_update() {
+        // Comments (and any other content outside the spliced spans)
+        // must pass through untouched — the old regex writers could in
+        // principle match inside them.
+        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="2">
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>landscape</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+   <!-- keep me: written by AcmeTool 1.2 -->
+   <dc:description>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">A sunset</rdf:li>
+    </rdf:Alt>
+   </dc:description>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+        // Tag update: only the dc:subject block changes; the comment and
+        // everything after it stay byte-for-byte.
+        let result = update_tags_in_string(xmp, &["ocean".to_string()], &[]);
+        assert!(result.contains("<!-- keep me: written by AcmeTool 1.2 -->"));
+        assert!(result.contains("<rdf:li>ocean</rdf:li>"));
+        let tail = "   <!-- keep me: written by AcmeTool 1.2 -->\n   <dc:description>";
+        assert!(result.contains(tail), "comment context must be untouched:\n{result}");
+
+        // Rating update: everything except the attribute value is untouched.
+        let result = update_rating_in_string(xmp, "5");
+        assert_eq!(result, xmp.replace(r#"xmp:Rating="2""#, r#"xmp:Rating="5""#));
+    }
 
     #[test]
     fn empty_file_returns_empty() {
@@ -2334,24 +2919,6 @@ mod tests {
             data2.hierarchical_keywords,
             vec!["animals|birds|eagles", "nature|sky|sunset"]
         );
-    }
-
-    #[test]
-    fn collect_lightroom_prefixes_finds_alien_bindings() {
-        let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
-<x:xmpmeta xmlns:x="adobe:ns:meta/">
- <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-  <rdf:Description rdf:about=""
-    xmlns:lr="http://ns.adobe.com/lightroom/1.0/"
-    xmlns:lightroom="http://ns.adobe.com/lightroom/1.0/"
-    xmlns:lrc="http://ns.adobe.com/lightroom/1.0/">
-  </rdf:Description>
- </rdf:RDF>
-</x:xmpmeta>"#;
-        let prefixes = collect_lightroom_prefixes(xmp);
-        assert!(prefixes.contains(&"lr".to_string()));
-        assert!(prefixes.contains(&"lightroom".to_string()));
-        assert!(prefixes.contains(&"lrc".to_string()));
     }
 
     #[test]
