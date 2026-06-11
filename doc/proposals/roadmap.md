@@ -18,7 +18,7 @@ sidecar write locking. Horizon 2 (v4.7–4.8): XMP writer rework (gates
 the Tier-1 IPTC/EXIF write-back below), tag provenance, FTS5, unified
 search pipeline. See `doc/proposals/roadmap-v4.6-horizons.md`.
 
-**Status:** Active — Horizon 1 implemented on main (June 2026, unreleased): select-all/text-query fix, web test harness, `serve --read-only` + basic auth, trash + `maki trash`, `maki doctor`, sidecar write locking. Horizon 2 is next.
+**Status:** Active — Horizon 1 shipped as **v4.6.0** (2026-06-11). Horizon 2 core implemented on main (June 2026, unreleased): FTS5 trigram free-text search (schema v9), XMP property-test suite + writer rework onto quick-xml locate-and-splice (IPTC/EXIF write-back is now unblocked), tag provenance model (schema v10, `tag clear --source`), unified search filter resolution (CLI/web drift made explicit in `query/resolve.rs`). Remaining from Horizon 2: IPTC/EXIF embed write-back itself, watch mode, auto-stack, web provenance badges, the documented `-person:`/`-collection:` web gaps.
 
 **Complexity:** Per-item, see the document.
 
