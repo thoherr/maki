@@ -2,6 +2,97 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.7.0 (2026-06-11)
+
+Foundation-rework release — the core of Horizon 2
+(`doc/proposals/roadmap-v4.6-horizons.md`). Two of MAKI's three
+longest bug sagas traced back to the same roots: regex-based XMP
+writing and silently drifting duplicate logic. This release fixes the
+roots, adds tag provenance as a new data-model capability, and raises
+the search performance ceiling.
+
+Two schema migrations (v9, v10) run automatically on first use
+(`maki migrate` or server startup).
+
+Tests: 891 + 255 + 7 standard, 1012 + 289 + 7 pro (up from 854 + 254
+at v4.6.0; the +7 suite is the new XMP property tests).
+
+### Tag provenance (schema v10)
+
+Tags now record **where they came from**: `user`, `xmp-import`,
+`auto-tag` (SigLIP), or `vlm`. Previously a human-curated tag and a
+machine guess were indistinguishable once stored — the quiet blocker
+behind machine-tag replacement and principled import-conflict
+handling.
+
+- Sources are recorded at every write path: XMP keyword import,
+  SigLIP auto-tag (CLI + web), VLM describe (CLI + web); everything
+  user-initiated stays `user`. Renames and splits carry the source —
+  a renamed machine tag stays a machine tag. Re-importing XMP never
+  demotes a user tag.
+- **`maki tag clear <asset> --source <vlm|auto-tag|xmp-import|user>`**
+  removes only tags of that source — e.g. wipe one model's guesses
+  before re-running auto-tag with a better model.
+- `maki show` annotates non-user tags (`festival (vlm)`); `--json`
+  gains a `tag_sources` object.
+- Absent source = `user`: existing catalogs need no backfill, old
+  sidecars load unchanged, and sidecars without machine tags never
+  gain the new key. `maki doctor` verifies the new column from day
+  one.
+- Web provenance badges are a follow-up.
+
+### Faster free-text search (FTS5, schema v9)
+
+Free-text terms previously ran a `LIKE %text%` table scan. New FTS5
+index with the trigram tokenizer: index-accelerated **substring**
+matching with semantics identical to the old scan (case-insensitive,
+mid-word fragments like `91_47` in `Z91_4714` still match). Terms
+under 3 characters keep the LIKE path. The index is maintained by SQL
+triggers — no write path can forget it — and backfills automatically
+on migration.
+
+### XMP writer rework
+
+The `update_*` writers edited XMP via regex find/replace on the raw
+string — the architecture behind the entire v4.5.14–v4.5.17 bug train
+(runaway entity escalation, namespace-prefix misses, dual-block
+leaks). They are now an XML-aware locate-and-splice pipeline sharing
+quick-xml with the reader: one locator pass produces byte-exact spans
+for every property block (namespace-URI resolved, any prefix), and
+writers splice canonical replacements or return the input bytes
+untouched on no-ops. No regex remains in the file.
+
+New property-based test suite (proptest: round-trip, byte-stable
+idempotence, removal complement, for generated hostile text) — which
+found and fixed three real quote-escaping bugs on its first run: a
+color label containing `"` (e.g. `19" rack`) corrupted the sidecar so
+badly that every field in the file became unreadable; labels with `&`
+produced invalid XML; correctly-escaped labels read back undecoded.
+
+This unblocks IPTC/EXIF embedded write-back (planned), which must not
+be built on string surgery.
+
+### Unified search filter resolution
+
+The collection/person filter resolution existed three times (CLI
+engine, web browse, web export-zip) and had silently drifted —
+notably, multiple `person:` filters mean "any of" on the CLI but "all
+of" in the web UI, and an unmatched filter matches nothing on the CLI
+while the browse page ignores it. One shared implementation now
+carries every difference as an explicit, documented parameter. No
+behavior changes; two genuine gaps are now documented decisions
+awaiting fixes: the web UI ignores `-person:`, and export-zip ignores
+`-collection:` (exports filtered with `-collection:` may contain more
+assets than the grid showed).
+
+### Operator notes
+
+- First run after upgrading performs the v9 + v10 migrations,
+  including the one-time FTS index backfill (seconds, even on large
+  catalogs).
+- Tag provenance starts recording from this version on; everything
+  already in the catalog counts as `user`.
+
 ## v4.6.0 (2026-06-11)
 
 Trust-hardening release — Horizon 1 of the v4.6 roadmap
