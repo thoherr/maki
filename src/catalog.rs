@@ -1111,6 +1111,90 @@ mod tests {
         assert!(catalog.has_variant("sha256:abc123").unwrap());
     }
 
+    /// `migrate_variant_hash` must move every referencing row to the
+    /// new hash in one go: variants PK, file_locations, recipes'
+    /// variant_hash, and the assets row's best_variant_hash +
+    /// preview_variant where they pointed at the old hash.
+    #[test]
+    fn migrate_variant_hash_updates_all_references() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let old_hash = "sha256:oldhash";
+        let new_hash = "sha256:newhash";
+
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, old_hash);
+        asset.preview_variant = Some(old_hash.to_string());
+        let volume_id = uuid::Uuid::new_v4();
+        catalog
+            .conn()
+            .execute(
+                "INSERT INTO volumes (id, label, mount_point, volume_type) \
+                 VALUES (?1, 'test-vol', '/mnt/test', 'external')",
+                rusqlite::params![volume_id.to_string()],
+            )
+            .unwrap();
+        let variant = crate::models::Variant {
+            content_hash: old_hash.to_string(),
+            asset_id: asset.id,
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 100,
+            original_filename: "img.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![crate::models::volume::FileLocation {
+                volume_id,
+                relative_path: std::path::PathBuf::from("photos/img.jpg"),
+                verified_at: None,
+            }],
+        };
+        asset.variants.push(variant.clone());
+        catalog.insert_asset(&asset).unwrap();
+        catalog.insert_variant(&variant).unwrap();
+        catalog
+            .insert_file_location(old_hash, &variant.locations[0])
+            .unwrap();
+        let recipe = crate::models::Recipe {
+            id: uuid::Uuid::new_v4(),
+            variant_hash: old_hash.to_string(),
+            software: "test".to_string(),
+            recipe_type: crate::models::RecipeType::Sidecar,
+            content_hash: "sha256:recipehash".to_string(),
+            location: crate::models::volume::FileLocation {
+                volume_id,
+                relative_path: std::path::PathBuf::from("photos/img.xmp"),
+                verified_at: None,
+            },
+            pending_writeback: false,
+        };
+        catalog.insert_recipe(&recipe).unwrap();
+
+        catalog.migrate_variant_hash(old_hash, new_hash).unwrap();
+
+        let q = |sql: &str, param: &str| -> i64 {
+            catalog
+                .conn()
+                .query_row(sql, rusqlite::params![param], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(q("SELECT COUNT(*) FROM variants WHERE content_hash = ?1", new_hash), 1);
+        assert_eq!(q("SELECT COUNT(*) FROM variants WHERE content_hash = ?1", old_hash), 0);
+        assert_eq!(q("SELECT COUNT(*) FROM file_locations WHERE content_hash = ?1", new_hash), 1);
+        assert_eq!(q("SELECT COUNT(*) FROM file_locations WHERE content_hash = ?1", old_hash), 0);
+        assert_eq!(q("SELECT COUNT(*) FROM recipes WHERE variant_hash = ?1", new_hash), 1);
+        assert_eq!(q("SELECT COUNT(*) FROM recipes WHERE variant_hash = ?1", old_hash), 0);
+        let (best, preview): (Option<String>, Option<String>) = catalog
+            .conn()
+            .query_row(
+                "SELECT best_variant_hash, preview_variant FROM assets WHERE id = ?1",
+                rusqlite::params![asset.id.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(best.as_deref(), Some(new_hash));
+        assert_eq!(preview.as_deref(), Some(new_hash));
+    }
+
     /// Helper to set up a catalog with one asset and variant for search tests.
     fn setup_search_catalog() -> Catalog {
         let catalog = Catalog::open_in_memory().unwrap();

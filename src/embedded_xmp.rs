@@ -7,7 +7,7 @@ use std::path::Path;
 use crate::xmp_reader::{XmpData, parse_xmp};
 
 /// XMP namespace identifier in JPEG APP1 markers.
-const XMP_NAMESPACE: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
+pub(crate) const XMP_NAMESPACE: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 
 /// Extract embedded XMP metadata from a JPEG or TIFF file.
 ///
@@ -39,7 +39,11 @@ fn extract_from_jpeg(path: &Path) -> XmpData {
 }
 
 /// Parse JPEG binary data to find XMP XML in an APP1 marker.
-fn extract_xmp_xml_from_jpeg(data: &[u8]) -> Option<String> {
+///
+/// `pub(crate)` because the embedded XMP *writer*
+/// ([`crate::embedded_xmp_write`]) uses it both to read the current
+/// packet before computing an update and to verify a rewritten file.
+pub(crate) fn extract_xmp_xml_from_jpeg(data: &[u8]) -> Option<String> {
     // Verify SOI marker
     if data.len() < 2 || data[0] != 0xFF || data[1] != 0xD8 {
         return None;
@@ -211,12 +215,15 @@ fn extract_xmp_xml_from_tiff(data: &[u8]) -> Option<String> {
     None
 }
 
+/// Minimal JPEG builders shared by this module's tests and the
+/// `embedded_xmp_write` tests (segment-surgery unit tests need valid
+/// JPEG fixtures with known segment layouts).
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod test_builders {
+    use super::XMP_NAMESPACE;
 
     /// Build a minimal JPEG with an XMP APP1 marker.
-    fn build_jpeg_with_xmp(xmp_xml: &str) -> Vec<u8> {
+    pub(crate) fn build_jpeg_with_xmp(xmp_xml: &str) -> Vec<u8> {
         let mut data = Vec::new();
 
         // SOI
@@ -237,7 +244,7 @@ mod tests {
     }
 
     /// Build a minimal JPEG with an EXIF APP1 marker (no XMP).
-    fn build_jpeg_with_exif() -> Vec<u8> {
+    pub(crate) fn build_jpeg_with_exif() -> Vec<u8> {
         let mut data = Vec::new();
 
         // SOI
@@ -255,6 +262,12 @@ mod tests {
 
         data
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_builders::{build_jpeg_with_exif, build_jpeg_with_xmp};
+    use super::*;
 
     /// Build a minimal little-endian TIFF with an XMP tag (700).
     fn build_tiff_le_with_xmp(xmp_xml: &str) -> Vec<u8> {

@@ -970,6 +970,11 @@ enum Commands {
     /// the matching set, even those without pending markers — useful for
     /// rematerialising catalog metadata onto disk after large catalog-
     /// only edits.
+    ///
+    /// With `--embed`, writes embedded XMP into the JPEG variant files
+    /// themselves instead of the .xmp sidecars (same scope and tag
+    /// semantics; originals preserved in the catalog trash; variant
+    /// content hashes migrated after the rewrite).
     #[cfg(feature = "pro")]
     #[command(display_order = 42)]
     Writeback {
@@ -1023,6 +1028,28 @@ enum Commands {
         /// delete, fix-unicode) accumulated while auto-writeback was off.
         #[arg(long, display_order = 13, requires = "all")]
         mirror_tags: bool,
+
+        /// Write embedded XMP into the asset's JPEG variant files
+        /// instead of flushing .xmp recipe sidecars. REPLACES the
+        /// recipe flush for this run — sidecar .xmp files are left
+        /// untouched. For each asset in scope, every jpg/jpeg variant
+        /// with an online file location gets its APP1 XMP segment
+        /// updated (rating, label, description, dc:subject flat
+        /// components + lr:hierarchicalSubject ancestor paths — same
+        /// conventions and --force/--mirror-tags semantics as the
+        /// sidecar flush). The file's bytes change, so the variant's
+        /// content hash is re-computed and migrated across the catalog
+        /// and sidecar. Originals are preserved in the catalog trash
+        /// first (see --no-trash). TIFF variants are skipped (IFD
+        /// rewriting deferred); offline volumes / missing files are
+        /// counted as skipped, not queued.
+        #[arg(long, display_order = 15)]
+        embed: bool,
+
+        /// (with --embed) Do not preserve original JPEGs in the
+        /// catalog trash before rewriting them
+        #[arg(long, display_order = 16, requires = "embed")]
+        no_trash: bool,
 
         /// Preview what would be written without modifying files
         #[arg(long, display_order = 20)]
@@ -2661,6 +2688,8 @@ faces/\n\
             all,
             force,
             mirror_tags,
+            embed,
+            no_trash,
             dry_run,
             asset_ids,
         } => run_writeback_command(
@@ -2670,6 +2699,8 @@ faces/\n\
             all,
             force,
             mirror_tags,
+            embed,
+            no_trash,
             dry_run,
             asset_ids,
             cli.json,

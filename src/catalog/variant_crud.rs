@@ -72,6 +72,56 @@ impl Catalog {
         Ok(())
     }
 
+    /// Migrate a variant's content-hash identity after its file bytes
+    /// changed on disk. Embedded XMP write-back (`maki writeback
+    /// --embed`) rewrites the JPEG itself, and `content_hash` IS the
+    /// variant's identity — so every referencing row must move to the
+    /// new hash in one transaction:
+    ///
+    /// - `variants.content_hash` (the PK)
+    /// - `file_locations.content_hash`
+    /// - `recipes.variant_hash`
+    /// - `assets.best_variant_hash` where it equals the old hash
+    /// - `assets.preview_variant` where it equals the old hash
+    ///
+    /// SQLite-side only. The caller must also: update the YAML sidecar
+    /// (variant `content_hash`, recipe `variant_hash`, asset
+    /// `preview_variant`) via the normal save path, rename preview /
+    /// smart-preview files on disk, and run
+    /// [`Catalog::update_denormalized_variant_columns`] — see
+    /// `QueryEngine::writeback_embedded` for the full cascade.
+    pub fn migrate_variant_hash(&self, old_hash: &str, new_hash: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        // `file_locations.content_hash` and `recipes.variant_hash`
+        // reference `variants(content_hash)`; updating parent and
+        // children one statement at a time necessarily passes through
+        // states where the constraint is violated. Defer enforcement
+        // to COMMIT — the end state is consistent.
+        tx.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        tx.execute(
+            "UPDATE variants SET content_hash = ?1 WHERE content_hash = ?2",
+            rusqlite::params![new_hash, old_hash],
+        )?;
+        tx.execute(
+            "UPDATE file_locations SET content_hash = ?1 WHERE content_hash = ?2",
+            rusqlite::params![new_hash, old_hash],
+        )?;
+        tx.execute(
+            "UPDATE recipes SET variant_hash = ?1 WHERE variant_hash = ?2",
+            rusqlite::params![new_hash, old_hash],
+        )?;
+        tx.execute(
+            "UPDATE assets SET best_variant_hash = ?1 WHERE best_variant_hash = ?2",
+            rusqlite::params![new_hash, old_hash],
+        )?;
+        tx.execute(
+            "UPDATE assets SET preview_variant = ?1 WHERE preview_variant = ?2",
+            rusqlite::params![new_hash, old_hash],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// List all file locations with their associated asset IDs.
     /// Returns `(asset_id, volume_id, relative_path)` tuples.
     pub fn list_all_locations_with_assets(&self) -> Result<Vec<(String, String, String)>> {

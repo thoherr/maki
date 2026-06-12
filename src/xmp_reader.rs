@@ -634,12 +634,7 @@ fn inject_block(
 /// Rating of `None` or `Some(0)` writes `"0"` (XMP convention for "no rating").
 pub fn update_rating(path: &Path, rating: Option<u8>) -> Result<bool> {
     let content = std::fs::read_to_string(path)?;
-    let rating_str = match rating {
-        Some(r) if r > 0 => r.to_string(),
-        _ => "0".to_string(),
-    };
-
-    let modified = update_rating_in_string(&content, &rating_str);
+    let modified = update_rating_str(&content, rating);
 
     if modified == content {
         return Ok(false);
@@ -647,6 +642,20 @@ pub fn update_rating(path: &Path, rating: Option<u8>) -> Result<bool> {
 
     std::fs::write(path, &modified)?;
     Ok(true)
+}
+
+/// String-level entry point for [`update_rating`] — same semantics
+/// (rating `None`/`Some(0)` writes `"0"`, the XMP "no rating"
+/// convention), but operates on the XMP packet text instead of a file.
+/// Used by embedded write-back (`maki writeback --embed`), which edits
+/// the packet extracted from a JPEG APP1 segment. Returns the input
+/// unchanged on a semantic no-op (byte-stability).
+pub(crate) fn update_rating_str(content: &str, rating: Option<u8>) -> String {
+    let rating_str = match rating {
+        Some(r) if r > 0 => r.to_string(),
+        _ => "0".to_string(),
+    };
+    update_rating_in_string(content, &rating_str)
 }
 
 /// Apply a rating update to an XMP string, returning the modified string.
@@ -699,12 +708,26 @@ pub fn update_tags(path: &Path, tags_to_add: &[String], tags_to_remove: &[String
         return Ok(false);
     }
     let content = std::fs::read_to_string(path)?;
-    let modified = update_tags_in_string(&content, tags_to_add, tags_to_remove);
+    let modified = update_tags_str(&content, tags_to_add, tags_to_remove);
     if modified == content {
         return Ok(false);
     }
     std::fs::write(path, &modified)?;
     Ok(true)
+}
+
+/// String-level entry point for [`update_tags`] — same delta semantics
+/// (empty add+remove is a no-op), on the XMP packet text. Used by
+/// embedded write-back. Returns the input unchanged on a no-op.
+pub(crate) fn update_tags_str(
+    content: &str,
+    tags_to_add: &[String],
+    tags_to_remove: &[String],
+) -> String {
+    if tags_to_add.is_empty() && tags_to_remove.is_empty() {
+        return content.to_string();
+    }
+    update_tags_in_string(content, tags_to_add, tags_to_remove)
 }
 
 /// Render a canonical `<qname><rdf:Bag>…` keyword block at the given
@@ -815,19 +838,37 @@ pub fn update_hierarchical_subjects(
     // silently keep stale leaf entries — `Bavaria`, `Konzert`,
     // multi-escape leftovers, anything flat that legitimately
     // shouldn't be in the hierarchical block.
-    let hier_remove: Vec<String> = tags_to_remove.to_vec();
-
-    if hier_add.is_empty() && hier_remove.is_empty() {
+    if hier_add.is_empty() && tags_to_remove.is_empty() {
         return Ok(false);
     }
 
     let content = std::fs::read_to_string(path)?;
-    let modified = update_hierarchical_in_string(&content, &hier_add, &hier_remove);
+    let modified = update_hierarchical_subjects_str(&content, tags_to_add, tags_to_remove);
     if modified == content {
         return Ok(false);
     }
     std::fs::write(path, &modified)?;
     Ok(true)
+}
+
+/// String-level entry point for [`update_hierarchical_subjects`] —
+/// carries the same add-filter (pipe-containing tags only) and
+/// remove-as-is semantics, on the XMP packet text. Used by embedded
+/// write-back. Returns the input unchanged on a no-op.
+pub(crate) fn update_hierarchical_subjects_str(
+    content: &str,
+    tags_to_add: &[String],
+    tags_to_remove: &[String],
+) -> String {
+    let hier_add: Vec<String> = tags_to_add
+        .iter()
+        .filter(|t| t.contains('|'))
+        .cloned()
+        .collect();
+    if hier_add.is_empty() && tags_to_remove.is_empty() {
+        return content.to_string();
+    }
+    update_hierarchical_in_string(content, &hier_add, tags_to_remove)
 }
 
 /// Render a canonical `lr:hierarchicalSubject` block at the given indent.
@@ -959,12 +1000,19 @@ fn update_hierarchical_in_string(
 /// `description` of `None` or `Some("")` removes the `dc:description` block.
 pub fn update_description(path: &Path, description: Option<&str>) -> Result<bool> {
     let content = std::fs::read_to_string(path)?;
-    let modified = update_description_in_string(&content, description);
+    let modified = update_description_str(&content, description);
     if modified == content {
         return Ok(false);
     }
     std::fs::write(path, &modified)?;
     Ok(true)
+}
+
+/// String-level entry point for [`update_description`], on the XMP
+/// packet text. Used by embedded write-back. Returns the input
+/// unchanged on a no-op.
+pub(crate) fn update_description_str(content: &str, description: Option<&str>) -> String {
+    update_description_in_string(content, description)
 }
 
 /// Render a canonical `dc:description` block at the given indent
@@ -1035,12 +1083,19 @@ fn update_description_in_string(content: &str, description: Option<&str>) -> Str
 /// `None` removes the label attribute/element entirely (unlike rating which uses "0").
 pub fn update_label(path: &Path, label: Option<&str>) -> Result<bool> {
     let content = std::fs::read_to_string(path)?;
-    let modified = update_label_in_string(&content, label);
+    let modified = update_label_str(&content, label);
     if modified == content {
         return Ok(false);
     }
     std::fs::write(path, &modified)?;
     Ok(true)
+}
+
+/// String-level entry point for [`update_label`], on the XMP packet
+/// text. Used by embedded write-back. Returns the input unchanged on
+/// a no-op.
+pub(crate) fn update_label_str(content: &str, label: Option<&str>) -> String {
+    update_label_in_string(content, label)
 }
 
 /// Apply a label update to an XMP string, returning the modified string.

@@ -532,6 +532,20 @@ maki writeback --all --force --volume Archive
 
 One pass per volume sweeps every recipe's tag blocks fresh from catalog state.
 
+**--embed**
+: Write embedded XMP into the asset's **JPEG variant files** instead of flushing `.xmp` recipe sidecars. `--embed` REPLACES the recipe flush for the run — the `.xmp` sidecars (and their pending flags) are left untouched. Some workflows need metadata inside the image file itself (stock submissions, tools that ignore sidecars); modern tools (Lightroom, Capture One, stock agencies) read embedded XMP, which is why v1 writes the XMP packet rather than IPTC IIM / EXIF IFD fields (both deferred, as is TIFF support — TIFF variants are skipped with a per-file status).
+
+  What happens per asset in scope: every variant with format `jpg`/`jpeg` that has an online file location gets its APP1 XMP segment replaced (or inserted, after the Exif segment) with a packet carrying the catalog's rating, label, description, and tags — `dc:subject` flat components plus `lr:hierarchicalSubject` ancestor paths, with the same `--force` / `--mirror-tags` remove-set semantics as the sidecar flush. The segment splice leaves every other byte of the JPEG untouched. Files whose embedded XMP already matches the catalog count as `already in sync` and are not rewritten.
+
+  Safety ladder per file: the original is first **copied into the catalog trash** (recover with `maki trash list` / `maki trash restore`; disable with `--no-trash`), the rewritten JPEG is written to a temp file, the temp file's embedded XMP is verified against the intended metadata (a mismatch fails the file and leaves the original untouched), then the temp file atomically replaces the original.
+
+  Because the file's bytes change, the variant's **content hash — its identity — changes too**. The hash is re-computed after the write and migrated across the catalog (variants, file locations, recipes, best-variant/preview references), the YAML sidecar, and the preview/smart-preview files on disk, so `maki verify` and `maki doctor` stay clean. Note this means other copies of the same variant on *offline* volumes now hold the pre-rewrite bytes under the new hash — they are reported as skipped (with the volume named); re-run `maki writeback --embed` per volume, or reconcile with `maki sync`, after reconnecting. There is no pending-flag queue for embedded targets.
+
+  Scope selection matches the sidecar flush: by default only assets with staged (pending) recipe changes are considered; `--all`/`--force` widen to every asset in scope. JPEG-only assets have no recipes (so nothing pending) — use `--force` (scoped) or `--all` to reach them. Packets too large for a single APP1 segment (>64 KB, would need ExtendedXMP) fail cleanly.
+
+**--no-trash** (requires `--embed`)
+: Skip preserving the original JPEGs in the catalog trash before rewriting them.
+
 **--dry-run**
 : Report what would be written without modifying any files.
 
@@ -579,6 +593,14 @@ Rebuild XMP tag blocks from scratch — when `--mirror-tags` didn't catch some s
 ```bash
 maki writeback --asset 016cc7dd --force
 maki writeback --all --force --volume MediaPortable   # whole-volume cleanup
+```
+
+Write metadata into the JPEG files themselves (embedded XMP) — e.g. before a stock-agency export:
+
+```bash
+maki writeback --embed --force --asset 016cc7dd        # one asset's JPEGs
+maki writeback --embed --all "rating:4+" --log         # all 4-star+ assets
+maki writeback --embed --force --no-trash --asset 016cc7dd   # skip trash copies
 ```
 
 Preview what would be written:

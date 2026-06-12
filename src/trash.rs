@@ -133,6 +133,40 @@ impl Trash {
         }
     }
 
+    /// Like [`Trash::dispose`], but COPIES the file into the trash and
+    /// leaves the original in place. Used by embedded write-back
+    /// (`maki writeback --embed`) to preserve the pre-rewrite original
+    /// before splicing a new XMP segment into a JPEG. Same dated
+    /// `<date>/<volume_label>/<relative_path>` layout and `-N` collision
+    /// suffix rules as `dispose`, so `maki trash list`/`restore` work
+    /// identically.
+    ///
+    /// When the trash is disabled (`--no-trash` or `[trash] enabled =
+    /// false`) nothing is preserved and [`Disposition::Deleted`] is
+    /// returned (meaning "no trash copy exists"); the original is never
+    /// touched either way.
+    pub fn preserve_copy(
+        &self,
+        full_path: &Path,
+        volume_label: &str,
+        relative_path: &str,
+    ) -> std::io::Result<Disposition> {
+        if !self.enabled {
+            return Ok(Disposition::Deleted);
+        }
+        let target_base = self
+            .trash_root
+            .join(&self.date_dir)
+            .join(sanitize_label(volume_label))
+            .join(relative_path);
+        if let Some(parent) = target_base.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let target = unique_target(target_base);
+        std::fs::copy(full_path, &target)?;
+        Ok(Disposition::Trashed(target))
+    }
+
     /// List every file currently in the trash, newest date first.
     pub fn list(catalog_root: &Path) -> Result<Vec<TrashEntry>> {
         let trash_root = catalog_root.join(TRASH_DIR);
@@ -365,6 +399,46 @@ mod tests {
         assert_ne!(p1, p2);
         assert!(p2.file_name().unwrap().to_string_lossy().contains("IMG-1"));
         assert!(p1.exists() && p2.exists());
+    }
+
+    #[test]
+    fn preserve_copy_keeps_original_in_place() {
+        let (_d, root) = setup();
+        let file = make_file(&root, "vol/2024/IMG_9.jpg");
+        let trash = Trash::new(&root, true);
+        let disp = trash.preserve_copy(&file, "ARCHIVE", "2024/IMG_9.jpg").unwrap();
+        // Original untouched, copy in the dated layout.
+        assert!(file.exists(), "original must stay in place");
+        assert_eq!(std::fs::read(&file).unwrap(), b"data");
+        match disp {
+            Disposition::Trashed(p) => {
+                assert!(p.exists());
+                assert_eq!(std::fs::read(&p).unwrap(), b"data");
+                let rel = p.strip_prefix(root.join(TRASH_DIR)).unwrap();
+                let parts: Vec<_> = rel
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().to_string())
+                    .collect();
+                assert_eq!(parts[1], "ARCHIVE");
+                assert_eq!(parts[3], "IMG_9.jpg");
+            }
+            Disposition::Deleted => panic!("must copy to trash"),
+        }
+        // Second copy of the same path gets the -N collision suffix.
+        let disp2 = trash.preserve_copy(&file, "ARCHIVE", "2024/IMG_9.jpg").unwrap();
+        let Disposition::Trashed(p2) = disp2 else { panic!("must copy") };
+        assert!(p2.file_name().unwrap().to_string_lossy().contains("IMG_9-1"));
+    }
+
+    #[test]
+    fn preserve_copy_disabled_is_noop() {
+        let (_d, root) = setup();
+        let file = make_file(&root, "vol/IMG_10.jpg");
+        let trash = Trash::new(&root, false);
+        let disp = trash.preserve_copy(&file, "ARCHIVE", "IMG_10.jpg").unwrap();
+        assert_eq!(disp, Disposition::Deleted);
+        assert!(file.exists(), "original must stay in place");
+        assert!(!root.join(TRASH_DIR).exists(), "no trash dir when disabled");
     }
 
     #[test]

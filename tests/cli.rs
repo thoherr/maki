@@ -11169,3 +11169,259 @@ fn writeback_force_drops_stale_xmp_entry() {
         "correctly-pipe-pathed hierarchical entry must survive:\n{after}"
     );
 }
+
+/// End-to-end embedded write-back: import a real JPEG with embedded
+/// XMP, change rating + tags in the catalog, run
+/// `maki writeback --embed --force`, and verify the JPEG file itself
+/// now carries the new metadata, the original is preserved in the
+/// trash, the variant's content hash migrated, and `maki verify`
+/// confirms the stores are hash-consistent with the disk.
+#[test]
+#[cfg(feature = "pro")]
+fn writeback_embed_writes_jpeg_and_migrates_hash() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let jpeg_path = root.join("photos/EMB_001.jpg");
+    let xmp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="1">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+    create_test_file(&root, "photos/EMB_001.jpg", &build_jpeg_with_xmp_for_test(xmp));
+    maki()
+        .current_dir(&root)
+        .args(["import", root.join("photos").to_str().unwrap()])
+        .assert()
+        .success();
+
+    let asset_id = String::from_utf8_lossy(
+        &maki()
+            .current_dir(&root)
+            .args(["search", "-q", "", "--format", "ids"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
+    assert!(!asset_id.is_empty());
+
+    // Catalog-side edits (auto-writeback is off by default; with no
+    // .xmp recipe there's nothing to stage anyway).
+    maki()
+        .current_dir(&root)
+        .args(["edit", &asset_id, "--rating", "4"])
+        .assert()
+        .success();
+    maki()
+        .current_dir(&root)
+        .args(["tag", &asset_id, "subject|nature|sunset"])
+        .assert()
+        .success();
+
+    let before = std::fs::read(&jpeg_path).unwrap();
+
+    // `--force`: a JPEG-only asset has no pending recipes, so the
+    // default pending-driven scope would find nothing.
+    maki()
+        .current_dir(&root)
+        .args(["writeback", "--embed", "--force", "--asset", &asset_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Writeback (embedded): 1 written"))
+        .stdout(predicate::str::contains("1 original(s) preserved in trash"));
+
+    // The JPEG file itself changed and carries the new metadata.
+    let after = std::fs::read(&jpeg_path).unwrap();
+    assert_ne!(after, before, "JPEG bytes must change");
+    let after_str = String::from_utf8_lossy(&after);
+    assert!(
+        after_str.contains("xmp:Rating=\"4\""),
+        "embedded XMP must carry the new rating:\n{after_str}"
+    );
+    assert!(
+        after_str.contains("<rdf:li>subject|nature|sunset</rdf:li>"),
+        "embedded XMP must carry the hierarchical tag:\n{after_str}"
+    );
+    assert!(
+        after_str.contains("<rdf:li>sunset</rdf:li>"),
+        "embedded XMP must carry the flat dc:subject component:\n{after_str}"
+    );
+
+    // Original preserved in the catalog trash.
+    maki()
+        .current_dir(&root)
+        .args(["trash", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("EMB_001.jpg"));
+
+    // Variant identity migrated: `maki verify --force` re-hashes the
+    // file on disk against the catalog's stored content hash. A stale
+    // (un-migrated) hash would report a FAILED mismatch and exit
+    // non-zero.
+    maki()
+        .current_dir(&root)
+        .args(["verify", "--force"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 verified"));
+
+    // Second run is a no-op: already in sync, no new trash copy, no
+    // further byte changes.
+    maki()
+        .current_dir(&root)
+        .args(["writeback", "--embed", "--force", "--asset", &asset_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 written, 1 already in sync"));
+    assert_eq!(std::fs::read(&jpeg_path).unwrap(), after);
+}
+
+/// `--embed --dry-run` reports what would be written without touching
+/// the file, the trash, or the catalog hashes.
+#[test]
+#[cfg(feature = "pro")]
+fn writeback_embed_dry_run_touches_nothing() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let jpeg_path = root.join("EMB_DRY.jpg");
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF \
+               xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+               <rdf:Description rdf:about=\"\" \
+               xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmp:Rating=\"1\"/>\
+               </rdf:RDF></x:xmpmeta>";
+    create_test_file(&root, "EMB_DRY.jpg", &build_jpeg_with_xmp_for_test(xmp));
+    maki()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let asset_id = String::from_utf8_lossy(
+        &maki()
+            .current_dir(&root)
+            .args(["search", "-q", "", "--format", "ids"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
+
+    maki()
+        .current_dir(&root)
+        .args(["edit", &asset_id, "--rating", "5"])
+        .assert()
+        .success();
+
+    let before = std::fs::read(&jpeg_path).unwrap();
+    maki()
+        .current_dir(&root)
+        .args(["writeback", "--embed", "--force", "--asset", &asset_id, "--dry-run"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Dry run"))
+        .stdout(predicate::str::contains("1 written"));
+
+    assert_eq!(std::fs::read(&jpeg_path).unwrap(), before, "dry-run must not modify the JPEG");
+    assert!(!root.join(".trash").exists(), "dry-run must not create trash copies");
+}
+
+/// `--embed --no-trash` rewrites the JPEG without preserving the
+/// original in the catalog trash.
+#[test]
+#[cfg(feature = "pro")]
+fn writeback_embed_no_trash_skips_trash_copy() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF \
+               xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+               <rdf:Description rdf:about=\"\" \
+               xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmp:Rating=\"1\"/>\
+               </rdf:RDF></x:xmpmeta>";
+    create_test_file(&root, "EMB_NT.jpg", &build_jpeg_with_xmp_for_test(xmp));
+    maki()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let asset_id = String::from_utf8_lossy(
+        &maki()
+            .current_dir(&root)
+            .args(["search", "-q", "", "--format", "ids"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
+
+    maki()
+        .current_dir(&root)
+        .args(["edit", &asset_id, "--rating", "2"])
+        .assert()
+        .success();
+
+    maki()
+        .current_dir(&root)
+        .args(["writeback", "--embed", "--force", "--no-trash", "--asset", &asset_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 written"))
+        .stdout(predicate::str::contains("preserved in trash").not());
+
+    assert!(!root.join(".trash").exists(), "--no-trash must not create trash copies");
+}
+
+/// TIFF variants are skipped with a per-file status — embedded
+/// write-back is JPEG-only in v1 (IFD rewriting deferred).
+#[test]
+#[cfg(feature = "pro")]
+fn writeback_embed_skips_tiff_variant() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let tiff_path = root.join("EMB_T.tif");
+    create_test_file(&root, "EMB_T.tif", b"II*\0fake-tiff-bytes");
+    maki()
+        .current_dir(&root)
+        .args(["import", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let asset_id = String::from_utf8_lossy(
+        &maki()
+            .current_dir(&root)
+            .args(["search", "-q", "", "--format", "ids"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
+
+    maki()
+        .current_dir(&root)
+        .args(["edit", &asset_id, "--rating", "3"])
+        .assert()
+        .success();
+
+    let before = std::fs::read(&tiff_path).unwrap();
+    maki()
+        .current_dir(&root)
+        .args(["writeback", "--embed", "--force", "--asset", &asset_id, "--log"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 skipped"))
+        .stderr(predicate::str::contains("not supported for TIFF yet"));
+    assert_eq!(std::fs::read(&tiff_path).unwrap(), before, "TIFF must be untouched");
+}

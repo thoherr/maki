@@ -55,6 +55,7 @@ mod resolve;
 pub use resolve::*;
 
 mod writeback;
+mod writeback_embed;
 
 // ═══ FREE FUNCTIONS ═══
 
@@ -341,6 +342,37 @@ pub struct WritebackResult {
     /// "(offline volumes: foo, bar)" so the user knows which drives to
     /// reconnect before the next flush. Empty when nothing was skipped
     /// due to an offline volume.
+    #[serde(skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub skipped_offline_volumes: std::collections::BTreeSet<String>,
+}
+
+/// Result of a `maki writeback --embed` operation (embedded XMP written
+/// into JPEG variant files). Separate from [`WritebackResult`] so the
+/// sidecar path's `--json` shape stays stable. All counters are
+/// per-FILE (a variant with copies on two online volumes counts twice).
+#[derive(Debug, Default, serde::Serialize)]
+pub struct EmbedWritebackResult {
+    /// JPEG files rewritten (or that would be in dry-run).
+    pub written: u32,
+    /// Files whose embedded XMP already matched the catalog (no write).
+    pub already_in_sync: u32,
+    /// Files skipped: volume offline, file missing, or TIFF variant
+    /// (embedded write-back doesn't support TIFF yet).
+    pub skipped: u32,
+    /// Files that failed (oversize packet, I/O error, post-write
+    /// verification failure — original left untouched in every case).
+    pub failed: u32,
+    /// Error messages, one per failed file.
+    pub errors: Vec<String>,
+    /// Whether this was a dry run.
+    pub dry_run: bool,
+    /// Originals copied into the catalog trash before rewriting
+    /// (`maki trash list` / `maki trash restore` to recover). 0 when
+    /// `--no-trash` or `[trash] enabled = false`.
+    pub trashed_originals: u32,
+    /// Sorted, deduped labels of offline volumes that held at least one
+    /// skipped JPEG location (mirror of
+    /// [`WritebackResult::skipped_offline_volumes`]).
     #[serde(skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub skipped_offline_volumes: std::collections::BTreeSet<String>,
 }

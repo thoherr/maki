@@ -53,7 +53,7 @@ YAML sidecars are the source of truth; SQLite catalog is a derived cache rebuilt
 `build_search_where()` returns `(where, params, needs_fl_join, needs_v_join)` — variant/location tables only joined when filters need them.
 
 ### XMP Write-Back
-Rating, tag, description, and label changes are written back to `.xmp` recipe files on disk. After writing, the file is re-hashed and the recipe's `content_hash` is updated in both SQLite and YAML sidecar. Offline volumes are silently skipped with `pending_writeback=true` flag. `maki writeback` replays pending writes when volumes come online.
+Rating, tag, description, and label changes are written back to `.xmp` recipe files on disk. After writing, the file is re-hashed and the recipe's `content_hash` is updated in both SQLite and YAML sidecar. Offline volumes are silently skipped with `pending_writeback=true` flag. `maki writeback` replays pending writes when volumes come online. `maki writeback --embed` instead splices the metadata into JPEG variant files' embedded APP1 XMP segment (trash-copy → temp-file → verify → atomic-rename safety ladder, then `Catalog::migrate_variant_hash` migrates the changed content-hash identity across SQLite, sidecar, and preview files).
 
 ### Feature Gates
 - `--features pro`: MAKI Pro edition (includes `ai`, plus "Pro" branding, VLM describe, writeback, sync-metadata, and future pro-only features)

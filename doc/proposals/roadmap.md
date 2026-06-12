@@ -68,11 +68,13 @@ SigLIP embedding generation on CPU is slow for large catalogs. GPU backends make
 
 Write metadata changes back into JPEG/TIFF files directly, not just XMP sidecars. Some workflows and stock photo submissions require embedded metadata.
 
+**Status:** v1 implemented (XMP-in-JPEG). `maki writeback --embed` writes rating, tags, description, and label into the JPEG's embedded APP1 XMP segment (segment-level splice on top of the v4.7 locate-and-splice XMP writers), preserves the original in the catalog trash, verifies before an atomic swap, and migrates the variant's content hash across catalog + sidecar + previews. Deferred: IPTC IIM (APP13) and EXIF IFD fields (modern tools — Lightroom, C1, stock agencies — read XMP), TIFF support (IFD rewriting is real binary surgery), ExtendedXMP multi-segment packets.
+
 **Scope:**
-- `maki writeback --embed` writes rating, tags, description, label into file's embedded metadata
-- IPTC keywords, caption/description, urgency (mapped from rating)
-- Preserves existing embedded metadata; only updates DAM-managed fields
-- Re-hashes file after write, updates variant content hash
+- `maki writeback --embed` writes rating, tags, description, label into file's embedded metadata ✔ (XMP packet)
+- IPTC keywords, caption/description, urgency (mapped from rating) — deferred
+- Preserves existing embedded metadata; only updates DAM-managed fields ✔
+- Re-hashes file after write, updates variant content hash ✔
 
 **Complexity:** High. Modifying binary file metadata without corruption requires careful handling.
 

@@ -12,6 +12,8 @@ pub fn run_writeback_command(
         all: bool,
         force: bool,
         mirror_tags: bool,
+        embed: bool,
+        no_trash: bool,
         dry_run: bool,
         asset_ids: Vec<String>,
         json: bool,
@@ -34,6 +36,63 @@ pub fn run_writeback_command(
     // idempotent at the keyword level — re-running adds nothing.
     let cfg = maki::config::CatalogConfig::load(&catalog_root).unwrap_or_default();
     let effective_mirror_tags = mirror_tags || cfg.writeback.mirror_tags;
+
+    // `--embed` REPLACES the recipe flush for this run: catalog
+    // metadata is written into the JPEG variant files' embedded XMP;
+    // the .xmp recipe sidecars (and their pending flags) are untouched.
+    if embed {
+        let result = engine.writeback_embedded(
+            volume.as_deref(),
+            scope.as_ref(),
+            all,
+            force,
+            effective_mirror_tags,
+            no_trash,
+            dry_run,
+            cli.log,
+            None,
+        )?;
+
+        if cli.json {
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        } else {
+            if dry_run {
+                eprint!("Dry run: ");
+            }
+            let mut parts = Vec::new();
+            parts.push(format!("{} written", result.written));
+            if result.already_in_sync > 0 {
+                parts.push(format!("{} already in sync", result.already_in_sync));
+            }
+            if result.skipped > 0 {
+                let mut s = format!("{} skipped", result.skipped);
+                if !result.skipped_offline_volumes.is_empty() {
+                    let labels: Vec<&str> = result
+                        .skipped_offline_volumes
+                        .iter()
+                        .map(String::as_str)
+                        .collect();
+                    s.push_str(&format!(" (offline volumes: {})", labels.join(", ")));
+                }
+                parts.push(s);
+            }
+            if result.failed > 0 {
+                parts.push(format!("{} failed", result.failed));
+            }
+            println!("Writeback (embedded): {}", parts.join(", "));
+            if result.trashed_originals > 0 {
+                println!(
+                    "{} original(s) preserved in trash — maki trash list",
+                    result.trashed_originals
+                );
+            }
+            for e in &result.errors {
+                eprintln!("  Error: {e}");
+            }
+        }
+
+        return Ok(());
+    }
 
     let result = engine.writeback(
         volume.as_deref(),

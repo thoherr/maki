@@ -56,6 +56,7 @@ pub mod content_store;
 pub mod device_registry;
 pub mod doctor;
 pub mod embedded_xmp;
+pub mod embedded_xmp_write;
 pub mod exif_reader;
 pub mod format;
 pub mod metadata_store;
