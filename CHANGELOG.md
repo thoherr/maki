@@ -2,6 +2,105 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.8.0 (2026-06-12)
+
+Horizon 2 completion (`doc/proposals/roadmap-v4.6-horizons.md`) — the
+workflow features built on v4.7.0's foundations: automatic import,
+similarity stacking, and writing metadata INTO your JPEG files. No
+schema migration in this release.
+
+Tests: 920 + 257 + 7 standard, 1052 + 299 + 7 pro (up from 891 + 255
++ 7 / 1012 + 289 + 7 at v4.7.0).
+
+### New: maki watch — auto-import on filesystem changes
+
+After a CaptureOne session, new files appear in the catalog without a
+manual `maki import`.
+
+- `maki watch [PATHS...] [--volume <label>] [--interval <s>]
+  [--once]` polls the watched roots (default: all online registered
+  volumes) and imports new media files through the standard import
+  pipeline — `[import]` config (auto_tags, smart previews,
+  embeddings, descriptions, excludes) applies.
+- **Copy-safe**: a file is only acted on once its size and mtime are
+  identical on two consecutive scans, so files still being copied
+  (tethering, network transfers) are never half-imported.
+- Changed `.xmp` recipe files that belong to the catalog go through
+  the refresh path; deletions are ignored (cleanup stays explicit).
+- The initial scan is a baseline — pre-existing files are NOT
+  imported (watch means "from now on"; use `maki import` for
+  backlog). `--once` runs a single cycle for scripting/cron.
+- Config: `[watch] poll_seconds` (default 30) + additive `exclude`
+  patterns.
+
+### New: maki auto-stack — stacks from visual similarity *(Pro)*
+
+Phase 3 of the similarity-browse work (the `similar:` filter and the
+stroll page were Phases 1–2): discover natural visual clusters across
+the catalog and turn them into stacks.
+
+- `maki auto-stack [QUERY] [--threshold 50-99] [--min-size N]
+  [--apply]` clusters embedded assets by SigLIP similarity (greedy
+  connected-components over per-asset top-20 neighbour edges — no
+  O(N²) matrix, scales with the embedding index).
+- Pick selection is deterministic: highest rating, then earliest
+  capture date, then asset id. Already-stacked assets are never
+  touched.
+- Report-only by default; `--apply` creates the stacks through the
+  normal stack machinery (denormalized columns, stacks.yaml).
+  Thresholds below 50% are rejected; a warning fires when one cluster
+  swallows more than half the candidates.
+- Uses stored embeddings only — no model download needed to cluster.
+
+### New: maki writeback --embed — metadata into JPEG files *(Pro)*
+
+Some workflows (stock submissions, tool interop) need metadata IN the
+file, not beside it. `maki writeback --embed` writes the catalog's
+rating, label, description, and tags into the embedded XMP segment of
+each JPEG variant in scope — same scope/`--force`/`--mirror-tags`
+semantics as the sidecar flush.
+
+This is the feature the v4.7.0 XMP writer rework was gating, and it
+is deliberately careful, because it rewrites original files:
+
+- **Safety ladder per file**: files already in sync are never touched
+  → the original is preserved in the catalog trash (recoverable via
+  `maki trash restore`; `--no-trash` opts out) → the rewrite goes to
+  a temp file → the temp file is re-parsed and field-verified →
+  atomic rename. A failed verification leaves the original untouched.
+- Only the XMP segment changes — every other byte of the JPEG passes
+  through untouched.
+- Because MAKI's storage is content-addressed, rewriting a file
+  changes the variant's identity: the new content hash is migrated
+  through variants, file locations, recipes, the best-variant and
+  preview-variant columns, the YAML sidecar, and the preview files in
+  one consistent step (`maki doctor` verifies clean afterwards;
+  `maki verify` passes on the rewritten file).
+- v1 boundaries (documented): JPEG only (TIFF deferred), XMP only
+  (IPTC IIM and EXIF IFD fields deferred — modern tools read XMP),
+  packets above the 64 KB segment limit fail cleanly.
+
+### Web improvements
+
+- **Provenance badges**: machine-added tags show a small `auto` /
+  `vlm` / `xmp` badge on the asset detail page's tag chips (from the
+  v4.7.0 provenance model); user tags stay badge-free. Badges survive
+  inline tag edits.
+- **`-person:` exclusion now works in the web UI** (browse, search,
+  select-all, facets, calendar, map) and **`-collection:` exclusion
+  now works in export-zip** — closing the two documented gaps from
+  the v4.7.0 filter-resolution unification. Exports can no longer
+  contain more assets than the filtered grid showed.
+
+### Operator notes
+
+- `writeback --embed` rewrites original files. The pre-rewrite
+  originals land in `<catalog>/.trash/` by default — leave
+  `[trash] enabled = true` until you trust the flow, and consider a
+  `--dry-run` plus a single-asset run first.
+- `maki watch` is a foreground process like `maki serve`; pair it
+  with `--log` while getting a feel for its decisions.
+
 ## v4.7.0 (2026-06-11)
 
 Foundation-rework release — the core of Horizon 2
