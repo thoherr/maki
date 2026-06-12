@@ -603,6 +603,102 @@ pub fn run_embed_command(
     Ok(())
 }
 
+/// Extracted body of `Commands::AutoStack`. See `run_import_command` for the
+/// extraction pattern.
+#[cfg(feature = "ai")]
+pub fn run_auto_stack_command(
+    query: Option<String>,
+    threshold: Option<u32>,
+    min_size: Option<usize>,
+    apply: bool,
+    asset_ids: Vec<String>,
+    json: bool,
+    log: bool,
+    verbosity: maki::Verbosity,
+) -> anyhow::Result<()> {
+    #[allow(dead_code)]
+    struct Ctx { json: bool, log: bool }
+    let cli = Ctx { json, log };
+    let (query, asset) = merge_trailing_ids(query, None, &asset_ids);
+
+    let (catalog_root, config) = maki::config::load_config()?;
+    let threshold = threshold.unwrap_or(85);
+    let min_size = min_size.unwrap_or(2);
+    let model_id = &config.ai.model;
+
+    if verbosity.verbose {
+        eprintln!("  Auto-stack: model={model_id}, threshold={threshold}%, min-size={min_size}");
+    }
+
+    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let show_log = cli.log;
+    let result = service.auto_stack(
+        query.as_deref(),
+        asset.as_deref(),
+        model_id,
+        threshold,
+        min_size,
+        apply,
+        |idx, cluster| {
+            if show_log {
+                let action = if cluster.stack_id.is_some() { "stacked" } else { "would stack" };
+                let pick = &cluster.pick[..8.min(cluster.pick.len())];
+                eprintln!(
+                    "  cluster {} — {action} {} assets (pick {pick}, min {:.0}%, avg {:.0}%)",
+                    idx + 1,
+                    cluster.members.len(),
+                    cluster.min_similarity * 100.0,
+                    cluster.avg_similarity * 100.0,
+                );
+            }
+        },
+    )?;
+
+    for w in &result.warnings {
+        eprintln!("Warning: {w}");
+    }
+
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
+    if !apply {
+        for (i, c) in result.clusters.iter().enumerate() {
+            println!(
+                "Cluster {} — {} assets (min {:.0}%, avg {:.0}%)",
+                i + 1,
+                c.members.len(),
+                c.min_similarity * 100.0,
+                c.avg_similarity * 100.0,
+            );
+            for m in &c.members {
+                let marker = if m.asset_id == c.pick { "*" } else { " " };
+                let short = &m.asset_id[..8.min(m.asset_id.len())];
+                let name = m.name.as_deref().unwrap_or("-");
+                println!("  {marker} {short}  {name}");
+            }
+        }
+        if !result.clusters.is_empty() {
+            println!();
+        }
+    }
+
+    let mode = if apply { "Auto-stack" } else { "Auto-stack (dry run)" };
+    println!(
+        "{mode}: {} clusters, {} assets, threshold {}%",
+        result.clusters.len(),
+        result.assets_clustered,
+        result.threshold,
+    );
+    if apply {
+        println!("  {} stacks created", result.stacks_created);
+    } else if !result.clusters.is_empty() {
+        println!("  Run with --apply to create these stacks.");
+    }
+    Ok(())
+}
+
 /// Extracted body of `Commands::Describe`. See `run_import_command` for the
 /// extraction pattern.
 #[cfg(feature = "pro")]

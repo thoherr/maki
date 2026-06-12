@@ -784,9 +784,13 @@ mod refresh;
 mod fix;
 mod export;
 mod ai;
+#[cfg(feature = "ai")]
+mod auto_stack;
 mod video;
 mod watch;
 mod workflow;
+#[cfg(feature = "ai")]
+pub use auto_stack::{auto_stack_catalog, AutoStackCluster, AutoStackMember, AutoStackResult};
 pub use watch::{is_recipe_path, FileSig, ScanOutcome, WatchScanner};
 pub use workflow::{ImportEvent, ImportPhase, ImportRequest, ImportWorkflowResult};
 

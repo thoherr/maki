@@ -7,6 +7,7 @@ Commands for curating static collections, managing saved searches (smart albums)
 | [collection](#maki-collection-create) | create, list, show, add, remove, delete |
 | [saved-search](#maki-saved-search-save) | save, list, run, delete |
 | [stack](#maki-stack-create) | create, add, remove, pick, dissolve, list, show, from-tag |
+| [auto-stack](#maki-auto-stack) *(Pro)* | — |
 | [faces](#maki-faces-detect) *(Pro)* | detect, cluster, people, name, merge, delete-person, unassign, export, download, status |
 
 ---
@@ -1036,7 +1037,85 @@ maki stack from-tag "Bracket {}" --apply
 
 [stack create](#maki-stack-create) -- manually create a stack from specific assets.
 [stack dissolve](#maki-stack-dissolve) -- dissolve stacks if the result is unwanted.
+[auto-stack](#maki-auto-stack) -- cluster visually similar assets into stacks.
 [tag](02-ingest-commands.md#maki-tag) -- manage asset tags.
+
+---
+
+---
+
+## maki auto-stack *(Pro)* {#maki-auto-stack}
+
+### NAME
+
+maki-auto-stack -- cluster visually similar assets into stacks
+
+### SYNOPSIS
+
+```
+maki [GLOBAL FLAGS] auto-stack [QUERY] [--threshold <50-99>] [--min-size <N>] [--apply]
+```
+
+### DESCRIPTION
+
+Discovers natural visual clusters across the catalog using stored SigLIP embeddings and proposes a stack for each cluster. This is the catalog-wide companion to the `similar:` search filter: instead of asking "what looks like this asset?", it asks "which assets naturally belong together?" — burst sequences, bracket series, multiple shots of the same scene.
+
+Candidates are assets that have a stored embedding for the active `[ai] model` (generated via `maki embed` or `maki import --embed`) and are **not already in a stack** — existing stacks are never disturbed. An optional positional QUERY narrows the candidate set (same syntax as `maki search`).
+
+Clustering is greedy connected-components over the similarity graph: each candidate is connected to every other candidate whose embedding similarity meets the threshold, and each connected group of at least `--min-size` assets becomes one proposed stack. Because connectivity is transitive, a long burst chains into a single cluster even when its first and last frames are individually below the threshold.
+
+The pick of each proposed stack is selected deterministically: highest rating first, then earliest capture date, then lowest asset ID.
+
+Without `--apply`, runs in **report-only mode** listing every proposed cluster with its size, pick, members, and min/avg similarity. With `--apply`, creates the stacks (including the `stacks.yaml` export, same as `maki stack create`).
+
+No model inference happens — only stored embeddings are read — so the command works without the AI model files downloaded and is fast even on large catalogs.
+
+**Safety**: thresholds below 50% are refused (they produce one degenerate giant cluster), and a warning is printed when more than half of all candidates end up in a single cluster — a sign the threshold is too low for your material.
+
+### ARGUMENTS
+
+**QUERY** (optional)
+: A search query that narrows the candidate set (same syntax as `maki search`). Without it, all unstacked embedded assets are considered.
+
+### OPTIONS
+
+**--threshold** *PERCENT*
+: Similarity threshold in percent, 50–99 (default: **85**). Same scale as the `similar:` filter's minimum similarity. Higher values produce tighter, smaller clusters; lower values merge more aggressively.
+
+**--min-size** *N*
+: Minimum cluster size (default: **2**). Clusters with fewer members are not proposed.
+
+**--apply**
+: Actually create the stacks. Without this flag, the command only reports what it would do.
+
+### EXAMPLES
+
+Preview clusters across the whole catalog:
+
+```bash
+maki auto-stack
+```
+
+Tighter clustering, only proposing groups of 3 or more:
+
+```bash
+maki auto-stack --threshold 92 --min-size 3
+```
+
+Cluster one shoot and create the stacks:
+
+```bash
+maki auto-stack 'path:2026-05-17' --apply
+```
+
+`--json` outputs the full structure: candidate count, per-cluster members with names and ratings, min/avg similarity, created stack IDs (with `--apply`), and any warnings. `--log` prints one line per cluster to stderr.
+
+### SEE ALSO
+
+[stack from-tag](#maki-stack-from-tag) -- convert existing tag-based groupings into stacks.
+[stack dissolve](#maki-stack-dissolve) -- dissolve stacks if the result is unwanted.
+[embed](02-ingest-commands.md#maki-embed) -- generate the embeddings auto-stack clusters on.
+[search filters](06-search-filters.md) -- the `similar:` filter for per-asset similarity browse.
 
 ---
 

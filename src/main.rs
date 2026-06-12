@@ -402,6 +402,31 @@ enum Commands {
         asset_ids: Vec<String>,
     },
 
+    /// Cluster visually similar assets into stacks (requires --features ai)
+    #[cfg(feature = "ai")]
+    #[command(display_order = 18)]
+    AutoStack {
+        /// Search query to scope candidate assets (same syntax as `maki search`)
+        #[arg(display_order = 1)]
+        query: Option<String>,
+
+        /// Similarity threshold in percent (50–99, default 85)
+        #[arg(long, display_order = 2)]
+        threshold: Option<u32>,
+
+        /// Minimum cluster size (default 2)
+        #[arg(long, display_order = 3)]
+        min_size: Option<usize>,
+
+        /// Create the proposed stacks (default: report-only)
+        #[arg(long, display_order = 10)]
+        apply: bool,
+
+        /// Asset IDs (for shell variable expansion)
+        #[arg(hide = true, trailing_var_arg = true)]
+        asset_ids: Vec<String>,
+    },
+
     /// Generate embeddings for visual similarity search (requires --features ai)
     #[cfg(feature = "ai")]
     #[command(display_order = 18)]
@@ -1911,7 +1936,7 @@ enum TrashCommands {
 fn print_custom_help() {
     let version = env!("CARGO_PKG_VERSION");
     let edition = if cfg!(feature = "pro") { " Pro" } else { "" };
-    let ai_note = if cfg!(feature = "pro") { "" } else { "  (download MAKI Pro for: describe, auto-tag, embed, faces, stroll, writeback, sync-metadata)" };
+    let ai_note = if cfg!(feature = "pro") { "" } else { "  (download MAKI Pro for: describe, auto-tag, auto-stack, embed, faces, stroll, writeback, sync-metadata)" };
 
     let help = format!("\
 maki{edition} {version} — Media Asset Keeper & Indexer{ai_note}
@@ -1931,7 +1956,7 @@ Ingest & Edit:
   group              Group variants into one asset
   split              Split variants out of an asset into new standalone assets
   auto-group         Auto-group assets by filename stem
-{describe}{auto_tag}{embed}{faces}
+{describe}{auto_tag}{auto_stack}{embed}{faces}
 
 Organize:
   collection         Manage collections (static albums)  [alias: col]
@@ -1984,6 +2009,7 @@ Options:
 ",
         describe = if cfg!(feature = "pro") { "\n  describe           Generate image descriptions using a VLM" } else { "" },
         auto_tag = if cfg!(feature = "ai") { "\n  auto-tag           Auto-tag assets using AI vision model" } else { "" },
+        auto_stack = if cfg!(feature = "ai") { "\n  auto-stack         Cluster visually similar assets into stacks" } else { "" },
         embed = if cfg!(feature = "ai") { "\n  embed              Generate embeddings for visual similarity search" } else { "" },
         faces = if cfg!(feature = "ai") { "\n  faces              Face detection and recognition" } else { "" },
         sync_metadata = if cfg!(feature = "pro") { "\n  sync-metadata      Bidirectional metadata sync: read XMP changes + write back pending edits" } else { "" },
@@ -2467,6 +2493,23 @@ faces/\n\
             list_models,
             list_labels,
             similar,
+            asset_ids,
+            cli.json,
+            cli.log,
+            verbosity,
+        ),
+        #[cfg(feature = "ai")]
+        Commands::AutoStack {
+            query,
+            threshold,
+            min_size,
+            apply,
+            asset_ids,
+        } => run_auto_stack_command(
+            query,
+            threshold,
+            min_size,
+            apply,
             asset_ids,
             cli.json,
             cli.log,

@@ -18,7 +18,7 @@ sidecar write locking. Horizon 2 (v4.7–4.8): XMP writer rework (gates
 the Tier-1 IPTC/EXIF write-back below), tag provenance, FTS5, unified
 search pipeline. See `doc/proposals/roadmap-v4.6-horizons.md`.
 
-**Status:** Active — Horizon 1 shipped as **v4.6.0** (2026-06-11). Horizon 2 core implemented on main (June 2026, unreleased): FTS5 trigram free-text search (schema v9), XMP property-test suite + writer rework onto quick-xml locate-and-splice (IPTC/EXIF write-back is now unblocked), tag provenance model (schema v10, `tag clear --source`), unified search filter resolution (CLI/web drift made explicit in `query/resolve.rs`), watch mode (`maki watch`, poll-based auto-import). Remaining from Horizon 2: IPTC/EXIF embed write-back itself, auto-stack, web provenance badges, the documented `-person:`/`-collection:` web gaps.
+**Status:** Active — Horizon 1 shipped as **v4.6.0** (2026-06-11). Horizon 2 core implemented on main (June 2026, unreleased): FTS5 trigram free-text search (schema v9), XMP property-test suite + writer rework onto quick-xml locate-and-splice (IPTC/EXIF write-back is now unblocked), tag provenance model (schema v10, `tag clear --source`), unified search filter resolution (CLI/web drift made explicit in `query/resolve.rs`), watch mode (`maki watch`, poll-based auto-import). Auto-stack implemented on main (June 2026, unreleased): `maki auto-stack` clusters embedded assets via union-find over top-K neighbour similarity edges. Remaining from Horizon 2: IPTC/EXIF embed write-back itself, web provenance badges, the documented `-person:`/`-collection:` web gaps.
 
 **Complexity:** Per-item, see the document.
 
@@ -39,11 +39,7 @@ Produce the MAKI user manual in English and German from a single source using in
 
 Discover natural visual clusters across the catalog and propose stacks. Phase 3 of the similarity browse proposal (Phases 1–2 implemented in v4.0.2). See `archive/proposal-similarity-browse-and-grouping.md`.
 
-**Scope:**
-- `maki auto-stack --threshold 85` — scan all embedded assets, cluster by similarity, propose stacks
-- Pick selection: highest-rated in each cluster
-- `--dry-run` for review, `--apply` to create
-- Clustering algorithm: greedy connected-components over embedding similarity matrix
+**Status:** Implemented on main (June 2026, unreleased) as `maki auto-stack [QUERY] [--threshold <50-99>] [--min-size <N>] [--apply]`. Report-only by default; `--apply` creates the stacks. Greedy connected-components over the similarity graph — top-20 neighbour search per candidate against the in-memory `EmbeddingIndex` (no O(N²) matrix), union-find over edges where similarity ≥ threshold (default 85%). Candidates are unstacked assets with a stored embedding for the active `[ai] model`; existing stacks are never disturbed. Pick: highest rating, then earliest created_at, then lowest asset ID. Safety: thresholds below 50% refused; warns when one cluster swallows more than half of all candidates. See `doc/manual/reference/03-organize-commands.md#maki-auto-stack`.
 
 **Complexity:** Medium. Embedding infrastructure and stacking exist; needs clustering algorithm and CLI command.
 

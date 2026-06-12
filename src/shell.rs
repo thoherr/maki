@@ -48,6 +48,7 @@ pub fn run(
 /// Subcommand names for completion (sorted).
 const SUBCOMMANDS: &[&str] = &[
     "auto-group",
+    "auto-stack",
     "auto-tag",
     "backup-status",
     "cleanup",

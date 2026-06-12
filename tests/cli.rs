@@ -9638,6 +9638,77 @@ mod auto_tag {
     }
 }
 
+// ===========================================================================
+// auto-stack (AI) — only compiled with --features ai
+// ===========================================================================
+
+#[cfg(feature = "ai")]
+mod auto_stack {
+    use super::*;
+
+    #[test]
+    fn auto_stack_empty_catalog_dry_run() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        // No embeddings → 0 candidates, 0 clusters. Doesn't need the model
+        // downloaded — auto-stack only reads stored embeddings.
+        maki()
+            .current_dir(&root)
+            .args(["auto-stack"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Auto-stack (dry run): 0 clusters, 0 assets, threshold 85%"));
+    }
+
+    #[test]
+    fn auto_stack_rejects_low_threshold() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        maki()
+            .current_dir(&root)
+            .args(["auto-stack", "--threshold", "40"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("threshold must be between 50 and 99"));
+    }
+
+    #[test]
+    fn auto_stack_rejects_min_size_one() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        maki()
+            .current_dir(&root)
+            .args(["auto-stack", "--min-size", "1"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("minimum cluster size is 2"));
+    }
+
+    #[test]
+    fn auto_stack_json_output() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        let output = maki()
+            .current_dir(&root)
+            .args(["auto-stack", "--json"])
+            .assert()
+            .success();
+
+        let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(parsed["candidates"], 0);
+        assert_eq!(parsed["threshold"], 85);
+        assert_eq!(parsed["min_size"], 2);
+        assert_eq!(parsed["dry_run"], true);
+        assert!(parsed["clusters"].is_array());
+        assert!(parsed["warnings"].is_array());
+    }
+}
+
 // ── sync-metadata ──────────────────────────────────────────────────
 
 #[test]
