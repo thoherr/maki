@@ -18,7 +18,7 @@ sidecar write locking. Horizon 2 (v4.7–4.8): XMP writer rework (gates
 the Tier-1 IPTC/EXIF write-back below), tag provenance, FTS5, unified
 search pipeline. See `doc/proposals/roadmap-v4.6-horizons.md`.
 
-**Status:** Active — Horizon 1 shipped as **v4.6.0** (2026-06-11). Horizon 2 core implemented on main (June 2026, unreleased): FTS5 trigram free-text search (schema v9), XMP property-test suite + writer rework onto quick-xml locate-and-splice (IPTC/EXIF write-back is now unblocked), tag provenance model (schema v10, `tag clear --source`), unified search filter resolution (CLI/web drift made explicit in `query/resolve.rs`), watch mode (`maki watch`, poll-based auto-import). Auto-stack implemented on main (June 2026, unreleased): `maki auto-stack` clusters embedded assets via union-find over top-K neighbour similarity edges. Remaining from Horizon 2: IPTC/EXIF embed write-back itself, web provenance badges, the documented `-person:`/`-collection:` web gaps.
+**Status:** Active — Horizon 1 shipped as **v4.6.0**, Horizon 2 core shipped as **v4.7.0** (both 2026-06-11). Horizon 2 completion implemented on main (June 2026, unreleased): web `-person:` / export-zip `-collection:` gaps closed, web provenance badges on machine-added tag chips, `maki watch` (poll-based auto-import with copy-stability debounce), `maki auto-stack` *(Pro)* (similarity clustering via union-find over top-K neighbour edges), and `maki writeback --embed` *(Pro)* — embedded-XMP-in-JPEG write-back v1 with trash-preserved originals and content-hash identity migration (IPTC IIM / EXIF IFD / TIFF deferred). **Horizon 2 is complete**; Horizon 3 (undo/history, multi-machine, ANN embeddings, mobile/PWA, tethered, print) is next.
 
 **Complexity:** Per-item, see the document.
 
