@@ -402,6 +402,32 @@ max_age_days = 30
 
 ---
 
+## [watch] Section {#watch-section}
+
+Controls `maki watch`, the poll-based auto-import loop.
+
+### poll_seconds
+
+- **Type:** integer
+- **Default:** `30`
+
+Seconds between filesystem scans of the watched roots. Minimum 2 — lower values are clamped at runtime. The `--interval` CLI flag overrides this value. Because a new or changed file must show an identical (size, mtime) signature on two consecutive scans before it is acted on, the poll interval is also the minimum time a file must be stable before import.
+
+### exclude
+
+- **Type:** array of strings (glob patterns)
+- **Default:** `[]`
+
+Additional exclude patterns applied during watch scans, on top of `[import] exclude`. Same matching as import: glob patterns matched against file and directory names (`*.tmp`, `Thumbs.db`, `CaptureOne`). Hidden files and directories (leading `.`) are always skipped.
+
+```toml
+[watch]
+poll_seconds = 10
+exclude = ["*.tmp", "*.partial"]
+```
+
+---
+
 ## [group] Section
 
 Controls how `maki auto-group` identifies session boundaries (shoot/event roots) when partitioning assets into directory neighborhoods.

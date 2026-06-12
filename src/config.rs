@@ -269,6 +269,33 @@ impl Default for GroupConfig {
     }
 }
 
+/// Watch mode configuration (`maki watch`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct WatchConfig {
+    /// Poll interval in seconds between filesystem scans. Minimum 2 —
+    /// lower values are clamped at runtime. Overridden by the
+    /// `--interval` CLI flag.
+    #[serde(default = "default_watch_poll_seconds")]
+    pub poll_seconds: u64,
+    /// Additional exclude patterns (glob, matched against file/directory
+    /// names) applied on top of `[import] exclude` during watch scans.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+}
+
+fn default_watch_poll_seconds() -> u64 {
+    30
+}
+
+impl Default for WatchConfig {
+    fn default() -> Self {
+        Self {
+            poll_seconds: default_watch_poll_seconds(),
+            exclude: Vec::new(),
+        }
+    }
+}
+
 #[allow(dead_code)] // pre-v4.5.5 these powered `skip_serializing_if`; kept as tidy equality helpers for tests / future use.
 fn is_default_group(g: &GroupConfig) -> bool {
     *g == GroupConfig::default()
@@ -804,6 +831,8 @@ pub struct CatalogConfig {
     pub cli: CliDefaults,
     #[serde(default)]
     pub group: GroupConfig,
+    #[serde(default)]
+    pub watch: WatchConfig,
 }
 
 impl Default for CatalogConfig {
@@ -823,6 +852,7 @@ impl Default for CatalogConfig {
             trash: TrashConfig::default(),
             cli: CliDefaults::default(),
             group: GroupConfig::default(),
+            watch: WatchConfig::default(),
         }
     }
 }
@@ -1096,6 +1126,7 @@ max_edge = 1000
             trash: TrashConfig::default(),
             cli: CliDefaults::default(),
             group: GroupConfig::default(),
+            watch: WatchConfig::default(),
         };
         let toml_str = toml::to_string_pretty(&original).unwrap();
         let parsed: CatalogConfig = toml::from_str(&toml_str).unwrap();
@@ -1249,6 +1280,7 @@ max_edge = 1000
             trash: TrashConfig::default(),
             cli: CliDefaults::default(),
             group: GroupConfig::default(),
+            watch: WatchConfig::default(),
         };
         original.save(dir.path()).unwrap();
         let loaded = CatalogConfig::load(dir.path()).unwrap();
@@ -1268,6 +1300,21 @@ max_edge = 1000
         let input = "[browse]\n";
         let config: CatalogConfig = toml::from_str(input).unwrap();
         assert_eq!(config.browse.default_filter, None);
+    }
+
+    #[test]
+    fn parse_watch_section() {
+        let input = "[watch]\npoll_seconds = 10\nexclude = [\"*.tmp\"]\n";
+        let config: CatalogConfig = toml::from_str(input).unwrap();
+        assert_eq!(config.watch.poll_seconds, 10);
+        assert_eq!(config.watch.exclude, vec!["*.tmp".to_string()]);
+    }
+
+    #[test]
+    fn parse_watch_defaults_when_missing() {
+        let config: CatalogConfig = toml::from_str("").unwrap();
+        assert_eq!(config.watch.poll_seconds, 30);
+        assert!(config.watch.exclude.is_empty());
     }
 
     /// Regression: editing config values via the web form (which round-trips

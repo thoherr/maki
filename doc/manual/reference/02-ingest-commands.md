@@ -5,6 +5,7 @@ Commands for importing files, applying metadata, and merging asset variants. Imp
 | Command | Description |
 |---------|-------------|
 | [import](#maki-import) | Import files into the catalog |
+| [watch](#maki-watch) | Watch directories and auto-import new files (poll-based) |
 | [delete](#maki-delete) | Remove assets from the catalog |
 | [tag](#maki-tag) | Add or remove tags |
 | [tag rename](#maki-tag-rename) | Rename a tag across all assets |
@@ -163,6 +164,100 @@ maki import /Volumes/Photos/NewShoot --json | jq '.imported'
 [auto-group](#maki-auto-group) -- group related assets by filename stem.
 [generate-previews](05-maintain-commands.md#maki-generate-previews) -- regenerate or upgrade previews.
 [CLI Conventions](00-cli-conventions.md) -- `--log`, `--json`, `--time` behavior.
+
+---
+
+## maki watch
+
+### NAME
+
+maki-watch -- watch directories and auto-import new files (poll-based)
+
+### SYNOPSIS
+
+```
+maki [GLOBAL FLAGS] watch [OPTIONS] [PATHS...]
+```
+
+### DESCRIPTION
+
+Watches directories for filesystem changes and feeds them into the catalog automatically. After a CaptureOne session (or any tethered/copy workflow), new files appear in the catalog without a manual `maki import`.
+
+With no PATHS, the mount points of all online registered volumes are watched (or just the volume named by `--volume`). Explicit PATHS must lie inside registered volumes — the same requirement (and error message) as `maki import`.
+
+**Polling, not events**: the watched roots are re-scanned every N seconds (default 30, configurable via `[watch] poll_seconds` or `--interval`). Poll-based watching behaves identically on macOS, Linux, and Windows and needs no OS-specific event APIs.
+
+**Stability debounce**: a new or changed file is acted on only once its size and modification time are identical on two consecutive scans. Files still being copied — for example during a tethered capture session — stay "pending" until they stop growing and are never half-imported.
+
+**Actions per tick**:
+
+- *New stable files* go through the regular import pipeline (per owning volume). All `[import]` config applies: `auto_tags`, `smart_previews`, `embeddings`, `descriptions`, and `exclude` patterns. Import is content-addressed and idempotent, so a re-offered known file is cheap and harmless.
+- *Changed stable `.xmp` recipe files* that already belong to the catalog go through the refresh pipeline, scoped to just those files — the owning asset's tags, rating, label, and description are re-read from the sidecar.
+- *Deletions* are ignored (logged with `--verbose` only). Removing catalog records stays an explicit decision — run `maki cleanup`.
+- *Changed media files* are ignored too (use `maki sync` to reconcile in-place edits).
+
+**Baseline**: the initial scan establishes a baseline; files already present when the watch starts are NOT imported — watch means "from now on". Run `maki import` once for the backlog. A one-line startup summary reports the watched roots, poll interval, and baseline file count.
+
+The catalog's own derived directories (`previews/`, `smart-previews/`, `metadata/`, `embeddings/`, `faces/`, `.trash/`) are never tracked, so a catalog living inside a watched volume does not import its own thumbnails.
+
+Runs as a foreground process like `maki serve`. Quiet ticks print nothing; a tick that did something prints a one-line summary to stderr. Ctrl-C exits cleanly.
+
+### ARGUMENTS
+
+**PATHS** (optional)
+: Directories (or files) to watch. Each must lie inside a registered volume. Default: the mount points of all online registered volumes.
+
+### OPTIONS
+
+**--volume \<LABEL\>**
+: Watch a specific volume's mount point. When PATHS are also given, each must lie on that volume.
+
+**--interval \<SECONDS\>**
+: Poll interval between scans. Minimum 2 (lower values are clamped). Defaults to `[watch] poll_seconds` from `maki.toml` (30).
+
+**--once**
+: Run exactly one cycle and exit: scan, wait ~1 second, re-scan for stability, act, print the summary. Unlike the continuous loop (whose baseline is "what was on disk when the watch started"), `--once` diffs against the *catalog*: stable files not yet tracked are imported, and tracked `.xmp` recipes whose content changed are refreshed. Designed for scripting and cron-style invocation.
+
+`--log` prints a per-file line for every import/refresh action. `--verbose` additionally logs quiet ticks, deletions, and ignored media changes. `--json` emits a machine-readable summary per active tick (a single pretty-printed object with `--once`).
+
+### EXAMPLES
+
+Watch all online volumes with the default 30s interval:
+
+```bash
+maki watch
+```
+
+Watch a CaptureOne session folder, polling every 10 seconds:
+
+```bash
+maki watch --interval 10 /Volumes/Photos/2026-06-11-shoot
+```
+
+Watch one volume with per-file logging:
+
+```bash
+maki watch --volume "Archive" --log
+```
+
+One-shot cycle for a cron job or script:
+
+```bash
+maki watch --once --json | jq '.imported'
+```
+
+### NOTES
+
+Excludes are additive: `[import] exclude` and `[watch] exclude` patterns are both applied (glob match against file and directory names, same matching as import). Hidden files and directories are always skipped.
+
+The stability window equals one poll interval in continuous mode (~1 second with `--once`). A file must therefore be unchanged for at least one full interval before it is imported.
+
+### SEE ALSO
+
+[import](#maki-import) -- one-shot import for backlogs and explicit ingestion.
+[refresh](05-maintain-commands.md#maki-refresh) -- re-read metadata from changed sidecar files.
+[sync](05-maintain-commands.md#maki-sync) -- reconcile moved/modified/missing files.
+[Configuration Reference](08-configuration.md#watch-section) -- `[watch]` section options.
 
 ---
 

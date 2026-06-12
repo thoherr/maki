@@ -785,7 +785,9 @@ mod fix;
 mod export;
 mod ai;
 mod video;
+mod watch;
 mod workflow;
+pub use watch::{is_recipe_path, FileSig, ScanOutcome, WatchScanner};
 pub use workflow::{ImportEvent, ImportPhase, ImportRequest, ImportWorkflowResult};
 
 

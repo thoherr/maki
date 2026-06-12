@@ -18,7 +18,7 @@ sidecar write locking. Horizon 2 (v4.7–4.8): XMP writer rework (gates
 the Tier-1 IPTC/EXIF write-back below), tag provenance, FTS5, unified
 search pipeline. See `doc/proposals/roadmap-v4.6-horizons.md`.
 
-**Status:** Active — Horizon 1 shipped as **v4.6.0** (2026-06-11). Horizon 2 core implemented on main (June 2026, unreleased): FTS5 trigram free-text search (schema v9), XMP property-test suite + writer rework onto quick-xml locate-and-splice (IPTC/EXIF write-back is now unblocked), tag provenance model (schema v10, `tag clear --source`), unified search filter resolution (CLI/web drift made explicit in `query/resolve.rs`). Remaining from Horizon 2: IPTC/EXIF embed write-back itself, watch mode, auto-stack, web provenance badges, the documented `-person:`/`-collection:` web gaps.
+**Status:** Active — Horizon 1 shipped as **v4.6.0** (2026-06-11). Horizon 2 core implemented on main (June 2026, unreleased): FTS5 trigram free-text search (schema v9), XMP property-test suite + writer rework onto quick-xml locate-and-splice (IPTC/EXIF write-back is now unblocked), tag provenance model (schema v10, `tag clear --source`), unified search filter resolution (CLI/web drift made explicit in `query/resolve.rs`), watch mode (`maki watch`, poll-based auto-import). Remaining from Horizon 2: IPTC/EXIF embed write-back itself, auto-stack, web provenance badges, the documented `-person:`/`-collection:` web gaps.
 
 **Complexity:** Per-item, see the document.
 
@@ -51,12 +51,7 @@ Discover natural visual clusters across the catalog and propose stacks. Phase 3 
 
 Auto-import and sync on filesystem changes. After a CaptureOne session, new files appear in the catalog without manual `maki import`.
 
-**Scope:**
-- `maki watch [PATHS...] [--volume <label>]` — monitors directories for new/changed files
-- Poll-based initially (simple, cross-platform); fsevents/inotify optional later
-- Triggers import for new files, refresh for changed recipes
-- Configurable via `[watch]` section in `maki.toml` (poll interval, exclude patterns)
-- Runs as foreground process (like `maki serve`), logs activity to stderr
+**Status:** Implemented on main (June 2026, unreleased) as `maki watch [PATHS...] [--volume <label>] [--interval <seconds>] [--once]`. Poll-based with (size, mtime) stability debounce (two consecutive identical scans before acting); new stable files run through the import pipeline, changed tracked `.xmp` recipes through the refresh pipeline, deletions ignored. `[watch]` config section (`poll_seconds`, `exclude` additive to `[import] exclude`). fsevents/inotify backends remain optional future work. See `doc/manual/reference/02-ingest-commands.md#maki-watch`.
 
 **Complexity:** Medium. Core import/refresh logic exists; needs a polling loop and file-change detection.
 

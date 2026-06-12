@@ -1,4 +1,4 @@
-//! Ingest commands: `import`, `create-sidecars`, `delete`.
+//! Ingest commands: `import`, `watch`, `create-sidecars`, `delete`.
 
 use super::*;
 
@@ -237,6 +237,414 @@ pub fn run_import_command(
             }
         }
     }
+    Ok(())
+}
+
+/// Per-tick action counters for `maki watch`.
+#[derive(Default, serde::Serialize)]
+struct WatchTickSummary {
+    imported: usize,
+    locations_added: usize,
+    recipes_attached: usize,
+    recipes_updated: usize,
+    recipes_refreshed: usize,
+    skipped: usize,
+    errors: Vec<String>,
+}
+
+impl WatchTickSummary {
+    /// Human-readable counter fragments, omitting zeros.
+    fn parts(&self) -> Vec<String> {
+        let mut parts = Vec::new();
+        if self.imported > 0 { parts.push(format!("{} imported", self.imported)); }
+        if self.locations_added > 0 { parts.push(format!("{} location(s) added", self.locations_added)); }
+        if self.recipes_attached > 0 { parts.push(format!("{} recipe(s) attached", self.recipes_attached)); }
+        if self.recipes_updated > 0 { parts.push(format!("{} recipe(s) updated", self.recipes_updated)); }
+        if self.recipes_refreshed > 0 { parts.push(format!("{} recipe(s) refreshed", self.recipes_refreshed)); }
+        if self.skipped > 0 { parts.push(format!("{} skipped", self.skipped)); }
+        parts
+    }
+}
+
+/// Group candidate paths by their owning registered volume. Paths whose
+/// volume cannot be resolved (e.g. the volume went offline mid-watch)
+/// are recorded as errors instead of aborting the tick.
+fn group_paths_by_volume(
+    registry: &DeviceRegistry,
+    paths: &[PathBuf],
+    errors: &mut Vec<String>,
+) -> Vec<(maki::models::Volume, Vec<PathBuf>)> {
+    let mut groups: Vec<(maki::models::Volume, Vec<PathBuf>)> = Vec::new();
+    for p in paths {
+        match registry.find_volume_for_path(p) {
+            Ok(vol) => {
+                if let Some((_, list)) = groups.iter_mut().find(|(v, _)| v.id == vol.id) {
+                    list.push(p.clone());
+                } else {
+                    groups.push((vol, vec![p.clone()]));
+                }
+            }
+            Err(e) => errors.push(format!("{}: {e}", p.display())),
+        }
+    }
+    groups
+}
+
+/// Run one watch tick's actions: feed new stable files through the
+/// regular import pipeline (per owning volume) and changed recipe files
+/// through the refresh pipeline. Errors are collected per volume group
+/// so one failing group never aborts the others (or the watch loop).
+fn watch_act(
+    service: &AssetService,
+    registry: &DeviceRegistry,
+    config: &maki::config::CatalogConfig,
+    excludes: &[String],
+    to_import: &[PathBuf],
+    to_refresh: &[PathBuf],
+    log: bool,
+) -> WatchTickSummary {
+    use maki::asset_service::{FileStatus, ImportEvent, ImportRequest, RefreshStatus};
+
+    let mut summary = WatchTickSummary::default();
+
+    // ── Import: new stable files, one workflow call per volume ─────
+    for (vol, group) in group_paths_by_volume(registry, to_import, &mut summary.errors) {
+        let req = ImportRequest {
+            paths: group,
+            volume_label: Some(vol.label.clone()),
+            profile: None,
+            include: Vec::new(),
+            skip: Vec::new(),
+            add_tags: Vec::new(),
+            dry_run: false,
+            smart: false,
+            auto_group: false,
+            embed: false,
+            describe: false,
+        };
+        let result = service.import_workflow(&req, config, |evt| {
+            if !log { return; }
+            if let ImportEvent::File { path, status, elapsed } = evt {
+                let label = match status {
+                    FileStatus::Imported => "imported",
+                    FileStatus::LocationAdded => "location added",
+                    FileStatus::Skipped => "skipped",
+                    FileStatus::RecipeAttached => "recipe",
+                    FileStatus::RecipeLocationAdded => "recipe location added",
+                    FileStatus::RecipeUpdated => "recipe updated",
+                };
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_else(|| path.to_str().unwrap_or("?"));
+                item_status(name, label, Some(elapsed));
+            }
+        });
+        match result {
+            Ok(r) => {
+                summary.imported += r.import.imported;
+                summary.locations_added += r.import.locations_added;
+                summary.recipes_attached += r.import.recipes_attached;
+                summary.recipes_updated += r.import.recipes_updated;
+                summary.skipped += r.import.skipped;
+            }
+            Err(e) => summary.errors.push(format!("import on \"{}\": {e:#}", vol.label)),
+        }
+    }
+
+    // ── Refresh: changed recipe files already tracked by the catalog ──
+    for (vol, group) in group_paths_by_volume(registry, to_refresh, &mut summary.errors) {
+        let result = service.refresh(
+            &group,
+            Some(&vol),
+            None,
+            false,
+            false,
+            excludes,
+            |path, status, elapsed| {
+                if !log { return; }
+                let label = match status {
+                    RefreshStatus::Unchanged => "unchanged",
+                    RefreshStatus::Refreshed => "recipe refreshed",
+                    RefreshStatus::Missing => "missing",
+                    RefreshStatus::Offline => "offline",
+                    RefreshStatus::SidecarPresent => "skipped (sidecar present)",
+                };
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_else(|| path.to_str().unwrap_or("?"));
+                item_status(name, label, Some(elapsed));
+            },
+        );
+        match result {
+            Ok(r) => {
+                summary.recipes_refreshed += r.refreshed;
+                summary.errors.extend(r.errors);
+            }
+            Err(e) => summary.errors.push(format!("refresh on \"{}\": {e:#}", vol.label)),
+        }
+    }
+
+    summary
+}
+
+/// Sleep for `total`, polling the stop flag every 200ms. Returns false
+/// when the flag was raised (Ctrl-C) before the sleep completed.
+fn sleep_unless_stopped(
+    total: std::time::Duration,
+    stop: &std::sync::atomic::AtomicBool,
+) -> bool {
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    let mut remaining = total;
+    while remaining > Duration::ZERO {
+        if stop.load(Ordering::SeqCst) {
+            return false;
+        }
+        let step = remaining.min(Duration::from_millis(200));
+        std::thread::sleep(step);
+        remaining -= step;
+    }
+    !stop.load(Ordering::SeqCst)
+}
+
+/// Extracted body of `Commands::Watch`. See `run_import_command` for the
+/// extraction pattern.
+pub fn run_watch_command(
+    paths: Vec<String>,
+    volume: Option<String>,
+    interval: Option<u64>,
+    once: bool,
+    json: bool,
+    log: bool,
+    verbosity: maki::Verbosity,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use maki::asset_service::{is_recipe_path, WatchScanner};
+
+    let (catalog_root, config) = maki::config::load_config()?;
+    let registry = DeviceRegistry::new(&catalog_root);
+
+    // ── Resolve watch roots ────────────────────────────────────────
+    let volume_filter = volume
+        .as_deref()
+        .map(|l| registry.resolve_volume(l))
+        .transpose()?;
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if !paths.is_empty() {
+        for p in &paths {
+            let cp = std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p));
+            // Same containment requirement (and error) as import:
+            // watched paths must lie inside a registered volume.
+            let vol = registry.find_volume_for_path(&cp)?;
+            if let Some(ref vf) = volume_filter {
+                if vol.id != vf.id {
+                    anyhow::bail!(
+                        "path {} is not on volume \"{}\"",
+                        cp.display(),
+                        vf.label
+                    );
+                }
+            }
+            roots.push(cp);
+        }
+    } else if let Some(vf) = volume_filter {
+        if !vf.is_online {
+            anyhow::bail!(
+                "volume \"{}\" is offline (mount point {} not found)",
+                vf.label,
+                vf.mount_point.display()
+            );
+        }
+        roots.push(vf.mount_point.clone());
+    } else {
+        for v in registry.list()? {
+            if v.is_online {
+                roots.push(v.mount_point.clone());
+            }
+        }
+        if roots.is_empty() {
+            anyhow::bail!(
+                "no online volumes to watch — register one with `maki volume add` or pass PATHS"
+            );
+        }
+    }
+
+    // ── Excludes: [import] exclude + [watch] exclude (additive) ────
+    let mut excludes = config.import.exclude.clone();
+    excludes.extend(config.watch.exclude.iter().cloned());
+
+    // ── Never track the catalog's own derived files (relevant when a
+    //    watched root contains the catalog directory) ───────────────
+    let canonical_root = std::fs::canonicalize(&catalog_root)
+        .unwrap_or_else(|_| catalog_root.clone());
+    let ignore_prefixes: Vec<PathBuf> =
+        ["previews", "smart-previews", "metadata", "embeddings", "faces", ".trash"]
+            .iter()
+            .map(|d| canonical_root.join(d))
+            .collect();
+
+    let poll_seconds = interval.unwrap_or(config.watch.poll_seconds).max(2);
+    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+
+    if once {
+        // ── Single cycle: scan, ~1s stability wait, re-scan, act ───
+        // Unlike the continuous loop (whose baseline is "what's on disk
+        // when the watch starts"), --once diffs against the *catalog*:
+        // stable files the catalog doesn't track yet are imported, and
+        // tracked .xmp recipes are refreshed if their content changed.
+        let mut scanner = WatchScanner::new(roots.clone(), excludes.clone(), ignore_prefixes, true);
+        let baseline = scanner.scan();
+        if verbosity.verbose {
+            eprintln!(
+                "  Watch: single cycle over {} root(s), {} candidate file(s); waiting 1s for stability",
+                roots.len(),
+                baseline.tracked
+            );
+        }
+        std::thread::sleep(Duration::from_millis(1100));
+        let outcome = scanner.scan();
+
+        let mut stable = outcome.new_stable;
+        stable.extend(outcome.changed_stable);
+
+        let mut to_import: Vec<PathBuf> = Vec::new();
+        let mut to_refresh: Vec<PathBuf> = Vec::new();
+        let mut pre_errors: Vec<String> = Vec::new();
+        {
+            let catalog = Catalog::open(&catalog_root)?;
+            for path in stable {
+                let vol = match registry.find_volume_for_path(&path) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        pre_errors.push(format!("{}: {e}", path.display()));
+                        continue;
+                    }
+                };
+                let rel = match path.strip_prefix(&vol.mount_point) {
+                    Ok(r) => r.to_string_lossy().to_string(),
+                    Err(_) => continue,
+                };
+                let vol_id = vol.id.to_string();
+                if is_recipe_path(&path) {
+                    if catalog.find_recipe_by_volume_and_path(&vol_id, &rel)?.is_some() {
+                        // Tracked recipe — refresh hash-compares and
+                        // reapplies XMP only when the content changed.
+                        to_refresh.push(path);
+                    } else if catalog.find_variant_by_volume_and_path(&vol_id, &rel)?.is_none() {
+                        to_import.push(path);
+                    }
+                } else if catalog.find_variant_by_volume_and_path(&vol_id, &rel)?.is_none() {
+                    to_import.push(path);
+                }
+            }
+        }
+
+        let mut summary = watch_act(&service, &registry, &config, &excludes, &to_import, &to_refresh, log);
+        summary.errors.extend(pre_errors);
+
+        for e in &summary.errors {
+            eprintln!("  {e}");
+        }
+        if outcome.pending > 0 {
+            eprintln!(
+                "  {} file(s) still changing — run `maki watch --once` again once they settle",
+                outcome.pending
+            );
+        }
+        if json {
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        } else {
+            let parts = summary.parts();
+            if parts.is_empty() {
+                println!("Watch: nothing to do");
+            } else {
+                println!("Watch: {}", parts.join(", "));
+            }
+        }
+        return Ok(());
+    }
+
+    // ── Continuous foreground loop (like `maki serve`) ─────────────
+    // Ctrl-C raises a flag via tokio's signal handler; the loop checks
+    // it while sleeping so shutdown is prompt and clean.
+    let stop = Arc::new(AtomicBool::new(false));
+    let rt = tokio::runtime::Runtime::new()?;
+    {
+        let stop = stop.clone();
+        rt.spawn(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            stop.store(true, Ordering::SeqCst);
+        });
+    }
+
+    let mut scanner = WatchScanner::new(roots.clone(), excludes.clone(), ignore_prefixes, false);
+    let baseline = scanner.scan();
+    eprintln!(
+        "Watching {} root(s) every {}s — baseline: {} file(s), not imported (run `maki import` for any backlog). Ctrl-C to stop.",
+        roots.len(),
+        poll_seconds,
+        baseline.tracked
+    );
+    if verbosity.verbose {
+        for r in &roots {
+            eprintln!("  watching {}", r.display());
+        }
+    }
+
+    loop {
+        if !sleep_unless_stopped(Duration::from_secs(poll_seconds), &stop) {
+            break;
+        }
+        let outcome = scanner.scan();
+        if verbosity.verbose {
+            for p in &outcome.deleted {
+                eprintln!("  deleted (ignored — see `maki cleanup`): {}", p.display());
+            }
+        }
+
+        let to_import = outcome.new_stable;
+        let mut to_refresh: Vec<PathBuf> = Vec::new();
+        for p in outcome.changed_stable {
+            if is_recipe_path(&p) {
+                to_refresh.push(p);
+            } else if verbosity.verbose {
+                eprintln!("  changed (ignored — see `maki sync`): {}", p.display());
+            }
+        }
+
+        if to_import.is_empty() && to_refresh.is_empty() {
+            if verbosity.verbose {
+                eprintln!(
+                    "[{}] Watch: quiet tick ({} tracked, {} pending)",
+                    chrono::Local::now().format("%H:%M:%S"),
+                    outcome.tracked,
+                    outcome.pending
+                );
+            }
+            continue;
+        }
+
+        let summary = watch_act(&service, &registry, &config, &excludes, &to_import, &to_refresh, log);
+        for e in &summary.errors {
+            eprintln!("  {e}");
+        }
+        let parts = summary.parts();
+        eprintln!(
+            "[{}] Watch: {}",
+            chrono::Local::now().format("%H:%M:%S"),
+            if parts.is_empty() { "no changes applied".to_string() } else { parts.join(", ") }
+        );
+        if json {
+            println!("{}", serde_json::to_string(&summary)?);
+        }
+    }
+
+    eprintln!("Watch stopped.");
     Ok(())
 }
 

@@ -189,6 +189,39 @@ enum Commands {
         describe: bool,
     },
 
+    /// Watch directories and auto-import new files (poll-based)
+    ///
+    /// Polls the watched roots every N seconds. A new or changed file is
+    /// acted on only once its size and modification time are identical on
+    /// two consecutive scans, so files still being copied (e.g. during a
+    /// tethered capture session) are never half-imported. New stable files
+    /// go through the regular import pipeline; changed .xmp recipe files
+    /// already tracked by the catalog are refreshed. Deleted files are
+    /// ignored (run `maki cleanup` explicitly).
+    ///
+    /// Files already present when the watch starts form the baseline and
+    /// are NOT imported — run `maki import` for the backlog. With --once a
+    /// single cycle runs instead: stable files the catalog doesn't track
+    /// yet are imported, tracked .xmp recipes are refreshed if changed,
+    /// then the command exits (useful for scripting).
+    #[command(display_order = 23)]
+    Watch {
+        /// Paths to watch (default: mount points of all online volumes)
+        paths: Vec<String>,
+
+        /// Watch a specific volume (paths, if given, must lie on it)
+        #[arg(long, display_order = 10)]
+        volume: Option<String>,
+
+        /// Poll interval in seconds (min 2; default: [watch] poll_seconds, 30)
+        #[arg(long, display_order = 11)]
+        interval: Option<u64>,
+
+        /// Run a single scan cycle (~1s stability wait) and exit
+        #[arg(long, display_order = 20)]
+        once: bool,
+    },
+
     /// Delete assets from the catalog
     #[command(display_order = 11)]
     Delete {
@@ -1891,6 +1924,7 @@ Setup:
 
 Ingest & Edit:
   import             Import files into the catalog
+  watch              Watch directories and auto-import new files (poll-based)
   delete             Delete assets from the catalog
   tag                Add, remove, rename, clear, or expand tags (supports subcommands)
   edit               Edit asset metadata (name, description, rating, label, date)
@@ -2151,6 +2185,9 @@ faces/\n\
             cli.log,
             verbosity,
         ),
+        Commands::Watch { paths, volume, interval, once } => {
+            run_watch_command(paths, volume, interval, once, cli.json, cli.log, verbosity)
+        }
         Commands::Search { query, format, quiet } => {
             use maki::format::{self, OutputFormat};
 

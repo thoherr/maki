@@ -641,6 +641,92 @@ fn import_xmp_applies_metadata() {
 }
 
 #[test]
+fn watch_once_imports_new_files() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Cycle 1: empty volume — baseline established, nothing imported.
+    maki()
+        .current_dir(&root)
+        .args(["watch", "--once"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing to do"));
+
+    // Drop a new file; cycle 2 finds it stable and imports it.
+    create_test_file(&root, "fresh.jpg", b"fresh data");
+    maki()
+        .current_dir(&root)
+        .args(["watch", "--once"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 imported"));
+
+    maki()
+        .current_dir(&root)
+        .args(["search", "fresh"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("fresh"));
+
+    // Cycle 3: nothing changed — nothing imported again.
+    maki()
+        .current_dir(&root)
+        .args(["watch", "--once"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing to do"));
+}
+
+#[test]
+fn watch_once_refreshes_changed_recipe() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    let photos = root.join("photos");
+    std::fs::create_dir_all(&photos).unwrap();
+    create_test_file(&photos, "DSC_200.nef", b"raw bytes for watch test");
+    let xmp = |rating: u8| {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmp:Rating="{rating}">
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#
+        )
+    };
+    create_test_file(&photos, "DSC_200.xmp", xmp(2).as_bytes());
+
+    maki()
+        .current_dir(&root)
+        .args(["import", photos.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 imported"));
+
+    // Externally modify the tracked recipe, then run one watch cycle:
+    // the changed .xmp must go through the refresh path, not import.
+    create_test_file(&photos, "DSC_200.xmp", xmp(4).as_bytes());
+    maki()
+        .current_dir(&root)
+        .args(["watch", "--once"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 recipe(s) refreshed"));
+
+    maki()
+        .current_dir(&root)
+        .args(["search", "rating:4"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DSC_200"));
+}
+
+#[test]
 fn import_skips_captureone_by_default() {
     let dir = tempdir().unwrap();
     let root = init_catalog(dir.path());
