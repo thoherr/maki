@@ -59,6 +59,7 @@ pub mod embedded_xmp;
 pub mod embedded_xmp_write;
 pub mod exif_reader;
 pub mod format;
+pub mod history;
 pub mod metadata_store;
 pub mod models;
 pub mod preview;

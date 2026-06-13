@@ -824,6 +824,43 @@ enum Commands {
 
     // --- Maintenance ---
 
+    /// Undo the most recent metadata edit
+    ///
+    /// Reverts the newest not-yet-undone operation from the edit-history
+    /// journal (`<catalog>/history/`), restoring each touched asset's prior
+    /// state in the catalog and YAML sidecar. Covers field-level metadata
+    /// edits (rating, label, description, name, date, tag add/remove/clear,
+    /// single and batch) — not import, delete, or structural operations.
+    /// Assets edited again since the recorded operation are reported as
+    /// conflicts and skipped unless `--force`. XMP `.xmp` files are not
+    /// touched live; affected recipes are flagged pending so a later
+    /// `maki writeback` reconciles them.
+    #[command(display_order = 37)]
+    Undo {
+        /// Show what would be undone without changing anything
+        #[arg(long, display_order = 10)]
+        dry_run: bool,
+
+        /// Restore even assets that were edited since the operation
+        #[arg(long, display_order = 11)]
+        force: bool,
+    },
+
+    /// Show recent metadata edits (optionally for one asset)
+    ///
+    /// Lists operations from the edit-history journal, newest first. With
+    /// an asset argument (prefix-resolved), shows only operations touching
+    /// that asset together with the per-field change each made.
+    #[command(display_order = 38)]
+    History {
+        /// Asset id (or unambiguous prefix) to scope the history to
+        asset: Option<String>,
+
+        /// Maximum number of operations to show
+        #[arg(long, display_order = 10, default_value_t = 20)]
+        limit: usize,
+    },
+
     /// Check YAML-sidecar ↔ SQLite-catalog consistency
     ///
     /// The YAML sidecars are the source of truth; the SQLite catalog is
@@ -2003,6 +2040,8 @@ Retrieve:
   licenses           Show MAKI license and third-party crate licenses
 
 Maintain:
+  undo               Undo the most recent metadata edit
+  history            Show recent metadata edits (optionally for one asset)
   doctor             Check YAML-sidecar ↔ SQLite-catalog consistency
   verify             Check file integrity
   sync               Sync catalog with disk changes (moved/modified/missing files)
@@ -2604,6 +2643,12 @@ faces/\n\
             cli.log,
             verbosity,
         ),
+        Commands::Undo { dry_run, force } => {
+            run_undo_command(dry_run, force, cli.json, cli.log)
+        }
+        Commands::History { asset, limit } => {
+            run_history_command(asset, limit, cli.json)
+        }
         Commands::Doctor { sample, repair } => {
             run_doctor_command(sample, repair, cli.json, cli.log)
         }

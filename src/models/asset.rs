@@ -74,7 +74,7 @@ impl std::str::FromStr for TagSource {
 }
 
 /// The central entity. Represents a logical asset (e.g. "photo of sunset at beach").
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Asset {
     pub id: Uuid,
     #[serde(default, skip_serializing_if = "Option::is_none")]

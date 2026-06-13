@@ -22,7 +22,7 @@ pub enum VariantRole {
 }
 
 /// A concrete file belonging to an asset.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Variant {
     pub content_hash: String,
     pub asset_id: Uuid,

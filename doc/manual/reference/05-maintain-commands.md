@@ -4,6 +4,9 @@ Commands for integrity checks, disk reconciliation, metadata sync, file relocati
 
 | Command | Description |
 |---------|-------------|
+| [undo](#maki-undo) | Revert the most recent metadata edit |
+| [history](#maki-history) | Show recent metadata edits |
+| [doctor](#maki-doctor) | Check YAML-sidecar ↔ SQLite-catalog consistency |
 | [verify](#maki-verify) | Check file integrity via SHA-256 |
 | [sync](#maki-sync) | Reconcile catalog with moved/modified/missing files |
 | [refresh](#maki-refresh) | Re-read metadata from changed recipe files |
@@ -20,6 +23,127 @@ Commands for integrity checks, disk reconciliation, metadata sync, file relocati
 | [create-sidecars](#maki-create-sidecars) | Create XMP sidecars for assets without recipes |
 | [rebuild-catalog](#maki-rebuild-catalog) | Rebuild SQLite from YAML sidecars |
 | [migrate](#maki-migrate) | Run database schema migrations |
+
+---
+
+## maki undo
+
+### NAME
+
+maki-undo -- revert the most recent metadata edit
+
+### SYNOPSIS
+
+```
+maki [GLOBAL FLAGS] undo [--dry-run] [--force]
+```
+
+### DESCRIPTION
+
+Reverts the newest not-yet-undone operation from the edit-history
+journal (`<catalog_root>/history/`), restoring each touched asset's
+prior state in both the SQLite catalog and the YAML sidecar.
+
+Undo is **LIFO**: each invocation reverts the most recent surviving
+operation, and a reverted operation is moved aside (into
+`history/undone/`) so the next `maki undo` walks back to the one
+before it.
+
+What undo covers — **field-level metadata edits only**: rating, color
+label, description, name, date, and tag add/remove/clear, made either
+singly or in a batch. A batch edit (e.g. rating 500 assets at once) is
+recorded as **one** operation and undone as one. Undo does **not**
+cover `import`, `delete`, or structural operations (group, split,
+stack, merge) — those have their own recovery paths (re-import is
+idempotent, delete is trash-backed; structural undo is a planned
+follow-on).
+
+**Conflict handling.** Before restoring each asset, undo checks that
+the asset's *current* state still matches what the operation recorded
+as its result. If a later edit has touched the asset since, that asset
+is a **conflict**: it is reported and skipped, and the operation is
+left in place (not marked undone) so you can decide. Pass `--force` to
+restore conflicting assets anyway.
+
+`--dry-run` reports what would be undone and changes nothing.
+
+### NOTES
+
+Undo restores catalog + sidecar state only; it does **not** write to
+`.xmp` files live. Any affected `.xmp` recipes are flagged
+`pending_writeback`, so if you keep edits mirrored to XMP, run `maki
+writeback` afterwards to propagate the restored values to disk. (Most
+catalogs run with auto-writeback off — the documented default — so
+this is opt-in.)
+
+The history journal is **non-authoritative**: it is neither a sidecar
+(source of truth) nor part of `catalog.db` (derived cache). It
+survives `rebuild-catalog`, is ignored by `maki doctor`, and may be
+deleted at any time — losing only the ability to undo past edits.
+Journaling and retention are configured under `[history]` in
+`maki.toml` (see the configuration reference).
+
+### SEE ALSO
+
+[history](#maki-history) -- list recorded edit operations.
+[writeback](#maki-writeback) -- flush pending metadata changes to XMP files *(Pro)*.
+
+---
+
+## maki history
+
+### NAME
+
+maki-history -- show recent metadata edits
+
+### SYNOPSIS
+
+```
+maki [GLOBAL FLAGS] history [<asset>] [--limit N]
+```
+
+### DESCRIPTION
+
+Lists operations from the edit-history journal, newest first. Each
+line shows a compact timestamp, the command label, a human summary,
+and the number of assets the operation touched.
+
+With an `<asset>` argument (resolved by unambiguous id prefix, like
+other asset commands), `history` lists only operations that touched
+that asset and shows the **field-level change** each one made to it —
+e.g. `rating 2 → 4`, `tags +[nature, wildlife]`, `label red → —`.
+
+`--limit N` caps the number of operations shown (default 20). `--json`
+emits the full operation records (asset-scoped when an asset is
+given).
+
+### ARGUMENTS
+
+`<asset>`
+: Optional asset id or unambiguous prefix to scope the history to.
+
+### OPTIONS
+
+`--limit N`
+: Maximum number of operations to display (default `20`).
+
+### EXAMPLES
+
+Show the last 20 edits across the catalog:
+
+```
+maki history
+```
+
+Show the edit history for one asset:
+
+```
+maki history a1b2c3d4
+```
+
+### SEE ALSO
+
+[undo](#maki-undo) -- revert the most recent edit operation.
 
 ---
 

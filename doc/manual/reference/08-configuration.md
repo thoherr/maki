@@ -862,6 +862,47 @@ escape hatch when freeing space is the whole point.
 
 ---
 
+## [history] Section
+
+Controls the edit-history journal that backs `maki undo` and `maki
+history`. When enabled (the default), field-level metadata edits
+(rating, label, description, name, date, tag add/remove/clear — single
+and batch) are recorded as undoable operations in
+`<catalog_root>/history/`.
+
+The journal is **non-authoritative**: it is neither a sidecar (source
+of truth) nor part of `catalog.db` (derived cache). It survives
+`rebuild-catalog`, is ignored by `maki doctor`, and may be deleted at
+any time — losing only the ability to undo past edits.
+
+### enabled
+
+- **Type:** boolean
+- **Default:** `true`
+
+Set to `false` to disable journaling entirely. No operations are
+written, and `maki undo` then has nothing to revert.
+
+### max_operations
+
+- **Type:** unsigned integer
+- **Default:** `200`
+
+How many operations to keep. After each recorded operation the journal
+is pruned to the newest `max_operations` files; older ones (and any
+undone counterparts) are deleted. Each operation stores the full
+before/after state of every asset it touched, so on very large batch
+edits the files are correspondingly larger — lower this if disk use
+matters more than deep undo history.
+
+```toml
+[history]
+enabled = true
+max_operations = 200
+```
+
+---
+
 ## [writeback] Section
 
 Controls whether metadata edits flow into the `.xmp` recipe files on your storage volumes **automatically** on every change.

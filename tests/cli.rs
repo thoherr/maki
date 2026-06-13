@@ -11425,3 +11425,72 @@ fn writeback_embed_skips_tiff_variant() {
         .stderr(predicate::str::contains("not supported for TIFF yet"));
     assert_eq!(std::fs::read(&tiff_path).unwrap(), before, "TIFF must be untouched");
 }
+
+#[test]
+fn undo_and_history_round_trip() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "undoable.jpg", b"undo test data");
+
+    maki()
+        .current_dir(&root)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = maki()
+        .current_dir(&root)
+        .args(["search", "-q", "type:image"])
+        .output()
+        .unwrap();
+    let asset_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    // Set a rating — this records an undoable operation.
+    maki()
+        .current_dir(&root)
+        .args(["edit", &asset_id, "--rating", "4"])
+        .assert()
+        .success();
+
+    // `maki history <asset>` shows the operation.
+    maki()
+        .current_dir(&root)
+        .args(["history", &asset_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rating"));
+
+    // Undo reverts the rating.
+    maki()
+        .current_dir(&root)
+        .arg("undo")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Undid:"));
+
+    // Rating is back to none.
+    let output = maki()
+        .current_dir(&root)
+        .args(["--json", "show", &asset_id])
+        .output()
+        .unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output.stdout).unwrap()).unwrap();
+    assert!(parsed["rating"].is_null(), "rating should be cleared after undo");
+
+    // The operation is gone from the active history.
+    maki()
+        .current_dir(&root)
+        .args(["history", &asset_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No edit history"));
+
+    // Undo again → nothing to undo.
+    maki()
+        .current_dir(&root)
+        .arg("undo")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Nothing to undo."));
+}

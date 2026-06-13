@@ -386,6 +386,15 @@ pub struct BatchContext {
     pub meta_store: MetadataStore,
     pub online_volumes: HashMap<uuid::Uuid, PathBuf>,
     pub content_store: ContentStore,
+    /// Optional edit-history recorder. When `Some`, the `*_inner` /
+    /// `set_*` write methods that flow through this context capture a
+    /// `before`/`after` [`crate::history::AssetDelta`] for every asset
+    /// whose state actually changed. The public entry point owns the
+    /// operation boundary: it installs the recorder, runs the edit(s),
+    /// then drains the accumulated deltas into one [`crate::history::Operation`].
+    /// `None` (the default for batch web handlers and pre-existing call
+    /// sites) skips journaling — and the costly `before` clone — entirely.
+    pub recorder: Option<std::cell::RefCell<Vec<crate::history::AssetDelta>>>,
 }
 
 /// Query engine — search execution and write-path operations on assets.
@@ -1351,8 +1360,24 @@ impl QueryEngine {
         let store = MetadataStore::new(&self.catalog_root);
         let online = Self::load_online_volumes(&self.catalog_root);
         let content_store = ContentStore::new(&self.catalog_root);
-        let ctx = BatchContext { catalog, meta_store: store, online_volumes: online, content_store };
-        self.tag_inner(&ctx, asset_id_prefix, tags, remove, source)
+        let ctx = BatchContext {
+            catalog,
+            meta_store: store,
+            online_volumes: online,
+            content_store,
+            recorder: Some(std::cell::RefCell::new(Vec::new())),
+        };
+        let result = self.tag_inner(&ctx, asset_id_prefix, tags, remove, source);
+        // One operation boundary per public call. Summarise from the
+        // result so the journal carries a human label even on partial
+        // success; drain the recorder regardless of Ok/Err.
+        let summary = match &result {
+            Ok(r) if remove => format!("removed {} tag(s)", r.changed.len()),
+            Ok(r) => format!("added {} tag(s)", r.changed.len()),
+            Err(_) => if remove { "removed tag(s)".to_string() } else { "added tag(s)".to_string() },
+        };
+        self.commit_recorder(&ctx, "tag", &summary);
+        result
     }
 
     fn tag_inner(
@@ -1369,6 +1394,8 @@ impl QueryEngine {
 
         let uuid: uuid::Uuid = full_id.parse()?;
         let mut asset = ctx.meta_store.load(uuid)?;
+        // Capture prior state only when journaling — the clone is wasted otherwise.
+        let before = if ctx.recorder.is_some() { Some(asset.clone()) } else { None };
 
         // On add: normalize inputs so disallowed delimiters (`,` / `;`) are auto-split
         // and control chars / whitespace are collapsed before reaching storage.
@@ -1449,6 +1476,17 @@ impl QueryEngine {
                 (changed.clone(), Vec::new())
             };
             self.write_back_tags_to_xmp_inner(&mut asset, &to_add, &to_remove, &ctx.catalog, &ctx.meta_store, &ctx.online_volumes, &ctx.content_store);
+        }
+
+        // Record the delta only when something actually changed.
+        if !changed.is_empty() {
+            if let (Some(rec), Some(before)) = (&ctx.recorder, before) {
+                rec.borrow_mut().push(crate::history::AssetDelta {
+                    asset_id: full_id.clone(),
+                    before,
+                    after: asset.clone(),
+                });
+            }
         }
 
         Ok(TagResult {
@@ -2373,6 +2411,7 @@ impl QueryEngine {
         let uuid: uuid::Uuid = full_id.parse()?;
         let store = MetadataStore::new(&self.catalog_root);
         let mut asset = store.load(uuid)?;
+        let before = asset.clone();
 
         if let Some(name) = &fields.name {
             asset.name = name.clone();
@@ -2418,6 +2457,36 @@ impl QueryEngine {
             self.write_back_label_to_xmp(&mut asset, label.as_deref(), &catalog, &store);
         }
 
+        // Journal the multi-field edit as one operation when anything
+        // actually changed. Summarise from the fields the caller touched.
+        if before != asset {
+            let mut parts: Vec<String> = Vec::new();
+            if before.rating != asset.rating {
+                parts.push(match asset.rating {
+                    Some(r) => format!("rating {r}"),
+                    None => "cleared rating".to_string(),
+                });
+            }
+            if before.color_label != asset.color_label {
+                parts.push("label".to_string());
+            }
+            if before.name != asset.name {
+                parts.push("name".to_string());
+            }
+            if before.description != asset.description {
+                parts.push("description".to_string());
+            }
+            if before.created_at != asset.created_at {
+                parts.push("date".to_string());
+            }
+            let summary = if parts.is_empty() {
+                "edited metadata".to_string()
+            } else {
+                format!("edited {}", parts.join(", "))
+            };
+            self.record_single_edit("edit", &summary, &full_id, before, asset.clone());
+        }
+
         Ok(EditResult {
             asset_id: full_id,
             name: asset.name,
@@ -2444,10 +2513,20 @@ impl QueryEngine {
         let uuid: uuid::Uuid = full_id.parse()?;
         let store = MetadataStore::new(&self.catalog_root);
         let mut asset = store.load(uuid)?;
+        let before = asset.clone();
+        let changed = asset.name != name;
 
         asset.name = name;
         store.save(&asset)?;
         catalog.insert_asset(&asset)?;
+
+        if changed {
+            let summary = match &asset.name {
+                Some(n) => format!("set name to {n}"),
+                None => "cleared name".to_string(),
+            };
+            self.record_single_edit("name", &summary, &full_id, before, asset.clone());
+        }
 
         Ok(asset.name)
     }
@@ -2464,10 +2543,17 @@ impl QueryEngine {
         let uuid: uuid::Uuid = full_id.parse()?;
         let store = MetadataStore::new(&self.catalog_root);
         let mut asset = store.load(uuid)?;
+        let before = asset.clone();
+        let changed = asset.created_at != date;
 
         asset.created_at = date;
         store.save(&asset)?;
         catalog.update_asset_created_at(&full_id, &date)?;
+
+        if changed {
+            let summary = format!("set date to {}", date.to_rfc3339());
+            self.record_single_edit("date", &summary, &full_id, before, asset.clone());
+        }
 
         Ok(date.to_rfc3339())
     }
@@ -2476,12 +2562,14 @@ impl QueryEngine {
     /// Also writes back the rating to any `.xmp` recipe files on disk.
     /// Returns the new rating value.
     pub fn set_rating(&self, asset_id_prefix: &str, rating: Option<u8>) -> Result<Option<u8>> {
-        let catalog = Catalog::open(&self.catalog_root)?;
-        let store = MetadataStore::new(&self.catalog_root);
-        let online = Self::load_online_volumes(&self.catalog_root);
-        let content_store = ContentStore::new(&self.catalog_root);
-        let ctx = BatchContext { catalog, meta_store: store, online_volumes: online, content_store };
-        self.set_rating_inner(&ctx, asset_id_prefix, rating)
+        let ctx = self.recording_context()?;
+        let result = self.set_rating_inner(&ctx, asset_id_prefix, rating);
+        let summary = match rating {
+            Some(r) => format!("set rating to {r}"),
+            None => "cleared rating".to_string(),
+        };
+        self.commit_recorder(&ctx, "rating", &summary);
+        result
     }
 
     fn set_rating_inner(&self, ctx: &BatchContext, asset_id_prefix: &str, rating: Option<u8>) -> Result<Option<u8>> {
@@ -2491,12 +2579,24 @@ impl QueryEngine {
 
         let uuid: uuid::Uuid = full_id.parse()?;
         let mut asset = ctx.meta_store.load(uuid)?;
+        let before = if ctx.recorder.is_some() { Some(asset.clone()) } else { None };
+        let changed = asset.rating != rating;
 
         asset.rating = rating;
         ctx.meta_store.save(&asset)?;
         ctx.catalog.update_asset_rating(&full_id, rating)?;
 
         self.write_back_rating_to_xmp_inner(&mut asset, rating, &ctx.catalog, &ctx.meta_store, &ctx.online_volumes, &ctx.content_store);
+
+        if changed {
+            if let (Some(rec), Some(before)) = (&ctx.recorder, before) {
+                rec.borrow_mut().push(crate::history::AssetDelta {
+                    asset_id: full_id.clone(),
+                    before,
+                    after: asset.clone(),
+                });
+            }
+        }
 
         Ok(rating)
     }
@@ -2505,12 +2605,14 @@ impl QueryEngine {
     /// Also writes back the label to any `.xmp` recipe files on disk.
     /// Returns the new label value.
     pub fn set_color_label(&self, asset_id_prefix: &str, label: Option<String>) -> Result<Option<String>> {
-        let catalog = Catalog::open(&self.catalog_root)?;
-        let store = MetadataStore::new(&self.catalog_root);
-        let online = Self::load_online_volumes(&self.catalog_root);
-        let content_store = ContentStore::new(&self.catalog_root);
-        let ctx = BatchContext { catalog, meta_store: store, online_volumes: online, content_store };
-        self.set_color_label_inner(&ctx, asset_id_prefix, label)
+        let ctx = self.recording_context()?;
+        let result = self.set_color_label_inner(&ctx, asset_id_prefix, label.clone());
+        let summary = match &label {
+            Some(l) => format!("set label to {l}"),
+            None => "cleared label".to_string(),
+        };
+        self.commit_recorder(&ctx, "label", &summary);
+        result
     }
 
     fn set_color_label_inner(&self, ctx: &BatchContext, asset_id_prefix: &str, label: Option<String>) -> Result<Option<String>> {
@@ -2520,12 +2622,24 @@ impl QueryEngine {
 
         let uuid: uuid::Uuid = full_id.parse()?;
         let mut asset = ctx.meta_store.load(uuid)?;
+        let before = if ctx.recorder.is_some() { Some(asset.clone()) } else { None };
+        let changed = asset.color_label != label;
 
         asset.color_label = label.clone();
         ctx.meta_store.save(&asset)?;
         ctx.catalog.update_asset_color_label(&full_id, label.as_deref())?;
 
         self.write_back_label_to_xmp_inner(&mut asset, label.as_deref(), &ctx.catalog, &ctx.meta_store, &ctx.online_volumes, &ctx.content_store);
+
+        if changed {
+            if let (Some(rec), Some(before)) = (&ctx.recorder, before) {
+                rec.borrow_mut().push(crate::history::AssetDelta {
+                    asset_id: full_id.clone(),
+                    before,
+                    after: asset.clone(),
+                });
+            }
+        }
 
         Ok(label)
     }
@@ -2655,12 +2769,22 @@ impl QueryEngine {
         let uuid: uuid::Uuid = full_id.parse()?;
         let store = MetadataStore::new(&self.catalog_root);
         let mut asset = store.load(uuid)?;
+        let before = asset.clone();
+        let changed = asset.description != description;
 
         asset.description = description.clone();
         store.save(&asset)?;
         catalog.insert_asset(&asset)?;
 
         self.write_back_description_to_xmp(&mut asset, description.as_deref(), &catalog, &store);
+
+        if changed {
+            let summary = match &asset.description {
+                Some(_) => "set description".to_string(),
+                None => "cleared description".to_string(),
+            };
+            self.record_single_edit("description", &summary, &full_id, before, asset.clone());
+        }
 
         Ok(asset.description)
     }
@@ -2821,34 +2945,177 @@ impl QueryEngine {
         let store = MetadataStore::new(&self.catalog_root);
         let online = Self::load_online_volumes(&self.catalog_root);
         let content_store = ContentStore::new(&self.catalog_root);
-        Ok(BatchContext { catalog, meta_store: store, online_volumes: online, content_store })
+        Ok(BatchContext {
+            catalog,
+            meta_store: store,
+            online_volumes: online,
+            content_store,
+            recorder: None,
+        })
     }
 
-    /// Tag multiple assets using a single shared catalog connection.
+    /// Build a `BatchContext` for single-asset edits with a fresh
+    /// edit-history recorder installed.
+    fn recording_context(&self) -> Result<BatchContext> {
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let store = MetadataStore::new(&self.catalog_root);
+        let online = Self::load_online_volumes(&self.catalog_root);
+        let content_store = ContentStore::new(&self.catalog_root);
+        Ok(BatchContext {
+            catalog,
+            meta_store: store,
+            online_volumes: online,
+            content_store,
+            recorder: Some(std::cell::RefCell::new(Vec::new())),
+        })
+    }
+
+    /// Drain a context's recorder and, if it captured any deltas, write one
+    /// edit-history [`Operation`](crate::history::Operation). No-op edits
+    /// (empty delta list) and disabled journaling never produce a file.
+    /// Recording failures are logged but never fail the edit itself — the
+    /// journal is non-authoritative.
+    fn commit_recorder(&self, ctx: &BatchContext, command: &str, summary: &str) {
+        let deltas = match &ctx.recorder {
+            Some(cell) => cell.borrow_mut().drain(..).collect::<Vec<_>>(),
+            None => return,
+        };
+        if deltas.is_empty() {
+            return;
+        }
+        let op = crate::history::Operation::new(
+            command,
+            summary,
+            crate::history::OpSource::Cli,
+            deltas,
+        );
+        let store = crate::history::HistoryStore::from_config(&self.catalog_root);
+        if let Err(e) = store.record(op) {
+            eprintln!("note: failed to record edit history: {e:#}");
+        }
+    }
+
+    /// Record a one-asset edit as a single edit-history operation. Used by
+    /// the standalone `set_name` / `set_date` / `set_description` methods
+    /// (which don't flow through a `BatchContext` recorder). Non-fatal on
+    /// failure — the journal is non-authoritative.
+    fn record_single_edit(
+        &self,
+        command: &str,
+        summary: &str,
+        asset_id: &str,
+        before: crate::models::Asset,
+        after: crate::models::Asset,
+    ) {
+        let op = crate::history::Operation::new(
+            command,
+            summary,
+            crate::history::OpSource::Cli,
+            vec![crate::history::AssetDelta {
+                asset_id: asset_id.to_string(),
+                before,
+                after,
+            }],
+        );
+        let store = crate::history::HistoryStore::from_config(&self.catalog_root);
+        if let Err(e) = store.record(op) {
+            eprintln!("note: failed to record edit history: {e:#}");
+        }
+    }
+
+    /// Restore an asset to a prior full state (undo). Writes the YAML
+    /// sidecar, re-inserts the asset + recipes into the catalog, refreshes
+    /// denormalized columns, and flags every `.xmp` recipe
+    /// `pending_writeback` so a later `maki writeback` reconciles the files
+    /// on disk. Does NOT touch `.xmp` files live — undo restores
+    /// catalog+sidecar state only (the documented default; most catalogs
+    /// run with auto-writeback off).
+    ///
+    /// Keeps SQLite recipe pending flags equal to the YAML it writes, so
+    /// `maki doctor` stays clean after an undo.
+    pub fn restore_asset(&self, asset: &crate::models::Asset) -> Result<()> {
+        let catalog = Catalog::open(&self.catalog_root)?;
+        let store = MetadataStore::new(&self.catalog_root);
+
+        // Flag every .xmp recipe pending in the in-memory copy first, so
+        // the sidecar we save and the catalog rows we insert agree.
+        let mut asset = asset.clone();
+        for recipe in &mut asset.recipes {
+            let is_xmp = recipe
+                .location
+                .relative_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("xmp"))
+                .unwrap_or(false);
+            if is_xmp {
+                recipe.pending_writeback = true;
+            }
+        }
+
+        store.save(&asset)?;
+        catalog.insert_asset(&asset)?;
+        for recipe in &asset.recipes {
+            catalog.insert_recipe(recipe)?;
+        }
+        catalog.update_denormalized_variant_columns(&asset)?;
+        Ok(())
+    }
+
+    /// Like [`Self::batch_context_fast`] but with an edit-history recorder
+    /// installed, so a whole batch accumulates into one undoable operation.
+    fn batch_recording_context(&self) -> Result<BatchContext> {
+        let mut ctx = self.batch_context_fast()?;
+        ctx.recorder = Some(std::cell::RefCell::new(Vec::new()));
+        Ok(ctx)
+    }
+
+    /// Tag multiple assets using a single shared catalog connection. The
+    /// whole batch is journaled as ONE undoable operation.
     pub fn batch_tag(&self, asset_ids: &[String], tags: &[String], remove: bool) -> Vec<Result<TagResult>> {
-        let ctx = match self.batch_context_fast() {
+        let ctx = match self.batch_recording_context() {
             Ok(c) => c,
             Err(e) => return asset_ids.iter().map(|_| Err(anyhow::anyhow!("{e:#}"))).collect(),
         };
-        asset_ids.iter().map(|id| self.tag_inner(&ctx, id, tags, remove, crate::models::TagSource::User)).collect()
+        let results: Vec<_> = asset_ids.iter().map(|id| self.tag_inner(&ctx, id, tags, remove, crate::models::TagSource::User)).collect();
+        let n = ctx.recorder.as_ref().map(|c| c.borrow().len()).unwrap_or(0);
+        let verb = if remove { "removed tag(s) on" } else { "added tag(s) on" };
+        self.commit_recorder(&ctx, "tag", &format!("{verb} {n} asset(s)"));
+        results
     }
 
-    /// Set rating on multiple assets using a single shared catalog connection.
+    /// Set rating on multiple assets using a single shared catalog
+    /// connection. The whole batch is journaled as ONE undoable operation.
     pub fn batch_set_rating(&self, asset_ids: &[String], rating: Option<u8>) -> Vec<Result<Option<u8>>> {
-        let ctx = match self.batch_context_fast() {
+        let ctx = match self.batch_recording_context() {
             Ok(c) => c,
             Err(e) => return asset_ids.iter().map(|_| Err(anyhow::anyhow!("{e:#}"))).collect(),
         };
-        asset_ids.iter().map(|id| self.set_rating_inner(&ctx, id, rating)).collect()
+        let results: Vec<_> = asset_ids.iter().map(|id| self.set_rating_inner(&ctx, id, rating)).collect();
+        let n = ctx.recorder.as_ref().map(|c| c.borrow().len()).unwrap_or(0);
+        let summary = match rating {
+            Some(r) => format!("set rating to {r} on {n} asset(s)"),
+            None => format!("cleared rating on {n} asset(s)"),
+        };
+        self.commit_recorder(&ctx, "rating", &summary);
+        results
     }
 
-    /// Set color label on multiple assets using a single shared catalog connection.
+    /// Set color label on multiple assets using a single shared catalog
+    /// connection. The whole batch is journaled as ONE undoable operation.
     pub fn batch_set_color_label(&self, asset_ids: &[String], label: Option<String>) -> Vec<Result<Option<String>>> {
-        let ctx = match self.batch_context_fast() {
+        let ctx = match self.batch_recording_context() {
             Ok(c) => c,
             Err(e) => return asset_ids.iter().map(|_| Err(anyhow::anyhow!("{e:#}"))).collect(),
         };
-        asset_ids.iter().map(|id| self.set_color_label_inner(&ctx, id, label.clone())).collect()
+        let results: Vec<_> = asset_ids.iter().map(|id| self.set_color_label_inner(&ctx, id, label.clone())).collect();
+        let n = ctx.recorder.as_ref().map(|c| c.borrow().len()).unwrap_or(0);
+        let summary = match &label {
+            Some(l) => format!("set label to {l} on {n} asset(s)"),
+            None => format!("cleared label on {n} asset(s)"),
+        };
+        self.commit_recorder(&ctx, "label", &summary);
+        results
     }
 }
 
@@ -5604,5 +5871,151 @@ mod tests {
         let asset: crate::models::Asset = store.load(asset_id.parse().unwrap()).unwrap();
         // NFD is still on disk — dry run was a no-op for storage.
         assert_eq!(asset.tags, vec![nfd.to_string()]);
+    }
+
+    // ═══ EDIT-HISTORY / UNDO ═══
+
+    use crate::history::HistoryStore;
+
+    fn load_asset(dir: &std::path::Path, id: &str) -> Asset {
+        let store = MetadataStore::new(dir);
+        store.load(id.parse().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn set_rating_records_one_operation() {
+        let (dir, asset_id) = setup_tag_env();
+        let engine = QueryEngine::new(dir.path());
+        engine.set_rating(&asset_id, Some(4)).unwrap();
+
+        let history = HistoryStore::from_config(dir.path());
+        let ops = history.list(None).unwrap();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].command, "rating");
+        assert_eq!(ops[0].assets.len(), 1);
+        assert_eq!(ops[0].assets[0].before.rating, None);
+        assert_eq!(ops[0].assets[0].after.rating, Some(4));
+    }
+
+    #[test]
+    fn no_op_edit_creates_no_operation() {
+        let (dir, asset_id) = setup_tag_env();
+        let engine = QueryEngine::new(dir.path());
+        // Asset starts with rating None; setting None again is a no-op.
+        engine.set_rating(&asset_id, None).unwrap();
+        // Removing a tag the asset doesn't have is a no-op.
+        engine.tag(&asset_id, &["nonexistent".to_string()], true).unwrap();
+
+        let history = HistoryStore::from_config(dir.path());
+        assert_eq!(history.list(None).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn undo_restores_prior_rating_in_both_stores() {
+        let (dir, asset_id) = setup_tag_env();
+        let engine = QueryEngine::new(dir.path());
+        engine.set_rating(&asset_id, Some(5)).unwrap();
+        assert_eq!(load_asset(dir.path(), &asset_id).rating, Some(5));
+
+        // Undo: restore the recorded `before` (rating None).
+        let history = HistoryStore::from_config(dir.path());
+        let op = history.newest_active().unwrap().unwrap();
+        engine.restore_asset(&op.assets[0].before).unwrap();
+        history.mark_undone(&op.id).unwrap();
+
+        // Sidecar reverted.
+        assert_eq!(load_asset(dir.path(), &asset_id).rating, None);
+        // Catalog reverted.
+        let catalog = Catalog::open(dir.path()).unwrap();
+        let details = engine.show(&asset_id).unwrap();
+        assert_eq!(details.rating, None);
+        drop(catalog);
+        // Operation no longer active.
+        assert!(history.newest_active().unwrap().is_none());
+    }
+
+    #[test]
+    fn second_undo_reverts_previous_operation_lifo() {
+        let (dir, asset_id) = setup_tag_env();
+        let engine = QueryEngine::new(dir.path());
+        engine.set_rating(&asset_id, Some(2)).unwrap();
+        engine.set_rating(&asset_id, Some(4)).unwrap();
+        assert_eq!(load_asset(dir.path(), &asset_id).rating, Some(4));
+
+        let history = HistoryStore::from_config(dir.path());
+        // First undo reverts 4 → 2.
+        let op1 = history.newest_active().unwrap().unwrap();
+        engine.restore_asset(&op1.assets[0].before).unwrap();
+        history.mark_undone(&op1.id).unwrap();
+        assert_eq!(load_asset(dir.path(), &asset_id).rating, Some(2));
+
+        // Second undo reverts 2 → None.
+        let op2 = history.newest_active().unwrap().unwrap();
+        engine.restore_asset(&op2.assets[0].before).unwrap();
+        history.mark_undone(&op2.id).unwrap();
+        assert_eq!(load_asset(dir.path(), &asset_id).rating, None);
+    }
+
+    #[test]
+    fn batch_tag_two_assets_one_operation_undo_reverts_both() {
+        let (dir, _h1, _h2, id1, id2) = setup_group_env();
+        let engine = QueryEngine::new(dir.path());
+
+        let results = engine.batch_tag(&[id1.clone(), id2.clone()], &["batchtag".to_string()], false);
+        assert!(results.iter().all(|r| r.is_ok()));
+        assert!(load_asset(dir.path(), &id1).tags.contains(&"batchtag".to_string()));
+        assert!(load_asset(dir.path(), &id2).tags.contains(&"batchtag".to_string()));
+
+        let history = HistoryStore::from_config(dir.path());
+        let ops = history.list(None).unwrap();
+        assert_eq!(ops.len(), 1, "batch of 2 = ONE operation");
+        assert_eq!(ops[0].assets.len(), 2);
+
+        // Undo restores both.
+        let op = &ops[0];
+        for delta in &op.assets {
+            engine.restore_asset(&delta.before).unwrap();
+        }
+        history.mark_undone(&op.id).unwrap();
+        assert!(!load_asset(dir.path(), &id1).tags.contains(&"batchtag".to_string()));
+        assert!(!load_asset(dir.path(), &id2).tags.contains(&"batchtag".to_string()));
+    }
+
+    #[test]
+    fn undo_skips_changed_asset_without_force_restores_with_force() {
+        let (dir, asset_id) = setup_tag_env();
+        let engine = QueryEngine::new(dir.path());
+        engine.set_rating(&asset_id, Some(3)).unwrap();
+
+        let history = HistoryStore::from_config(dir.path());
+        let op = history.newest_active().unwrap().unwrap();
+        let delta = &op.assets[0];
+
+        // Simulate a later edit: current state now differs from `after`.
+        engine.set_rating(&asset_id, Some(1)).unwrap();
+        let current = load_asset(dir.path(), &asset_id);
+        let changed_since = current != delta.after;
+        assert!(changed_since, "asset changed since the recorded operation");
+
+        // Without --force: skip (we just assert the conflict detection here).
+        // With --force: restore anyway.
+        engine.restore_asset(&delta.before).unwrap();
+        assert_eq!(load_asset(dir.path(), &asset_id).rating, None);
+    }
+
+    #[test]
+    fn doctor_clean_after_undo() {
+        let (dir, asset_id) = setup_tag_env();
+        let engine = QueryEngine::new(dir.path());
+        engine.set_rating(&asset_id, Some(4)).unwrap();
+
+        let history = HistoryStore::from_config(dir.path());
+        let op = history.newest_active().unwrap().unwrap();
+        engine.restore_asset(&op.assets[0].before).unwrap();
+        history.mark_undone(&op.id).unwrap();
+
+        // After restore, doctor must report no consistency issues.
+        let report = crate::doctor::run_doctor(dir.path(), None, false, |_, _| {}).unwrap();
+        assert!(report.healthy(), "doctor found issues after undo: {:?}", report.mismatched);
     }
 }

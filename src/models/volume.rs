@@ -100,7 +100,7 @@ impl Volume {
 ///
 /// `relative_path` always uses forward slashes for cross-platform consistency
 /// (paths are stored in SQLite and YAML sidecars, shared across OS).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileLocation {
     pub volume_id: Uuid,
     #[serde(serialize_with = "serialize_path_forward_slash")]

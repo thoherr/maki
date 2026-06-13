@@ -1598,3 +1598,248 @@ pub fn run_doctor_command(
     }
     Ok(())
 }
+
+/// Render the timestamp portion of a history line compactly
+/// (`YYYY-MM-DD HH:MM`), tolerating any RFC 3339 input.
+fn short_timestamp(ts: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|_| ts.to_string())
+}
+
+/// Human-readable list of the metadata fields that differ between two
+/// asset states, for `maki history <asset>`. Keeps it readable rather than
+/// a full structural diff.
+fn describe_asset_change(before: &maki::models::Asset, after: &maki::models::Asset) -> Vec<String> {
+    let mut out = Vec::new();
+    if before.rating != after.rating {
+        out.push(format!(
+            "rating {} → {}",
+            before.rating.map(|r| r.to_string()).unwrap_or_else(|| "—".into()),
+            after.rating.map(|r| r.to_string()).unwrap_or_else(|| "—".into()),
+        ));
+    }
+    if before.color_label != after.color_label {
+        out.push(format!(
+            "label {} → {}",
+            before.color_label.clone().unwrap_or_else(|| "—".into()),
+            after.color_label.clone().unwrap_or_else(|| "—".into()),
+        ));
+    }
+    if before.name != after.name {
+        out.push(format!(
+            "name {} → {}",
+            before.name.clone().unwrap_or_else(|| "—".into()),
+            after.name.clone().unwrap_or_else(|| "—".into()),
+        ));
+    }
+    if before.description != after.description {
+        out.push("description changed".to_string());
+    }
+    if before.created_at != after.created_at {
+        out.push(format!(
+            "date {} → {}",
+            before.created_at.to_rfc3339(),
+            after.created_at.to_rfc3339(),
+        ));
+    }
+    if before.tags != after.tags {
+        let bset: std::collections::HashSet<&String> = before.tags.iter().collect();
+        let aset: std::collections::HashSet<&String> = after.tags.iter().collect();
+        let added: Vec<&str> = after.tags.iter().filter(|t| !bset.contains(t)).map(|s| s.as_str()).collect();
+        let removed: Vec<&str> = before.tags.iter().filter(|t| !aset.contains(t)).map(|s| s.as_str()).collect();
+        if !added.is_empty() {
+            out.push(format!("tags +[{}]", added.join(", ")));
+        }
+        if !removed.is_empty() {
+            out.push(format!("tags -[{}]", removed.join(", ")));
+        }
+    }
+    out
+}
+
+/// Extracted body of `Commands::Undo`.
+pub fn run_undo_command(
+    dry_run: bool,
+    force: bool,
+    json: bool,
+    log: bool,
+) -> anyhow::Result<()> {
+    let catalog_root = maki::config::find_catalog_root()?;
+    let history = maki::history::HistoryStore::from_config(&catalog_root);
+    let engine = QueryEngine::new(&catalog_root);
+
+    let op = match history.newest_active()? {
+        Some(op) => op,
+        None => {
+            if json {
+                println!("{}", serde_json::json!({ "undone": false, "reason": "nothing to undo" }));
+            } else {
+                println!("Nothing to undo.");
+            }
+            return Ok(());
+        }
+    };
+
+    let store = MetadataStore::new(&catalog_root);
+
+    let mut restored: Vec<String> = Vec::new();
+    let mut conflicted: Vec<String> = Vec::new();
+    let mut any_pending_xmp = false;
+
+    for delta in &op.assets {
+        // Resolve the asset's CURRENT state. If it can't be loaded
+        // (sidecar gone), treat it as a conflict — we won't silently
+        // recreate it here.
+        let uuid: uuid::Uuid = match delta.asset_id.parse() {
+            Ok(u) => u,
+            Err(_) => {
+                conflicted.push(delta.asset_id.clone());
+                continue;
+            }
+        };
+        let current = store.load(uuid).ok();
+        let changed_since = match &current {
+            Some(cur) => cur != &delta.after,
+            None => true,
+        };
+
+        if changed_since && !force {
+            conflicted.push(delta.asset_id.clone());
+            if log {
+                eprintln!("  {} — changed since this edit; skipped (use --force)", &delta.asset_id[..8.min(delta.asset_id.len())]);
+            }
+            continue;
+        }
+
+        if delta.before.recipes.iter().any(|r| {
+            r.location.relative_path.extension().and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("xmp")).unwrap_or(false)
+        }) {
+            any_pending_xmp = true;
+        }
+
+        if !dry_run {
+            engine.restore_asset(&delta.before)?;
+        }
+        restored.push(delta.asset_id.clone());
+        if log {
+            eprintln!("  {} — restored", &delta.asset_id[..8.min(delta.asset_id.len())]);
+        }
+    }
+
+    // Mark undone only when we actually restored something and left no
+    // unforced conflicts behind.
+    let will_mark = !dry_run && !restored.is_empty() && conflicted.is_empty();
+    if will_mark {
+        history.mark_undone(&op.id)?;
+    }
+
+    if json {
+        let report = serde_json::json!({
+            "undone": will_mark,
+            "dry_run": dry_run,
+            "operation": {
+                "id": op.id,
+                "command": op.command,
+                "summary": op.summary,
+                "timestamp": op.timestamp,
+            },
+            "restored": restored,
+            "conflicts": conflicted,
+            "writeback_pending": any_pending_xmp && !dry_run,
+        });
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    let prefix = if dry_run { "Would undo" } else { "Undid" };
+    println!(
+        "{prefix}: {} ({}, {} asset(s)) [from {}]",
+        op.summary,
+        op.command,
+        restored.len(),
+        short_timestamp(&op.timestamp),
+    );
+    if !conflicted.is_empty() {
+        println!(
+            "  {} asset(s) changed since this edit — skipped{}",
+            conflicted.len(),
+            if force { " (unexpected with --force)" } else { "; re-run with --force to override" },
+        );
+        if !force && !dry_run {
+            println!("  Operation left in place (not marked undone).");
+        }
+    }
+    if any_pending_xmp && !dry_run && !restored.is_empty() {
+        println!("  Run `maki writeback` to propagate the restored values to .xmp files.");
+    }
+    Ok(())
+}
+
+/// Extracted body of `Commands::History`.
+pub fn run_history_command(
+    asset: Option<String>,
+    limit: usize,
+    json: bool,
+) -> anyhow::Result<()> {
+    let catalog_root = maki::config::find_catalog_root()?;
+    let history = maki::history::HistoryStore::from_config(&catalog_root);
+
+    match asset {
+        Some(prefix) => {
+            let catalog = Catalog::open(&catalog_root)?;
+            let full_id = catalog
+                .resolve_asset_id(&prefix)?
+                .ok_or_else(|| anyhow::anyhow!("no asset found matching '{prefix}'"))?;
+            let ops = history.list_for_asset(&full_id, Some(limit))?;
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&ops)?);
+                return Ok(());
+            }
+
+            if ops.is_empty() {
+                println!("No edit history for {}.", &full_id[..8.min(full_id.len())]);
+                return Ok(());
+            }
+            println!("History for {} ({} operation(s)):", &full_id[..8.min(full_id.len())], ops.len());
+            for op in &ops {
+                let changes = op
+                    .assets
+                    .iter()
+                    .find(|d| d.asset_id == full_id)
+                    .map(|d| describe_asset_change(&d.before, &d.after))
+                    .unwrap_or_default();
+                let detail = if changes.is_empty() {
+                    op.summary.clone()
+                } else {
+                    changes.join("; ")
+                };
+                println!("  {}  {:<11} {detail}", short_timestamp(&op.timestamp), op.command);
+            }
+        }
+        None => {
+            let ops = history.list(Some(limit))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&ops)?);
+                return Ok(());
+            }
+            if ops.is_empty() {
+                println!("No edit history.");
+                return Ok(());
+            }
+            println!("Recent edits ({} operation(s)):", ops.len());
+            for op in &ops {
+                println!(
+                    "  {}  {:<11} {}  ({} asset(s))",
+                    short_timestamp(&op.timestamp),
+                    op.command,
+                    op.summary,
+                    op.assets.len(),
+                );
+            }
+        }
+    }
+    Ok(())
+}

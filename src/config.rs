@@ -661,6 +661,39 @@ impl Default for TrashConfig {
     }
 }
 
+/// Edit-history journal configuration (`maki undo` / `maki history`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HistoryConfig {
+    /// When true (default), field-level metadata edits (rating, label,
+    /// description, name, date, tag add/remove/clear — single and batch)
+    /// are recorded as undoable operations in `<catalog_root>/history/`.
+    /// Set to false to disable journaling entirely (no operations are
+    /// written; `maki undo` then has nothing to revert).
+    ///
+    /// The journal is a non-authoritative, prunable log — it is not a
+    /// sidecar (not source of truth) and not in `catalog.db` (not a
+    /// derived cache). It survives `rebuild-catalog`, is ignored by
+    /// `maki doctor`, and may be deleted freely (losing only the ability
+    /// to undo past edits).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// How many operations to keep. After each recorded operation the
+    /// journal is pruned to the newest `max_operations` files (older ones
+    /// — and any undone counterparts — are deleted).
+    #[serde(default = "default_history_max_operations")]
+    pub max_operations: usize,
+}
+
+fn default_history_max_operations() -> usize {
+    200
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        Self { enabled: true, max_operations: 200 }
+    }
+}
+
 /// XMP writeback configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct WritebackConfig {
@@ -828,6 +861,8 @@ pub struct CatalogConfig {
     #[serde(default)]
     pub trash: TrashConfig,
     #[serde(default)]
+    pub history: HistoryConfig,
+    #[serde(default)]
     pub cli: CliDefaults,
     #[serde(default)]
     pub group: GroupConfig,
@@ -850,6 +885,7 @@ impl Default for CatalogConfig {
             browse: BrowseConfig::default(),
             writeback: WritebackConfig::default(),
             trash: TrashConfig::default(),
+            history: HistoryConfig::default(),
             cli: CliDefaults::default(),
             group: GroupConfig::default(),
             watch: WatchConfig::default(),
@@ -1124,6 +1160,7 @@ max_edge = 1000
             browse: BrowseConfig::default(),
             writeback: WritebackConfig::default(),
             trash: TrashConfig::default(),
+            history: HistoryConfig::default(),
             cli: CliDefaults::default(),
             group: GroupConfig::default(),
             watch: WatchConfig::default(),
@@ -1278,6 +1315,7 @@ max_edge = 1000
             browse: BrowseConfig::default(),
             writeback: WritebackConfig::default(),
             trash: TrashConfig::default(),
+            history: HistoryConfig::default(),
             cli: CliDefaults::default(),
             group: GroupConfig::default(),
             watch: WatchConfig::default(),

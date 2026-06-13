@@ -16,7 +16,7 @@ pub enum RecipeType {
 }
 
 /// Processing instructions associated with a variant.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Recipe {
     pub id: Uuid,
     pub variant_hash: String,
