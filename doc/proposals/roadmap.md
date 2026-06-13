@@ -8,6 +8,23 @@ Current version: **v4.8.0** (2026-06-12)
 
 ## Active Proposals
 
+### v5 Horizon 3 — Reversibility & Reach
+
+The v5 arc following Horizons 1–2. Two arcs plus two outliers:
+**Reversibility** (edit history + undo, ANN index) continues the trust
+line; **Reach** (multi-machine, mobile/PWA, tethered) is the v5
+headline — the catalog escapes the single machine. Decided forks:
+bounded LIFO undo at operation granularity in a dedicated
+non-authoritative `<catalog>/history/` journal; multi-machine as a
+reconcile layer over the user's own transport, not a transport itself;
+ANN deferred until scale is a felt pain. See
+`doc/proposals/roadmap-v5-horizon3.md`.
+
+**Status:** Active — starting with the Reversibility arc (v4.9.x):
+edit-history journal + `AssetWriter` write-through (the choke point the
+codebase has wanted since the v4.5.15 divergence), then `maki undo` /
+`maki history`. Multi-machine (v5.0) is proposal-doc-gated.
+
 ### v4.6.x ff. Horizons — Trust Hardening & Foundation Rework
 
 The sequenced plan for the post-v4.5.17 cycle, derived from the June
