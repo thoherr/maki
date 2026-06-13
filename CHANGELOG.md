@@ -2,6 +2,47 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.9.0 (unreleased)
+
+Horizon 3, Reversibility arc (`doc/proposals/roadmap-v5-horizon3.md`):
+metadata edits become reversible, and — under the hood — every
+mutation now flows through a single write-through path, the choke
+point the codebase has wanted since the v4.5.15 YAML/SQLite
+divergence bug.
+
+### New: edit history + undo
+
+- **`maki undo [--dry-run] [--force]`** reverts the most recent
+  metadata operation (LIFO). An "operation" is one command or web
+  action and may touch many assets — a 500-asset batch tag undoes as
+  a single unit. Per-asset safety: if an asset changed since the
+  operation, it is skipped unless `--force`, so undo never silently
+  clobbers a later edit.
+- **`maki history [<asset>] [--limit N]`** lists recent operations,
+  or — for one asset — the field-level change each operation made
+  (`rating 2 → 4`, `tags +[landscape, sunset]`).
+- Scope: field-level edits (rating, label, description, name, date,
+  tag add/remove/clear, single and batch). Tag rename/split/delete,
+  structural operations (group/split/stack), redo, and a web undo UI
+  are planned follow-ons. `import` and `delete` are not undoable —
+  they have their own recovery (re-import is idempotent; delete is
+  trash-backed).
+- Undo restores the catalog and YAML sidecar; `.xmp` recipe files are
+  flagged pending so a subsequent `maki writeback` propagates the
+  reverted state to disk.
+
+### Internal: write-through choke point
+
+Metadata mutations now journal through one path at the query-engine
+layer, so CLI, web, and shell edits are all recorded and keep the
+YAML sidecar and SQLite catalog consistent by construction — no
+scattered write sites to forget. The history journal lives in
+`<catalog>/history/` as an independent, append-only, prunable log: it
+is neither source of truth (the sidecars) nor derived cache
+(catalog.db), survives `rebuild-catalog`, is ignored by `maki doctor`,
+and can be deleted at any time (losing only undo capability). Config:
+`[history] enabled` (default true) + `max_operations` (default 200).
+
 ## v4.8.0 (2026-06-12)
 
 Horizon 2 completion (`doc/proposals/roadmap-v4.6-horizons.md`) — the
