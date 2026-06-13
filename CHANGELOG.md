@@ -31,6 +31,17 @@ divergence bug.
   flagged pending so a subsequent `maki writeback` propagates the
   reverted state to disk.
 
+### Fixed
+
+- **Windows: `maki watch` and `maki refresh <path>` matched no files.**
+  Relative paths were computed from `strip_prefix` (backslash
+  separators on Windows) and compared against the catalog's
+  forward-slash-normalized `relative_path`, so the lookups never
+  matched — watch silently treated changed recipes/variants as new,
+  and path-mode refresh found nothing. Normalized to forward slashes
+  at all three lookup sites (same class as the v4.6.0 Windows trash
+  fix). Unix behavior is unchanged.
+
 ### Internal: write-through choke point
 
 Metadata mutations now journal through one path at the query-engine

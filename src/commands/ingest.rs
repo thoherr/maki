@@ -525,8 +525,14 @@ pub fn run_watch_command(
                         continue;
                     }
                 };
+                // Forward slashes regardless of platform: catalog
+                // relative_path is stored normalized (serialize_path_forward_slash),
+                // so the find_*_by_volume_and_path lookups below only match
+                // when we normalize here too. Without this, watch never
+                // matched changed recipes/variants on Windows (backslashes
+                // from strip_prefix) and silently treated them as new files.
                 let rel = match path.strip_prefix(&vol.mount_point) {
-                    Ok(r) => r.to_string_lossy().to_string(),
+                    Ok(r) => r.to_string_lossy().replace('\\', "/"),
                     Err(_) => continue,
                 };
                 let vol_id = vol.id.to_string();

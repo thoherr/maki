@@ -55,8 +55,13 @@ impl AssetService {
                 if !filter.is_recipe(ext) {
                     continue;
                 }
+                // Normalize to forward slashes — catalog relative_path is
+                // stored that way (serialize_path_forward_slash); without
+                // this the find_*_by_volume_and_path lookups miss on Windows
+                // (strip_prefix yields backslashes), so `maki refresh <path>`
+                // and watch-driven refresh found nothing to refresh.
                 let relative_path = match file_path.strip_prefix(&vol.mount_point) {
-                    Ok(rp) => rp.to_string_lossy().to_string(),
+                    Ok(rp) => rp.to_string_lossy().replace('\\', "/"),
                     Err(_) => continue,
                 };
                 if let Some((recipe_id, content_hash, variant_hash)) =
@@ -181,7 +186,7 @@ impl AssetService {
                         continue;
                     }
                     let relative_path = match file_path.strip_prefix(&vol.mount_point) {
-                        Ok(rp) => rp.to_string_lossy().to_string(),
+                        Ok(rp) => rp.to_string_lossy().replace('\\', "/"),
                         Err(_) => continue,
                     };
                     if let Some((content_hash, _format)) =
