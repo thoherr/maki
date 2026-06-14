@@ -2,6 +2,21 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.8.1 (2026-06-14)
+
+Patch release. Windows-only fix for the v4.8.0 `maki watch` feature.
+
+### Fixed
+
+- **Windows: `maki watch` and `maki refresh <path>` matched no files.**
+  Relative paths were computed from `strip_prefix` (which yields
+  backslash separators on Windows) and compared against the catalog's
+  forward-slash-normalized `relative_path`, so the lookups never
+  matched — watch silently treated changed recipes and variants as
+  brand-new files, and path-mode refresh found nothing to refresh.
+  Normalized to forward slashes at all three lookup sites (same class
+  as the v4.6.0 Windows trash fix). Unix behavior is unchanged.
+
 ## v4.8.0 (2026-06-12)
 
 Horizon 2 completion (`doc/proposals/roadmap-v4.6-horizons.md`) — the
