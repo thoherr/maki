@@ -285,6 +285,23 @@
             hide();
         }
 
+        // Selecting a suggestion COMPLETES it into the input rather than
+        // committing it as a chip — so hierarchical tags can be extended
+        // (type "person|ens", pick "person|ensemble|band", then keep
+        // typing "|Metallica" before committing with Enter). Mirrors the
+        // subfolder picker in this dialog (drill, don't commit) and is the
+        // right rule for tags specifically: any tag can gain a deeper
+        // level, so a "leaf → commit" shortcut would defeat the purpose.
+        // Commit stays an explicit Enter (on un-highlighted input) or comma.
+        function completeInput(t) {
+            inputEl.value = t;
+            inputEl.focus();
+            inputEl.setSelectionRange(t.length, t.length);
+            // Re-show so deeper descendants (if any) are offered; if none,
+            // the tag itself is shown and Enter then commits it.
+            showSuggestions(t);
+        }
+
         function escHtml(s) {
             return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
         }
@@ -331,7 +348,7 @@
                 }
                 div.onmousedown = function(e) {
                     e.preventDefault();
-                    addTag(t);
+                    completeInput(t);
                 };
                 acEl.appendChild(div);
             });
@@ -369,10 +386,18 @@
             } else if (e.key === 'Enter') {
                 e.preventDefault();
                 if (open && acIndex >= 0) {
-                    addTag(items[acIndex].getAttribute('data-tag'));
+                    // Enter on a highlighted suggestion completes it into the
+                    // input (does not commit) — a second Enter commits.
+                    completeInput(items[acIndex].getAttribute('data-tag'));
                 } else if (this.value.trim()) {
                     addTag(this.value);
                 }
+            } else if (e.key === 'Tab' && open) {
+                // Tab completes the highlighted (or first) suggestion into
+                // the input without committing — same as the subfolder picker.
+                e.preventDefault();
+                var idx = acIndex >= 0 ? acIndex : 0;
+                completeInput(items[idx].getAttribute('data-tag'));
             } else if (e.key === ',') {
                 // Comma also commits — matches the old free-text input UX
                 // and aligns with how the CLI parses `--add-tag` lists.
