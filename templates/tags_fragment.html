@@ -54,6 +54,18 @@
 
         function tagToDisplay(t) { return t; }
 
+        // Selecting a suggestion completes it into the input and keeps the
+        // dropdown open (offering deeper descendants) so hierarchical tags
+        // can be extended before committing; the form submit (Enter on
+        // un-highlighted input, or the Add button) is what actually adds
+        // the tag. Matches the import-dialog tag picker.
+        function completeInput(t) {
+            input.value = tagToDisplay(t);
+            input.focus();
+            input.setSelectionRange(input.value.length, input.value.length);
+            showSuggestions(input.value);
+        }
+
         function showSuggestions(query) {
             query = query.toLowerCase();
             var queryStorage = query.replace(/>/g, '|');
@@ -96,9 +108,7 @@
                 }
                 div.addEventListener('mousedown', function(e) {
                     e.preventDefault();
-                    input.value = tagToDisplay(t);
-                    ac.style.display = 'none';
-                    acIndex = -1;
+                    completeInput(t);
                 });
                 ac.appendChild(div);
             });
@@ -134,10 +144,13 @@
                 acIndex = Math.max(acIndex - 1, 0);
                 highlight(acIndex);
             } else if (e.key === 'Enter' && acIndex >= 0 && items[acIndex]) {
+                // Complete into the input; a second Enter (un-highlighted)
+                // submits the form to actually add the tag.
                 e.preventDefault();
-                input.value = tagToDisplay(items[acIndex].getAttribute('data-tag'));
-                ac.style.display = 'none';
-                acIndex = -1;
+                completeInput(items[acIndex].getAttribute('data-tag'));
+            } else if (e.key === 'Tab' && ac.style.display === 'block' && items.length > 0) {
+                e.preventDefault();
+                completeInput(items[acIndex >= 0 ? acIndex : 0].getAttribute('data-tag'));
             } else if (e.key === 'Escape') {
                 ac.style.display = 'none';
                 acIndex = -1;

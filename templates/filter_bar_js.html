@@ -310,7 +310,7 @@
             }
             div.onmousedown = function(e) {
                 e.preventDefault();
-                addTagAndSearch(t);
+                completeTagInput(t);
             };
             ac.appendChild(div);
         });
@@ -329,6 +329,21 @@
     function hideAutocomplete() {
         document.getElementById('tag-autocomplete').style.display = 'none';
         acIndex = -1;
+    }
+
+    // Selecting a suggestion completes it into the input and keeps the
+    // dropdown open (offering deeper descendants) rather than committing a
+    // filter chip + searching — so hierarchical tags can be extended
+    // before committing. Commit stays an explicit Enter on un-highlighted
+    // input. Matches the import-dialog and detail-page tag pickers. (The
+    // path-prefix span retains its own drill-to-parent click.)
+    function completeTagInput(t) {
+        var input = document.getElementById('tag-input');
+        if (!input) return;
+        input.value = t;
+        input.focus();
+        input.setSelectionRange(t.length, t.length);
+        showSuggestions(t);
     }
 
     var tagInput = document.getElementById('tag-input');
@@ -350,11 +365,16 @@
         } else if (e.key === 'Enter') {
             e.preventDefault();
             if (acIndex >= 0 && items[acIndex]) {
-                addTagAndSearch(items[acIndex].getAttribute('data-tag'));
+                // Complete into the input (don't commit); a second Enter on
+                // un-highlighted input adds the filter chip and searches.
+                completeTagInput(items[acIndex].getAttribute('data-tag'));
             } else {
                 var val = this.value.trim();
                 if (val) addTagAndSearch(val);
             }
+        } else if (e.key === 'Tab' && ac.style.display === 'block' && items.length > 0) {
+            e.preventDefault();
+            completeTagInput(items[acIndex >= 0 ? acIndex : 0].getAttribute('data-tag'));
         } else if (e.key === 'Escape') {
             hideAutocomplete();
         } else if (e.key === 'Backspace' && this.value === '') {
