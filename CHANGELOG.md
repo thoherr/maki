@@ -2,7 +2,7 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## v4.9.0 (unreleased)
+## v4.9.0 (2026-06-23)
 
 Horizon 3, Reversibility arc (`doc/proposals/roadmap-v5-horizon3.md`):
 metadata edits become reversible, and — under the hood — every
@@ -31,16 +31,23 @@ divergence bug.
   flagged pending so a subsequent `maki writeback` propagates the
   reverted state to disk.
 
-### Fixed
+### Changed
 
-- **Windows: `maki watch` and `maki refresh <path>` matched no files.**
-  Relative paths were computed from `strip_prefix` (backslash
-  separators on Windows) and compared against the catalog's
-  forward-slash-normalized `relative_path`, so the lookups never
-  matched — watch silently treated changed recipes/variants as new,
-  and path-mode refresh found nothing. Normalized to forward slashes
-  at all three lookup sites (same class as the v4.6.0 Windows trash
-  fix). Unix behavior is unchanged.
+- **Tag autocomplete completes into the input instead of committing.**
+  In all three tag pickers — the import dialog, the browse filter bar,
+  and the asset detail page — selecting a suggestion (click, Tab, or
+  Enter on a highlighted item) now fills the input with that tag and
+  keeps the dropdown open, so a hierarchical tag can be extended (type
+  `person|ens`, pick `person|ensemble|band`, then add `|Metallica`)
+  before committing. Committing stays an explicit Enter on
+  un-highlighted input (or comma in the import dialog). Trade-off: a
+  plain tag that is exactly what you want now takes one extra Enter.
+
+### Dependencies
+
+- Refreshed all in-semver dependency versions (openssl 0.10.81,
+  tokio/hyper/http/chrono/regex/time patches). The RUSTSEC advisory
+  check is clean.
 
 ### Internal: write-through choke point
 
@@ -53,6 +60,21 @@ is neither source of truth (the sidecars) nor derived cache
 (catalog.db), survives `rebuild-catalog`, is ignored by `maki doctor`,
 and can be deleted at any time (losing only undo capability). Config:
 `[history] enabled` (default true) + `max_operations` (default 200).
+
+## v4.8.1 (2026-06-14)
+
+Patch release. Windows-only fix for the v4.8.0 `maki watch` feature.
+
+### Fixed
+
+- **Windows: `maki watch` and `maki refresh <path>` matched no files.**
+  Relative paths were computed from `strip_prefix` (which yields
+  backslash separators on Windows) and compared against the catalog's
+  forward-slash-normalized `relative_path`, so the lookups never
+  matched — watch silently treated changed recipes and variants as
+  brand-new files, and path-mode refresh found nothing to refresh.
+  Normalized to forward slashes at all three lookup sites (same class
+  as the v4.6.0 Windows trash fix). Unix behavior is unchanged.
 
 ## v4.8.0 (2026-06-12)
 
