@@ -20,10 +20,13 @@ reconcile layer over the user's own transport, not a transport itself;
 ANN deferred until scale is a felt pain. See
 `doc/proposals/roadmap-v5-horizon3.md`.
 
-**Status:** Active — starting with the Reversibility arc (v4.9.x):
-edit-history journal + `AssetWriter` write-through (the choke point the
-codebase has wanted since the v4.5.15 divergence), then `maki undo` /
-`maki history`. Multi-machine (v5.0) is proposal-doc-gated.
+**Status:** Active — the Reversibility arc opened with **v4.9.0**
+(2026-06-23): the edit-history journal + write-through choke point (the
+one the codebase has wanted since the v4.5.15 divergence) + `maki undo`
+/ `maki history` for field-level edits. Remaining Reversibility work:
+undo for tag rename/split/delete and structural ops, redo, and the web
+undo-toast / history panel. Then the Reach arc — multi-machine (v5.0),
+which is proposal-doc-gated. ANN deferred until scale is a felt pain.
 
 ### v4.6.x ff. Horizons — Trust Hardening & Foundation Rework
 
@@ -35,7 +38,7 @@ sidecar write locking. Horizon 2 (v4.7–4.8): XMP writer rework (gates
 the Tier-1 IPTC/EXIF write-back below), tag provenance, FTS5, unified
 search pipeline. See `doc/proposals/roadmap-v4.6-horizons.md`.
 
-**Status:** Active — Horizon 1 shipped as **v4.6.0**, Horizon 2 core shipped as **v4.7.0** (both 2026-06-11). Horizon 2 completion implemented on main (June 2026, unreleased): web `-person:` / export-zip `-collection:` gaps closed, web provenance badges on machine-added tag chips, `maki watch` (poll-based auto-import with copy-stability debounce), `maki auto-stack` *(Pro)* (similarity clustering via union-find over top-K neighbour edges), and `maki writeback --embed` *(Pro)* — embedded-XMP-in-JPEG write-back v1 with trash-preserved originals and content-hash identity migration (IPTC IIM / EXIF IFD / TIFF deferred). **Horizon 2 is complete**; Horizon 3 (undo/history, multi-machine, ANN embeddings, mobile/PWA, tethered, print) is next.
+**Status:** ✅ Complete and released. Horizon 1 → **v4.6.0**; Horizon 2 → **v4.7.0** (core: FTS5, XMP writer rework, tag provenance, unified search) + **v4.8.0** / **v4.8.1** (completion: `maki watch`, `maki auto-stack`, `maki writeback --embed`, web provenance badges, the `-person:` / `-collection:` web gaps, Windows path fix). Per-version detail in the Completed list below and `doc/proposals/roadmap-v4.6-horizons.md`. Succeeded by the v5 Horizon 3 plan above.
 
 **Complexity:** Per-item, see the document.
 
@@ -52,21 +55,9 @@ Produce the MAKI user manual in English and German from a single source using in
 
 ## Tier 1 — High Value
 
-### Auto-Stack by Similarity (Catalog-wide) *(Pro)*
-
-Discover natural visual clusters across the catalog and propose stacks. Phase 3 of the similarity browse proposal (Phases 1–2 implemented in v4.0.2). See `archive/proposal-similarity-browse-and-grouping.md`.
-
-**Status:** Implemented on main (June 2026, unreleased) as `maki auto-stack [QUERY] [--threshold <50-99>] [--min-size <N>] [--apply]`. Report-only by default; `--apply` creates the stacks. Greedy connected-components over the similarity graph — top-20 neighbour search per candidate against the in-memory `EmbeddingIndex` (no O(N²) matrix), union-find over edges where similarity ≥ threshold (default 85%). Candidates are unstacked assets with a stored embedding for the active `[ai] model`; existing stacks are never disturbed. Pick: highest rating, then earliest created_at, then lowest asset ID. Safety: thresholds below 50% refused; warns when one cluster swallows more than half of all candidates. See `doc/manual/reference/03-organize-commands.md#maki-auto-stack`.
-
-**Complexity:** Medium. Embedding infrastructure and stacking exist; needs clustering algorithm and CLI command.
-
-### Watch Mode
-
-Auto-import and sync on filesystem changes. After a CaptureOne session, new files appear in the catalog without manual `maki import`.
-
-**Status:** Implemented on main (June 2026, unreleased) as `maki watch [PATHS...] [--volume <label>] [--interval <seconds>] [--once]`. Poll-based with (size, mtime) stability debounce (two consecutive identical scans before acting); new stable files run through the import pipeline, changed tracked `.xmp` recipes through the refresh pipeline, deletions ignored. `[watch]` config section (`poll_seconds`, `exclude` additive to `[import] exclude`). fsevents/inotify backends remain optional future work. See `doc/manual/reference/02-ingest-commands.md#maki-watch`.
-
-**Complexity:** Medium. Core import/refresh logic exists; needs a polling loop and file-change detection.
+> Auto-Stack, Watch Mode, and IPTC/EXIF Write-Back v1 (XMP-in-JPEG)
+> shipped in **v4.8.0** — see the Completed list. `fsevents`/`inotify`
+> backends for watch remain optional future work.
 
 ### GPU-Accelerated Embeddings (Linux/Windows) *(Pro)*
 
@@ -81,17 +72,18 @@ SigLIP embedding generation on CPU is slow for large catalogs. GPU backends make
 
 **Complexity:** Low for adding providers (code pattern exists), high for testing/packaging.
 
-### IPTC/EXIF Write-Back *(Pro)*
+### Embedded Write-Back v2 — IPTC/EXIF + TIFF *(Pro)*
 
-Write metadata changes back into JPEG/TIFF files directly, not just XMP sidecars. Some workflows and stock photo submissions require embedded metadata.
+v1 (XMP-in-JPEG) shipped in **v4.8.0** as `maki writeback --embed`. The
+remaining surface, deferred there:
 
-**Status:** v1 implemented (XMP-in-JPEG). `maki writeback --embed` writes rating, tags, description, and label into the JPEG's embedded APP1 XMP segment (segment-level splice on top of the v4.7 locate-and-splice XMP writers), preserves the original in the catalog trash, verifies before an atomic swap, and migrates the variant's content hash across catalog + sidecar + previews. Deferred: IPTC IIM (APP13) and EXIF IFD fields (modern tools — Lightroom, C1, stock agencies — read XMP), TIFF support (IFD rewriting is real binary surgery), ExtendedXMP multi-segment packets.
+- IPTC IIM (APP13) keywords + caption / urgency (urgency mapped from rating)
+- EXIF IFD fields
+- TIFF support (IFD rewriting is real binary surgery)
+- ExtendedXMP multi-segment packets (>64 KB)
 
-**Scope:**
-- `maki writeback --embed` writes rating, tags, description, label into file's embedded metadata ✔ (XMP packet)
-- IPTC keywords, caption/description, urgency (mapped from rating) — deferred
-- Preserves existing embedded metadata; only updates DAM-managed fields ✔
-- Re-hashes file after write, updates variant content hash ✔
+Lower priority: modern tools (Lightroom, Capture One, stock agencies)
+read the XMP packet that v1 already writes.
 
 **Complexity:** High. Modifying binary file metadata without corruption requires careful handling.
 
@@ -103,13 +95,18 @@ Write metadata changes back into JPEG/TIFF files directly, not just XMP sidecars
 
 The web UI works on mobile but isn't optimized. Combined with read-only multi-user access, this enables "show photos to clients on iPad" and remote browsing from any device on the LAN.
 
+The safe-sharing half shipped in **v4.6.0**: `serve --read-only`
+(method-based write guard) and HTTP basic auth (`[serve]
+username`/`password`). Remaining is the frontend polish:
+
 **Scope:**
 - Responsive layout improvements: touch-friendly grid, swipe navigation in lightbox
 - Collapsible filter bar for small screens
-- `--read-only` mode (disables all write endpoints) for safe sharing
-- Optional basic auth (`[serve] username/password` in `maki.toml`)
+- PWA manifest + service worker for an installable, offline-tolerant browser
+- ~~`--read-only` mode~~ ✔ v4.6.0
+- ~~Optional basic auth~~ ✔ v4.6.0
 
-**Complexity:** Medium. CSS/layout work plus read-only mode (which is mostly route-level guards).
+**Complexity:** Medium. Now mostly CSS/layout work — the access-control groundwork is done.
 
 ### Advanced Contact Sheet Templates *(Pro)*
 
@@ -148,16 +145,11 @@ Surface drive health and verification staleness proactively.
 
 ## Tier 3 — Polish & Future
 
-### Undo / Edit History
-
-Track metadata changes with timestamps for audit trail and undo capability.
-
-**Scope:**
-- `asset_history` table: asset_id, field, old_value, new_value, timestamp, source
-- `maki history <asset-id>` and `maki undo <asset-id>`
-- Web UI history panel on detail page
-
-**Complexity:** High.
+> Undo / Edit History shipped in **v4.9.0** (`maki undo` / `maki
+> history`, the v5 Horizon 3 Reversibility arc — built as an
+> independent `<catalog>/history/` journal, not the originally-sketched
+> `asset_history` table). Remaining: rename/split/structural-op undo,
+> redo, and the web history panel — tracked under Horizon 3 above.
 
 ### Tethered Shooting
 
@@ -243,3 +235,8 @@ Design documents for completed features are in `doc/proposals/archive/`. Key mil
 - **v4.5.15**: XMP roundtrip cleanup follow-on, surfaced by real-world testing of v4.5.14. Three related fixes: (1) **`insert_recipe` now preserves `pending_writeback`** — the `INSERT OR REPLACE` in `src/catalog/recipe_crud.rs` was omitting that column, so the schema default (`NOT NULL DEFAULT 0`) kicked in on every catalog write and silently reset SQLite's pending flag while YAML kept `pending_writeback: true`. Symptom: `maki writeback --asset <id>` reports "0 written" while YAML says pending, web UI shows no pending indicator, edits never reach disk. User diagnosed by JOINing recipes against variants by asset_id and showing the divergence. Fix: include `pending_writeback` in the column list so state survives every catalog write. (2) **Sidecar-wins gate extended to `reimport_metadata_inner`** in `src/query.rs` — the path behind `maki refresh --reimport` and the web UI's "Reload metadata" button. v4.5.14 added the gate to the two `refresh.rs` loops but missed this third copy of the same iterate-JPEG-locations-and-read-embedded-XMP pattern. Without the gate, "Reload metadata" re-injected the JPEG's stale flat keywords just like the unfixed refresh path. Docstring on `Catalog::asset_has_recipe` now lists every call site so a future fourth site is easy to wire correctly. (3) **`maki writeback --force` flag** (and matching web Maintain dialog checkbox) — escape hatch for cases where the catalog's pending state is wrong (cleared by a stale `insert_recipe`, or simply not flagged because the user wants to re-canonicalise after an upgrade). Distinct from `--all`: `--all` expands the scope to every recipe in the catalog; `--force` keeps the explicit scope (`--asset`/query/`--volume`) but ignores the pending-flag filter. Implementation: new SQL branch in `engine.writeback` matching `--all`'s shape but with the SCOPE still applied. Operator note documented in CHANGELOG: if your catalog already has YAML/SQLite divergence from pre-v4.5.15, run `maki rebuild-catalog --asset <id>` once after upgrading to re-sync SQLite from YAML; alternatively `maki writeback --asset <id> --force` re-writes regardless and clears pending in both stores. Tests: 813 + 252 standard, 933 + 285 pro (+1 lib `insert_recipe_preserves_pending_writeback_flag` verifies the schema-default clobber is gone; +1 CLI standard `refresh_reimport_skips_embedded_xmp_when_sidecar_present` mirrors the v4.5.14 refresh-media test for the reimport path; +1 CLI pro `writeback_force_rewrites_non_pending_recipe` locks the `--force` semantics — plain writeback no-ops at "0 written", `--force` opt-in flows hit "already in sync" or write).
 - **v4.5.16**: Asset detail page UX patch on top of v4.5.15. The pending_writeback markers on the recipes block (↻ icons + the `pending` summary badge) used to be server-rendered once on page load and never refreshed, so editing a rating/tag/description/label didn't update them until the user reloaded the page. v4.5.15 fixed the catalog correctness side (`insert_recipe` now preserves the flag); v4.5.16 fixes the UI side. Mechanism: new partial `templates/recipes_fragment.html` + endpoint `GET /api/asset/{id}/recipes-fragment`; asset detail page wraps the existing inline render in `<div id="recipes-block" hx-get=".../recipes-fragment" hx-trigger="pending-changed from:body" hx-swap="innerHTML">`. Every per-asset metadata-edit endpoint (`set_rating`, `set_description`, `set_name`, `set_color_label`, `add_tags`, `remove_tag`, `clear_tags`) appends `HX-Trigger: pending-changed` to its success response via a shared `with_pending_trigger` helper. htmx fires the event on `document.body`, the recipes block listens and refreshes. The "Write back to XMP" button JS also fires the same event manually (instead of doing a full page reload as it used to) so the markers clear in place after a successful flush. `set_date` and the tags-page / rename / split / delete endpoints don't get the header — they don't mark anything pending, or they're not invoked from a detail page. Tests unchanged from v4.5.15 (813 + 252 standard, 933 + 285 pro) — the change is template wiring + response header, and adding an axum-test-harness for header assertions is out of scope here.
 - **v4.5.17**: Workflow-driven release closing two threads: (1) the XMP-writeback hardening started in v4.5.14–v4.5.16 finally reaches a clean end-state where catalogs with years of accumulated escape damage roundtrip cleanly through `maki writeback --all --force`; (2) `maki status` gets a per-volume pending-writeback breakdown plus a missing-previews count plus alignment fixes on the action-hints. Plus the import dialog finally treats dry-run as a first-class job (progress, re-attach, minimize-to-toast) and the CI Linux runner stops dying on disk pressure. **XMP runaway-escape root fix**: `update_tags_in_string` and `update_hierarchical_in_string` captured raw `<rdf:li>` text via regex and never decoded XML entity references — on each rewrite, `xml_escape` re-escaped the captured text, turning `&amp;` into `&amp;amp;` and accumulating one layer per writeback. Band names like `Bobby & the BigTones` ended up as `Bobby &amp;amp;amp;amp;amp;amp;amp;amp; the BigTones` after eight runs. New `xml_unescape` helper (inverse of `xml_escape`, with `&amp;` decoded LAST to preserve nested-encoding semantics) applied at both `li_re.captures_iter` sites. The streaming `parse_xmp` reader was already correct (quick-xml's `Event::Text::unescape()` decodes entities); the bug was isolated to the regex-based write paths. **`--force` flag**: `maki writeback --force` rebuilds the `dc:subject` + `lr:hierarchicalSubject` blocks from catalog state, discarding any pre-existing XMP entry that isn't in the catalog. More aggressive than `--mirror-tags` — `--force` empties the blocks and re-adds catalog tags fresh, guaranteeing a clean rewrite regardless of what was on disk. Use when stale entries are stuck in a file that mirror-tags didn't catch (multi-layer escape leftovers, leaf-only entries in `lr:hierarchicalSubject` from years of multi-tool roundtrips, manually corrupted XMP). New SQL branch in `engine.writeback` ANDed with new `force` parameter on `writeback_process`; the remove-set is computed from the FULL existing XMP keyword list rather than the catalog-diff used by mirror-tags. Web Maintain dialog gets a matching checkbox. **`update_hierarchical_subjects` leaf-only removal fix**: the function filtered BOTH `tags_to_add` AND `tags_to_remove` to pipe-containing tags only. For adds that's correct (flat tags don't belong in `lr:hierarchicalSubject`). For removes it silently kept leaf-only entries — `Bavaria`, `Konzert`, multi-escape leftovers in leaf form, anything mirror-tags/force legitimately marked for removal. Fix: drop the pipe filter on `hier_remove`; the add side keeps its filter. Surfaced by user on `Z91_4714.xmp` where `Bavaria` and a 2-layer-escape band-name leftover survived multiple `--force` runs until this fix. **`maki status` per-volume pending breakdown**: when pending writebacks span more than one volume (or a multi-volume catalog has any pending), status nests `└─ N on <volume label> (online|offline)` lines under the existing summary. The data was already loaded — `gather()` in `src/status.rs` runs `catalog.list_pending_writeback_recipes(None)` once and iterates the full list to bucket into online/offline counts; the same pass now also accumulates into a `HashMap<String, usize>` keyed by volume_id. New `PendingByVolume` struct + `pending_writebacks_by_volume: Vec<PendingByVolume>` field on `PendingWork`, sorted count-desc then label-asc. Display gate: only shown for catalogs with >1 registered volume (single-volume catalogs would just repeat the top-level summary). **Missing previews count**: new pending lines `✗ N asset(s) missing previews → maki generate-previews` and the smart-preview variant. Computed by walking `<catalog_root>/{previews,smart-previews}` once each to build a `HashSet<String>` of stems on disk, then SQL-querying expected `best_variant_hash` from `assets` and counting those NOT in the present-set. Smart-preview coverage reported only when the directory exists (users who haven't opted in aren't shown the line). Two extra `read_dir` walks of sharded directories — modest cost on top of the cleanup_dry pass status already runs. **Hint alignment**: removed fragile fixed-width padding (`{:<11}`, `{:<23}`, `{:<24}`) on every `→ maki <command>` line. The padding assumed specific number widths and broke as soon as numbers grew (e.g. 6-digit pending counts pushed arrows out by a different amount on each line). Hints now sit two spaces after the text, robust to any digit count. **Import dry-run as first-class job**: previously the dry-run path ran synchronously in `spawn_blocking`, returning the final summary as the HTTP response. Closing the modal mid-dry-run lost everything; re-opening didn't re-attach; no per-file progress during the wait. Now dry-run goes through the same `JobRegistry` machinery as live import — same SSE progress stream, same minimize-to-toast, same `reattachIfRunning` flow. Terminal payload carries `dry_run: true` so the result phase shows "Would import N" rather than "Imported N", hides the "Browse imported" link, and shows a "Run for real" button that re-launches the same form parameters as a live import. Server-side: removed the early `if dry_run { ... }` branch in `start_import_api` and the now-unused `run_import_dry` helper. Client-side: factored both button handlers into one `launchImport(dryRun)` helper. **CI Linux disk-space**: the Linux job tipped over with `IOException: No space left on device` during the cache restore step — default `ubuntu-latest` runners ship with ~14 GB free, which a full Rust build of MAKI (default features + `--features ai`, plus a fat `target/` cache restore) was exhausting. Added `jlumbroso/free-disk-space@main` step gated by `if: runner.os == 'Linux'` that frees ~25 GB by purging OS-bundled Android SDK / .NET / Haskell / cached Docker images. **Tagging guide**: two more "Thinking in facets" worked examples alongside events and color — *striking objects that span subject and event* (fireworks, campfire, Maibaum) with concrete hierarchy placements (and a note on distinguishing the Bavarian Maibaum from the British ribbon-dance maypole) plus five more neighbours (parade float, costume, christmas tree, lantern, sparkler); and *when not to add a tag — "action"* showing how an obvious-looking word splits into three different questions (activity in frame, motion-quality qualifier, photo technique) and the right home for each. Tests: 822 + 252 standard, 942 + 286 pro (+9 lib / +2 CLI standard / +2 CLI pro from v4.5.16). Twelve commits accumulated locally before cutting; the trail is documented in CHANGELOG.
+- **v4.6.0**: Horizon 1 — trust hardening. `maki doctor` (sidecar↔SQLite consistency checker with `--repair`); trash/quarantine for destructive ops (`maki trash list/restore/empty`, `--no-trash`); `serve --read-only` + HTTP basic auth (`[serve] username/password`, `MAKI_SERVE_PASSWORD`); atomic + cross-process-locked sidecar writes; the first in-process axum web test harness; and the select-all/`text:`-filter fix. Tests: 854 + 254 standard, 971 + 288 pro.
+- **v4.7.0**: Horizon 2 core — foundation rework. FTS5 trigram free-text index (schema v9, substring-identical to the old LIKE scan, trigger-maintained); the XMP writer rework from regex surgery to a quick-xml locate-and-splice pipeline, with a new property-test suite that found and fixed three real quote-escaping bugs; tag provenance (schema v10 — `user`/`xmp-import`/`auto-tag`/`vlm`, `maki tag clear --source`, `show` annotations); and unified CLI/web search-filter resolution (`query/resolve.rs`, the drift made explicit). Tests: 891 + 255 + 7 standard, 1012 + 289 + 7 pro.
+- **v4.8.0**: Horizon 2 completion — workflow features. `maki watch` (poll-based auto-import with copy-stability debounce); `maki auto-stack` *(Pro)* (similarity clustering via union-find over top-K neighbour edges); `maki writeback --embed` *(Pro)* — embedded-XMP-in-JPEG write-back v1 with trash-preserved originals, verify-before-atomic-swap, and content-hash identity migration; web provenance badges on machine-added tag chips; and the `-person:` / export-zip `-collection:` exclude-filter gaps closed. Tests: 920 + 257 + 7 standard, 1052 + 299 + 7 pro.
+- **v4.8.1**: Windows hotfix. `maki watch` and `maki refresh <path>` computed relative paths via `strip_prefix` (backslashes on Windows) and never matched the catalog's forward-slash-normalized `relative_path` — watch treated changed files as new, path-mode refresh found nothing. Forward-slash normalization at the three lookup sites (same class as the v4.6.0 Windows trash fix).
+- **v4.9.0**: Horizon 3 — Reversibility arc opens. `maki undo` (LIFO, operation-granular, per-asset "changed since" safety) + `maki history`, built on a `<catalog>/history/` journal and a single write-through choke point at the query-engine layer (the structural fix wanted since the v4.5.15 divergence); tag autocomplete completes-into-input across all three pickers (import dialog, filter bar, detail page); and an in-semver dependency refresh (advisories clean). Tests: 933 + 258 + 7 standard, 1065 + 300 + 7 pro.

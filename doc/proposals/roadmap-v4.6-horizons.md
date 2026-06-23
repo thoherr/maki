@@ -1,5 +1,12 @@
 # Roadmap v4.6.x ff. — Trust Hardening, Foundation Rework, v5 Horizons
 
+> **Status: ✅ COMPLETE (historical record).** Horizon 1 shipped as
+> **v4.6.0** and Horizon 2 as **v4.7.0** (core) + **v4.8.0** / **v4.8.1**
+> (completion). Both horizons are fully released; see the Completed list
+> in `roadmap.md` and `CHANGELOG.md` for per-version detail. The v5 arc
+> that follows is `roadmap-v5-horizon3.md`. This document is retained as
+> the original plan for the cycle.
+
 Planning document for the development cycle following v4.5.17. Derived
 from the June 2026 QA loop (code metrics, DRY, SRP, and documentation
 audits) plus a gap analysis of the v4.5.x bug history.

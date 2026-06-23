@@ -200,14 +200,21 @@ part. Smallest audience — last, or only if asked for.
 
 ## Proposed release map
 
-| Release | Contents |
-|---|---|
-| **v4.9.0** | Edit-history journal + `AssetWriter` write-through; `maki undo` / `maki history` for field edits |
-| **v4.9.x** | Undo for tag rename/split/delete; web undo toast + history panel; (redo) |
-| **v5.0.0** | Multi-machine (after its proposal doc + go/no-go); the Reach headline |
-| **v5.x** | Mobile/PWA, tethered — interleaved |
-| **when felt** | ANN index (scale-triggered) |
-| **if asked** | Print |
+| Release | Contents | Status |
+|---|---|---|
+| **v4.9.0** | Edit-history journal + write-through choke point; `maki undo` / `maki history` for field edits | ✅ shipped 2026-06-23 |
+| **v4.9.x** | Undo for tag rename/split/delete; structural-op undo; web undo toast + history panel; (redo) | next |
+| **v5.0.0** | Multi-machine (after its proposal doc + go/no-go); the Reach headline | proposal-gated |
+| **v5.x** | Mobile/PWA, tethered — interleaved | planned |
+| **when felt** | ANN index (scale-triggered) | deferred |
+| **if asked** | Print | deferred |
+
+Progress: the Reversibility arc's foundation (the write-through choke
+point) and the `maki undo` / `maki history` commands landed in v4.9.0.
+The journal is built as the planned `<catalog>/history/` log with
+bounded LIFO undo at operation granularity — both decided forks held.
+What remains in the arc: extending undo past field edits (tag
+rename/split/delete, then structural ops), redo, and the web UI.
 
 Sequencing rationale: reversibility first — it is the natural
 continuation of the trust arc, the lowest-risk highest-value item, and
