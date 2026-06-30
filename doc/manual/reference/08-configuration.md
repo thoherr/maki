@@ -286,7 +286,7 @@ auto_tags = ["inbox", "unreviewed"]
 - **Type:** boolean
 - **Default:** `false`
 
-When `true`, import automatically generates smart previews (high-resolution, 2560px) alongside regular thumbnails. Equivalent to passing `--smart` on every `maki import` command. Smart preview dimensions are controlled by `[preview] smart_max_edge`.
+When `true`, import automatically generates smart previews (high-resolution, 2560px) alongside regular thumbnails. Equivalent to passing `--smart` on every `maki import` command. Smart preview dimensions are controlled by `[preview] smart_max_edge`. Also sets the initial checked-state of the "Smart previews" checkbox in the web UI import dialog.
 
 ```toml
 [import]
@@ -302,7 +302,7 @@ smart_previews = true
 
 When `true`, import automatically generates SigLIP image embeddings for visual similarity search alongside previews. Equivalent to passing `--embed` on every `maki import` command. Embeddings enable `maki auto-tag --similar` and the web UI "Find similar" button.
 
-Uses the model configured in `[ai] model`. Silently skips if the model is not downloaded. Non-image assets are skipped.
+Uses the model configured in `[ai] model`. Silently skips if the model is not downloaded. Non-image assets are skipped. Also sets the initial checked-state of the "Generate embeddings" checkbox in the web UI import dialog (`descriptions` does the same for the VLM "Generate descriptions" checkbox). The web defaults are read at server startup, so a `maki serve` restart is needed to pick up a config change.
 
 ```toml
 [import]

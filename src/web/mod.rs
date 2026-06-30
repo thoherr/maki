@@ -256,6 +256,15 @@ pub struct AppState {
     /// a Clear pill so the state is visible). Surfaced via
     /// `/api/build-info` and consumed by `browse.html`.
     pub remember_latest_filter: bool,
+    /// Default checked-state for the web import dialog's "Smart previews",
+    /// "Generate embeddings", and "Generate descriptions" checkboxes,
+    /// sourced from `[import] smart_previews` / `embeddings` /
+    /// `descriptions` (same fields the CLI import honors). Surfaced via
+    /// `/api/build-info`. Read at startup, like the other serve-time
+    /// config below.
+    pub import_smart_previews: bool,
+    pub import_embeddings: bool,
+    pub import_descriptions: bool,
     /// Safe-sharing mode: the guard middleware rejects every mutating
     /// (non-GET/HEAD) request with 403. Effective value is
     /// `--read-only` OR `[serve] read_only`. Surfaced via
@@ -352,6 +361,9 @@ impl AppState {
             slideshow_seconds: browse_cfg.slideshow_seconds.max(1),
             slideshow_loop: browse_cfg.slideshow_loop,
             remember_latest_filter: browse_cfg.remember_latest_filter,
+            import_smart_previews: cfg.import.smart_previews,
+            import_embeddings: cfg.import.embeddings,
+            import_descriptions: cfg.import.descriptions,
             read_only,
             basic_auth,
             verbosity,
@@ -416,6 +428,9 @@ impl AppState {
             slideshow_seconds: browse_cfg.slideshow_seconds.max(1),
             slideshow_loop: browse_cfg.slideshow_loop,
             remember_latest_filter: browse_cfg.remember_latest_filter,
+            import_smart_previews: cfg.import.smart_previews,
+            import_embeddings: cfg.import.embeddings,
+            import_descriptions: cfg.import.descriptions,
             read_only,
             basic_auth,
             verbosity,

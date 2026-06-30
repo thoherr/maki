@@ -43,6 +43,20 @@
             .catch(function() { buildInfoLoaded = true; });
     }
 
+    // Set the optional-step checkboxes from the [import] config defaults
+    // surfaced by /api/build-info. "Smart previews" is always available;
+    // embeddings/descriptions are also feature-gated (their labels stay
+    // hidden, and launchImport only sends them when ai/pro), so checking
+    // them on a build that lacks the feature is harmless.
+    function applyImportDefaults() {
+        var s = document.getElementById('import-smart');
+        if (s) s.checked = !!buildInfo.import_smart_previews;
+        var e = document.getElementById('import-embed');
+        if (e) e.checked = !!buildInfo.import_embeddings;
+        var d = document.getElementById('import-describe');
+        if (d) d.checked = !!buildInfo.import_descriptions;
+    }
+
     function showPhase(which) {
         pickPhase.style.display = which === 'pick' ? 'block' : 'none';
         formPhase.style.display = which === 'form' ? 'block' : 'none';
@@ -107,14 +121,12 @@
         // Reset form state
         document.getElementById('import-subfolder').value = '';
         importTagChips.clear();
-        // Reset post-import opt-in checkboxes; user re-checks each open.
-        var embedEl = document.getElementById('import-embed');
-        if (embedEl) embedEl.checked = false;
-        var descEl = document.getElementById('import-describe');
-        if (descEl) descEl.checked = false;
 
         loadProfiles();
-        loadBuildInfo();
+        // Reset the optional-step checkboxes to their configured defaults
+        // ([import] smart_previews / embeddings / descriptions) on every
+        // open, once build-info has resolved.
+        loadBuildInfo().then(applyImportDefaults);
 
         if (volId && volLabel) {
             showFormPhase(volId, volLabel);

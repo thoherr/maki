@@ -499,6 +499,29 @@ async fn build_info_reports_read_only() {
     assert_eq!(json["read_only"], true);
 }
 
+#[tokio::test]
+async fn build_info_reports_import_defaults_from_config() {
+    // The import dialog reads these to set its optional-step checkboxes;
+    // they must reflect [import] config. Default (no config) is false.
+    let srv = TestServer::new();
+    let (status, _, body) = srv.get("/api/build-info").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["import_smart_previews"], false);
+    assert_eq!(json["import_embeddings"], false);
+
+    // …and true when the config opts in.
+    let srv = TestServer::new_with(
+        false,
+        "[import]\nsmart_previews = true\nembeddings = true\n",
+    );
+    let (status, _, body) = srv.get("/api/build-info").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["import_smart_previews"], true, "body: {body}");
+    assert_eq!(json["import_embeddings"], true, "body: {body}");
+}
+
 #[test]
 fn base64_encode_matches_known_vectors() {
     // RFC 4648 test vectors plus the credential shape used by basic auth.

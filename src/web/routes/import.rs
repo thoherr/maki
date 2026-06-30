@@ -260,6 +260,12 @@ pub async fn build_info_api(
         "slideshow_seconds": state.slideshow_seconds,
         "slideshow_loop": state.slideshow_loop,
         "remember_latest_filter": state.remember_latest_filter,
+        // Default checked-state for the import dialog's optional-step
+        // checkboxes, from `[import]` config (the CLI honors the same
+        // fields). embeddings/descriptions are also feature-gated below.
+        "import_smart_previews": state.import_smart_previews,
+        "import_embeddings": state.import_embeddings,
+        "import_descriptions": state.import_descriptions,
         // Safe-sharing mode: the JS layer can hide edit affordances when
         // the server rejects mutations anyway (enforced server-side by
         // the guard middleware regardless of what the UI shows).
