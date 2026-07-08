@@ -276,10 +276,11 @@ fn xmlns_decls(e: &quick_xml::events::BytesStart<'_>) -> Vec<(String, String)> {
             key.strip_prefix("xmlns:").map(str::to_string)
         };
         if let Some(p) = prefix {
-            let uri = attr
-                .unescape_value()
-                .map(|v| v.into_owned())
-                .unwrap_or_else(|_| String::from_utf8_lossy(&attr.value).into_owned());
+            // Decode entities via our own `xml_unescape` (same path as the
+            // text handler above) rather than quick-xml's escape module —
+            // quick-xml doesn't auto-unescape attribute values, so the raw
+            // bytes carry entities. One consistent decode path.
+            let uri = xml_unescape(&String::from_utf8_lossy(&attr.value));
             decls.push((p, uri));
         }
     }
@@ -1283,9 +1284,44 @@ pub(crate) fn parse_xmp(xml: &str) -> XmpData {
                 );
             }
             Ok(Event::Text(ref e)) => {
-                if let Ok(t) = e.unescape() {
+                // quick-xml 0.41 tokenizes entity references into separate
+                // `GeneralRef` events (below), so `Text` events are now
+                // entity-free literal runs — decode charset only and push
+                // raw. (0.36 gave one combined escaped run that we decoded
+                // with unescape(); the split model resolves entities in the
+                // GeneralRef arm instead.)
+                if let Ok(decoded) = e.decode() {
                     if in_li || capture_rating || capture_label {
-                        text_buf.push_str(&t);
+                        text_buf.push_str(&decoded);
+                    }
+                }
+            }
+            // Entity/char reference — 0.41 emits these as their own event.
+            // Resolving them here (rather than a whole-string unescape) gives
+            // the single-pass runaway-escape decode the tests lock for free:
+            // `&amp;amp;…` splits into GeneralRef(`amp`)→`&` plus a literal
+            // `amp;…` Text run, i.e. exactly one layer peeled per read.
+            Ok(Event::GeneralRef(ref e)) => {
+                if in_li || capture_rating || capture_label {
+                    if let Ok(Some(c)) = e.resolve_char_ref() {
+                        // numeric char ref: &#NN; / &#xNN;
+                        text_buf.push(c);
+                    } else if let Ok(name) = e.decode() {
+                        match name.as_ref() {
+                            "amp" => text_buf.push('&'),
+                            "lt" => text_buf.push('<'),
+                            "gt" => text_buf.push('>'),
+                            "quot" => text_buf.push('"'),
+                            "apos" => text_buf.push('\''),
+                            // Unknown entity — preserve it literally, matching
+                            // the old xml_unescape's leniency (it only touched
+                            // the five predefined names).
+                            other => {
+                                text_buf.push('&');
+                                text_buf.push_str(other);
+                                text_buf.push(';');
+                            }
+                        }
                     }
                 }
             }
@@ -1382,10 +1418,10 @@ fn handle_open_tag(
                 // escaped quotes/ampersands (`19&quot; rack`, `R&amp;D`).
                 // Reading them undecoded breaks the write→read round
                 // trip (property-test finding).
-                let val = attr
-                    .unescape_value()
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|_| String::from_utf8_lossy(&attr.value).to_string());
+                // Same entity-decode path as the namespace-decl site and
+                // the text handler: our own xml_unescape on the raw
+                // attribute bytes (quick-xml leaves attr values escaped).
+                let val = xml_unescape(&String::from_utf8_lossy(&attr.value));
                 match key.as_slice() {
                     b"Rating" => {
                         if !val.is_empty() && val != "0" {

@@ -20,7 +20,7 @@ imageproc = { version = "0.26", default-features = false, features = ["text"] }
 ab_glyph = "0.2"
 lofty = "0.24"
 kamadak-exif = "0.5"
-quick-xml = "0.36"
+quick-xml = "0.41"
 regex = "1"
 toml = "0.8"
 toml_edit = "0.22"
