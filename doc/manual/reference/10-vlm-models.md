@@ -24,7 +24,7 @@ To switch models, either set `[vlm] model` in `maki.toml` or pass `--model` on t
 The answer is usually "stick with what works." The descriptions you're getting from your current model are good enough for *navigation* — that's the bar `maki describe` is trying to clear, not poet-grade prose. The clearest upgrade paths from popular defaults:
 
 - `gemma3:4b` → `gemma4:e4b` — same effective compute, native multimodal (vs Gemma 3's bolt-on projector), 128K context, native system prompts. Similar latency on equivalent hardware.
-- `qwen2.5vl:3b` → `qwen3-vl:8b` — bigger but noticeably richer; or stay at 3 B class with `qwen3-vl:4b` for minimal RAM increase.
+- `qwen2.5vl:3b` → `qwen3.5:4b` — the current Qwen generation (natively multimodal, no separate `-VL`) at the same size class; or `qwen3.5:9b` for a clear quality jump. The `qwen3-vl` line (`qwen3-vl:4b`/`:8b`) is the well-trodden previous generation and still an excellent choice if you prefer it.
 - `moondream` → `gemma4:e2b` — same speed bracket, much better visual reasoning.
 
 Upgrading helps in specific cases:
@@ -76,7 +76,7 @@ All timings measured on Apple M3 Pro (18 GB) with Ollama, using preview images (
 |-------------------:|---------:|--------:|:----------------------------------------------------------------------|
 | **Qwen2.5-VL 3B** `qwen2.5vl:3b` | **3 GB** `\newline`{=latex} (2.0 GB) | 8--12s | **Default.** Best balance of speed, quality, and resource use. Very good quality. |
 | **Gemma 4 E4B** `gemma4:e4b` | **10 GB** `\newline`{=latex} (9.6 GB) | 10--15s | **Recommended upgrade from Gemma 3 4B.** Native multimodal, 128K context, native system prompts. |
-| **Qwen3-VL 8B** `qwen3-vl:8b` | **6 GB** `\newline`{=latex} (5.2 GB) | 15--20s | **Recommended upgrade from Qwen2.5-VL 3B.** Excellent quality, noticeably better descriptions. |
+| **Qwen3-VL 8B** `qwen3-vl:8b` | **6 GB** `\newline`{=latex} (5.2 GB) | 15--20s | Excellent quality, noticeably better than 2.5-VL. Previous-gen; see Qwen3.5/3.6 below for the current line. |
 | **Qwen3-VL 4B** `qwen3-vl:4b` | **4 GB** `\newline`{=latex} (2.8 GB) | 10--15s | Good step up from Qwen2.5-VL 3B without much extra RAM. Very good quality. |
 | **Qwen2.5-VL 7B** `qwen2.5vl:7b` | **6 GB** `\newline`{=latex} (4.7 GB) | 20--36s | Proven, widely tested. Excellent quality. |
 | **Gemma 3 4B** `gemma3:4b` | **4 GB** `\newline`{=latex} (3.3 GB) | 10--15s | Strong reasoning, good at scene understanding. Very good quality. |
@@ -98,17 +98,35 @@ All timings measured on Apple M3 Pro (18 GB) with Ollama, using preview images (
 | **Gemma 4 31B** `gemma4:31b` | **24 GB** `\newline`{=latex} (20 GB) | 70--100s | Largest dense Gemma 4; near-cloud quality on a workstation. 256K context. |
 | **LLaVA 1.6 7B** `llava:7b` | **6 GB** `\newline`{=latex} (4.7 GB) | 15--25s | Well-established, wide compatibility. Good quality. |
 
-### Qwen3.5 (Native Multimodal)
+### Qwen3.5 & Qwen3.6 (Current Native-Multimodal Generation)
 
-Qwen3.5 models are natively multimodal — no separate "-VL" variant — and use a different vision architecture than the Qwen-VL line. Subjectively stronger on visual reasoning at similar parameter counts, but requires a backend that handles the model's vision projector.
+The Qwen line moved on from the `-VL` split: **Qwen3.5** (shipped early
+2026) and **Qwen3.6** (the newest) are natively multimodal across every
+size — no separate "-VL" variant — and generally out-reason the Qwen-VL
+models at similar parameter counts. These are the current mainstream
+Qwen recommendation; `qwen3-vl` is the still-solid previous generation.
 
-| Model | RAM `\newline`{=latex} Download | Backend | Notes |
-|-------------------:|---------:|----------------:|:----------------------------------------------------------------------|
-| **Qwen3.5 4B** | **4 GB** `\newline`{=latex} (3 GB) | llama.cpp, vLLM, recent Ollama | Smaller variant; check Ollama version for vision support. |
-| **Qwen3.5 9B** | **8 GB** `\newline`{=latex} (6 GB) | llama.cpp, vLLM, recent Ollama | Strong upgrade path from 7–8 B Qwen-VL. Excellent quality. |
-| **Qwen3.5 27B** | **20 GB** `\newline`{=latex} (16 GB) | llama.cpp, vLLM | Needs significant RAM; best local quality. Outstanding quality. |
+**Qwen3.5** — the everyday line, with the full size range on Ollama:
 
-**Ollama vision support has shifted across Ollama releases** — earlier versions silently dropped image input for Qwen3.5 models. If `maki describe --model qwen3.5:9b` returns text-only descriptions that ignore the image content, your Ollama is too old; upgrade to the latest release or fall back to llama.cpp / vLLM. A quick test: ask the model to describe an obviously distinctive image (e.g. a sunset over water) — if the answer is generic enough that it could fit any photo, vision is broken.
+| Model | RAM `\newline`{=latex} Download | Notes |
+|-------------------:|---------:|:----------------------------------------------------------------------|
+| **Qwen3.5 2B** `qwen3.5:2b` | **3 GB** | Budget / batch; fast. |
+| **Qwen3.5 4B** `qwen3.5:4b` | **4 GB** | **Recommended everyday upgrade from Qwen2.5-VL 3B** — same class, current architecture. |
+| **Qwen3.5 9B** `qwen3.5:9b` | **8 GB** | Clear quality jump; the sweet spot when RAM allows. |
+| **Qwen3.5 27B** `qwen3.5:27b` | **20 GB** | High quality on a workstation. |
+| **Qwen3.5 35B** `qwen3.5:35b` | **24 GB** | Largest widely-available variant. |
+
+**Qwen3.6** — the newest generation; on Ollama currently only the
+larger sizes are published (`qwen3.6:27b` ~17 GB, `qwen3.6:35b`
+~24 GB), so it's a "best local quality" option rather than an everyday
+one until smaller variants land. Multimodal across all published tags.
+
+**Vision on Ollama:** current Ollama releases handle the Qwen3.5/3.6
+vision path correctly; only quite old versions silently dropped image
+input. If `maki describe --model qwen3.5:9b` returns descriptions that
+ignore the image, upgrade Ollama (or use llama.cpp / vLLM). Quick test:
+describe an obviously distinctive image (e.g. a sunset over water) — a
+generic answer that could fit any photo means vision isn't wired up.
 
 ### Gemma 4 (Native Multimodal)
 
@@ -118,6 +136,7 @@ Google's Gemma 4 is natively multimodal — vision (and audio on the smaller var
 |--------:|----:|-----------------:|-----------:|:------|
 | E2B | `gemma4:e2b` | 2.3 B (5.1 B w/ embeddings) | text + image + audio | Compact, fast. Smaller-than-Gemma-3-4B effective compute. |
 | E4B | `gemma4:e4b` | 4.5 B (8 B w/ embeddings) | text + image + audio | **Direct upgrade path for `gemma3:4b` users.** Similar effective size, newer architecture, longer context. |
+| 12B | `gemma4:12b` | 12 B | text + image | Mid-size dense; a step above E4B when RAM allows, below the 26B MoE. |
 | 26B MoE | `gemma4:26b` | 25.2 B total / 3.8 B active | text + image | MoE — only ~3.8 B weights active per token, large total. Good quality / active-weight ratio. |
 | 31B Dense | `gemma4:31b` | 30.7 B | text + image | Largest dense variant; best local Gemma 4 quality. |
 
