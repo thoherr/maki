@@ -2,6 +2,59 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.9.1 (2026-07-09)
+
+Security + polish patch. No schema migration.
+
+### Security
+
+- **quick-xml 0.36 → 0.41** clears two denial-of-service advisories
+  (RUSTSEC-2026-0194 quadratic duplicate-attribute check, 0195
+  unbounded namespace-declaration allocation). These matter to MAKI's
+  actual threat surface — it parses XMP from imported and embedded
+  image files. The upgrade required adapting the XMP reader to
+  quick-xml's new tokenization (entity references now arrive as their
+  own event); the property-test suite verified the single-pass
+  runaway-escape decoding is preserved bit-for-bit.
+- **crossbeam-epoch → 0.9.20** (via `cargo update`) clears
+  RUSTSEC-2026-0204.
+- Two remaining advisories are documented no-ops in `deny.toml`:
+  RUSTSEC-2026-0187 (a lopdf *parse* stack-overflow — MAKI only
+  *writes* PDFs, so it is unreachable; the fix needs a printpdf release
+  that allows lopdf ≥ 0.42) and RUSTSEC-2026-0192 (ttf-parser
+  unmaintained). `cargo deny check advisories` is clean.
+
+### Changed
+
+- **Tag autocomplete completes into the input instead of committing.**
+  In all three tag pickers — import dialog, browse filter bar, and
+  asset detail page — selecting a suggestion (click, Tab, or Enter on
+  a highlighted item) now fills the input and keeps the dropdown open,
+  so a hierarchical tag can be extended (`person|ens` → pick
+  `person|ensemble|band` → add `|Metallica`) before committing.
+  Committing stays an explicit Enter on un-highlighted input (comma in
+  the import dialog).
+- **Import dialog checkboxes honor `[import]` config.** The web import
+  dialog's "Smart previews" / "Generate embeddings" / "Generate
+  descriptions" checkboxes now default from `[import] smart_previews` /
+  `embeddings` / `descriptions` (read at server startup), consistent
+  with what `maki import` already does — previously they were
+  hardcoded off in the browser.
+
+### Documentation
+
+- **VLM model guide** refreshed against ollama.com (July 2026):
+  Qwen3.5 (un-hedged — it shipped and is natively multimodal across its
+  full size range) and the newer Qwen3.6 are now the current Qwen
+  recommendation, with qwen3-vl framed as the still-solid previous
+  generation; added the `gemma4:12b` tag.
+- **Roadmap / planning docs** brought current through v4.9.0 (Horizons
+  1–2 marked shipped, done features pruned from the tier lists,
+  Completed list extended v4.6.0 → v4.9.0).
+- **Architecture + component specs** refreshed for the v4.6–v4.9
+  subsystems (history journal, trash, doctor, watch, FTS5, tag
+  provenance, embedded write-back).
+
 ## v4.9.0 (2026-06-23)
 
 Horizon 3, Reversibility arc (`doc/proposals/roadmap-v5-horizon3.md`):
