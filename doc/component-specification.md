@@ -1,14 +1,32 @@
 # Component Specification
 
-> **As of: v4.4.x (March 2026).** This document has not been
-> systematically updated for the v4.5.x cycle. Known gaps include the
-> `recipes.pending_writeback` flow (offline-volume tracking +
-> `maki writeback`), the JobRegistry-based web jobs (import dry-run,
-> maintain operations, SSE re-attach), the recipes-fragment endpoint
-> (`GET /api/asset/{id}/recipes-fragment`), and newer denormalized
-> columns (`face_count`, `leaf_tag_count`, `video_duration`/`video_codec`).
-> For current behavior consult `doc/specification.md`, the reference
-> manual under `doc/manual/`, and `CHANGELOG.md`.
+> **As of: v4.4.x baseline, last reviewed at v4.9.0 (July 2026).** This
+> document captures the original data-model / component / route design
+> and has intentionally NOT been rewritten for each release since —
+> `doc/specification.md`, the reference manual under `doc/manual/`, and
+> `CHANGELOG.md` are the maintained sources of current behaviour. The
+> data model and routes below are still broadly accurate, but the
+> following was added after this document and is not reflected here:
+>
+> - **Schema v9 (v4.7.0):** the `assets_fts` FTS5 trigram index for
+>   free-text search, trigger-maintained.
+> - **Schema v10 (v4.7.0):** `assets.tag_sources` (tag provenance —
+>   `user` / `xmp-import` / `auto-tag` / `vlm`; absent = user).
+> - **Denormalized columns** added over v4.5–v4.9: `face_count`,
+>   `leaf_tag_count`, `video_duration` / `video_codec`.
+> - **The edit-history journal (v4.9.0):** `<catalog>/history/` — an
+>   independent, non-authoritative, prunable operation log backing
+>   `maki undo` / `maki history` (neither sidecar nor catalog.db).
+> - **The trash (v4.6.0):** `<catalog>/.trash/` quarantine for deleting
+>   operations (`maki trash`).
+> - **New commands / subsystems:** `maki doctor` (sidecar↔SQLite
+>   consistency), `maki watch` (poll-based auto-import), `maki auto-stack`,
+>   `writeback --embed` (embedded-XMP-in-JPEG with content-hash
+>   migration), `serve --read-only` + basic auth.
+> - **Web:** the JobRegistry-based jobs (import dry-run, maintain
+>   operations, SSE re-attach), the recipes-fragment endpoint
+>   (`GET /api/asset/{id}/recipes-fragment`), and the
+>   `recipes.pending_writeback` offline-volume flow.
 
 ## Data Model
 
