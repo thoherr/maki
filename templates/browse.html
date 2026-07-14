@@ -1520,6 +1520,9 @@ window.onFilterChange = onFilterChange;
                 if (!r.ok) {
                     return r.text().then(function(t) { throw new Error(t); });
                 }
+                var exported = parseInt(r.headers.get('X-Maki-Exported') || '0', 10);
+                var skipped = parseInt(r.headers.get('X-Maki-Skipped') || '0', 10);
+                var skippedOffline = parseInt(r.headers.get('X-Maki-Skipped-Offline') || '0', 10);
                 return r.blob().then(function(blob) {
                     var userFilename = (document.getElementById('export-filename').value || 'maki-export').trim();
                     if (!userFilename.endsWith('.zip')) userFilename += '.zip';
@@ -1530,6 +1533,14 @@ window.onFilterChange = onFilterChange;
                     a.click();
                     URL.revokeObjectURL(url);
                     overlay.remove();
+                    if (skipped > 0) {
+                        var msg = 'Export incomplete: ' + skipped + ' file' + (skipped === 1 ? '' : 's') + ' could not be included';
+                        if (skippedOffline > 0) {
+                            msg += ' (' + skippedOffline + ' on offline volume' + (skippedOffline === 1 ? '' : 's') + ')';
+                        }
+                        msg += '. The ZIP contains ' + exported + ' file' + (exported === 1 ? '' : 's') + '.';
+                        alert(msg);
+                    }
                 });
             })
             .catch(function(err) {

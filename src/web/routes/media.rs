@@ -1059,7 +1059,7 @@ pub async fn export_zip(
     let pc = preview_config.clone();
     let tmp = std::env::temp_dir().join(format!("maki-export-{}.zip", std::process::id()));
     let tmp2 = tmp.clone();
-    let zip_result = tokio::task::spawn_blocking(move || -> Result<std::path::PathBuf, String> {
+    let zip_result = tokio::task::spawn_blocking(move || -> Result<(std::path::PathBuf, usize, usize, usize), String> {
         let service = AssetService::new(&root, state.verbosity, &pc);
         let result = service.export_zip_for_ids(&ids, &tmp2, layout, all_variants, include_sidecars, |_, _, _| {})
             .map_err(|e| format!("Export failed: {e}"))?;
@@ -1067,10 +1067,11 @@ pub async fn export_zip(
             let _ = std::fs::remove_file(&tmp2);
             return Err("No exportable files found (volumes may be offline)".to_string());
         }
-        Ok(tmp2)
+        let offline = result.errors.iter().filter(|e| e.contains("offline")).count();
+        Ok((tmp2, result.files_exported + result.sidecars_exported, result.errors.len(), offline))
     }).await;
 
-    let zip_path = match zip_result {
+    let (zip_path, exported, skipped, skipped_offline) = match zip_result {
         Ok(Ok(p)) => p,
         Ok(Err(e)) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
@@ -1109,10 +1110,17 @@ pub async fn export_zip(
 
     let filename = format!("maki-export-{}-assets.zip", count);
 
+    // Skip counts as headers so the export dialog can warn about files that
+    // were left out (offline volumes, unreadable files) — the ZIP itself
+    // downloads fine either way, which used to make partial exports look
+    // like complete ones.
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/zip")
         .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\""))
+        .header("X-Maki-Exported", exported.to_string())
+        .header("X-Maki-Skipped", skipped.to_string())
+        .header("X-Maki-Skipped-Offline", skipped_offline.to_string())
         .body(body)
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response").into_response())
 }
