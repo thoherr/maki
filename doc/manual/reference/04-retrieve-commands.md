@@ -343,6 +343,12 @@ Files are copied with SHA-256 integrity verification. Existing files at the targ
 **--include-sidecars**
 : Also copy recipe/sidecar files (`.xmp`, `.cos`, `.cot`, `.cop`, `.pp3`, `.dop`, `.on1`) alongside the exported variants.
 
+**--previews**
+: Export the assets' preview images instead of the originals. Previews live in the catalog directory, so this works even when the originals' volumes are offline — handy for handing out web/social-media-sized copies without mounting archive drives. Exported files keep the original filename with the extension swapped to the preview format (`IMG_0042.NEF` → `IMG_0042.jpg`). Assets without a generated preview are reported as skipped; run `maki generate-previews` first for full coverage. Since a preview's bytes differ from the original's, no hash verification is performed for these copies, and `--all-variants` has no useful effect (previews are keyed to the best variant).
+
+**--smart-previews**
+: Like `--previews`, but exports the high-resolution smart previews from `<catalog>/smart-previews/`. Assets without a smart preview are skipped (no silent fallback to the standard preview); run `maki generate-previews --smart` first for full coverage. Mutually exclusive with `--previews`.
+
 **--dry-run**
 : Report the export plan without writing any files or creating directories.
 
@@ -372,6 +378,12 @@ Include sidecars for another workstation:
 
 ```bash
 maki export "tag:client" /tmp/handoff/ --include-sidecars
+```
+
+Hand out social-media-sized copies without mounting the archive drives:
+
+```bash
+maki export "tag:event|concert rating:4+" ~/for-the-band.zip --zip --smart-previews
 ```
 
 Create symlinks instead of copies:

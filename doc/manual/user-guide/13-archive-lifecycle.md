@@ -254,6 +254,15 @@ maki contact-sheet "collection:Johnson Wedding Selects" proofs.pdf \
 maki export "tag:johnson-wedding" /Volumes/USB/handoff --layout mirror --include-sidecars
 ```
 
+When the originals live on an offline archive drive, you can still deliver preview-sized copies — previews and smart previews are stored in the catalog directory, so no volume needs to be mounted:
+
+```bash
+# Social-media-sized copies straight from the catalog's smart previews
+maki export "tag:johnson-wedding rating:4+" social.zip --zip --smart-previews
+```
+
+Files keep their original names with the extension swapped to the preview format (`IMG_0042.NEF` → `IMG_0042.jpg`). Assets without a generated (smart) preview are reported as skipped — run `maki generate-previews [--smart]` first for full coverage. The same option is available in the web UI's export dialog ("Content: Originals / Previews / Smart previews").
+
 ---
 
 ## Putting It All Together: A Photographer's Monthly Workflow

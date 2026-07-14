@@ -340,7 +340,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 - `POST /api/batch/auto-group` — batch auto-group selected assets by stem (JSON: `{asset_ids}`)
 - `POST /api/batch/stack` — create a stack from selected assets (JSON: `{asset_ids}`)
 - `DELETE /api/batch/stack` — unstack selected assets (JSON: `{asset_ids}`)
-- `POST /api/batch/export` — download assets as ZIP archive (JSON: `{asset_ids?, filters?, layout, all_variants, include_sidecars}`)
+- `POST /api/batch/export` — download assets as ZIP archive (JSON: `{asset_ids?, filters?, layout, source?, all_variants, include_sidecars}`; `filters` takes the browse URL params verbatim incl. `stacks`/`nodefault` and resolves through the same pipeline as the grid; `source` is `originals` (default) / `previews` / `smart`; response carries `X-Maki-Exported`/`X-Maki-Skipped`/`X-Maki-Skipped-Offline` headers for the partial-export warning)
 - `POST /api/asset/{id}/vlm-describe` — describe a single asset via VLM (JSON: `{mode?, model?}`)
 - `POST /api/batch/describe` — batch describe assets via VLM (JSON: `{asset_ids, mode?, model?}`)
 - `POST /api/batch/delete` — batch delete assets (JSON: `{asset_ids, remove_files?}`)

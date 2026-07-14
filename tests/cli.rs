@@ -9052,6 +9052,128 @@ fn export_no_results() {
         .stdout(predicate::str::contains("No assets matched"));
 }
 
+#[test]
+fn export_previews_exports_preview_file_with_swapped_extension() {
+    use image::{ImageBuffer, Rgb};
+
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Real image so import generates a preview
+    let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_pixel(1, 1, Rgb([10, 20, 30]));
+    let img_path = root.join("pv_export.png");
+    img.save(&img_path).unwrap();
+    maki()
+        .current_dir(&root)
+        .args(["import", img_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let export_dir = dir.path().join("pv_out");
+    maki()
+        .current_dir(&root)
+        .args([
+            "export",
+            "pv_export",
+            export_dir.to_str().unwrap(),
+            "--previews",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 files"));
+
+    // Original name, preview extension (default preview format is jpg)
+    let exported = export_dir.join("pv_export.jpg");
+    assert!(exported.exists(), "preview export should keep the original stem with the preview extension");
+    // Exported bytes are the preview, not the original PNG
+    assert_ne!(
+        std::fs::read(&exported).unwrap(),
+        std::fs::read(&img_path).unwrap()
+    );
+}
+
+#[test]
+fn export_previews_works_when_volume_offline() {
+    use image::{ImageBuffer, Rgb};
+
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Asset lives on a removable volume we take offline after import;
+    // its preview stays in the catalog directory.
+    let removable_dir = tempdir().unwrap();
+    let removable = removable_dir.path().canonicalize().unwrap();
+    maki()
+        .current_dir(&root)
+        .args(["volume", "add", "removable", removable.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_pixel(1, 1, Rgb([200, 100, 50]));
+    let img_path = removable.join("pv_offline.png");
+    img.save(&img_path).unwrap();
+    maki()
+        .current_dir(&root)
+        .args(["import", removable.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let stashed = removable.with_extension("offline");
+    std::fs::rename(&removable, &stashed).unwrap();
+
+    // Originals export finds nothing — all locations offline
+    let orig_dir = dir.path().join("orig_out");
+    maki()
+        .current_dir(&root)
+        .args(["export", "pv_offline", orig_dir.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 files"))
+        .stderr(predicate::str::contains("all locations offline"));
+
+    // Preview export still delivers the file
+    let pv_dir = dir.path().join("pv_out");
+    maki()
+        .current_dir(&root)
+        .args(["export", "pv_offline", pv_dir.to_str().unwrap(), "--previews"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 files"));
+    assert!(pv_dir.join("pv_offline.jpg").exists());
+}
+
+#[test]
+fn export_smart_previews_missing_reports_skip() {
+    use image::{ImageBuffer, Rgb};
+
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Import without smart previews — smart export has nothing to ship
+    let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_pixel(1, 1, Rgb([1, 2, 3]));
+    let img_path = root.join("smart_missing.png");
+    img.save(&img_path).unwrap();
+    maki()
+        .current_dir(&root)
+        .args(["import", img_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let export_dir = dir.path().join("smart_out");
+    maki()
+        .current_dir(&root)
+        .args([
+            "export",
+            "smart_missing",
+            export_dir.to_str().unwrap(),
+            "--smart-previews",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 files"))
+        .stderr(predicate::str::contains("no smart preview on disk"));
+}
+
 // ===========================================================================
 // migrate
 // ===========================================================================

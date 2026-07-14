@@ -932,6 +932,11 @@ pub struct ExportZipRequest {
     pub all_variants: bool,
     #[serde(default)]
     pub include_sidecars: bool,
+    /// "originals" (default) | "previews" | "smart" — what file content to
+    /// export. Preview sources come from the catalog directory, so they
+    /// work for assets whose volumes are offline.
+    #[serde(default)]
+    pub source: String,
 }
 
 fn default_layout() -> String {
@@ -945,7 +950,7 @@ pub async fn export_zip(
 ) -> Response {
     use axum::body::Body;
     use axum::http::header;
-    use crate::asset_service::{AssetService, ExportLayout};
+    use crate::asset_service::{AssetService, ExportLayout, ExportSource};
 
     let catalog_root = state.catalog_root.clone();
     let preview_config = state.preview_config.clone();
@@ -999,6 +1004,11 @@ pub async fn export_zip(
     }
 
     let layout = if req.layout == "mirror" { ExportLayout::Mirror } else { ExportLayout::Flat };
+    let source = match req.source.as_str() {
+        "previews" => ExportSource::Previews,
+        "smart" | "smart-previews" => ExportSource::SmartPreviews,
+        _ => ExportSource::Originals,
+    };
     let all_variants = req.all_variants;
     let include_sidecars = req.include_sidecars;
     let count = asset_ids.len();
@@ -1010,11 +1020,15 @@ pub async fn export_zip(
     let tmp2 = tmp.clone();
     let zip_result = tokio::task::spawn_blocking(move || -> Result<(std::path::PathBuf, usize, usize, usize), String> {
         let service = AssetService::new(&root, state.verbosity, &pc);
-        let result = service.export_zip_for_ids(&ids, &tmp2, layout, all_variants, include_sidecars, |_, _, _| {})
+        let result = service.export_zip_for_ids(&ids, &tmp2, layout, all_variants, include_sidecars, source, |_, _, _| {})
             .map_err(|e| format!("Export failed: {e}"))?;
         if result.files_exported == 0 && result.sidecars_exported == 0 {
             let _ = std::fs::remove_file(&tmp2);
-            return Err("No exportable files found (volumes may be offline)".to_string());
+            return Err(if source == ExportSource::Originals {
+                "No exportable files found (volumes may be offline)".to_string()
+            } else {
+                "No exportable files found (previews not generated yet — run maki generate-previews)".to_string()
+            });
         }
         let offline = result.errors.iter().filter(|e| e.contains("offline")).count();
         Ok((tmp2, result.files_exported + result.sidecars_exported, result.errors.len(), offline))

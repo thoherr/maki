@@ -11,6 +11,8 @@ pub fn run_export_command(
         symlink: bool,
         all_variants: bool,
         include_sidecars: bool,
+        previews: bool,
+        smart_previews: bool,
         dry_run: bool,
         overwrite: bool,
         zip: bool,
@@ -21,12 +23,20 @@ pub fn run_export_command(
     #[allow(dead_code)]
     struct Ctx { json: bool, log: bool }
     let cli = Ctx { json, log };
-    use maki::asset_service::{ExportLayout, ExportStatus};
+    use maki::asset_service::{ExportLayout, ExportSource, ExportStatus};
 
     let export_layout = match layout.as_str() {
         "flat" => ExportLayout::Flat,
         "mirror" => ExportLayout::Mirror,
         _ => anyhow::bail!("unknown layout '{}'. Valid layouts: flat, mirror", layout),
+    };
+
+    let export_source = if smart_previews {
+        ExportSource::SmartPreviews
+    } else if previews {
+        ExportSource::Previews
+    } else {
+        ExportSource::Originals
     };
 
     let (catalog_root, config) = maki::config::load_config()?;
@@ -73,6 +83,7 @@ pub fn run_export_command(
             export_layout,
             all_variants,
             include_sidecars,
+            export_source,
             log_callback,
         )?
     } else {
@@ -87,6 +98,7 @@ pub fn run_export_command(
             symlink,
             all_variants,
             include_sidecars,
+            export_source,
             dry_run,
             overwrite,
             log_callback,

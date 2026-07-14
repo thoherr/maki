@@ -724,6 +724,14 @@ enum Commands {
         #[arg(long)]
         include_sidecars: bool,
 
+        /// Export previews instead of originals (works with offline volumes)
+        #[arg(long, conflicts_with = "smart_previews")]
+        previews: bool,
+
+        /// Export smart previews instead of originals (works with offline volumes)
+        #[arg(long)]
+        smart_previews: bool,
+
         /// Show what would be exported without writing files
         #[arg(long)]
         dry_run: bool,
@@ -2979,6 +2987,8 @@ faces/\n\
             symlink,
             all_variants,
             include_sidecars,
+            previews,
+            smart_previews,
             dry_run,
             overwrite,
             zip,
@@ -2989,6 +2999,8 @@ faces/\n\
             symlink,
             all_variants,
             include_sidecars,
+            previews,
+            smart_previews,
             dry_run,
             overwrite,
             zip,

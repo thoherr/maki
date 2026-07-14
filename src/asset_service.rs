@@ -605,6 +605,24 @@ pub enum ExportLayout {
     Mirror,
 }
 
+/// What file content to export for each asset.
+///
+/// Previews and smart previews live in the catalog directory, so they export
+/// fine even when the original's volume is offline — useful for handing out
+/// web/social-media-sized copies without mounting archive drives. Exported
+/// preview files keep the original filename with the extension swapped to the
+/// preview format; missing previews are reported as skipped (run
+/// `maki generate-previews` first for full coverage).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportSource {
+    /// The original media files from their volumes (default).
+    Originals,
+    /// Standard previews from `<catalog>/previews/`.
+    Previews,
+    /// High-resolution smart previews from `<catalog>/smart-previews/`.
+    SmartPreviews,
+}
+
 /// Status of a single file during export.
 pub enum ExportStatus {
     Copied,
@@ -633,6 +651,25 @@ pub struct ExportFilePlan {
     pub target_path: PathBuf,
     pub file_size: u64,
     pub is_sidecar: bool,
+    /// Volume the entry's *original* lives on — used for the multi-volume
+    /// label prefix in mirror layout. For preview sources the actual
+    /// source_path is in the catalog directory, so the prefix can't be
+    /// derived from it.
+    pub source_volume_id: Option<String>,
+    /// False for preview sources: `content_hash` is the original variant's
+    /// hash there (used for dedup and flat-name collisions), so it must not
+    /// be verified against the copied preview file.
+    pub verify_hash: bool,
+}
+
+/// Replace a filename's extension (preview exports keep the original name
+/// but carry the preview format's extension: `IMG_001.NEF` → `IMG_001.jpg`).
+fn swap_extension(filename: &str, ext: &str) -> String {
+    let stem = Path::new(filename)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+    format!("{stem}.{ext}")
 }
 
 /// Resolve a flat-mode target path, handling filename collisions.

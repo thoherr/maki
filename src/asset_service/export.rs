@@ -25,6 +25,7 @@ impl AssetService {
         layout: ExportLayout,
         all_variants: bool,
         include_sidecars: bool,
+        source: ExportSource,
     ) -> Result<(Vec<ExportFilePlan>, usize, Vec<String>)> {
         use crate::catalog::Catalog;
         use crate::models::variant::best_preview_index_details;
@@ -33,6 +34,14 @@ impl AssetService {
         let registry = DeviceRegistry::new(&self.catalog_root);
 
         let assets_matched = asset_ids.len();
+
+        // Preview sources read from the catalog directory, keyed by variant
+        // content hash — no volume access needed for the file bytes.
+        let preview_gen = crate::preview::PreviewGenerator::new(
+            &self.catalog_root,
+            self.verbosity,
+            &self.preview_config,
+        );
 
         // Load volumes for resolving online mount points
         let volumes = registry.list()?;
@@ -72,36 +81,99 @@ impl AssetService {
                     continue;
                 }
 
-                let loc = variant.locations.iter().find(|l| {
-                    online_volumes.contains_key(&l.volume_id)
-                });
-                let loc = match loc {
-                    Some(l) => l,
-                    None => {
-                        errors.push(format!(
-                            "Asset {} variant {} — all locations offline",
-                            &asset_id[..8],
-                            &variant.content_hash[..12]
-                        ));
-                        continue;
-                    }
-                };
-
-                let vol = online_volumes[&loc.volume_id];
-                let source_path = vol.mount_point.join(&loc.relative_path);
+                // Per source: where the bytes come from, what the exported
+                // file is called (flat), which volume-relative path mirrors
+                // it (mirror), and whether the copy can be hash-verified.
+                let (source_path, file_size, flat_name, mirror_rel, volume_id, verify_hash) =
+                    match source {
+                        ExportSource::Originals => {
+                            let loc = variant.locations.iter().find(|l| {
+                                online_volumes.contains_key(&l.volume_id)
+                            });
+                            let loc = match loc {
+                                Some(l) => l,
+                                None => {
+                                    errors.push(format!(
+                                        "Asset {} variant {} — all locations offline",
+                                        &asset_id[..8],
+                                        &variant.content_hash[..12]
+                                    ));
+                                    continue;
+                                }
+                            };
+                            let vol = online_volumes[&loc.volume_id];
+                            (
+                                vol.mount_point.join(&loc.relative_path),
+                                variant.file_size,
+                                variant.original_filename.clone(),
+                                Some(PathBuf::from(&loc.relative_path)),
+                                Some(loc.volume_id.clone()),
+                                true,
+                            )
+                        }
+                        ExportSource::Previews | ExportSource::SmartPreviews => {
+                            let (pv_path, kind) = if source == ExportSource::SmartPreviews {
+                                (preview_gen.smart_preview_path(&variant.content_hash), "smart preview")
+                            } else {
+                                (preview_gen.preview_path(&variant.content_hash), "preview")
+                            };
+                            if !pv_path.exists() {
+                                errors.push(format!(
+                                    "Asset {} variant {} — no {kind} on disk (run maki generate-previews{})",
+                                    &asset_id[..8],
+                                    &variant.content_hash[..12],
+                                    if source == ExportSource::SmartPreviews { " --smart" } else { "" },
+                                ));
+                                continue;
+                            }
+                            let file_size = pv_path.metadata().map(|m| m.len()).unwrap_or(0);
+                            let ext = pv_path
+                                .extension()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
+                            // Preview bytes don't need the volume online —
+                            // any known location provides the mirror path.
+                            let loc = variant
+                                .locations
+                                .iter()
+                                .find(|l| online_volumes.contains_key(&l.volume_id))
+                                .or_else(|| variant.locations.first());
+                            (
+                                pv_path,
+                                file_size,
+                                swap_extension(&variant.original_filename, &ext),
+                                loc.map(|l| Path::new(&l.relative_path).with_extension(&ext)),
+                                loc.map(|l| l.volume_id.clone()),
+                                false,
+                            )
+                        }
+                    };
 
                 let target_path = match layout {
                     ExportLayout::Flat => {
                         resolve_flat_target(
                             target_base,
-                            &variant.original_filename,
+                            &flat_name,
                             &variant.content_hash,
                             &mut flat_seen,
                         )
                     }
                     ExportLayout::Mirror => {
-                        involved_volume_ids.insert(loc.volume_id.clone());
-                        target_base.join(&loc.relative_path)
+                        if let Some(ref vid) = volume_id {
+                            involved_volume_ids.insert(vid.clone());
+                        }
+                        match &mirror_rel {
+                            Some(rel) => target_base.join(rel),
+                            // Variant without any recorded location (can't
+                            // happen for originals) — fall back to flat name.
+                            None => resolve_flat_target(
+                                target_base,
+                                &flat_name,
+                                &variant.content_hash,
+                                &mut flat_seen,
+                            ),
+                        }
                     }
                 };
 
@@ -111,8 +183,10 @@ impl AssetService {
                     content_hash: variant.content_hash.clone(),
                     source_path,
                     target_path,
-                    file_size: variant.file_size,
+                    file_size,
                     is_sidecar: false,
+                    source_volume_id: volume_id,
+                    verify_hash,
                 });
             }
 
@@ -163,23 +237,26 @@ impl AssetService {
                         target_path,
                         file_size,
                         is_sidecar: true,
+                        source_volume_id: Some(vol_id.clone()),
+                        verify_hash: true,
                     });
                 }
             }
         }
 
-        // Mirror layout: if multiple volumes involved, prefix with volume label
+        // Mirror layout: if multiple volumes involved, prefix with volume
+        // label. Keyed by the recorded source volume (not the source path —
+        // preview sources live in the catalog dir, not on the volume).
         if layout == ExportLayout::Mirror && involved_volume_ids.len() > 1 {
+            let labels: HashMap<String, &str> = volumes
+                .iter()
+                .map(|v| (v.id.to_string(), v.label.as_str()))
+                .collect();
             for entry in &mut plan {
-                for vol in &volumes {
-                    if vol.is_online
-                        && entry.source_path.starts_with(&vol.mount_point)
-                    {
-                        if let Ok(rel) = entry.source_path.strip_prefix(&vol.mount_point) {
-                            entry.target_path = target_base.join(&vol.label).join(rel);
-                        }
-                        break;
-                    }
+                let Some(ref vid) = entry.source_volume_id else { continue };
+                let Some(label) = labels.get(vid) else { continue };
+                if let Ok(rel) = entry.target_path.strip_prefix(target_base).map(Path::to_path_buf) {
+                    entry.target_path = target_base.join(label).join(rel);
                 }
             }
         }
@@ -195,6 +272,7 @@ impl AssetService {
         symlink: bool,
         all_variants: bool,
         include_sidecars: bool,
+        source: ExportSource,
         dry_run: bool,
         overwrite: bool,
         on_file: impl Fn(&Path, &ExportStatus, Duration),
@@ -220,7 +298,7 @@ impl AssetService {
 
         // Phase 2: Build plan
         let asset_ids: Vec<String> = search_results.iter().map(|r| r.asset_id.clone()).collect();
-        let (plan, _, errors) = self.build_export_plan(&asset_ids, target_dir, layout, all_variants, include_sidecars)?;
+        let (plan, _, errors) = self.build_export_plan(&asset_ids, target_dir, layout, all_variants, include_sidecars, source)?;
 
         // Phase 3: Execute or dry-run
         let mut result = ExportResult {
@@ -247,20 +325,28 @@ impl AssetService {
                 continue;
             }
 
-            // Check if target already exists with matching hash
+            // Check if target already exists with matching hash. Preview
+            // entries carry the original variant's hash (never matches the
+            // preview bytes), so existence alone decides for them.
             if !overwrite && entry.target_path.exists() {
-                match content_store.hash_file(&entry.target_path) {
-                    Ok(existing_hash) if existing_hash == entry.content_hash => {
-                        result.files_skipped += 1;
-                        on_file(
-                            &entry.target_path,
-                            &ExportStatus::Skipped,
-                            file_start.elapsed(),
-                        );
-                        continue;
-                    }
-                    _ => {} // different hash or error — proceed with copy/overwrite
+                let up_to_date = if entry.verify_hash {
+                    matches!(
+                        content_store.hash_file(&entry.target_path),
+                        Ok(existing_hash) if existing_hash == entry.content_hash
+                    )
+                } else {
+                    true
+                };
+                if up_to_date {
+                    result.files_skipped += 1;
+                    on_file(
+                        &entry.target_path,
+                        &ExportStatus::Skipped,
+                        file_start.elapsed(),
+                    );
+                    continue;
                 }
+                // different hash or error — proceed with copy/overwrite
             }
 
             // Create parent directories
@@ -307,11 +393,18 @@ impl AssetService {
                     }
                 }
             } else {
-                match content_store.copy_and_verify(
-                    &entry.source_path,
-                    &entry.target_path,
-                    &entry.content_hash,
-                ) {
+                let copy_result = if entry.verify_hash {
+                    content_store.copy_and_verify(
+                        &entry.source_path,
+                        &entry.target_path,
+                        &entry.content_hash,
+                    )
+                } else {
+                    std::fs::copy(&entry.source_path, &entry.target_path)
+                        .map(|_| ())
+                        .map_err(anyhow::Error::from)
+                };
+                match copy_result {
                     Ok(()) => {
                         if entry.is_sidecar {
                             result.sidecars_exported += 1;
@@ -353,6 +446,7 @@ impl AssetService {
         layout: ExportLayout,
         all_variants: bool,
         include_sidecars: bool,
+        source: ExportSource,
         on_file: impl Fn(&Path, &ExportStatus, Duration),
     ) -> Result<ExportResult> {
         let engine = crate::query::QueryEngine::new(&self.catalog_root);
@@ -373,7 +467,7 @@ impl AssetService {
         }
 
         let asset_ids: Vec<String> = search_results.iter().map(|r| r.asset_id.clone()).collect();
-        self.export_zip_for_ids(&asset_ids, zip_path, layout, all_variants, include_sidecars, on_file)
+        self.export_zip_for_ids(&asset_ids, zip_path, layout, all_variants, include_sidecars, source, on_file)
     }
 
     /// Export specific asset IDs as a ZIP archive.
@@ -384,6 +478,7 @@ impl AssetService {
         layout: ExportLayout,
         all_variants: bool,
         include_sidecars: bool,
+        source: ExportSource,
         on_file: impl Fn(&Path, &ExportStatus, Duration),
     ) -> Result<ExportResult> {
         use std::io::Write;
@@ -391,7 +486,7 @@ impl AssetService {
 
         let dummy_base = Path::new("");
         let (plan, assets_matched, errors) =
-            self.build_export_plan(asset_ids, dummy_base, layout, all_variants, include_sidecars)?;
+            self.build_export_plan(asset_ids, dummy_base, layout, all_variants, include_sidecars, source)?;
 
         let mut result = ExportResult {
             dry_run: false,

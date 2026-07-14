@@ -1477,6 +1477,11 @@ window.onFilterChange = onFilterChange;
                     '<label class="export-radio"><input type="radio" name="export-layout" value="flat" checked> Flat</label>' +
                     '<label class="export-radio"><input type="radio" name="export-layout" value="mirror"> Mirror</label>' +
                 '</div>' +
+                '<div class="export-row"><label>Content</label>' +
+                    '<label class="export-radio" title="Original media files (volumes must be online)"><input type="radio" name="export-source" value="originals" checked> Originals</label>' +
+                    '<label class="export-radio" title="Preview images — works with offline volumes"><input type="radio" name="export-source" value="previews"> Previews</label>' +
+                    '<label class="export-radio" title="High-resolution smart previews — works with offline volumes"><input type="radio" name="export-source" value="smart"> Smart previews</label>' +
+                '</div>' +
                 '<div class="export-row"><label><input type="checkbox" id="export-all-variants"> All variants</label></div>' +
                 '<div class="export-row"><label><input type="checkbox" id="export-sidecars"> Include sidecars (.xmp, .cos, \u2026)</label></div>' +
             '</div>' +
@@ -1495,13 +1500,25 @@ window.onFilterChange = onFilterChange;
             if (e.target === overlay) overlay.remove();
         });
 
+        // Previews are generated for the best variant only — "All variants"
+        // makes no sense there, so disable it when a preview source is picked.
+        overlay.querySelectorAll('input[name="export-source"]').forEach(function(radio) {
+            radio.addEventListener('change', function() {
+                var isOriginals = overlay.querySelector('input[name="export-source"]:checked').value === 'originals';
+                var av = document.getElementById('export-all-variants');
+                av.disabled = !isOriginals;
+                if (!isOriginals) av.checked = false;
+            });
+        });
+
         overlay.querySelector('.export-download-btn').addEventListener('click', function() {
             var btn = this;
             var layout = overlay.querySelector('input[name="export-layout"]:checked').value;
+            var source = overlay.querySelector('input[name="export-source"]:checked').value;
             var allVariants = document.getElementById('export-all-variants').checked;
             var sidecars = document.getElementById('export-sidecars').checked;
 
-            var body = {layout: layout, all_variants: allVariants, include_sidecars: sidecars};
+            var body = {layout: layout, source: source, all_variants: allVariants, include_sidecars: sidecars};
             if (mode === 'selection') {
                 body.asset_ids = ids;
             } else {
