@@ -9,11 +9,9 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 
 use crate::device_registry::DeviceRegistry;
-use crate::query::normalize_path_for_search;
 use crate::web::templates::{CompareAsset, ComparePage};
 use crate::web::AppState;
 
-use super::merge_search_params;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct CompareParams {
@@ -919,27 +917,15 @@ fn batch_vlm_describe_inner(
 
 // ─── Export ZIP ─────────────────────────────────────────────────────
 
-#[derive(serde::Deserialize, Default)]
-pub struct ExportFilters {
-    pub q: Option<String>,
-    #[serde(rename = "type")]
-    pub asset_type: Option<String>,
-    pub tag: Option<String>,
-    pub format: Option<String>,
-    pub volume: Option<String>,
-    pub rating: Option<String>,
-    pub label: Option<String>,
-    pub collection: Option<String>,
-    pub path: Option<String>,
-    pub person: Option<String>,
-}
-
 #[derive(serde::Deserialize)]
 pub struct ExportZipRequest {
     #[serde(default)]
     pub asset_ids: Vec<String>,
+    /// Browse URL params, passed through verbatim by the export dialog so
+    /// "Export all" matches the grid's result set exactly (including
+    /// `stacks` collapse and `nodefault`).
     #[serde(default)]
-    pub filters: Option<ExportFilters>,
+    pub filters: Option<super::SearchParams>,
     #[serde(default = "default_layout")]
     pub layout: String,
     #[serde(default)]
@@ -968,68 +954,31 @@ pub async fn export_zip(
         req.asset_ids
     } else {
         let state2 = state.clone();
-        let filters = req.filters.unwrap_or_default();
-        match tokio::task::spawn_blocking(move || {
+        let params = req.filters.unwrap_or_default();
+        match tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<crate::catalog::SearchRow>> {
             let catalog = state2.catalog()?;
 
-            let query = filters.q.as_deref().unwrap_or("");
-            let asset_type = filters.asset_type.as_deref().unwrap_or("");
-            let tag = filters.tag.as_deref().unwrap_or("");
-            let format = filters.format.as_deref().unwrap_or("");
-            let volume = filters.volume.as_deref().unwrap_or("");
-            let rating_str = filters.rating.as_deref().unwrap_or("");
-            let label_str = filters.label.as_deref().unwrap_or("");
-            let collection_str = filters.collection.as_deref().unwrap_or("");
-            let path_str = filters.path.as_deref().unwrap_or("");
-            let person_str = filters.person.as_deref().unwrap_or("");
-
-            let mut parsed = merge_search_params(query, asset_type, tag, format, rating_str, label_str);
-
-            let path_volume_id = if !path_str.is_empty() {
-                let registry = crate::device_registry::DeviceRegistry::new(&state2.catalog_root);
-                let vols = registry.list().unwrap_or_default();
-                let (normalized, vol_id) = normalize_path_for_search(path_str, &vols, None);
-                if !normalized.is_empty() {
-                    parsed.path_prefixes.push(normalized);
-                }
-                vol_id
-            } else {
-                None
-            };
-
-            if !collection_str.is_empty() {
-                parsed.collections.push(collection_str.to_string());
-            }
-            if !person_str.is_empty() {
-                for p in person_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    parsed.persons.push(p.to_string());
-                }
-            }
-
-            let mut opts = parsed.to_search_options();
-            if !volume.is_empty() {
-                opts.volume = Some(volume);
-            }
-            if let Some(ref vid) = path_volume_id {
-                if opts.volume.is_none() {
-                    opts.volume = Some(vid);
-                }
-            }
-
-            // Shared collection/person ID resolution (crate::query::resolve)
-            // with web person semantics (AllOf) and MatchNothing policy.
-            // All four filter kinds honored since v4.7.1 — historically
-            // export-zip ignored `-collection:` / `-person:` excludes, so
-            // an export of an exclude-filtered browse view could contain
-            // MORE assets than the grid showed (drift-matrix history in
-            // the resolver docs).
-            let resolved = crate::query::ResolvedFilterIds::resolve(
+            // Same pipeline as browse_page / search_api, so "Export all"
+            // covers exactly the grid's result set: default filter from
+            // [browse] config (honoring `nodefault`), AI text-query /
+            // `similar:` resolution, and `stacks` collapse. Only deliberate
+            // difference: EmptyFilterPolicy::MatchNothing — an unresolvable
+            // collection/person exports nothing rather than everything
+            // (fail-closed; see the drift-matrix history in the resolver
+            // docs for why export-zip is stricter here).
+            let bf = super::build_parsed_search(&params, &state2);
+            let mut resolved = super::ResolvedSearch::resolve(
                 &catalog,
-                &parsed,
+                &bf.parsed,
+                bf.volume,
+                bf.path_volume_id,
                 crate::query::EmptyFilterPolicy::MatchNothing,
-                crate::query::PersonCombine::AllOf,
             );
+            resolved.resolve_ai_filters(&catalog, &state2, &bf.parsed)?;
+
+            let mut opts = bf.parsed.to_search_options();
             resolved.apply(&mut opts);
+            opts.collapse_stacks = bf.collapse_stacks;
 
             opts.per_page = u32::MAX;
             opts.page = 1;

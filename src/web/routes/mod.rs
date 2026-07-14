@@ -186,7 +186,7 @@ fn resolve_similar_filter(
     Ok((Vec::new(), std::collections::HashMap::new()))
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct SearchParams {
     pub q: Option<String>,
     #[serde(rename = "type")]
@@ -533,33 +533,6 @@ pub(super) fn build_parsed_search(params: &SearchParams, state: &AppState) -> Br
         collapse_stacks,
         nodefault,
     }
-}
-
-/// Merge explicit dropdown params into a ParsedSearch.
-/// Used by handlers not yet migrated to build_parsed_search.
-pub(super) fn merge_search_params(
-    query: &str,
-    asset_type: &str,
-    tag: &str,
-    format: &str,
-    rating_str: &str,
-    label: &str,
-) -> ParsedSearch {
-    let mut parsed = parse_search_query(query);
-    if !asset_type.is_empty() { parsed.asset_types.push(asset_type.to_string()); }
-    if !tag.is_empty() {
-        for t in tag.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-            parsed.tags.push(t.to_string());
-        }
-    }
-    if !format.is_empty() { parsed.formats.push(format.to_string()); }
-    if !rating_str.is_empty() { parsed.rating = crate::query::parse_numeric_filter(rating_str); }
-    if label == "none" {
-        parsed.color_label_none = true;
-    } else if !label.is_empty() {
-        parsed.color_labels.push(label.to_string());
-    }
-    parsed
 }
 
 /// Apply the default filter from config to a parsed search, unless disabled.

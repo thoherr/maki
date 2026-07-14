@@ -1560,7 +1560,7 @@ window.onFilterChange = onFilterChange;
     function getFilterParams() {
         var params = new URLSearchParams(window.location.search);
         var filters = {};
-        ['q', 'type', 'tag', 'format', 'volume', 'rating', 'label', 'collection', 'path', 'person'].forEach(function(k) {
+        ['q', 'type', 'tag', 'format', 'volume', 'rating', 'label', 'collection', 'path', 'person', 'stacks', 'nodefault'].forEach(function(k) {
             var v = params.get(k);
             if (v) filters[k] = v;
         });

@@ -1,6 +1,6 @@
 //! Browse / search / asset-page / facets route handlers.
 //!
-//! Shared helpers (build_parsed_search, merge_search_params,
+//! Shared helpers (build_parsed_search,
 //! resolve_best_variant_idx, resolve_similar_filter, ResolvedSearch,
 //! BrowseFilters, SearchParams) live in the parent routes module so sibling
 //! submodules (calendar_map, media, assets, ai) can reuse them; the
