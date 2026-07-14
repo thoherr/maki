@@ -2,6 +2,65 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.9.2 (2026-07-14)
+
+Web export trust + preview export. No schema migration.
+
+### Fixed
+
+- **Partial web exports are no longer silent.** On a mostly-offline
+  catalog, "Export all" looked like it exported only the newest images:
+  assets whose volumes were offline were skipped from the ZIP with no
+  feedback — HTTP 200, complete-looking archive. The export response
+  now carries `X-Maki-Exported` / `X-Maki-Skipped` /
+  `X-Maki-Skipped-Offline` headers and the export dialog warns when
+  files were left out ("Export incomplete: 4 files could not be
+  included (4 on offline volumes). The ZIP contains 5 files."). Covers
+  both "Export all" and the batch-toolbar Export (same endpoint).
+- **"Export all" exports exactly what the grid shows.** The export
+  endpoint had its own filter pipeline that drifted from the browse
+  page: it ignored the `[browse] default_filter`, never resolved AI
+  filters (`text:` / `similar:` in the query), and always exported
+  stack members even when the grid was collapsed — so an export of a
+  filtered view could contain *more* assets than the grid showed. The
+  endpoint now runs the identical `build_parsed_search` →
+  `ResolvedSearch` → AI-resolution pipeline as the grid, honors stack
+  collapse, and the dialog forwards the `stacks` / `nodefault` URL
+  params. One deliberate difference kept: an unresolvable
+  collection/person filter exports nothing rather than everything
+  (fail-closed).
+
+### Added
+
+- **Preview / smart-preview export.** `maki export --previews` /
+  `--smart-previews` (and a new "Content" picker in the web export
+  dialog: Originals / Previews / Smart previews) export the assets'
+  preview images instead of the originals. Previews live in the catalog
+  directory, so this works with every volume offline — delivery-sized
+  copies for social media or client review without mounting archive
+  drives. Exported files keep the original filename with the extension
+  swapped to the preview format (`IMG_0042.NEF` → `IMG_0042.jpg`);
+  mirror layout mirrors the original's directory structure (multi-volume
+  label prefix included). Assets without a generated (smart) preview
+  are reported as skipped — no silent quality fallback; run
+  `maki generate-previews [--smart]` first for full coverage. Composes
+  with `--zip`, `--symlink`, `--layout mirror`, `--dry-run`. Preview
+  copies skip SHA-256 verification (the plan carries the source
+  variant's hash, not the preview's); in directory exports an existing
+  target file is skipped by existence alone, so use `--overwrite` after
+  regenerating previews.
+
+### Internal
+
+- Mirror layout's multi-volume label prefix is now keyed by the
+  recorded source volume id instead of a source-path prefix match.
+- `merge_search_params` (the export endpoint's private filter merger)
+  had no remaining callers and is removed.
+
+Tests: 934 + 261 + 7 standard, 1066 + 303 + 7 pro (+3 CLI export tests:
+preview extension swap, offline-volume delivery, missing-smart-preview
+skip).
+
 ## v4.9.1 (2026-07-09)
 
 Security + polish patch. No schema migration.

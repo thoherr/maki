@@ -2,7 +2,7 @@
 
 Living document tracking planned enhancements. Previous proposals (all implemented or deferred) are in `archive/`. Active proposals are in `doc/proposals/`.
 
-Current version: **v4.9.1** (2026-07-09)
+Current version: **v4.9.2** (2026-07-14)
 
 ---
 
@@ -123,6 +123,12 @@ Professional-grade contact sheet layouts beyond the current defaults. Templates 
 
 The ZIP export modal shows "Preparing..." with no progress feedback.
 
+> Partial-export *feedback* shipped in **v4.9.2**: the response carries
+> `X-Maki-Exported` / `X-Maki-Skipped` / `X-Maki-Skipped-Offline`
+> headers and the dialog warns when files were left out (offline
+> volumes, missing previews). Still open: *progress during* the export,
+> and the pre-flight size warning below.
+
 **Scope:**
 - Server sends export plan summary (file count, estimated size) before starting
 - Client shows a progress bar or asset counter
@@ -240,3 +246,5 @@ Design documents for completed features are in `doc/proposals/archive/`. Key mil
 - **v4.8.0**: Horizon 2 completion — workflow features. `maki watch` (poll-based auto-import with copy-stability debounce); `maki auto-stack` *(Pro)* (similarity clustering via union-find over top-K neighbour edges); `maki writeback --embed` *(Pro)* — embedded-XMP-in-JPEG write-back v1 with trash-preserved originals, verify-before-atomic-swap, and content-hash identity migration; web provenance badges on machine-added tag chips; and the `-person:` / export-zip `-collection:` exclude-filter gaps closed. Tests: 920 + 257 + 7 standard, 1052 + 299 + 7 pro.
 - **v4.8.1**: Windows hotfix. `maki watch` and `maki refresh <path>` computed relative paths via `strip_prefix` (backslashes on Windows) and never matched the catalog's forward-slash-normalized `relative_path` — watch treated changed files as new, path-mode refresh found nothing. Forward-slash normalization at the three lookup sites (same class as the v4.6.0 Windows trash fix).
 - **v4.9.0**: Horizon 3 — Reversibility arc opens. `maki undo` (LIFO, operation-granular, per-asset "changed since" safety) + `maki history`, built on a `<catalog>/history/` journal and a single write-through choke point at the query-engine layer (the structural fix wanted since the v4.5.15 divergence); tag autocomplete completes-into-input across all three pickers (import dialog, filter bar, detail page); and an in-semver dependency refresh (advisories clean). Tests: 933 + 258 + 7 standard, 1065 + 300 + 7 pro.
+- **v4.9.1**: Security + polish patch. quick-xml 0.36 → 0.41 clears two DoS advisories on the XMP parse path (RUSTSEC-2026-0194/0195); crossbeam-epoch clears 0204; tag autocomplete completes into the input across all three pickers; web import-dialog checkboxes default from `[import]` config; VLM model guide + planning docs refreshed. Tests: 934 + 258 + 7 standard, 1066 + 300 + 7 pro.
+- **v4.9.2**: Web export trust + preview export. "Export all" silently dropped offline-volume assets (HTTP 200, complete-looking ZIP) — the export dialog now warns when the archive is partial (`X-Maki-*` skip-count headers). The export endpoint runs the exact browse-grid pipeline (default filter + `nodefault`, AI `text:`/`similar:` resolution, stack collapse), so "Export all" exports precisely what the grid shows. New preview/smart-preview export (`maki export --previews|--smart-previews`, web "Content" picker) sources from the catalog directory — delivery-sized copies work with every volume offline; original filename kept with extension swapped to preview format. Tests: 934 + 261 + 7 standard, 1066 + 303 + 7 pro.
