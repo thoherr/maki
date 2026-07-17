@@ -296,11 +296,16 @@ impl Catalog {
         // direct column comparison rather than a JSON-each subquery so it
         // stays cheap on large catalogues.
         if let Some(ref f) = opts.tag_count { Self::numeric_clause(f, "a.leaf_tag_count", &mut clauses, &mut params); }
-        if let Some(ref f) = opts.duration { Self::numeric_clause(f, "a.video_duration", &mut clauses, &mut params); }
+        if let Some(ref f) = opts.duration { Self::numeric_clause(f, "a.duration_seconds", &mut clauses, &mut params); }
         if let Some(ref c) = opts.codec {
             clauses.push("a.video_codec LIKE ?".to_string());
             params.push(Box::new(format!("%{c}%")));
         }
+        if let Some(ref k) = opts.audio_key {
+            clauses.push("LOWER(a.audio_key) = LOWER(?)".to_string());
+            params.push(Box::new(k.clone()));
+        }
+        if let Some(ref f) = opts.audio_bpm { Self::numeric_clause(f, "a.audio_bpm", &mut clauses, &mut params); }
 
         // Embedding presence filter
         if let Some(has_embed) = opts.has_embed {

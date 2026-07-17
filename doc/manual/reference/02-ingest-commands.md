@@ -22,6 +22,7 @@ Commands for importing files, applying metadata, and merging asset variants. Imp
 | [auto-group](#maki-auto-group) | Auto-group by filename stem |
 | [auto-tag](#maki-auto-tag) | AI-powered tag suggestions *(Pro)* |
 | [embed](#maki-embed) | Generate image embeddings *(Pro)* |
+| [audio analyze](#maki-audio-analyze) | Detect musical key and tempo of audio assets |
 | [describe](#maki-describe) | Generate VLM descriptions *(Pro)* |
 
 ---
@@ -1658,6 +1659,70 @@ maki embed --export
 
 [auto-tag](#maki-auto-tag) -- AI tag suggestion and visual similarity search.
 [Configuration](08-configuration.md#ai-section) -- `[ai]` section for model and model directory settings.
+
+---
+
+## maki audio analyze {#maki-audio-analyze}
+
+### NAME
+
+maki-audio-analyze -- detect musical key and tempo of audio assets via external tools
+
+### SYNOPSIS
+
+```
+maki [GLOBAL FLAGS] audio analyze [QUERY] [OPTIONS]
+```
+
+### DESCRIPTION
+
+Runs external analyzers on audio assets and stores the results as searchable metadata: the musical key (via the configured `[audio] key_command`, default [keyfinder-cli](https://github.com/evanpurkhiser/keyfinder-cli)) and the tempo in BPM (via `[audio] bpm_command`, default [beat_this](https://github.com/CPJKU/beat_this); MAKI derives BPM from the median inter-beat interval of the tracker's beat timestamps, which is robust against occasional missed or extra beats).
+
+Results are written to the analyzed variant's `source_metadata` (`audio_key` / `audio_bpm`) — sidecar first, catalog second — and denormalized into typed columns, so the [`key:`](06-search-filters.md#key) and [`bpm:`](06-search-filters.md#bpm) search filters pick them up immediately. The values also appear as badges on the web asset detail page.
+
+Analysis is **explicitly opt-in** rather than part of import: key detection is only trustworthy on full mixes — running it on voice memos or single-instrument practice recordings produces confident-looking nonsense. Scope the query to the material where the answer means something (`path:BackingTracks`, `tag:genre|…`).
+
+MAKI never processes audio itself — it records what the tools report. Missing tools are warned about and that half of the analysis is skipped; whichever analyzer exists still runs. Assets that already carry both fields are skipped (use `--force` to re-analyze); assets whose volumes are offline are reported and skipped.
+
+### ARGUMENTS
+
+**QUERY** (optional)
+: Search query to scope the analysis (same syntax as `maki search`). `type:audio` is always implied. Empty analyzes all audio assets.
+
+### OPTIONS
+
+**--force**
+: Re-analyze assets that already have key/BPM values.
+
+**--dry-run**
+: Report what would be analyzed without running the tools.
+
+`--json` outputs an `AudioAnalyzeResult` object with fields: `assets_matched`, `analyzed`, `skipped_existing`, `skipped_offline`, `failed`, `keys_set`, `bpms_set`, `key_tool_available`, `bpm_tool_available`, `errors`.
+
+### EXAMPLES
+
+Analyze all backing tracks:
+
+```bash
+maki audio analyze "path:BackingTracks" --log
+```
+
+Re-analyze a single asset after replacing the file:
+
+```bash
+maki audio analyze "id:6ba7b810" --force
+```
+
+Then search by the results:
+
+```bash
+maki search "key:am bpm:100-140"
+```
+
+### SEE ALSO
+
+[Search filters](06-search-filters.md#key) -- `key:` and `bpm:` filter reference.
+[Configuration](08-configuration.md#audio-section) -- `[audio]` section for analyzer commands.
 
 ---
 

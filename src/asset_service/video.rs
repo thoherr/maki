@@ -19,7 +19,32 @@ impl AssetService {
         source_path: &std::path::Path,
     ) -> bool {
         let video_meta = crate::preview::extract_video_metadata(source_path);
-        if video_meta.is_empty() {
+        self.merge_variant_metadata(asset_id, variant_hash, video_meta)
+    }
+
+    /// Backfill audio metadata (duration, bitrate, sample rate, channels,
+    /// embedded title/artist/album) via lofty. Audio analog of
+    /// [`Self::backfill_video_metadata`] — same sidecar + catalog update.
+    pub fn backfill_audio_metadata(
+        &self,
+        asset_id: &str,
+        variant_hash: &str,
+        source_path: &std::path::Path,
+    ) -> bool {
+        let audio_meta = crate::preview::extract_audio_source_metadata(source_path);
+        self.merge_variant_metadata(asset_id, variant_hash, audio_meta)
+    }
+
+    /// Merge extracted metadata into a variant's source_metadata, updating
+    /// sidecar (source of truth) and catalog. Returns true if anything was
+    /// written.
+    pub(crate) fn merge_variant_metadata(
+        &self,
+        asset_id: &str,
+        variant_hash: &str,
+        meta: std::collections::HashMap<String, String>,
+    ) -> bool {
+        if meta.is_empty() {
             return false;
         }
         let store = MetadataStore::new(&self.catalog_root);
@@ -29,7 +54,7 @@ impl AssetService {
         };
         if let Ok(mut asset) = store.load(uuid) {
             if let Some(v) = asset.variants.iter_mut().find(|v| v.content_hash == variant_hash) {
-                v.source_metadata.extend(video_meta);
+                v.source_metadata.extend(meta);
                 if let Ok(catalog) = crate::catalog::Catalog::open(&self.catalog_root) {
                     catalog.insert_variant(v).ok();
                     catalog.insert_asset(&asset).ok();

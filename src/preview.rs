@@ -214,6 +214,7 @@ impl PreviewGenerator {
                 | "mef" | "mos" | "rwl" | "bay" | "x3f" => "RAW (dcraw)",
                 "mp4" | "mov" | "avi" | "mkv" | "wmv" | "flv" | "webm" | "m4v" | "mpg" | "mpeg"
                 | "3gp" | "mts" | "m2ts" => "video (ffmpeg)",
+                f if AUDIO_FORMATS.contains(&f) => "audio waveform (ffmpeg)",
                 _ => "info card",
             };
             let name = source_path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
@@ -233,7 +234,12 @@ impl PreviewGenerator {
             // Video formats
             "mp4" | "mov" | "avi" | "mkv" | "wmv" | "flv" | "webm" | "m4v" | "mpg" | "mpeg"
             | "3gp" | "mts" | "m2ts" => self.generate_video(dest, source_path, max_edge, quality, manual_rotation),
-            // Audio and everything else → info card
+            // Audio → info card with waveform strip (falls back to plain
+            // info card internally when ffmpeg is unavailable)
+            f if AUDIO_FORMATS.contains(&f) => {
+                return self.generate_audio(dest, source_path, &fmt, max_edge, quality)
+            }
+            // Everything else → info card
             _ => return self.generate_info_card(dest, source_path, &fmt, max_edge, quality),
         };
 
@@ -481,6 +487,93 @@ impl PreviewGenerator {
         let resized = resize_image(&img, max_edge);
         self.save_preview(&resized, dest, quality)?;
         Ok(())
+    }
+
+    /// Generate an audio preview: the info card with a waveform rendered
+    /// into its empty top region via ffmpeg `showwavespic`.
+    ///
+    /// Degrades gracefully — when ffmpeg is missing or fails on the file,
+    /// the plain info card is written (previous behavior), never an error.
+    fn generate_audio(
+        &self,
+        dest: &Path,
+        source_path: &Path,
+        format: &str,
+        max_edge: u32,
+        quality: u8,
+    ) -> Result<Option<PathBuf>> {
+        let info = InfoCardData::from_file(source_path, format);
+        let card_width = max_edge;
+        let card_height = (max_edge as f64 * 0.75) as u32;
+        let mut img = render_info_card(&info, card_width, card_height);
+
+        // Waveform strip: card-margin wide, sits in the blank area above
+        // the format badge (badge starts at y=180 in card coordinates).
+        let wave_x: u32 = 40;
+        let wave_y: u32 = 20;
+        let wave_w = card_width.saturating_sub(80);
+        let wave_h: u32 = 140;
+        if wave_w >= 80 && tool_available("ffmpeg") {
+            let temp_wave = dest.with_extension("tmp.png");
+            let color = format!(
+                "#{:02x}{:02x}{:02x}",
+                BADGE_AUDIO.0[0], BADGE_AUDIO.0[1], BADGE_AUDIO.0[2]
+            );
+            // filter=peak draws the per-column envelope — the default
+            // (average) cancels symmetric waveforms to a flat line.
+            let filter = format!(
+                "aformat=channel_layouts=mono,showwavespic=s={wave_w}x{wave_h}:colors={color}:filter=peak"
+            );
+            if self.verbosity.debug {
+                eprintln!(
+                    "[debug] ffmpeg -i {} -filter_complex '{filter}' -frames:v 1 -y {}",
+                    source_path.display(),
+                    temp_wave.display()
+                );
+            }
+            let output = Command::new("ffmpeg")
+                .args(["-i"])
+                .arg(source_path)
+                .args(["-filter_complex", &filter, "-frames:v", "1", "-y"])
+                .arg(&temp_wave)
+                .output();
+
+            match output {
+                Ok(o) if o.status.success() => {
+                    if let Ok(wave) = image::open(&temp_wave) {
+                        let wave = wave.to_rgba8();
+                        // showwavespic renders on transparency; copy only
+                        // the drawn pixels onto the card.
+                        for (x, y, px) in wave.enumerate_pixels() {
+                            if px.0[3] > 32 {
+                                let cx = wave_x + x;
+                                let cy = wave_y + y;
+                                if cx < card_width && cy < card_height {
+                                    img.put_pixel(cx, cy, Rgb([px.0[0], px.0[1], px.0[2]]));
+                                }
+                            }
+                        }
+                    }
+                    std::fs::remove_file(&temp_wave).ok();
+                }
+                Ok(o) => {
+                    std::fs::remove_file(&temp_wave).ok();
+                    if self.verbosity.debug && !o.stderr.is_empty() {
+                        eprintln!(
+                            "[debug] ffmpeg showwavespic stderr: {}",
+                            String::from_utf8_lossy(&o.stderr)
+                        );
+                    }
+                }
+                Err(_) => {
+                    std::fs::remove_file(&temp_wave).ok();
+                }
+            }
+        }
+
+        ensure_parent(dest)?;
+        self.save_preview(&image::DynamicImage::ImageRgb8(img), dest, quality)?;
+        Ok(Some(dest.to_path_buf()))
     }
 
     /// Generate an info card preview showing textual metadata.
@@ -881,7 +974,7 @@ fn warn_missing_tool_once(msg: &str) {
     }
 }
 
-fn tool_available(name: &str) -> bool {
+pub(crate) fn tool_available(name: &str) -> bool {
     #[cfg(unix)]
     let checker = "which";
     #[cfg(windows)]
@@ -893,6 +986,60 @@ fn tool_available(name: &str) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// Extract audio metadata for `variant.source_metadata` using lofty.
+///
+/// The audio analog of [`extract_video_metadata`]: raw numeric values keyed
+/// `audio_*` (duration in seconds, bitrate in kbps, sample rate in Hz,
+/// channel count) plus embedded tag fields (title/artist/album) when
+/// present. Returns an empty map when the file can't be read as audio.
+/// The typed `assets` columns (`duration_seconds`, `audio_sample_rate`, …)
+/// are denormalized from these keys in `insert_asset`.
+pub fn extract_audio_source_metadata(path: &Path) -> std::collections::HashMap<String, String> {
+    let mut meta = std::collections::HashMap::new();
+
+    let tagged_file = match lofty::read_from_path(path) {
+        Ok(f) => f,
+        Err(_) => return meta,
+    };
+
+    use lofty::file::AudioFile;
+    let props = tagged_file.properties();
+
+    let dur = props.duration();
+    if dur.as_secs() > 0 || dur.subsec_millis() > 0 {
+        meta.insert("audio_duration".to_string(), format!("{:.1}", dur.as_secs_f64()));
+    }
+    if let Some(b) = props.audio_bitrate().or_else(|| props.overall_bitrate()) {
+        meta.insert("audio_bitrate".to_string(), b.to_string());
+    }
+    if let Some(sr) = props.sample_rate() {
+        meta.insert("audio_sample_rate".to_string(), sr.to_string());
+    }
+    if let Some(ch) = props.channels() {
+        meta.insert("audio_channels".to_string(), ch.to_string());
+    }
+
+    // Embedded tag fields — searchable via FTS/meta: and shown in the
+    // source-metadata table. Musical key/BPM deliberately NOT read from
+    // tags here: `maki audio analyze` computes them (tag values in the
+    // wild are unreliable).
+    use lofty::file::TaggedFileExt;
+    use lofty::tag::Accessor;
+    if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+        if let Some(v) = tag.title() {
+            if !v.trim().is_empty() { meta.insert("audio_title".to_string(), v.to_string()); }
+        }
+        if let Some(v) = tag.artist() {
+            if !v.trim().is_empty() { meta.insert("audio_artist".to_string(), v.to_string()); }
+        }
+        if let Some(v) = tag.album() {
+            if !v.trim().is_empty() { meta.insert("audio_album".to_string(), v.to_string()); }
+        }
+    }
+
+    meta
 }
 
 /// Extract video metadata (duration, codec, resolution, framerate) using ffprobe.

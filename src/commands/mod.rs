@@ -37,6 +37,8 @@ use crate::{
 mod ai;
 #[cfg(any(feature = "ai", feature = "pro"))]
 pub use ai::*;
+mod audio;
+pub use audio::*;
 mod export;
 pub use export::*;
 #[cfg(feature = "ai")]

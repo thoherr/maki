@@ -1171,6 +1171,13 @@ enum Commands {
         command: TrashCommands,
     },
 
+    /// Audio metadata analysis via external tools
+    #[command(display_order = 47)]
+    Audio {
+        #[command(subcommand)]
+        command: AudioCommands,
+    },
+
     /// Copy or move asset files to another volume
     #[command(display_order = 46)]
     Relocate {
@@ -1965,6 +1972,33 @@ enum AiCommands {
         /// Emit the built-in default vocabulary instead of the active one.
         #[arg(long)]
         default: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum AudioCommands {
+    /// Detect musical key and tempo of audio assets via external tools
+    ///
+    /// Runs the configured `[audio] key_command` (default: keyfinder-cli)
+    /// and `[audio] bpm_command` (default: beat_this) on each matching
+    /// audio asset and stores `audio_key` / `audio_bpm` in the catalog +
+    /// sidecar, searchable via `key:` and `bpm:` filters. Explicit opt-in:
+    /// key detection is only trustworthy on full mixes, not on voice
+    /// recordings — scope the query accordingly. Missing tools are
+    /// warned about and skipped.
+    Analyze {
+        /// Search query to scope the analysis (same syntax as maki search;
+        /// `type:audio` is implied). Empty analyzes all audio assets.
+        #[arg(default_value = "")]
+        query: String,
+
+        /// Re-analyze assets that already have key/BPM values
+        #[arg(long)]
+        force: bool,
+
+        /// Report what would be analyzed without running the tools
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -2795,6 +2829,11 @@ faces/\n\
             verbosity,
         ),
         Commands::Trash { command } => run_trash_command(command, cli.json),
+        Commands::Audio { command } => match command {
+            AudioCommands::Analyze { query, force, dry_run } => {
+                run_audio_analyze_command(query, force, dry_run, cli.json, cli.log, verbosity)
+            }
+        },
         Commands::UpdateLocation {
             asset_id,
             from,

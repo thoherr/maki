@@ -984,6 +984,33 @@ time = true
 
 ---
 
+## [audio] Section
+
+External analyzers for `maki audio analyze` (musical key and tempo detection). The tools are shelled out per file — same policy as dcraw/ffmpeg: probed at run time, warned about when missing, never bundled. Commands are configurable so venv-installed tools or substitutes work.
+
+### key_command
+
+- **Type:** string
+- **Default:** `keyfinder-cli`
+
+Command that prints an audio file's musical key to stdout, invoked as `<command> <file>`. The default, [keyfinder-cli](https://github.com/evanpurkhiser/keyfinder-cli), emits standard notation (`Am`, `Eb`, …); empty output with exit 0 is treated as "no key detected" (silence), not an error. Any substitute with the same contract works.
+
+### bpm_command
+
+- **Type:** string
+- **Default:** `beat_this`
+
+Command that writes beat timestamps for an audio file, invoked as `<command> <file> -o <output-dir>`. The default, [beat_this](https://github.com/CPJKU/beat_this), writes `.beats` files with one `<seconds> <beat-number>` line per beat. MAKI derives BPM from the median inter-beat interval, so occasional missed or extra beats don't skew the result. Any beat tracker with the same output contract works.
+
+```toml
+[audio]
+# Point at a venv installation
+key_command = "keyfinder-cli"
+bpm_command = "/Users/me/.venvs/beats/bin/beat_this"
+```
+
+---
+
 ## Full Example
 
 A complete `maki.toml` with all options set and annotated:

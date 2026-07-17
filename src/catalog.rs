@@ -104,8 +104,8 @@ pub struct SearchRow {
     pub preview_rotation: Option<u16>,
     /// Number of detected faces in this asset.
     pub face_count: u32,
-    /// Video duration in seconds (None for non-video assets).
-    pub video_duration: Option<f64>,
+    /// Media duration in seconds (audio and video; None otherwise).
+    pub duration_seconds: Option<f64>,
 }
 
 impl SearchRow {
@@ -511,6 +511,8 @@ pub struct SearchOptions<'a> {
     pub tag_count: Option<NumericFilter>,
     pub duration: Option<NumericFilter>,
     pub codec: Option<String>,
+    pub audio_key: Option<String>,
+    pub audio_bpm: Option<NumericFilter>,
     pub stale_days: Option<NumericFilter>,
     pub meta_filters: Vec<(&'a str, &'a str)>,
     pub orphan: bool,
@@ -580,6 +582,8 @@ impl<'a> Default for SearchOptions<'a> {
             tag_count: None,
             duration: None,
             codec: None,
+            audio_key: None,
+            audio_bpm: None,
             stale_days: None,
             meta_filters: Vec::new(),
             orphan: false,
@@ -691,7 +695,7 @@ fn next_date_bound(s: &str) -> String {
 }
 
 /// Current schema version. Bump this whenever `run_migrations()` changes.
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 11;
 
 // ═══ CATALOG STRUCT & CONNECTION ═══
 
@@ -951,11 +955,23 @@ mod tests {
     }
 
     #[test]
-    fn initialize_stamps_schema_version_10_with_tag_sources_column() {
+    fn initialize_stamps_schema_version_11_with_audio_columns() {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
         assert_eq!(catalog.schema_version(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 10);
+        assert_eq!(SCHEMA_VERSION, 11);
+        // v11: shared duration column (renamed from video_duration) and
+        // typed audio columns exist.
+        let cols: Vec<String> = {
+            let mut stmt = catalog.conn.prepare("PRAGMA table_info(assets)").unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, String>(1)).unwrap();
+            rows.map(|r| r.unwrap()).collect()
+        };
+        assert!(cols.contains(&"duration_seconds".to_string()));
+        assert!(!cols.contains(&"video_duration".to_string()));
+        for c in ["audio_sample_rate", "audio_channels", "audio_bitrate", "audio_key", "audio_bpm"] {
+            assert!(cols.contains(&c.to_string()), "missing column {c}");
+        }
         // v10 column exists and defaults to an empty JSON object.
         let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:v10");
         catalog.insert_asset(&asset).unwrap();

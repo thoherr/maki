@@ -14,7 +14,7 @@ impl Catalog {
     /// **Invariant: `asset.variants` must be populated before calling.**
     /// The denormalized columns (`best_variant_hash`,
     /// `primary_variant_format`, `variant_count`, `latitude`/`longitude`,
-    /// `video_duration`/`video_codec`) are computed here from the variant
+    /// `duration_seconds`/`video_codec`/`audio_*`) are computed here from the variant
     /// list — inserting an asset and filling its variants in afterwards
     /// leaves them empty/stale. This is the known trap in test setup:
     /// `setup_search_catalog()` / `setup_metadata_catalog()` populate
@@ -29,11 +29,24 @@ impl Catalog {
         let primary_format = crate::models::variant::compute_primary_format(&asset.variants);
         let variant_count = asset.variants.len() as i64;
         let (latitude, longitude) = crate::models::variant::compute_gps_from_variants(&asset.variants);
-        // Compute video duration from first variant that has it
-        let video_duration: Option<f64> = asset.variants.iter()
-            .find_map(|v| v.source_metadata.get("video_duration")?.parse::<f64>().ok());
+        // Duration is shared across media types: video variants carry
+        // `video_duration`, audio variants `audio_duration` (both seconds).
+        let duration_seconds: Option<f64> = asset.variants.iter()
+            .find_map(|v| v.source_metadata.get("video_duration")?.parse::<f64>().ok())
+            .or_else(|| asset.variants.iter()
+                .find_map(|v| v.source_metadata.get("audio_duration")?.parse::<f64>().ok()));
         let video_codec: Option<String> = asset.variants.iter()
             .find_map(|v| v.source_metadata.get("video_codec").cloned());
+        let audio_sample_rate: Option<i64> = asset.variants.iter()
+            .find_map(|v| v.source_metadata.get("audio_sample_rate")?.parse::<i64>().ok());
+        let audio_channels: Option<i64> = asset.variants.iter()
+            .find_map(|v| v.source_metadata.get("audio_channels")?.parse::<i64>().ok());
+        let audio_bitrate: Option<i64> = asset.variants.iter()
+            .find_map(|v| v.source_metadata.get("audio_bitrate")?.parse::<i64>().ok());
+        let audio_key: Option<String> = asset.variants.iter()
+            .find_map(|v| v.source_metadata.get("audio_key").cloned());
+        let audio_bpm: Option<f64> = asset.variants.iter()
+            .find_map(|v| v.source_metadata.get("audio_bpm")?.parse::<f64>().ok());
         // Leaf tag count — denormalised for the `tagcount:` search filter.
         // Computed from the current tags list, so any call that saves the
         // asset (tag add/remove/rename/split/clear/reimport) picks up the
@@ -43,8 +56,8 @@ impl Catalog {
         // intermediate DELETE that triggers FK constraint violations on
         // variants/faces/collection_assets referencing this asset.
         self.conn.execute(
-            "INSERT INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count, latitude, longitude, preview_rotation, preview_variant, video_duration, video_codec, face_scan_status, leaf_tag_count, tag_sources) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20) \
+            "INSERT INTO assets (id, name, created_at, asset_type, tags, description, rating, color_label, best_variant_hash, primary_variant_format, variant_count, latitude, longitude, preview_rotation, preview_variant, duration_seconds, video_codec, audio_sample_rate, audio_channels, audio_bitrate, audio_key, audio_bpm, face_scan_status, leaf_tag_count, tag_sources) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25) \
              ON CONFLICT(id) DO UPDATE SET \
                name = excluded.name, \
                created_at = excluded.created_at, \
@@ -61,8 +74,13 @@ impl Catalog {
                longitude = excluded.longitude, \
                preview_rotation = excluded.preview_rotation, \
                preview_variant = excluded.preview_variant, \
-               video_duration = excluded.video_duration, \
+               duration_seconds = excluded.duration_seconds, \
                video_codec = excluded.video_codec, \
+               audio_sample_rate = excluded.audio_sample_rate, \
+               audio_channels = excluded.audio_channels, \
+               audio_bitrate = excluded.audio_bitrate, \
+               audio_key = excluded.audio_key, \
+               audio_bpm = excluded.audio_bpm, \
                face_scan_status = excluded.face_scan_status, \
                leaf_tag_count = excluded.leaf_tag_count",
             rusqlite::params![
@@ -81,8 +99,13 @@ impl Catalog {
                 longitude,
                 asset.preview_rotation.map(|r| r as i64),
                 asset.preview_variant,
-                video_duration,
+                duration_seconds,
                 video_codec,
+                audio_sample_rate,
+                audio_channels,
+                audio_bitrate,
+                audio_key,
+                audio_bpm,
                 asset.face_scan_status.as_deref(),
                 leaf_tag_count,
                 tag_sources_json,

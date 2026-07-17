@@ -12,7 +12,7 @@ use super::*;
 const SEARCH_ROW_COLUMNS: &str = "a.id, a.name, a.asset_type, a.created_at, bv.original_filename, bv.format, \
      a.tags, a.description, bv.content_hash, a.rating, a.color_label, \
      a.primary_variant_format, a.variant_count, a.stack_id, s.member_count, \
-     a.preview_rotation, a.face_count, a.video_duration";
+     a.preview_rotation, a.face_count, a.duration_seconds";
 
 /// Map a row produced by a `SEARCH_ROW_COLUMNS` SELECT into a `SearchRow`.
 fn map_search_row(row: &rusqlite::Row) -> rusqlite::Result<SearchRow> {
@@ -23,7 +23,7 @@ fn map_search_row(row: &rusqlite::Row) -> rusqlite::Result<SearchRow> {
     let stack_member_count: Option<i64> = row.get(14)?;
     let rotation_val: Option<i64> = row.get(15)?;
     let face_count_val: i64 = row.get::<_, Option<i64>>(16)?.unwrap_or(0);
-    let video_duration: Option<f64> = row.get(17)?;
+    let duration_seconds: Option<f64> = row.get(17)?;
     Ok(SearchRow {
         asset_id: row.get(0)?,
         name: row.get(1)?,
@@ -42,7 +42,7 @@ fn map_search_row(row: &rusqlite::Row) -> rusqlite::Result<SearchRow> {
         stack_count: stack_member_count.map(|n| n as u32),
         preview_rotation: rotation_val.map(|r| r as u16),
         face_count: face_count_val as u32,
-        video_duration,
+        duration_seconds,
     })
 }
 

@@ -765,7 +765,7 @@ maki search "scattered:1"                    # all files in the same session roo
 
 **Values:** Duration in seconds. Supports all standard numeric filter forms: exact (`60`), minimum (`30+`), range (`10-120`), OR (`30,60`), OR+min (`30,60+`).
 
-**Description:** Filters by video duration. Duration is extracted from video files via ffprobe during import and stored as a denormalized `video_duration` column on the assets table. Non-video assets (images, audio) have no duration and will not match this filter.
+**Description:** Filters by media duration — video **and** audio. Duration is extracted at import (ffprobe for video, lofty for audio) and stored in the shared denormalized `duration_seconds` column on the assets table. Images and documents have no duration and will not match this filter.
 
 **Examples:**
 
@@ -775,10 +775,11 @@ maki search "duration:30+"                      # 30 seconds or longer
 maki search "duration:10-120"                   # between 10s and 2 minutes
 maki search "duration:30,60"                    # exactly 30s or 60s
 maki search "type:video duration:60+"           # videos at least 1 minute
+maki search "type:audio duration:300+"          # tracks longer than 5 minutes
 maki search "duration:10-30 rating:4+"          # short clips, highly rated
 ```
 
-**SQL behavior:** Direct filter on the denormalized `a.video_duration` column using `NumericFilter` (exact/min/range/values). No JOIN required.
+**SQL behavior:** Direct filter on the denormalized `a.duration_seconds` column using `NumericFilter` (exact/min/range/values). No JOIN required.
 
 ---
 
@@ -801,6 +802,46 @@ maki search "codec:hevc duration:60+"           # HEVC videos at least 1 minute
 ```
 
 **SQL behavior:** `WHERE a.video_codec LIKE '%value%'` (case-insensitive via SQLite `COLLATE NOCASE`). Pure assets-table filter, no JOIN required.
+
+---
+
+## key
+
+**Syntax:** `key:<key>`
+
+**Values:** Musical key in the notation your key tool emits — keyfinder-cli's standard notation by default (`A` = A major, `Am` = A minor, `Eb` = E-flat major, …). Case-insensitive exact match.
+
+**Description:** Filters audio assets by detected musical key. Keys are not read from file tags — they are computed by `maki audio analyze` (external keyfinder-cli by default) and stored in the denormalized `audio_key` column. Assets that have not been analyzed will not match.
+
+**Examples:**
+
+```
+maki search "key:am"                            # everything in A minor
+maki search "key:F#m bpm:100-140"               # F-sharp minor at moderate tempo
+maki search "type:audio key:c rating:4+"        # favorite tracks in C major
+```
+
+**SQL behavior:** `WHERE LOWER(a.audio_key) = LOWER(?)`. Pure assets-table filter, no JOIN required.
+
+---
+
+## bpm
+
+**Syntax:** `bpm:<N>` | `bpm:<N>+` | `bpm:<min>-<max>` | `bpm:<N>,<M>`
+
+**Values:** Tempo in beats per minute. Supports all standard numeric filter forms.
+
+**Description:** Filters audio assets by detected tempo. BPM is computed by `maki audio analyze` (beat_this beat tracker by default; MAKI derives BPM from the median inter-beat interval) and stored in the denormalized `audio_bpm` column. Assets that have not been analyzed will not match.
+
+**Examples:**
+
+```
+maki search "bpm:120"                           # exactly 120 BPM
+maki search "bpm:100-140"                       # moderate tempo range
+maki search "type:audio bpm:160+ tag:genre|drum-and-bass"
+```
+
+**SQL behavior:** Direct filter on the denormalized `a.audio_bpm` column using `NumericFilter`. No JOIN required.
 
 ---
 

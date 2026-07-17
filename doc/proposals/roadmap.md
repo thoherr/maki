@@ -42,6 +42,28 @@ search pipeline. See `doc/proposals/roadmap-v4.6-horizons.md`.
 
 **Complexity:** Per-item, see the document.
 
+### Audio as a First-Class Media Type
+
+Index audio properly (metadata, typed search, waveform previews,
+players), model derivation trees (song → stems → pitch-shifted mixes)
+via project manifests, and grow an audio workbench view — while keeping
+the "no audio processing in MAKI, ever" ground rule. Four phases; the
+derivation graph deliberately starts as a manifest sidecar (option C)
+and is promoted to core edges (option B) only once the schema has
+survived real use. See `doc/proposals/audio-first-class.md`.
+
+**Status:** Phase 1 (Index) implemented on main 2026-07-18, unreleased:
+lofty extraction into `variant.source_metadata` + sidecar, schema v11
+(shared `duration_seconds` + `audio_sample_rate`/`channels`/`bitrate`/
+`audio_key`/`audio_bpm` typed columns), waveform previews (ffmpeg
+`showwavespic`), `key:`/`bpm:` filters + `duration:` now audio-aware,
+`maki audio analyze` (keyfinder-cli / beat_this via `[audio]` config),
+web `<audio>` player + key/BPM/technical badges. Next: Phase 2
+(project manifests + workbench dashboard route).
+
+**Complexity:** Phase 1 low (shipped), Phase 2 medium, Phase 3 (core
+derivation edges) medium-high.
+
 ### Manual Translation (i18n)
 
 Produce the MAKI user manual in English and German from a single source using inline language markers. See `doc/proposals/manual-i18n.md`.

@@ -803,12 +803,18 @@ pub fn run_generate_previews_command(
                 }
 
                 if let Some(path) = source_path {
-                    // Backfill video metadata if missing
-                    if maki::asset_service::determine_asset_type(&variant.format) == maki::models::AssetType::Video
+                    // Backfill video/audio metadata if missing
+                    let variant_type = maki::asset_service::determine_asset_type(&variant.format);
+                    if variant_type == maki::models::AssetType::Video
                         && !variant.source_metadata.contains_key("video_duration")
                     {
                         let service = AssetService::new(&catalog_root, verbosity, &config.preview);
                         service.backfill_video_metadata(&asset_data.id.to_string(), &variant.content_hash, &path);
+                    } else if variant_type == maki::models::AssetType::Audio
+                        && !variant.source_metadata.contains_key("audio_duration")
+                    {
+                        let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+                        service.backfill_audio_metadata(&asset_data.id.to_string(), &variant.content_hash, &path);
                     }
 
                     let file_start = std::time::Instant::now();

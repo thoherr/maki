@@ -118,6 +118,10 @@ pub struct ParsedSearch {
     pub tag_count: Option<NumericFilter>,
     pub duration: Option<NumericFilter>,
     pub codec: Option<String>,
+    /// `key:Am` — musical key (exact, case-insensitive; set by `maki audio analyze`).
+    pub audio_key: Option<String>,
+    /// `bpm:120` / `bpm:100-140` — tempo (set by `maki audio analyze`).
+    pub audio_bpm: Option<NumericFilter>,
     pub stale_days: Option<NumericFilter>,
     pub meta_filters: Vec<(String, String)>,
     pub orphan: bool,
@@ -261,6 +265,8 @@ impl ParsedSearch {
             tag_count: self.tag_count.clone(),
             duration: self.duration.clone(),
             codec: self.codec.clone(),
+            audio_key: self.audio_key.clone(),
+            audio_bpm: self.audio_bpm.clone(),
             stale_days: self.stale_days.clone(),
             meta_filters: self
                 .meta_filters
@@ -528,6 +534,10 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
             parsed.duration = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("codec:") {
             parsed.codec = Some(value.to_string());
+        } else if let Some(value) = token_body.strip_prefix("key:") {
+            parsed.audio_key = Some(value.to_string());
+        } else if let Some(value) = token_body.strip_prefix("bpm:") {
+            parsed.audio_bpm = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("faces:") {
             if value == "any" {
                 parsed.has_faces = Some(true);

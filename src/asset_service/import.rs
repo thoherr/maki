@@ -190,6 +190,9 @@ impl AssetService {
                     if asset_type == AssetType::Video {
                         let video_meta = crate::preview::extract_video_metadata(file_path);
                         exif_data.source_metadata.extend(video_meta);
+                    } else if asset_type == AssetType::Audio {
+                        let audio_meta = crate::preview::extract_audio_source_metadata(file_path);
+                        exif_data.source_metadata.extend(audio_meta);
                     }
 
                     let mut asset = Asset::new(asset_type, &content_hash);
@@ -261,6 +264,9 @@ impl AssetService {
                     if determine_asset_type(ext) == AssetType::Video {
                         let video_meta = crate::preview::extract_video_metadata(file_path);
                         exif_data.source_metadata.extend(video_meta);
+                    } else if determine_asset_type(ext) == AssetType::Audio {
+                        let audio_meta = crate::preview::extract_audio_source_metadata(file_path);
+                        exif_data.source_metadata.extend(audio_meta);
                     }
 
                     // If this variant has an older date, update the asset's created_at

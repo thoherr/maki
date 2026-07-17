@@ -661,6 +661,43 @@ impl Default for TrashConfig {
     }
 }
 
+/// Audio analysis configuration (`maki audio analyze`).
+///
+/// The analyzers are external CLI tools shelled out per file, same policy
+/// as dcraw/ffmpeg: probed, warned about when missing, never bundled. The
+/// commands are configurable so venv-installed tools or substitutes work
+/// (any key tool printing the key to stdout; any beat tracker writing
+/// `.beats` timestamp lines).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AudioConfig {
+    /// Command that prints an audio file's musical key to stdout
+    /// (default: `keyfinder-cli`; invoked as `<cmd> <file>`).
+    #[serde(default = "default_audio_key_command")]
+    pub key_command: String,
+    /// Command that writes beat timestamps for an audio file (default:
+    /// `beat_this`; invoked as `<cmd> <file> -o <out>`, expects `.beats`
+    /// output with one `<seconds> <beat>` line per beat).
+    #[serde(default = "default_audio_bpm_command")]
+    pub bpm_command: String,
+}
+
+fn default_audio_key_command() -> String {
+    "keyfinder-cli".to_string()
+}
+
+fn default_audio_bpm_command() -> String {
+    "beat_this".to_string()
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            key_command: default_audio_key_command(),
+            bpm_command: default_audio_bpm_command(),
+        }
+    }
+}
+
 /// Edit-history journal configuration (`maki undo` / `maki history`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HistoryConfig {
@@ -868,6 +905,8 @@ pub struct CatalogConfig {
     pub group: GroupConfig,
     #[serde(default)]
     pub watch: WatchConfig,
+    #[serde(default)]
+    pub audio: AudioConfig,
 }
 
 impl Default for CatalogConfig {
@@ -889,6 +928,7 @@ impl Default for CatalogConfig {
             cli: CliDefaults::default(),
             group: GroupConfig::default(),
             watch: WatchConfig::default(),
+            audio: AudioConfig::default(),
         }
     }
 }
@@ -1164,6 +1204,7 @@ max_edge = 1000
             cli: CliDefaults::default(),
             group: GroupConfig::default(),
             watch: WatchConfig::default(),
+            audio: AudioConfig::default(),
         };
         let toml_str = toml::to_string_pretty(&original).unwrap();
         let parsed: CatalogConfig = toml::from_str(&toml_str).unwrap();
@@ -1319,6 +1360,7 @@ max_edge = 1000
             cli: CliDefaults::default(),
             group: GroupConfig::default(),
             watch: WatchConfig::default(),
+            audio: AudioConfig::default(),
         };
         original.save(dir.path()).unwrap();
         let loaded = CatalogConfig::load(dir.path()).unwrap();

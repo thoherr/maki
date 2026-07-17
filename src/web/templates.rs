@@ -21,6 +21,12 @@ pub fn smart_preview_url(content_hash: &str, ext: &str) -> String {
     format!("/smart-preview/{prefix}/{hex}.{ext}")
 }
 
+/// Compute audio playback URL from a content hash.
+pub fn audio_url(content_hash: &str) -> String {
+    let hex = content_hash.strip_prefix("sha256:").unwrap_or(content_hash);
+    format!("/audio/{hex}")
+}
+
 /// Compute video URL from a content hash.
 pub fn video_url(content_hash: &str) -> String {
     let hex = content_hash.strip_prefix("sha256:").unwrap_or(content_hash);
@@ -97,7 +103,7 @@ impl AssetCard {
             } else {
                 None
             },
-            duration_display: row.video_duration.map(format_video_duration),
+            duration_display: row.duration_seconds.map(format_video_duration),
         }
     }
 
@@ -358,6 +364,11 @@ pub struct AssetPage {
     pub video_duration_display: Option<String>,
     pub media_resolution: Option<String>,
     pub video_codec: Option<String>,
+    pub is_audio: bool,
+    pub audio_url: Option<String>,
+    pub audio_key: Option<String>,
+    pub audio_bpm: Option<String>,
+    pub audio_details: Option<String>,
 }
 
 /// A detected face on the asset detail page.
@@ -518,6 +529,38 @@ impl AssetPage {
         } else {
             (None, None)
         };
+
+        let is_audio = details.asset_type == "audio";
+        let audio_url_val = is_audio.then(|| audio_url(&best_variant_hash));
+        // Audio badges: duration shares the video display slot; key/BPM and
+        // a technical summary ("44.1 kHz - Stereo - 320 kbps") get their own.
+        let (audio_duration_display, audio_key, audio_bpm, audio_details) = if is_audio {
+            let dur = best_meta.and_then(|m| m.get("audio_duration"))
+                .and_then(|d| d.parse::<f64>().ok())
+                .map(format_video_duration);
+            let key = best_meta.and_then(|m| m.get("audio_key")).cloned();
+            let bpm = best_meta.and_then(|m| m.get("audio_bpm"))
+                .and_then(|b| b.parse::<f64>().ok())
+                .map(|b| format!("{b:.0} BPM"));
+            let tech = best_meta.map(|m| {
+                let mut parts: Vec<String> = Vec::new();
+                if let Some(sr) = m.get("audio_sample_rate").and_then(|v| v.parse::<u32>().ok()) {
+                    if sr % 1000 == 0 { parts.push(format!("{} kHz", sr / 1000)); }
+                    else { parts.push(format!("{:.1} kHz", sr as f64 / 1000.0)); }
+                }
+                if let Some(ch) = m.get("audio_channels").and_then(|v| v.parse::<u32>().ok()) {
+                    parts.push(match ch { 1 => "Mono".to_string(), 2 => "Stereo".to_string(), n => format!("{n} ch") });
+                }
+                if let Some(br) = m.get("audio_bitrate") {
+                    parts.push(format!("{br} kbps"));
+                }
+                parts.join(" \u{b7} ")
+            }).filter(|t| !t.is_empty());
+            (dur, key, bpm, tech)
+        } else {
+            (None, None, None, None)
+        };
+        let video_duration_display = video_duration_display.or(audio_duration_display);
         // Resolution: works for both images (image_width/height) and videos (video_width/height)
         let media_resolution = best_meta.and_then(|m| {
             // Try video dimensions first, then image dimensions
@@ -581,6 +624,11 @@ impl AssetPage {
             video_duration_display,
             media_resolution,
             video_codec,
+            is_audio,
+            audio_url: audio_url_val,
+            audio_key,
+            audio_bpm,
+            audio_details,
         }
     }
 }
@@ -653,6 +701,8 @@ pub struct PreviewFragment {
     pub error: Option<String>,
     pub is_video: bool,
     pub video_url: Option<String>,
+    pub is_audio: bool,
+    pub audio_url: Option<String>,
 }
 
 #[derive(Template)]

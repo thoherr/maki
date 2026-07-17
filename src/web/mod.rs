@@ -769,6 +769,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .nest_service("/preview", ServeDir::new(preview_dir))
         .route("/smart-preview/{prefix}/{file}", axum::routing::get(routes::serve_smart_preview))
         .route("/video/{hash}", axum::routing::get(routes::serve_video))
+        .route("/audio/{hash}", axum::routing::get(routes::serve_video))
         .layer(axum::middleware::from_fn_with_state(state.clone(), log_request))
         // Outermost layer: auth + read-only run before anything else,
         // including the static-asset and preview services.

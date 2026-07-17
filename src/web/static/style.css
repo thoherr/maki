@@ -932,6 +932,11 @@ select.badge {
     margin: 0 auto;
     border-radius: 4px;
 }
+.asset-preview #preview .detail-audio-player {
+    width: 100%;
+    display: block;
+    margin: 12px auto 0;
+}
 .asset-preview .no-preview {
     width: 100%;
     height: 400px;

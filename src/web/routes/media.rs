@@ -149,7 +149,10 @@ pub async fn serve_smart_preview(
     }
 }
 
-/// GET /video/{hash} — serve a video file with range request support for seeking.
+/// GET /video/{hash} and GET /audio/{hash} — serve a media file with
+/// range request support for seeking. One handler for both media types:
+/// the Content-Type is derived from the variant's format either way, the
+/// two routes exist only so the URLs say what they serve.
 pub async fn serve_video(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
@@ -191,6 +194,14 @@ pub async fn serve_video(
         "avi" => "video/x-msvideo",
         "mts" | "m2ts" => "video/mp2t",
         "3gp" => "video/3gpp",
+        "mp3" => "audio/mpeg",
+        "m4a" | "alac" => "audio/mp4",
+        "aac" => "audio/aac",
+        "flac" => "audio/flac",
+        "ogg" | "opus" => "audio/ogg",
+        "wav" => "audio/wav",
+        "aiff" | "aif" => "audio/aiff",
+        "wma" => "audio/x-ms-wma",
         _ => "video/mp4",
     };
 

@@ -35,6 +35,18 @@
 {% endmatch %}
 {% endif %}
 <span class="smart-loading" id="detail-smart-loading" style="display:none;">HD</span>
+{% if is_audio %}
+{% if has_online_source %}
+{% if let Some(aurl) = audio_url %}
+<audio controls preload="metadata" id="detail-audio" class="detail-audio-player">
+    <source src="{{ aurl }}">
+    Your browser does not support the audio tag.
+</audio>
+{% endif %}
+{% else %}
+<div class="preview-offline-hint">Audio source offline — playback unavailable</div>
+{% endif %}
+{% endif %}
 {% if let Some(err) = error %}
 <div class="preview-error">{{ err }}</div>
 {% endif %}

@@ -246,6 +246,8 @@ pub async fn generate_preview(
                     error: Some("Source files are offline — cannot regenerate previews.".to_string()),
                     is_video: false,
                     video_url: None,
+                    is_audio: false,
+                    audio_url: None,
                 };
                 return Ok::<_, anyhow::Error>(tmpl.render()?);
             }
@@ -293,6 +295,14 @@ pub async fn generate_preview(
                 let service = state.asset_service();
                 service.backfill_video_metadata(&details.id, content_hash, &source_path);
             }
+        } else if details.asset_type == "audio" {
+            let has_duration = details.variants.get(best_idx)
+                .map(|v| v.source_metadata.contains_key("audio_duration"))
+                .unwrap_or(false);
+            if !has_duration {
+                let service = state.asset_service();
+                service.backfill_audio_metadata(&details.id, content_hash, &source_path);
+            }
         }
 
         let ts = std::time::SystemTime::now()
@@ -325,6 +335,12 @@ pub async fn generate_preview(
             is_video: details.asset_type == "video",
             video_url: if details.asset_type == "video" {
                 Some(crate::web::templates::video_url(content_hash))
+            } else {
+                None
+            },
+            is_audio: details.asset_type == "audio",
+            audio_url: if details.asset_type == "audio" {
+                Some(crate::web::templates::audio_url(content_hash))
             } else {
                 None
             },
@@ -411,6 +427,8 @@ pub async fn set_rotation(
                     error: Some("Source files are offline — cannot rotate.".to_string()),
                     is_video: false,
                     video_url: None,
+                    is_audio: false,
+                    audio_url: None,
                 };
                 return Ok::<_, anyhow::Error>(tmpl.render()?);
             }
@@ -451,6 +469,12 @@ pub async fn set_rotation(
             is_video: details.asset_type == "video",
             video_url: if details.asset_type == "video" {
                 Some(crate::web::templates::video_url(content_hash))
+            } else {
+                None
+            },
+            is_audio: details.asset_type == "audio",
+            audio_url: if details.asset_type == "audio" {
+                Some(crate::web::templates::audio_url(content_hash))
             } else {
                 None
             },

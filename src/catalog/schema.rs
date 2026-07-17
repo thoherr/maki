@@ -336,6 +336,55 @@ impl Catalog {
             );
         }
 
+        // ── v10 → v11: audio first-class phase 1 — typed audio columns +
+        // duration generalization ──
+        if current < 11 {
+            // Duration is a shared media fact, not a video-only one; audio
+            // joins the column video pioneered. RENAME keeps existing data
+            // and makes stragglers referencing the old name fail loudly.
+            // (Fresh initialize() runs the v4 block first, so the source
+            // column always exists here.)
+            let _ = self.conn.execute_batch(
+                "ALTER TABLE assets RENAME COLUMN video_duration TO duration_seconds",
+            );
+            // Typed audio columns, derived from variant source_metadata
+            // (`$.audio_*` keys) exactly like video_codec. sample_rate in
+            // Hz, bitrate in kbps. audio_key / audio_bpm are filled by
+            // `maki audio analyze` (opt-in external tools), the technical
+            // trio by lofty at import/refresh time.
+            let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN audio_sample_rate INTEGER");
+            let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN audio_channels INTEGER");
+            let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN audio_bitrate INTEGER");
+            let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN audio_key TEXT");
+            let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN audio_bpm REAL");
+            // Backfill from variant metadata where present (no-op on
+            // catalogs from before this release; keeps re-runs consistent).
+            for (col, json_key, cast) in [
+                ("duration_seconds", "audio_duration", "REAL"),
+                ("audio_sample_rate", "audio_sample_rate", "INTEGER"),
+                ("audio_channels", "audio_channels", "INTEGER"),
+                ("audio_bitrate", "audio_bitrate", "INTEGER"),
+                ("audio_bpm", "audio_bpm", "REAL"),
+            ] {
+                let _ = self.conn.execute_batch(&format!(
+                    "UPDATE assets SET {col} = ( \
+                        SELECT CAST(json_extract(v.source_metadata, '$.{json_key}') AS {cast}) \
+                        FROM variants v WHERE v.asset_id = assets.id \
+                        AND json_extract(v.source_metadata, '$.{json_key}') IS NOT NULL \
+                        LIMIT 1 \
+                     ) WHERE {col} IS NULL",
+                ));
+            }
+            let _ = self.conn.execute_batch(
+                "UPDATE assets SET audio_key = ( \
+                    SELECT json_extract(v.source_metadata, '$.audio_key') \
+                    FROM variants v WHERE v.asset_id = assets.id \
+                    AND json_extract(v.source_metadata, '$.audio_key') IS NOT NULL \
+                    LIMIT 1 \
+                 ) WHERE audio_key IS NULL",
+            );
+        }
+
         // Stamp the new schema version
         let _ = self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);

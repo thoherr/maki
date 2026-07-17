@@ -39,6 +39,9 @@
                 {% if let Some(codec) = video_codec %}<span class="badge">{{ codec }}</span>{% endif %}
                 {% if let Some(res) = media_resolution %}<span class="badge">{{ res }}</span>{% endif %}
                 {% if let Some(dur) = video_duration_display %}<span class="badge">{{ dur }}</span>{% endif %}
+                {% if let Some(key) = audio_key %}<span class="badge" title="Musical key (maki audio analyze)">{{ key }}</span>{% endif %}
+                {% if let Some(bpm) = audio_bpm %}<span class="badge" title="Tempo (maki audio analyze)">{{ bpm }}</span>{% endif %}
+                {% if let Some(tech) = audio_details %}<span class="badge">{{ tech }}</span>{% endif %}
             </td></tr>
             <tr><th>Date</th><td id="date">{% include "date_fragment.html" %}</td></tr>
         </table>

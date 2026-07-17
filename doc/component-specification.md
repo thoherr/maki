@@ -14,6 +14,12 @@
 >   `user` / `xmp-import` / `auto-tag` / `vlm`; absent = user).
 > - **Denormalized columns** added over v4.5–v4.9: `face_count`,
 >   `leaf_tag_count`, `video_duration` / `video_codec`.
+> - **Schema v11 (audio first-class, phase 1):** `video_duration`
+>   RENAMEd to the shared `duration_seconds` (audio + video); new
+>   `audio_sample_rate` / `audio_channels` / `audio_bitrate` /
+>   `audio_key` / `audio_bpm` columns, all denormalized from variant
+>   `source_metadata` `audio_*` keys (lofty at import; key/BPM from
+>   `maki audio analyze`).
 > - **The edit-history journal (v4.9.0):** `<catalog>/history/` — an
 >   independent, non-authoritative, prunable operation log backing
 >   `maki undo` / `maki history` (neither sidecar nor catalog.db).
@@ -268,7 +274,8 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 **Approach**:
 - Images: use `image` crate for common formats, shell out to `dcraw` or `libraw` for RAW files.
 - Videos: shell out to `ffmpeg` to extract a frame.
-- Non-visual formats (audio, documents, unknown): generate an info card — an 800x600 JPEG showing file metadata (name, format, size, and audio-specific properties like duration/bitrate via `lofty`). Uses `imageproc` for text rendering with an embedded DejaVu Sans font (`ab_glyph`).
+- Audio: info card with a waveform strip rendered into its top region via ffmpeg `showwavespic` (`filter=peak`); plain info card when ffmpeg is missing. Playback in the web UI via `GET /audio/{hash}` (same range-capable handler as `GET /video/{hash}`).
+- Non-visual formats (documents, unknown): generate an info card — an 800x600 JPEG showing file metadata (name, format, size, and audio-specific properties like duration/bitrate via `lofty`). Uses `imageproc` for text rendering with an embedded DejaVu Sans font (`ab_glyph`).
 - Fallback: when external tools (dcraw, ffmpeg) are missing, RAW and video files also get an info card instead of no preview.
 - Store previews in `<catalog_root>/previews/<hash-prefix>/<hash>.jpg` at a standard size (800px longest edge for visual previews, 800x600 for info cards).
 - Generate on import, regenerate on demand.
