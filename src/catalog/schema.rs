@@ -357,31 +357,50 @@ impl Catalog {
             let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN audio_bitrate INTEGER");
             let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN audio_key TEXT");
             let _ = self.conn.execute_batch("ALTER TABLE assets ADD COLUMN audio_bpm REAL");
-            // Backfill from variant metadata where present (no-op on
-            // catalogs from before this release; keeps re-runs consistent).
-            for (col, json_key, cast) in [
-                ("duration_seconds", "audio_duration", "REAL"),
-                ("audio_sample_rate", "audio_sample_rate", "INTEGER"),
-                ("audio_channels", "audio_channels", "INTEGER"),
-                ("audio_bitrate", "audio_bitrate", "INTEGER"),
-                ("audio_bpm", "audio_bpm", "REAL"),
-            ] {
-                let _ = self.conn.execute_batch(&format!(
-                    "UPDATE assets SET {col} = ( \
-                        SELECT CAST(json_extract(v.source_metadata, '$.{json_key}') AS {cast}) \
-                        FROM variants v WHERE v.asset_id = assets.id \
-                        AND json_extract(v.source_metadata, '$.{json_key}') IS NOT NULL \
-                        LIMIT 1 \
-                     ) WHERE {col} IS NULL",
-                ));
-            }
+            // Backfill from variant metadata where present — one UPDATE,
+            // restricted to audio assets that actually carry `audio_*`
+            // keys. The restriction is load-bearing, not an optimization:
+            // every row an UPDATE processes fires the FTS5 trigram
+            // triggers (schema v9) even when nothing changes, and each
+            // firing re-tokenizes the row's full source_metadata blob.
+            // An unguarded `WHERE col IS NULL` matches the whole table
+            // and turned this migration into hours of no-op FTS rewrites
+            // on large catalogs (6 passes × N assets). On a pre-v11
+            // catalog no variant has `audio_*` keys, so this now touches
+            // zero rows; it only does work when re-run over a partially
+            // migrated or post-v11 catalog. The instr() prescan avoids
+            // parsing JSON for assets that can't match.
             let _ = self.conn.execute_batch(
-                "UPDATE assets SET audio_key = ( \
-                    SELECT json_extract(v.source_metadata, '$.audio_key') \
-                    FROM variants v WHERE v.asset_id = assets.id \
-                    AND json_extract(v.source_metadata, '$.audio_key') IS NOT NULL \
-                    LIMIT 1 \
-                 ) WHERE audio_key IS NULL",
+                "UPDATE assets SET \
+                    duration_seconds = COALESCE(duration_seconds, ( \
+                        SELECT CAST(json_extract(v.source_metadata, '$.audio_duration') AS REAL) \
+                        FROM variants v WHERE v.asset_id = assets.id \
+                        AND json_extract(v.source_metadata, '$.audio_duration') IS NOT NULL LIMIT 1)), \
+                    audio_sample_rate = COALESCE(audio_sample_rate, ( \
+                        SELECT CAST(json_extract(v.source_metadata, '$.audio_sample_rate') AS INTEGER) \
+                        FROM variants v WHERE v.asset_id = assets.id \
+                        AND json_extract(v.source_metadata, '$.audio_sample_rate') IS NOT NULL LIMIT 1)), \
+                    audio_channels = COALESCE(audio_channels, ( \
+                        SELECT CAST(json_extract(v.source_metadata, '$.audio_channels') AS INTEGER) \
+                        FROM variants v WHERE v.asset_id = assets.id \
+                        AND json_extract(v.source_metadata, '$.audio_channels') IS NOT NULL LIMIT 1)), \
+                    audio_bitrate = COALESCE(audio_bitrate, ( \
+                        SELECT CAST(json_extract(v.source_metadata, '$.audio_bitrate') AS INTEGER) \
+                        FROM variants v WHERE v.asset_id = assets.id \
+                        AND json_extract(v.source_metadata, '$.audio_bitrate') IS NOT NULL LIMIT 1)), \
+                    audio_key = COALESCE(audio_key, ( \
+                        SELECT json_extract(v.source_metadata, '$.audio_key') \
+                        FROM variants v WHERE v.asset_id = assets.id \
+                        AND json_extract(v.source_metadata, '$.audio_key') IS NOT NULL LIMIT 1)), \
+                    audio_bpm = COALESCE(audio_bpm, ( \
+                        SELECT CAST(json_extract(v.source_metadata, '$.audio_bpm') AS REAL) \
+                        FROM variants v WHERE v.asset_id = assets.id \
+                        AND json_extract(v.source_metadata, '$.audio_bpm') IS NOT NULL LIMIT 1)) \
+                 WHERE asset_type = 'audio' \
+                 AND EXISTS ( \
+                    SELECT 1 FROM variants v WHERE v.asset_id = assets.id \
+                    AND instr(v.source_metadata, '\"audio_') > 0 \
+                 )",
             );
         }
 

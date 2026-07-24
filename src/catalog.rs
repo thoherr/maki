@@ -986,6 +986,90 @@ mod tests {
         assert_eq!(stored, "{}");
     }
 
+    /// The v11 backfill must not touch rows that have nothing to backfill:
+    /// every row an UPDATE processes fires the FTS5 trigram triggers (full
+    /// re-tokenization of the source_metadata blob), so an unguarded
+    /// whole-table UPDATE turns migration into hours of no-op FTS rewrites
+    /// on large catalogs. A temp trigger counts the rows actually updated.
+    #[test]
+    fn migration_v11_backfill_touches_only_audio_assets_with_audio_metadata() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        // Photo asset — the overwhelming majority in a real catalog.
+        let mut photo = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:mig11a");
+        let photo_variant = crate::models::Variant {
+            content_hash: "sha256:mig11a".to_string(),
+            asset_id: photo.id,
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 100,
+            original_filename: "photo.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        photo.variants.push(photo_variant.clone());
+        catalog.insert_asset(&photo).unwrap();
+        catalog.insert_variant(&photo_variant).unwrap();
+
+        // Audio asset whose variant carries audio_* keys (backfill target).
+        let mut track = crate::models::Asset::new(crate::models::AssetType::Audio, "sha256:mig11b");
+        let mut meta = std::collections::BTreeMap::new();
+        meta.insert("audio_duration".to_string(), "180.0".to_string());
+        meta.insert("audio_key".to_string(), "Am".to_string());
+        let track_variant = crate::models::Variant {
+            content_hash: "sha256:mig11b".to_string(),
+            asset_id: track.id,
+            role: crate::models::VariantRole::Original,
+            format: "mp3".to_string(),
+            file_size: 100,
+            original_filename: "track.mp3".to_string(),
+            source_metadata: meta,
+            locations: vec![],
+        };
+        track.variants.push(track_variant.clone());
+        catalog.insert_asset(&track).unwrap();
+        catalog.insert_variant(&track_variant).unwrap();
+
+        // Simulate an interrupted / pre-v11 state: columns empty, version 10.
+        catalog.conn.execute_batch(
+            "UPDATE assets SET duration_seconds = NULL, audio_key = NULL;
+             DELETE FROM schema_version; INSERT INTO schema_version VALUES (10);",
+        ).unwrap();
+
+        // Count every assets row the migration UPDATEs (temp trigger fires
+        // per processed row, exactly like the FTS triggers would).
+        catalog.conn.execute_batch(
+            "CREATE TEMP TABLE touched (id TEXT);
+             CREATE TEMP TRIGGER count_asset_updates AFTER UPDATE ON assets
+             BEGIN INSERT INTO touched VALUES (new.id); END;",
+        ).unwrap();
+
+        catalog.run_migrations();
+
+        let touched: Vec<String> = {
+            let mut stmt = catalog.conn.prepare("SELECT id FROM touched").unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+            rows.map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(
+            touched,
+            vec![track.id.to_string()],
+            "v11 backfill must update exactly the audio asset with audio metadata — \
+             touching anything else re-tokenizes the FTS index for no reason"
+        );
+
+        // And the backfill itself worked.
+        let (dur, key): (Option<f64>, Option<String>) = catalog.conn.query_row(
+            "SELECT duration_seconds, audio_key FROM assets WHERE id = ?1",
+            rusqlite::params![track.id.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!(dur, Some(180.0));
+        assert_eq!(key.as_deref(), Some("Am"));
+        assert_eq!(catalog.schema_version(), SCHEMA_VERSION);
+    }
+
     #[test]
     fn insert_asset_persists_tag_sources_column() {
         use crate::models::TagSource;
