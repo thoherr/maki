@@ -2,9 +2,9 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## Unreleased
+## v4.9.3 (2026-08-15)
 
-Model-currency fixes from the August 2026 dependency/model audit. No schema migration.
+August 2026 dependency + model audit: `cargo audit` down to zero vulnerabilities, unmaintained crates retired, AI-model docs brought current. No schema migration.
 
 ### Security / Dependencies
 
