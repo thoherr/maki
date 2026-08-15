@@ -157,15 +157,15 @@ pub fn load_from_path(path: &Path) -> Result<Vocabulary> {
 /// hand-grouped layouts (Scene types, Nature, …) come through intact
 /// in `--verbose` model output.
 fn parse_yaml(content: &str) -> Result<Vocabulary> {
-    // serde_yaml::from_str on a Mapping doesn't preserve insertion
+    // serde_norway::from_str on a Mapping doesn't preserve insertion
     // order, but we want order-stability for nicer debug output, so
-    // parse into a serde_yaml::Value and walk it manually.
-    let value: serde_yaml::Value = serde_yaml::from_str(content)
+    // parse into a serde_norway::Value and walk it manually.
+    let value: serde_norway::Value = serde_norway::from_str(content)
         .context("Failed to parse vocabulary YAML")?;
 
     let map = match value {
-        serde_yaml::Value::Mapping(m) => m,
-        serde_yaml::Value::Null => {
+        serde_norway::Value::Mapping(m) => m,
+        serde_norway::Value::Null => {
             anyhow::bail!("vocabulary YAML is empty");
         }
         other => {
@@ -181,7 +181,7 @@ fn parse_yaml(content: &str) -> Result<Vocabulary> {
 
     for (k, v) in &map {
         let label = match k {
-            serde_yaml::Value::String(s) => s.clone(),
+            serde_norway::Value::String(s) => s.clone(),
             other => anyhow::bail!(
                 "vocabulary keys must be strings, got {}",
                 value_kind(other)
@@ -189,13 +189,13 @@ fn parse_yaml(content: &str) -> Result<Vocabulary> {
         };
 
         let tags: Vec<String> = match v {
-            serde_yaml::Value::Null => Vec::new(),
-            serde_yaml::Value::String(s) => vec![s.clone()],
-            serde_yaml::Value::Sequence(seq) => {
+            serde_norway::Value::Null => Vec::new(),
+            serde_norway::Value::String(s) => vec![s.clone()],
+            serde_norway::Value::Sequence(seq) => {
                 let mut out = Vec::with_capacity(seq.len());
                 for item in seq {
                     match item {
-                        serde_yaml::Value::String(s) => out.push(s.clone()),
+                        serde_norway::Value::String(s) => out.push(s.clone()),
                         other => anyhow::bail!(
                             "vocabulary list items for label '{label}' must be strings, got {}",
                             value_kind(other)
@@ -237,15 +237,15 @@ fn parse_txt_list(content: &str) -> Vocabulary {
     }
 }
 
-fn value_kind(v: &serde_yaml::Value) -> &'static str {
+fn value_kind(v: &serde_norway::Value) -> &'static str {
     match v {
-        serde_yaml::Value::Null => "null",
-        serde_yaml::Value::Bool(_) => "bool",
-        serde_yaml::Value::Number(_) => "number",
-        serde_yaml::Value::String(_) => "string",
-        serde_yaml::Value::Sequence(_) => "list",
-        serde_yaml::Value::Mapping(_) => "mapping",
-        serde_yaml::Value::Tagged(_) => "tagged",
+        serde_norway::Value::Null => "null",
+        serde_norway::Value::Bool(_) => "bool",
+        serde_norway::Value::Number(_) => "number",
+        serde_norway::Value::String(_) => "string",
+        serde_norway::Value::Sequence(_) => "list",
+        serde_norway::Value::Mapping(_) => "mapping",
+        serde_norway::Value::Tagged(_) => "tagged",
     }
 }
 

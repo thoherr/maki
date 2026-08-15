@@ -150,7 +150,7 @@ Generates `doc/manual/maki-manual.pdf` from the 21 Markdown source files. The sc
 |-------|---------|
 | `clap` | CLI argument parsing with derive macros |
 | `sha2` | SHA-256 content hashing |
-| `serde` / `serde_json` / `serde_yaml` | Serialization for JSON output, YAML sidecars |
+| `serde` / `serde_json` / `serde_norway` | Serialization for JSON output, YAML sidecars |
 | `rusqlite` | SQLite database access (bundled) |
 | `kamadak-exif` | EXIF metadata extraction from images |
 | `quick-xml` | XMP/XML parsing and manipulation |

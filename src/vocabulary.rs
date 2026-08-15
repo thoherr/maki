@@ -41,7 +41,7 @@ pub fn load_vocabulary(catalog_root: &Path) -> Vec<String> {
 ///
 /// Output: `["subject", "subject|nature", "subject|nature|landscape", ...]`
 pub fn parse_vocabulary(yaml_str: &str) -> Vec<String> {
-    let value: serde_yaml::Value = match serde_yaml::from_str(yaml_str) {
+    let value: serde_norway::Value = match serde_norway::from_str(yaml_str) {
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
@@ -54,15 +54,15 @@ pub fn parse_vocabulary(yaml_str: &str) -> Vec<String> {
 }
 
 fn flatten_value(
-    value: &serde_yaml::Value,
+    value: &serde_norway::Value,
     prefix: &str,
     result: &mut Vec<String>,
     seen: &mut HashSet<String>,
 ) {
     match value {
-        serde_yaml::Value::Mapping(map) => {
+        serde_norway::Value::Mapping(map) => {
             for (key, val) in map {
-                if let serde_yaml::Value::String(key_str) = key {
+                if let serde_norway::Value::String(key_str) = key {
                     let path = if prefix.is_empty() {
                         key_str.clone()
                     } else {
@@ -75,9 +75,9 @@ fn flatten_value(
                 }
             }
         }
-        serde_yaml::Value::Sequence(seq) => {
+        serde_norway::Value::Sequence(seq) => {
             for item in seq {
-                if let serde_yaml::Value::String(s) = item {
+                if let serde_norway::Value::String(s) = item {
                     let path = if prefix.is_empty() {
                         s.clone()
                     } else {
@@ -89,7 +89,7 @@ fn flatten_value(
                 }
             }
         }
-        serde_yaml::Value::Null => {
+        serde_norway::Value::Null => {
             // Empty node — the prefix itself is the tag (already added by parent)
         }
         _ => {}

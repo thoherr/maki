@@ -42,7 +42,7 @@ pub fn load_yaml(catalog_root: &Path) -> Result<StacksFile> {
     let path = catalog_root.join(FILENAME);
     if path.exists() {
         let contents = std::fs::read_to_string(&path)?;
-        let file: StacksFile = serde_yaml::from_str(&contents)?;
+        let file: StacksFile = serde_norway::from_str(&contents)?;
         Ok(file)
     } else {
         Ok(StacksFile::default())
@@ -52,7 +52,7 @@ pub fn load_yaml(catalog_root: &Path) -> Result<StacksFile> {
 /// Save stacks to the YAML file.
 pub fn save_yaml(catalog_root: &Path, file: &StacksFile) -> Result<()> {
     let path = catalog_root.join(FILENAME);
-    let contents = serde_yaml::to_string(file)?;
+    let contents = serde_norway::to_string(file)?;
     std::fs::write(path, contents)?;
     Ok(())
 }

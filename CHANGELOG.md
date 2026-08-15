@@ -22,6 +22,18 @@ Model-currency fixes from the August 2026 dependency/model audit. No schema migr
   up upstream ONNX Runtime bug and security fixes). rc.12+ builder
   methods return recoverable-value errors (`Error<SessionBuilder>`);
   the session-builder error handling in `ai.rs` was adapted.
+- **serde_yaml → serde_norway.** serde_yaml has been archived/deprecated
+  since March 2024; sidecars are MAKI's source of truth, so the YAML
+  parser needs a maintained home. serde_norway is the actively
+  maintained drop-in fork — verified byte-identical serialization on
+  representative sidecar structures (unicode, multiline descriptions,
+  ambiguous scalars), so existing sidecars neither reparse differently
+  nor get rewritten with format churn.
+- **fs2 dependency dropped** (dead since 2018) — the sidecar write lock
+  now uses `std::fs::File::try_lock`, stabilized in Rust 1.89. Same
+  advisory flock/LockFileEx semantics, one less dependency. Requires
+  Rust 1.89+ to build (CI tracks stable; rusqlite 0.40 already needs
+  1.88).
 - **`cargo update` sweep** — all semver-compatible patch/minor bumps
   (tokio 1.53, regex 1.13, uuid 1.24, clap 4.6.6, serde 1.0.229, …).
   `cargo audit` / `cargo deny` clean apart from the already-triaged

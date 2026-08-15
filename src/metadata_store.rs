@@ -64,9 +64,9 @@ impl MetadataStore {
         let yaml = if asset.has_stale_tag_sources() {
             let mut pruned = asset.clone();
             pruned.prune_tag_sources();
-            serde_yaml::to_string(&pruned)?
+            serde_norway::to_string(&pruned)?
         } else {
-            serde_yaml::to_string(asset)?
+            serde_norway::to_string(asset)?
         };
 
         let _lock = self.acquire_write_lock()?;
@@ -80,8 +80,8 @@ impl MetadataStore {
     }
 
     /// Acquire the cross-process sidecar write lock
-    /// (`metadata/.write.lock`, advisory flock/LockFileEx via `fs2`).
-    /// Released when the returned handle drops.
+    /// (`metadata/.write.lock`, advisory flock/LockFileEx via
+    /// `std::fs::File::try_lock`). Released when the returned handle drops.
     ///
     /// This serializes sidecar WRITES between concurrent maki processes
     /// (`maki serve` + a CLI command is the common case), so two writers
@@ -92,7 +92,6 @@ impl MetadataStore {
     /// per-operation, not per-process, so a long-running import doesn't
     /// freeze the web UI's metadata edits.
     fn acquire_write_lock(&self) -> Result<std::fs::File> {
-        use fs2::FileExt;
         const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
         std::fs::create_dir_all(&self.metadata_dir)?;
@@ -104,7 +103,7 @@ impl MetadataStore {
             .open(&lock_path)?;
         let start = std::time::Instant::now();
         loop {
-            match file.try_lock_exclusive() {
+            match file.try_lock() {
                 Ok(()) => return Ok(file),
                 Err(_) if start.elapsed() < TIMEOUT => {
                     std::thread::sleep(std::time::Duration::from_millis(25));
@@ -125,7 +124,7 @@ impl MetadataStore {
     pub fn load(&self, asset_id: Uuid) -> Result<Asset> {
         let path = self.sidecar_path(asset_id);
         let contents = std::fs::read_to_string(&path)?;
-        let mut asset: Asset = serde_yaml::from_str(&contents)?;
+        let mut asset: Asset = serde_norway::from_str(&contents)?;
         // Normalize MicrosoftPhoto:Rating percentage values (>5) to 1-5 scale
         if let Some(r) = asset.rating {
             if r > 5 {
@@ -139,7 +138,7 @@ impl MetadataStore {
     pub fn load_raw(&self, asset_id: Uuid) -> Result<Asset> {
         let path = self.sidecar_path(asset_id);
         let contents = std::fs::read_to_string(&path)?;
-        let asset: Asset = serde_yaml::from_str(&contents)?;
+        let asset: Asset = serde_norway::from_str(&contents)?;
         Ok(asset)
     }
 

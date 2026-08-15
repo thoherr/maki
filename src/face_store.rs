@@ -866,7 +866,7 @@ pub fn load_faces_yaml(catalog_root: &std::path::Path) -> Result<FacesFile> {
     let path = catalog_root.join("faces.yaml");
     if path.exists() {
         let contents = std::fs::read_to_string(&path)?;
-        let file: FacesFile = serde_yaml::from_str(&contents)?;
+        let file: FacesFile = serde_norway::from_str(&contents)?;
         Ok(file)
     } else {
         Ok(FacesFile::default())
@@ -876,7 +876,7 @@ pub fn load_faces_yaml(catalog_root: &std::path::Path) -> Result<FacesFile> {
 /// Save faces to the YAML file.
 pub fn save_faces_yaml(catalog_root: &std::path::Path, file: &FacesFile) -> Result<()> {
     let path = catalog_root.join("faces.yaml");
-    let contents = serde_yaml::to_string(file)?;
+    let contents = serde_norway::to_string(file)?;
     std::fs::write(&path, contents)?;
     Ok(())
 }
@@ -886,7 +886,7 @@ pub fn load_people_yaml(catalog_root: &std::path::Path) -> Result<PeopleFile> {
     let path = catalog_root.join("people.yaml");
     if path.exists() {
         let contents = std::fs::read_to_string(&path)?;
-        let file: PeopleFile = serde_yaml::from_str(&contents)?;
+        let file: PeopleFile = serde_norway::from_str(&contents)?;
         Ok(file)
     } else {
         Ok(PeopleFile::default())
@@ -896,7 +896,7 @@ pub fn load_people_yaml(catalog_root: &std::path::Path) -> Result<PeopleFile> {
 /// Save people to the YAML file.
 pub fn save_people_yaml(catalog_root: &std::path::Path, file: &PeopleFile) -> Result<()> {
     let path = catalog_root.join("people.yaml");
-    let contents = serde_yaml::to_string(file)?;
+    let contents = serde_norway::to_string(file)?;
     std::fs::write(&path, contents)?;
     Ok(())
 }

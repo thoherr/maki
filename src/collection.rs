@@ -43,7 +43,7 @@ pub fn load_yaml(catalog_root: &Path) -> Result<CollectionsFile> {
     let path = catalog_root.join(FILENAME);
     if path.exists() {
         let contents = std::fs::read_to_string(&path)?;
-        let file: CollectionsFile = serde_yaml::from_str(&contents)?;
+        let file: CollectionsFile = serde_norway::from_str(&contents)?;
         Ok(file)
     } else {
         Ok(CollectionsFile::default())
@@ -53,7 +53,7 @@ pub fn load_yaml(catalog_root: &Path) -> Result<CollectionsFile> {
 /// Save collections to the YAML file.
 pub fn save_yaml(catalog_root: &Path, file: &CollectionsFile) -> Result<()> {
     let path = catalog_root.join(FILENAME);
-    let contents = serde_yaml::to_string(file)?;
+    let contents = serde_norway::to_string(file)?;
     std::fs::write(path, contents)?;
     Ok(())
 }

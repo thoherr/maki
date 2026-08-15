@@ -33,12 +33,12 @@ impl DeviceRegistry {
 
     fn load(&self) -> Result<Vec<Volume>> {
         let contents = std::fs::read_to_string(self.volumes_path())?;
-        let volumes: Vec<Volume> = serde_yaml::from_str(&contents)?;
+        let volumes: Vec<Volume> = serde_norway::from_str(&contents)?;
         Ok(volumes)
     }
 
     fn save(&self, volumes: &[Volume]) -> Result<()> {
-        let yaml = serde_yaml::to_string(volumes)?;
+        let yaml = serde_norway::to_string(volumes)?;
         std::fs::write(self.volumes_path(), yaml)?;
         Ok(())
     }
