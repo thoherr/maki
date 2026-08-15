@@ -22,6 +22,23 @@ Model-currency fixes from the August 2026 dependency/model audit. No schema migr
   up upstream ONNX Runtime bug and security fixes). rc.12+ builder
   methods return recoverable-value errors (`Error<SessionBuilder>`);
   the session-builder error handling in `ai.rs` was adapted.
+- **printpdf 0.7 → 0.12 — clears RUSTSEC-2026-0187.** The lopdf
+  stack-overflow advisory (previously waived in deny.toml because MAKI
+  only writes PDFs) is now actually fixed: printpdf 0.12 depends on
+  lopdf 0.44. The contact-sheet PDF writer was ported to the reworked
+  printpdf API (document → pages-of-ops model; pages embed the
+  pre-rendered raster at its native DPI as before). The ignore was
+  removed from deny.toml; `cargo audit` now reports **zero
+  vulnerabilities**, and the old ttf-parser 0.19 copy left the tree.
+- **Modernization bumps** (no advisory pressure, all source-compatible
+  or near): thiserror 2, toml 1.1 / toml_edit 0.25, sha2 0.11 (manual
+  hex encoding — digest 0.11 dropped `LowerHex`; content hashes verified
+  unchanged against fixed vectors), zip 8, rustyline 18, lofty 0.25,
+  kamadak-exif 0.6, imageproc 0.27, tower-http 0.7, tokenizers 0.23.
+  Deferred with reasons: schemars 1.x (emits JSON Schema draft 2020-12;
+  the web config-form JS resolves draft-07 `#/definitions/...` refs) and
+  askama 0.16 (new filter-call convention + `call`/`endcall` template
+  syntax across all 23 templates) — each needs its own migration pass.
 - **serde_yaml → serde_norway.** serde_yaml has been archived/deprecated
   since March 2024; sidecars are MAKI's source of truth, so the YAML
   parser needs a maintained home. serde_norway is the actively

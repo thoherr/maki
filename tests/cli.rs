@@ -2868,7 +2868,7 @@ fn sync_handles_modified_media_with_apply() {
     use sha2::Digest;
     let mut h = sha2::Sha256::new();
     h.update(std::fs::read(&jpeg).unwrap());
-    let new_hash = format!("sha256:{:x}", h.finalize());
+    let new_hash = format!("sha256:{}", sha256_hex_of(&h.finalize()));
     assert!(
         yaml.contains(&new_hash),
         "Sidecar must reference the new content_hash {new_hash}. Got:\n{yaml}"
@@ -5595,8 +5595,16 @@ fn edit_label_validates_color() {
 /// Helper: compute the SHA-256 hex of some content (matches maki's content_hash minus "sha256:" prefix).
 fn sha256_hex(data: &[u8]) -> String {
     use sha2::{Sha256, Digest};
-    let digest = Sha256::digest(data);
-    format!("{:x}", digest)
+    sha256_hex_of(&Sha256::digest(data))
+}
+
+/// Lowercase-hex encode a digest (digest 0.11 dropped LowerHex on the output array).
+fn sha256_hex_of(digest: &[u8]) -> String {
+    use std::fmt::Write;
+    digest.iter().fold(String::with_capacity(64), |mut s, b| {
+        write!(s, "{b:02x}").unwrap();
+        s
+    })
 }
 
 #[test]
@@ -10468,7 +10476,7 @@ fn writeback_reconciles_when_disk_already_matches_catalog() {
     let rsynced_bytes = std::fs::read(&xmp_path).unwrap();
     let mut hasher = sha2::Sha256::new();
     hasher.update(&rsynced_bytes);
-    let post_rsync_hash = format!("sha256:{:x}", hasher.finalize());
+    let post_rsync_hash = format!("sha256:{}", sha256_hex_of(&hasher.finalize()));
     let mtime_before = std::fs::metadata(&xmp_path).unwrap().modified().unwrap();
 
     // Run writeback. Should report "1 already in sync, 0 written" and

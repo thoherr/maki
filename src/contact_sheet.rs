@@ -1120,58 +1120,33 @@ fn write_pdf(output: &Path, page_jpegs: &[Vec<u8>], page_w: u32, page_h: u32) ->
     let w_mm = page_w as f32 / DPI as f32 * 25.4;
     let h_mm = page_h as f32 / DPI as f32 * 25.4;
 
-    let (doc, page1, layer1) = PdfDocument::new(
-        "Contact Sheet",
-        Mm(w_mm),
-        Mm(h_mm),
-        "Layer 1",
-    );
+    let mut doc = PdfDocument::new("Contact Sheet");
+    let mut warnings = Vec::new();
+    let mut pages = Vec::with_capacity(page_jpegs.len());
 
-    for (i, jpeg_data) in page_jpegs.iter().enumerate() {
-        let (page_ref, layer_ref) = if i == 0 {
-            (page1, layer1)
-        } else {
-            let (p, l) = doc.add_page(Mm(w_mm), Mm(h_mm), "Layer 1");
-            (p, l)
-        };
-
-        let current_layer = doc.get_page(page_ref).get_layer(layer_ref);
-
-        let image = Image::from(ImageXObject {
-            width: Px(page_w as usize),
-            height: Px(page_h as usize),
-            color_space: ColorSpace::Rgb,
-            bits_per_component: ColorBits::Bit8,
-            interpolate: true,
-            image_data: decode_jpeg_to_raw(jpeg_data)?,
-            image_filter: None,
-            smask: None,
-            clipping_bbox: None,
-        });
-
-        image.add_to_layer(
-            current_layer,
-            ImageTransform {
-                translate_x: Some(Mm(0.0)),
-                translate_y: Some(Mm(0.0)),
-                scale_x: Some(w_mm / (page_w as f32 / DPI as f32 * 25.4)),
-                scale_y: Some(h_mm / (page_h as f32 / DPI as f32 * 25.4)),
+    for jpeg_data in page_jpegs {
+        let image = RawImage::decode_from_bytes(jpeg_data, &mut warnings)
+            .map_err(|e| anyhow::anyhow!("Failed to decode contact-sheet page image: {e}"))?;
+        let image_id = doc.add_image(&image);
+        // The page raster is exactly page_w × page_h px at DPI, so placing
+        // it at the origin with its native dpi fills the page.
+        let ops = vec![Op::UseXobject {
+            id: image_id,
+            transform: XObjectTransform {
+                dpi: Some(DPI as f32),
                 ..Default::default()
             },
-        );
+        }];
+        pages.push(PdfPage::new(Mm(w_mm), Mm(h_mm), ops));
     }
 
-    let pdf_bytes = doc.save_to_bytes()?;
+    let pdf_bytes = doc
+        .with_pages(pages)
+        .save(&PdfSaveOptions::default(), &mut warnings);
     std::fs::write(output, pdf_bytes)
         .with_context(|| format!("Failed to write PDF to {}", output.display()))?;
 
     Ok(())
-}
-
-fn decode_jpeg_to_raw(jpeg_data: &[u8]) -> Result<Vec<u8>> {
-    let img = image::load_from_memory_with_format(jpeg_data, image::ImageFormat::Jpeg)
-        .context("Failed to decode JPEG page image")?;
-    Ok(img.to_rgb8().into_raw())
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────

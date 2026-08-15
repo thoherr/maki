@@ -13,32 +13,32 @@ rusqlite = { version = "0.40", features = ["bundled", "functions", "fallible_uin
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_norway = "0.9"
-sha2 = "0.10"
-thiserror = "1"
+sha2 = "0.11"
+thiserror = "2"
 image = "0.25"
-imageproc = { version = "0.26", default-features = false, features = ["text"] }
+imageproc = { version = "0.27", default-features = false, features = ["text"] }
 ab_glyph = "0.2"
-lofty = "0.24"
-kamadak-exif = "0.5"
+lofty = "0.25"
+kamadak-exif = "0.6"
 quick-xml = "0.41"
 regex = "1"
-toml = "0.8"
-toml_edit = "0.22"
+toml = "1"
+toml_edit = "0.25"
 schemars = { version = "0.8", features = ["uuid1"] }
 glob-match = "0.2"
 unicode-normalization = "0.1"
-rustyline = { version = "15", features = ["derive"] }
+rustyline = { version = "18", features = ["derive"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 axum = "0.8"
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.7", features = ["fs"] }
 askama = "0.12"
-printpdf = "0.7"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+printpdf = { version = "0.12", default-features = false, features = ["jpeg"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 ort = { version = "=2.0.0-rc.13", optional = true, default-features = false, features = ["std", "ndarray", "download-binaries", "tls-native", "copy-dylibs"] }
 ndarray = { version = "0.17", optional = true }
-tokenizers = { version = "0.20", optional = true, default-features = false, features = ["onig"] }
+tokenizers = { version = "0.23", optional = true, default-features = false, features = ["onig"] }
 
 [features]
 default = []
@@ -50,7 +50,7 @@ ai-gpu = ["ai", "ort/coreml"]
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
-sha2 = "0.10"
+sha2 = "0.11"
 # Web-layer test harness: drive the axum Router in-process (no socket)
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

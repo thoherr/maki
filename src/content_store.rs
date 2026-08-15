@@ -38,7 +38,14 @@ impl ContentStore {
             hasher.update(&buffer[..bytes_read]);
         }
         let hash = hasher.finalize();
-        Ok(format!("sha256:{:x}", hash))
+        // digest 0.11 dropped LowerHex on the output array; format manually.
+        let mut hex = String::with_capacity(7 + hash.len() * 2);
+        hex.push_str("sha256:");
+        for byte in hash {
+            use std::fmt::Write;
+            write!(hex, "{byte:02x}").expect("writing to String cannot fail");
+        }
+        Ok(hex)
     }
 
     /// Copy a file from source to dest, then verify the copy matches the expected hash.
