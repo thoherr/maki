@@ -8,6 +8,16 @@ Model-currency fixes from the August 2026 dependency/model audit. No schema migr
 
 ### Security / Dependencies
 
+- **Bundled SQLite 3.45.1 → 3.53.2** via rusqlite 0.31 → 0.40. Clears
+  every SQLite CVE published since early 2024, including CVE-2025-6965
+  (reported as exploited in the wild) and the CVE-2026-51296…51304
+  cluster (fixed exactly in 3.53.2). Practical exposure was low — MAKI
+  runs its own SQL against its own catalog — but this was the only
+  dependency with real CVE deltas. Code change was minimal: rusqlite
+  moved the unsigned-integer `ToSql`/`FromSql` impls behind the new
+  `fallible_uint` feature, which we enable (same fallible-conversion
+  semantics as 0.31). Catalog files are unaffected (SQLite's on-disk
+  format is stable across this range).
 - **ONNX Runtime 1.23.2 → 1.28.0** via `ort` 2.0.0-rc.11 → rc.13 (picks
   up upstream ONNX Runtime bug and security fixes). rc.12+ builder
   methods return recoverable-value errors (`Error<SessionBuilder>`);
