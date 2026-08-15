@@ -6,6 +6,18 @@ All notable changes to the Digital Asset Manager are documented here.
 
 Model-currency fixes from the August 2026 dependency/model audit. No schema migration.
 
+### Security / Dependencies
+
+- **ONNX Runtime 1.23.2 → 1.28.0** via `ort` 2.0.0-rc.11 → rc.13 (picks
+  up upstream ONNX Runtime bug and security fixes). rc.12+ builder
+  methods return recoverable-value errors (`Error<SessionBuilder>`);
+  the session-builder error handling in `ai.rs` was adapted.
+- **`cargo update` sweep** — all semver-compatible patch/minor bumps
+  (tokio 1.53, regex 1.13, uuid 1.24, clap 4.6.6, serde 1.0.229, …).
+  `cargo audit` / `cargo deny` clean apart from the already-triaged
+  deny.toml ignores (lopdf via printpdf — write-only PDF path; paste and
+  ttf-parser unmaintained warnings).
+
 ### Fixed
 
 - **SigLIP 2 auto-tag confidence calibration.** The two SigLIP 2 model

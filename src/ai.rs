@@ -21,27 +21,27 @@ use tokenizers::Tokenizer;
 /// available, "cpu" forces CPU-only, "coreml" requests CoreML explicitly.
 pub fn build_onnx_session(model_path: &Path, provider: &str, verbosity: crate::Verbosity) -> Result<Session> {
     let debug = verbosity.debug;
-    let builder = Session::builder()
+    // ort 2.0.0-rc.12+ returns `Error<SessionBuilder>` (recoverable-value errors)
+    // from builder methods; those aren't Send+Sync, so map to anyhow explicitly.
+    let mut builder = Session::builder()
         .context("Failed to create ONNX session builder")?
         .with_intra_threads(4)
-        .context("Failed to set intra threads")?;
+        .map_err(|e| anyhow::anyhow!("Failed to set intra threads: {e}"))?;
 
     let provider_lower = provider.to_lowercase();
     let _use_gpu = provider_lower == "auto" || provider_lower == "coreml";
 
     #[cfg(all(feature = "ai-gpu", target_os = "macos"))]
-    let builder = if _use_gpu {
+    if _use_gpu {
         use ort::ep;
         let coreml = ep::CoreML::default().build();
         if debug {
             eprintln!("  [debug] registering CoreML execution provider");
         }
-        builder
+        builder = builder
             .with_execution_providers([coreml])
-            .context("Failed to register CoreML execution provider")?
-    } else {
-        builder
-    };
+            .map_err(|e| anyhow::anyhow!("Failed to register CoreML execution provider: {e}"))?;
+    }
 
     #[cfg(not(all(feature = "ai-gpu", target_os = "macos")))]
     if _use_gpu && provider_lower != "auto" && debug {
