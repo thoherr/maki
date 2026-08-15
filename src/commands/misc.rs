@@ -80,11 +80,11 @@ pub fn run_licenses_command(
             "third_party_licenses_url": third_party_url,
             "third_party_summary": "All Rust dependencies use permissive licenses (MIT, Apache-2.0, BSD, ISC, MPL-2.0, NCSA, Unicode, Zlib, BSL-1.0, CC0). See THIRD_PARTY_LICENSES.md in the release archive.",
             "ai_models": {
-                "license": "Apache-2.0",
+                "license": "Apache-2.0 (SigLIP/SigLIP 2, ArcFace); MIT (YuNet)",
                 "source": "Hugging Face (downloaded on demand)",
-                "credit": "Google Research (SigLIP, SigLIP 2)",
+                "credit": "Google Research (SigLIP, SigLIP 2); OpenCV Zoo (YuNet); ONNX Model Zoo (ArcFace)",
             },
-            "external_tools": "dcraw, libraw, ffmpeg, curl — installed separately by the user under their own licenses; not bundled.",
+            "external_tools": "dcraw, libraw, ffmpeg, curl, keyfinder-cli, beat_this — installed separately by the user under their own licenses; not bundled.",
         }));
         return Ok(());
     }
@@ -107,14 +107,16 @@ pub fn run_licenses_command(
     println!("───────────────");
     println!("SigLIP and SigLIP 2 image-text encoders are downloaded on demand from");
     println!("Hugging Face. Both are released by Google Research under Apache-2.0.");
-    println!("Face detection/recognition models (when used) are also Apache-2.0.");
+    println!("Face models (when used): YuNet detection is MIT (OpenCV Zoo), ArcFace");
+    println!("recognition is Apache-2.0 (ONNX Model Zoo).");
     println!("MAKI does not bundle model weights in the binary.");
     println!();
     println!("External tools");
     println!("──────────────");
-    println!("dcraw, libraw, ffmpeg, ffprobe, and curl are called as separate processes");
-    println!("when present on the system. They are governed by their own licenses and");
-    println!("installed by the user; MAKI does not bundle their code.");
+    println!("dcraw, libraw, ffmpeg, ffprobe, curl, keyfinder-cli, and beat_this are");
+    println!("called as separate processes when present on the system. They are governed");
+    println!("by their own licenses and installed by the user; MAKI does not bundle");
+    println!("their code.");
 
     if !summary {
         println!();

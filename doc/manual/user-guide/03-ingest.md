@@ -550,11 +550,16 @@ maki describe --check
 
 | Model | Size | RAM | Speed (M3 Pro) | Best For |
 |-------|------|-----|-----------------|----------|
-| **Moondream 2B** | 1.7 GB | ~2 GB | ~3--5s | Large batch processing |
-| **Qwen2.5-VL 3B** | 2.0 GB | ~3 GB | ~8--12s | Daily use (default) |
-| **Gemma 3 4B** | 3.3 GB | ~4 GB | ~10--15s | Strong reasoning |
-| **Qwen2.5-VL 7B** | 4.7 GB | ~6 GB | ~20--36s | Best quality, key assets |
-| **SmolVLM 2.2B** | 1.5 GB | ~2 GB | ~4--8s | Minimal resources |
+| **Moondream 2B** `moondream` | 1.7 GB | ~2 GB | ~3--5s | Large batch processing |
+| **Qwen2.5-VL 3B** `qwen2.5vl:3b` | 2.0 GB | ~3 GB | ~8--12s | Daily use (default) |
+| **Gemma 3 4B** `gemma3:4b` | 3.3 GB | ~4 GB | ~10--15s | Strong reasoning |
+| **Qwen2.5-VL 7B** `qwen2.5vl:7b` | 4.7 GB | ~6 GB | ~20--36s | Best quality, key assets |
+
+These are the well-tested defaults. The current model generations —
+**Qwen3.5** (`qwen3.5:4b` as the everyday upgrade from the default,
+`qwen3.5:9b` for a quality jump) and **Gemma 4** (`gemma4:e4b` as the
+upgrade from Gemma 3 4B) — are covered with size and speed comparisons
+in the [VLM Model Guide](../reference/10-vlm-models.md).
 
 All models use GPU automatically on macOS (Metal), Linux (CUDA), and Windows (CUDA/DirectML) when run through Ollama.
 
@@ -582,17 +587,17 @@ Cloud vision APIs that implement the OpenAI chat completions format can also be 
 ```toml
 [vlm]
 endpoint = "https://api.openai.com"
-model = "gpt-4o"
+model = "gpt-5.1-chat-latest"
 ```
 
-Requires `OPENAI_API_KEY` in your environment. Cost: ~$0.01--0.03 per image depending on resolution.
+Requires `OPENAI_API_KEY` in your environment. Charged per image; see OpenAI's current pricing.
 
 **Groq (free tier available):**
 
 ```toml
 [vlm]
 endpoint = "https://api.groq.com/openai"
-model = "llama-3.2-90b-vision-preview"
+model = "<current Groq vision model>"   # check console.groq.com/docs/models
 ```
 
 Requires `GROQ_API_KEY`. Free tier allows ~30 requests/minute.
@@ -602,10 +607,14 @@ Requires `GROQ_API_KEY`. Free tier allows ~30 requests/minute.
 ```toml
 [vlm]
 endpoint = "https://api.together.xyz"
-model = "meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo"
+model = "<current Together vision model>"   # check docs.together.ai
 ```
 
 Requires `TOGETHER_API_KEY`.
+
+Cloud model rosters rotate quickly (OpenAI's `gpt-4o` and the Llama 3.2
+vision previews once listed here have all been retired) -- always take
+the exact identifier from the provider's current model list.
 
 > **Note on authentication:** maki currently sends requests without authentication headers. For cloud APIs that require bearer tokens, you may need a local proxy that adds the header, or use a server like Ollama as a gateway. Native API key support may be added in a future version.
 

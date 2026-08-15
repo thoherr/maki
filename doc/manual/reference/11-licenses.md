@@ -68,10 +68,10 @@ MAKI Pro uses image-text encoder models (SigLIP, SigLIP 2) and face detection/re
 | `siglip-vit-l16-256` | `Xenova/siglip-large-patch16-256` | Apache-2.0 | Google Research |
 | `siglip2-base-256-multi` | `onnx-community/siglip2-base-patch16-256-ONNX` | Apache-2.0 | Google Research (SigLIP 2) |
 | `siglip2-large-256-multi` | `onnx-community/siglip2-large-patch16-256-ONNX` | Apache-2.0 | Google Research (SigLIP 2) |
-| Face detection (RetinaFace) | Hugging Face | Apache-2.0 | InsightFace project |
-| Face recognition (ArcFace) | Hugging Face | Apache-2.0 | InsightFace project |
+| Face detection (YuNet) | `opencv/face_detection_yunet` | MIT | Shiqi Yu et al. / OpenCV Zoo |
+| Face recognition (ArcFace ResNet-100) | `onnxmodelzoo/arcfaceresnet100-8` | Apache-2.0 | ONNX Model Zoo; ArcFace method by the InsightFace project |
 
-By downloading these models, you agree to the terms of the Apache-2.0 license under which they are distributed. Because MAKI does not bundle the model weights, MAKI itself has no redistribution obligation for them; the obligation, if any, is on you when you copy a downloaded model elsewhere.
+By downloading these models, you agree to the terms of the license under which each is distributed (Apache-2.0, or MIT for YuNet). Because MAKI does not bundle the model weights, MAKI itself has no redistribution obligation for them; the obligation, if any, is on you when you copy a downloaded model elsewhere.
 
 ## External tools
 
@@ -83,6 +83,8 @@ MAKI calls several external command-line tools as separate processes when they a
 | `ffmpeg` | Video thumbnail and proxy generation | LGPL-2.1 / GPL-2 (build-dependent) |
 | `ffprobe` | Video metadata extraction (duration, codec, resolution) | Same as ffmpeg |
 | `curl` | AI model download and VLM HTTP calls | MIT/X-style |
+| `keyfinder-cli` | Musical key detection (`maki audio analyze`) | GPL-3.0 |
+| `beat_this` | Tempo (BPM) detection (`maki audio analyze`) | MIT |
 
 Because MAKI invokes these tools via `std::process::Command` (a separate-process boundary), there is no linking and no derived-work relationship — MAKI's Apache-2.0 license is unaffected by their licenses, and vice versa.
 

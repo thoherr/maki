@@ -2,7 +2,44 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## v4.9.2 (2026-07-14)
+## Unreleased
+
+Model-currency fixes from the August 2026 dependency/model audit. No schema migration.
+
+### Fixed
+
+- **SigLIP 2 auto-tag confidence calibration.** The two SigLIP 2 model
+  specs reused SigLIP 1's `logit_scale`/`logit_bias` as acknowledged
+  placeholders; the constants are now the real values extracted from the
+  released `google/siglip2-*-patch16-256` weights (base: bias −16.77 vs
+  the borrowed −12.93). Auto-tag confidences on SigLIP 2 models drop to
+  their honest level — re-tune `[ai] threshold` if you had raised it for
+  a SigLIP 2 model. Similarity search and `text:` ranking (pure cosine)
+  are unaffected. SigLIP 1 models unchanged.
+- **Licenses appendix named the wrong face-detection model.** The AI
+  models table claimed "RetinaFace (InsightFace)"; MAKI uses YuNet from
+  the OpenCV Zoo (MIT, Shiqi Yu et al.). The table (and `maki licenses`)
+  now names YuNet + ArcFace with their concrete Hugging Face repos and
+  correct licenses, and lists keyfinder-cli (GPL-3.0) / beat_this (MIT)
+  among the external tools.
+- **`smolvlm` removed from VLM recommendations** — the tag is gone from
+  the Ollama library (`ollama pull smolvlm` no longer resolves).
+- **Qwen3.5/3.6 vision status on Ollama untangled** (verified August
+  2026): Qwen3.5 vision works on current Ollama releases; Qwen3.6 image
+  input is still not wired up there (text-only; use llama.cpp or
+  LM Studio for 3.6 vision). The model guide's comparison table and
+  recommendation now say so consistently — Qwen3.5 via Ollama is the
+  current sweet spot.
+- **Cloud VLM examples refreshed** — `gpt-4o` (retired by OpenAI 2026,
+  API snapshot shutdown 2026-10-23) replaced with `gpt-5.1-chat-latest`;
+  the dead Llama 3.2 vision-preview examples for Groq/Together now point
+  at the providers' current model lists instead.
+- **Doc drift**: README, specification, and module reference still
+  described the two-model SigLIP roster (four since v4.3.12);
+  specification also documented `[ai] threshold` as 0.5 (actual 0.1) and
+  `model_dir` as `~/.cache/maki/models` (actual `~/.maki/models`); the
+  setup/config VLM tables now point at the current model generations
+  (Qwen3.5, Gemma 4) covered by the VLM guide.
 
 Web export trust + preview export. No schema migration.
 

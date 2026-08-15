@@ -114,12 +114,10 @@ pub const MODEL_SPECS: &[ModelSpec] = &[
         embedding_dim: 768,
         image_size: 256,
         // logit_scale / logit_bias are only used by auto-tag (multi-label
-        // classification). The values from SigLIP 1 base are reasonable
-        // approximations for similarity ranking but should be replaced with
-        // the actual SigLIP 2 values if precise auto-tag confidence calibration
-        // is needed.
-        logit_scale: 4.7129,
-        logit_bias: -12.9283,
+        // classification). Values extracted from the F32 weights of
+        // google/siglip2-base-patch16-256 (model.safetensors).
+        logit_scale: 4.7265,
+        logit_bias: -16.7718,
         max_text_len: 64,
         // Gemma tokenizer uses pad_token_id = 0 (vs 1 for SigLIP 1's tokenizer)
         pad_token_id: 0,
@@ -134,9 +132,9 @@ pub const MODEL_SPECS: &[ModelSpec] = &[
         hf_repo: "onnx-community/siglip2-large-patch16-256-ONNX",
         embedding_dim: 1024,
         image_size: 256,
-        // Reasonable approximations from SigLIP 1 large; refine if needed.
-        logit_scale: 4.7007,
-        logit_bias: -12.6546,
+        // Extracted from the F32 weights of google/siglip2-large-patch16-256.
+        logit_scale: 4.6826,
+        logit_bias: -16.3476,
         max_text_len: 64,
         pad_token_id: 0,
     },

@@ -86,8 +86,14 @@ All timings measured on Apple M3 Pro (18 GB) with Ollama, using preview images (
 | Model | RAM `\newline`{=latex} Download | Speed | Notes |
 |-------------------:|---------:|--------:|:----------------------------------------------------------------------|
 | **Moondream 2B** `moondream` | **2 GB** `\newline`{=latex} (1.7 GB) | 3--5s | Fastest option. Good for bulk first passes before refining with a larger model. |
-| **SmolVLM 2.2B** `smolvlm` | **2 GB** `\newline`{=latex} (1.5 GB) | 4--8s | HuggingFace, very compact. Similar niche to Moondream. |
 | **Gemma 4 E2B** `gemma4:e2b` | **8 GB** `\newline`{=latex} (7.2 GB) | 6--10s | Smaller Gemma 4 variant; faster than E4B while keeping the new generation's prompting + 128K context. |
+
+SmolVLM was previously listed here; it has been removed from the Ollama
+library (`ollama pull smolvlm` no longer resolves — only
+community-namespaced re-uploads remain), and Moondream / Gemma 4 E2B
+cover the same niche. Moondream 3 (a 9B-MoE preview with much stronger
+visual reasoning) exists on HuggingFace but is not in the Ollama library
+yet.
 
 ### Large / High Quality
 
@@ -119,14 +125,19 @@ Qwen recommendation; `qwen3-vl` is the still-solid previous generation.
 **Qwen3.6** — the newest generation; on Ollama currently only the
 larger sizes are published (`qwen3.6:27b` ~17 GB, `qwen3.6:35b`
 ~24 GB), so it's a "best local quality" option rather than an everyday
-one until smaller variants land. Multimodal across all published tags.
+one until smaller variants land.
 
-**Vision on Ollama:** current Ollama releases handle the Qwen3.5/3.6
-vision path correctly; only quite old versions silently dropped image
-input. If `maki describe --model qwen3.5:9b` returns descriptions that
-ignore the image, upgrade Ollama (or use llama.cpp / vLLM). Quick test:
+**Vision on Ollama — 3.5 yes, 3.6 not yet (as of August 2026):**
+current Ollama releases handle the **Qwen3.5** vision path correctly
+(only quite old versions silently dropped image input). **Qwen3.6**
+image input is *not* wired up in Ollama yet — the library page shows an
+"image input" badge and text generation works, but the separate vision
+projector isn't loaded, so `maki describe` gets text-only behavior. For
+Qwen3.6 vision use llama.cpp or LM Studio. Quick test either way:
 describe an obviously distinctive image (e.g. a sunset over water) — a
 generic answer that could fit any photo means vision isn't wired up.
+Newer Qwen generations keep appearing (Ollama just added Qwen 3.8
+support); run the same smoke test before adopting one for `describe`.
 
 ### Gemma 4 (Native Multimodal)
 
@@ -169,7 +180,7 @@ endpoint = "http://localhost:11434"
 model = "qwen2.5vl:3b"
 ```
 
-**Supported models:** All models with Ollama vision support — Qwen2.5-VL, Qwen3-VL, Gemma 3, Gemma 4 (text+image variants, see caveat above), LLaVA, Moondream, SmolVLM. Qwen3.5 multimodal depends on your Ollama version.
+**Supported models:** All models with Ollama vision support — Qwen2.5-VL, Qwen3-VL, Qwen3.5 (current Ollama releases), Gemma 3, Gemma 4 (text+image variants, see caveat above), LLaVA, Moondream. Qwen3.6 vision is not wired up in Ollama yet (text-only there; see above).
 
 **Concurrency:** Ollama handles one request at a time by default. For `concurrency > 1`, set `OLLAMA_NUM_PARALLEL` environment variable or increase `num_parallel` in Ollama's config.
 
@@ -255,8 +266,11 @@ Any OpenAI-compatible cloud API works. Note that cloud APIs charge per request a
 # maki.toml — example with a self-hosted proxy that adds auth
 [vlm]
 endpoint = "https://api.openai.com"
-model = "gpt-4o"
+model = "gpt-5.1-chat-latest"
 ```
+
+(Older examples used `gpt-4o`; OpenAI retired that model in 2026 —
+use a current GPT-5.x identifier.)
 
 ---
 
@@ -268,9 +282,9 @@ model = "gpt-4o"
 |------------------------------|--------------------------|----------------------------------------|
 | **Daily use, modest hardware** | Qwen2.5-VL 3B | Fast, 3 GB RAM, good quality |
 | **Direct upgrade from Gemma 3** | Gemma 4 E4B | Native multimodal, 128K context, similar latency |
-| **Best quality via Ollama** | Qwen3-VL 8B or Gemma 4 E4B | Excellent descriptions, reasonable speed |
+| **Best quality via Ollama** | Qwen3.5 9B, Qwen3-VL 8B, or Gemma 4 E4B | Excellent descriptions, reasonable speed |
 | **Bulk first pass** | Moondream 2B or Gemma 4 E2B | 3--10s per image, good-enough descriptions |
-| **Best local quality** | Gemma 4 31B or Qwen3.5 9B (llama.cpp) | Strongest reasoning at workstation RAM |
+| **Best local quality** | Gemma 4 31B or Qwen3.5 27B | Strongest reasoning at workstation RAM |
 | **32 GB+ Mac or GPU server** | Qwen3-VL 32B / Gemma 4 31B / Qwen3.5 27B | Near-cloud quality |
 | **Tag suggestions** | Qwen3-VL 8B or Gemma 4 E4B | Structured output reliability |
 | **Architectural / technical** | Gemma 4 E4B or Qwen3-VL 8B | Good at detail and materials |
@@ -281,7 +295,7 @@ model = "gpt-4o"
 
 | System RAM | GPU VRAM | Suggested Models |
 |-------------|----------|-------------------------------------------------------|
-| 8 GB | — | Moondream 2B, SmolVLM 2.2B, Gemma 4 E2B |
+| 8 GB | — | Moondream 2B, Gemma 4 E2B |
 | 16 GB | — | Qwen2.5-VL 3B (default), Gemma 3 4B, Qwen3-VL 4B, Gemma 4 E4B |
 | 24--32 GB | — | Qwen3-VL 8B, Qwen2.5-VL 7B, Qwen3.5 9B, Gemma 4 26B |
 | 32 GB+ | — | Qwen3-VL 32B, Qwen3.5 27B, Gemma 4 31B |
@@ -301,10 +315,10 @@ model = "gpt-4o"
 | **Document understanding** | Good | Better | Best (90.8 OmniDocBench) |
 | **Context length** | 128K | 128K | 256K |
 | **Languages** | ~29 | ~119 | 201 |
-| **Ollama vision** | Yes | Yes | Not yet |
+| **Ollama vision** | Yes | Yes | Yes (current releases) |
 | **llama.cpp vision** | Yes | Yes | Yes (with mmproj) |
 
-For most users, **Qwen3-VL via Ollama** is the practical sweet spot right now. When Ollama adds Qwen3.5 vision support, it will become the clear best choice.
+For most users, **Qwen3.5 via Ollama** (`qwen3.5:4b` or `:9b`) is the practical sweet spot now that Ollama wires up its vision path; **Qwen3-VL** remains a well-tested fallback. Qwen3.6 vision is not available via Ollama yet (see above).
 
 ### Description Quality (Subjective)
 

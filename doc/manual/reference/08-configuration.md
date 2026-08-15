@@ -503,6 +503,8 @@ The CLI `--model` flag overrides this value. Embeddings are stored per `(asset_i
 
 **Multilingual model**: `siglip2-base-256-multi` is Google's SigLIP 2 base, trained on the WebLI dataset across many languages. Use this if you want to type `text:` queries in German or any non-English language. It uses the Gemma SentencePiece tokenizer (vocab 256k) and is a drop-in replacement for `siglip-vit-b16-256` in dimensions and image resolution.
 
+> **Note:** earlier releases scored the SigLIP 2 models with SigLIP 1's calibration constants, which inflated auto-tag confidence values. The constants now match the released SigLIP 2 weights, so confidences are lower (and honest) — if you tuned `threshold` upward specifically for a SigLIP 2 model, re-tune it after upgrading. Similarity search and `text:` ranking are unaffected.
+
 ### threshold
 
 - **Type:** float (0.0--1.0)
@@ -595,9 +597,13 @@ Base URL of the VLM server. Any server implementing the OpenAI-compatible `/v1/c
 - [llama.cpp server](https://github.com/ggerganov/llama.cpp) -- `http://localhost:8080`
 
 **Cloud APIs** (OpenAI-compatible, require API key in environment):
-- OpenAI -- `https://api.openai.com` (model: `gpt-4o`)
-- Groq -- `https://api.groq.com/openai` (model: `llama-3.2-90b-vision-preview`)
-- Together AI -- `https://api.together.xyz` (model: `meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo`)
+- OpenAI -- `https://api.openai.com` (model: `gpt-5.1-chat-latest`)
+- Groq -- `https://api.groq.com/openai`
+- Together AI -- `https://api.together.xyz`
+
+Cloud model rosters rotate quickly (OpenAI retired `gpt-4o` in 2026, and
+the Llama vision previews formerly listed here are gone) -- check the
+provider's current vision-model list for the exact identifier.
 
 > **Note:** Cloud APIs charge per request. maki does not set authentication headers -- if your endpoint requires an API key, you may need to use a local proxy or set the key via the server's own configuration.
 
@@ -606,7 +612,7 @@ Base URL of the VLM server. Any server implementing the OpenAI-compatible `/v1/c
 - **Type:** string
 - **Default:** `"qwen2.5vl:3b"`
 
-Model name passed to the VLM server. For Ollama, this is the model tag (e.g., `moondream`, `qwen2.5vl:3b`, `qwen2.5vl:7b`). For cloud APIs, this is the model identifier (e.g., `gpt-4o`).
+Model name passed to the VLM server. For Ollama, this is the model tag (e.g., `moondream`, `qwen2.5vl:3b`, `qwen3.5:4b`). For cloud APIs, this is the model identifier (e.g., `gpt-5.1-chat-latest`).
 
 **Recommended models for photography** (tested with Ollama on Apple Silicon):
 
@@ -619,7 +625,7 @@ Model name passed to the VLM server. For Ollama, this is the model tag (e.g., `m
 | Qwen3-VL 8B | 5.2 GB | ~6 GB | ~15--20s | Excellent |
 | Qwen2.5-VL 7B | 4.7 GB | ~6 GB | ~20--36s | Excellent |
 
-See [VLM Model Guide](10-vlm-models.md) for a comprehensive comparison including Qwen3.5, backend setup instructions, and hardware recommendations.
+The table above lists the long-tested baseline models. See the [VLM Model Guide](10-vlm-models.md) for the current generations — Qwen3.5 (`qwen3.5:4b`/`:9b`) and Gemma 4 (`gemma4:e4b`) — plus backend setup instructions and hardware recommendations.
 
 ### max_tokens
 
