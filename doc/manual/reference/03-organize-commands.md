@@ -1439,7 +1439,7 @@ maki faces dump-aligned --query 'tag:"person|refugee"' --limit 30
 
 ---
 
-## maki faces people *(Pro)*
+## maki faces people *(Pro)* {#maki-faces-people}
 
 ### NAME
 
@@ -1500,7 +1500,7 @@ maki faces name 550e8400-... "Alice"
 
 ---
 
-## maki faces merge *(Pro)*
+## maki faces merge *(Pro)* {#maki-faces-merge}
 
 ### NAME
 
@@ -1532,7 +1532,7 @@ maki faces merge 550e8400-... 661f9511-...
 
 ---
 
-## maki faces delete-person *(Pro)*
+## maki faces delete-person *(Pro)* {#maki-faces-delete-person}
 
 ### NAME
 
@@ -1561,7 +1561,7 @@ maki faces delete-person 550e8400-...
 
 ---
 
-## maki faces unassign *(Pro)*
+## maki faces unassign *(Pro)* {#maki-faces-unassign}
 
 ### NAME
 
