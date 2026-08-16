@@ -31,7 +31,7 @@ maki --version
 
 ### Building from source
 
-MAKI is written in Rust. You need a working Rust toolchain (rustc + cargo). Install one via [rustup](https://rustup.rs/) if you have not already.
+MAKI is written in Rust. You need a working Rust toolchain (rustc + cargo), version 1.89 or newer. Install one via [rustup](https://rustup.rs/) if you have not already.
 
 ```bash
 git clone https://github.com/thoherr/maki.git
@@ -56,6 +56,7 @@ MAKI handles standard image formats (JPEG, PNG, TIFF, WebP) natively. The follow
 | **dcraw** or **dcraw_emu** (LibRaw) | RAW file previews (NEF, ARW, CR2, CR3, etc.) | `brew install dcraw` or `brew install libraw` on macOS; your package manager on Linux; `winget install LibRaw.LibRaw` or `scoop install libraw` on Windows |
 | **ffmpeg** / **ffprobe** | Video thumbnail extraction and video metadata (duration, codec, resolution, framerate). `ffprobe` is included with the ffmpeg package. | `brew install ffmpeg` on macOS; your package manager on Linux; `winget install Gyan.FFmpeg` or `scoop install ffmpeg` on Windows |
 | **curl** | AI model download and VLM image descriptions | Pre-installed on macOS and most Linux distributions; `winget install cURL.cURL` or `scoop install curl` on Windows |
+| **keyfinder-cli** / **beat_this** *(optional)* | Musical key and tempo detection for `maki audio analyze` | [keyfinder-cli](https://github.com/evanpurkhiser/keyfinder-cli) and [beat_this](https://github.com/CPJKU/beat_this); commands configurable via `[audio]` in `maki.toml` |
 
 When an external tool is missing, MAKI prints a warning on first use explaining what is needed and why. It still imports RAW and video files, but generates an info card (a placeholder JPEG showing file metadata) instead of a rendered preview. You can install the tools later and run `maki generate-previews --force` to regenerate real previews.
 

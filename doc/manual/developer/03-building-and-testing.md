@@ -29,7 +29,7 @@ Builds the **Pro** edition with SigLIP-based zero-shot image classification, fac
 
 ### Requirements
 
-- **Rust edition**: 2021 (stable toolchain)
+- **Rust edition**: 2021; minimum Rust **1.89** (std file locking; the bundled-SQLite stack needs 1.88). CI tracks stable.
 - **Platforms**: macOS, Linux, Windows
 - **SQLite**: Bundled via `rusqlite` with the `bundled` feature (no system SQLite required)
 
@@ -115,11 +115,12 @@ Generates `doc/manual/maki-manual.pdf` from the 21 Markdown source files. The sc
    ```
    This regenerates `Cargo.lock` with the new version.
 
-4. **Run all tests**:
+4. **Run all tests — both feature matrices**:
    ```bash
    cargo test
+   cargo test --features pro
    ```
-   All tests must pass before releasing.
+   All tests must pass in both configurations before releasing.
 
 5. **Commit**:
    ```bash
@@ -134,13 +135,36 @@ Generates `doc/manual/maki-manual.pdf` from the 21 Markdown source files. The sc
 
 7. **Push**:
    ```bash
-   git push && git push --tags
+   git push origin main && git push origin vX.Y.Z
    ```
+   Verify both actually landed (`git ls-remote origin` shows the tag and
+   the main commit).
 
-8. **Create GitHub release**:
+8. **Let the Release workflow publish.** The tag push triggers
+   `.github/workflows/release.yml`, which builds all platform archives,
+   creates the GitHub release, extracts the release body from the
+   CHANGELOG's `## vX.Y.Z` section, and uploads all assets.
+   **Do not run `gh release create` manually** — a manually created
+   release races the workflow: the workflow's token cannot upload assets
+   to a release it doesn't own, and the result is a release with a
+   partial asset set.
+
+9. **Verify the assets** once the workflow completes (~20 minutes):
    ```bash
-   gh release create vX.Y.Z --title "vX.Y.Z" --notes "changelog content here"
+   gh release view vX.Y.Z --json assets --jq '.assets[].name'
    ```
+   Expect 11 assets: six platform archives (macOS arm64 / Linux x86_64 /
+   Windows x86_64, each standard + pro), four PDFs (manual, cheat-sheet,
+   search-filters, tagging), and `THIRD_PARTY_LICENSES.md`.
+
+10. **Per-minor cleanup**: only the latest patch of each minor line
+    keeps a GitHub release (all tags are kept). After verifying, delete
+    the previous *published* release of the same minor:
+    ```bash
+    gh release delete vX.Y.<previous> --yes --cleanup-tag=false
+    ```
+    Check `gh release list` first — pick the previous release that was
+    actually published, not just the previous version number.
 
 ## Dependencies
 
@@ -158,13 +182,17 @@ Generates `doc/manual/maki-manual.pdf` from the 21 Markdown source files. The sc
 | `image` | Image decoding, resizing, and encoding for previews |
 | `imageproc` | Text rendering on info card previews |
 | `ab_glyph` | Font loading for info card text (embedded DejaVu Sans) |
-| `lofty` | Audio metadata extraction (duration, bitrate) for info cards |
+| `lofty` | Audio metadata extraction (duration, bitrate, sample rate, channels, embedded tags) |
 | `uuid` | UUID v4 generation (asset IDs) and v5 (deterministic IDs) |
 | `axum` | HTTP web framework for the `serve` command |
 | `askama` | Compile-time HTML template engine |
 | `tokio` | Async runtime for the web server |
 | `tower-http` | Static file serving middleware (`ServeDir` for previews) |
-| `toml` | Configuration file parsing (`maki.toml`, `searches.toml`) |
+| `toml` / `toml_edit` | Configuration file parsing (`maki.toml`, `searches.toml`); comment-preserving Settings save |
+| `schemars` | JSON Schema generation for the web Settings form |
+| `printpdf` | Contact-sheet PDF assembly |
+| `zip` | Web export ZIP archives |
+| `rustyline` | Interactive `maki shell` REPL (line editing, completion) |
 | `glob-match` | Filename glob matching for import exclusion patterns |
 | `chrono` | Date/time handling with serde support |
 | `anyhow` / `thiserror` | Error handling |
@@ -179,6 +207,8 @@ Generates `doc/manual/maki-manual.pdf` from the 21 Markdown source files. The sc
 | `assert_cmd` | CLI binary testing (running `maki` as a subprocess) |
 | `predicates` | Assertion helpers for CLI output matching |
 | `tempfile` | Temporary directories for test isolation |
+| `tower` / `http-body-util` | In-process axum router test harness (no socket) |
+| `proptest` | Property-based round-trip tests for the XMP reader/writer |
 
 ### External Tools (Highly Recommended)
 
@@ -186,9 +216,11 @@ These tools are not Rust dependencies but are invoked as subprocesses for specif
 
 - **dcraw** or **LibRaw** (`dcraw_emu`) -- RAW image preview extraction. Used to decode camera-native formats (NEF, ARW, CR2, CR3, etc.) into RGB data for thumbnail generation. LibRaw's `dcraw_emu` is preferred when available.
 
-- **ffmpeg** -- Video thumbnail extraction. Used to capture a frame from video files (MP4, MOV, AVI, etc.) for preview generation.
+- **ffmpeg** / **ffprobe** -- Video thumbnail extraction, audio waveform previews (`showwavespic`), and video metadata (duration, codec, resolution, framerate via `ffprobe`, which ships in the ffmpeg package).
 
 - **curl** -- Model file download for AI auto-tagging *(Pro)* and VLM image descriptions (`maki describe`). Used to download ONNX model files from HuggingFace. Available by default on macOS and most Linux distributions.
+
+- **keyfinder-cli** / **beat_this** *(optional)* -- External audio analyzers for `maki audio analyze` (musical key and BPM detection). Commands configurable via `[audio]` in `maki.toml`; see the [Configuration Reference](../reference/08-configuration.md).
 
 **Install on macOS** (Homebrew):
 
