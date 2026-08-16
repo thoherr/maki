@@ -104,13 +104,14 @@ yet.
 | **Gemma 4 31B** `gemma4:31b` | **24 GB** `\newline`{=latex} (20 GB) | 70--100s | Largest dense Gemma 4; near-cloud quality on a workstation. 256K context. |
 | **LLaVA 1.6 7B** `llava:7b` | **6 GB** `\newline`{=latex} (4.7 GB) | 15--25s | Well-established, wide compatibility. Good quality. |
 
-### Qwen3.5 & Qwen3.6 (Current Native-Multimodal Generation)
+### Qwen3.5, 3.6 & 3.8 (Current Native-Multimodal Generations)
 
 The Qwen line moved on from the `-VL` split: **Qwen3.5** (shipped early
-2026) and **Qwen3.6** (the newest) are natively multimodal across every
-size — no separate "-VL" variant — and generally out-reason the Qwen-VL
-models at similar parameter counts. These are the current mainstream
-Qwen recommendation; `qwen3-vl` is the still-solid previous generation.
+2026), **Qwen3.6**, and the brand-new **Qwen3.8** (open weights
+released mid-August 2026) are natively multimodal — no separate "-VL"
+variant — and generally out-reason the Qwen-VL models at similar
+parameter counts. Qwen3.5 is the mainstream recommendation; `qwen3-vl`
+is the still-solid previous generation.
 
 **Qwen3.5** — the everyday line, with the full size range on Ollama:
 
@@ -122,22 +123,32 @@ Qwen recommendation; `qwen3-vl` is the still-solid previous generation.
 | **Qwen3.5 27B** `qwen3.5:27b` | **20 GB** | High quality on a workstation. |
 | **Qwen3.5 35B** `qwen3.5:35b` | **24 GB** | Largest widely-available variant. |
 
-**Qwen3.6** — the newest generation; on Ollama currently only the
-larger sizes are published (`qwen3.6:27b` ~17 GB, `qwen3.6:35b`
-~24 GB), so it's a "best local quality" option rather than an everyday
-one until smaller variants land.
+**Qwen3.6** — on Ollama only the larger sizes are published
+(`qwen3.6:27b` ~17 GB, `qwen3.6:35b` ~24 GB), so it's a "best local
+quality" option rather than an everyday one.
 
-**Vision on Ollama — 3.5 yes, 3.6 not yet (as of August 2026):**
-current Ollama releases handle the **Qwen3.5** vision path correctly
-(only quite old versions silently dropped image input). **Qwen3.6**
-image input is *not* wired up in Ollama yet — the library page shows an
-"image input" badge and text generation works, but the separate vision
-projector isn't loaded, so `maki describe` gets text-only behavior. For
-Qwen3.6 vision use llama.cpp or LM Studio. Quick test either way:
-describe an obviously distinctive image (e.g. a sunset over water) — a
-generic answer that could fit any photo means vision isn't wired up.
-Newer Qwen generations keep appearing (Ollama just added Qwen 3.8
-support); run the same smoke test before adopting one for `describe`.
+**Qwen3.8** — the newest generation (open weights August 2026); on
+Ollama as **27B only** (`qwen3.8:27b`, ~18 GB at Q4; `qwen3.8:27b-mlx`
+for Apple Silicon), 256K context. Early benchmarks show the strongest
+image understanding of any local Qwen yet (document and real-world
+image tasks clearly ahead of Qwen3.6-27B), but there's no smaller size,
+so it needs ~24 GB RAM/VRAM. Worth trying if your hardware fits — with
+two caveats: run **Ollama v0.32.14 or newer** (release-day builds
+mis-parsed image input via the wrong parser; fixed within days), and
+treat it as a week-old model — A/B it against your current model on
+your own photos before switching the default.
+
+**Vision on Ollama — 3.5 yes, 3.8 yes (with current Ollama), 3.6 no
+(as of August 2026):** current Ollama releases handle the **Qwen3.5**
+vision path correctly (only quite old versions silently dropped image
+input), and **Qwen3.8** runs on the native engine with vision wired up
+(on v0.32.14+, see above). **Qwen3.6** image input is *not* wired up in
+Ollama — the library page shows an "image input" badge and text
+generation works, but the separate vision projector isn't loaded, so
+`maki describe` gets text-only behavior; for Qwen3.6 vision use
+llama.cpp or LM Studio. Quick test for any new model: describe an
+obviously distinctive image (e.g. a sunset over water) — a generic
+answer that could fit any photo means vision isn't wired up.
 
 ### Gemma 4 (Native Multimodal)
 
@@ -285,7 +296,7 @@ use a current GPT-5.x identifier.)
 | **Best quality via Ollama** | Qwen3.5 9B, Qwen3-VL 8B, or Gemma 4 E4B | Excellent descriptions, reasonable speed |
 | **Bulk first pass** | Moondream 2B or Gemma 4 E2B | 3--10s per image, good-enough descriptions |
 | **Best local quality** | Gemma 4 31B or Qwen3.5 27B | Strongest reasoning at workstation RAM |
-| **32 GB+ Mac or GPU server** | Qwen3-VL 32B / Gemma 4 31B / Qwen3.5 27B | Near-cloud quality |
+| **32 GB+ Mac or GPU server** | Qwen3.8 27B / Qwen3-VL 32B / Gemma 4 31B | Near-cloud quality (Qwen3.8 needs Ollama 0.32.14+) |
 | **Tag suggestions** | Qwen3-VL 8B or Gemma 4 E4B | Structured output reliability |
 | **Architectural / technical** | Gemma 4 E4B or Qwen3-VL 8B | Good at detail and materials |
 | **Multilingual descriptions** | Qwen3.5 (any size) | 201 languages |
@@ -298,7 +309,7 @@ use a current GPT-5.x identifier.)
 | 8 GB | — | Moondream 2B, Gemma 4 E2B |
 | 16 GB | — | Qwen2.5-VL 3B (default), Gemma 3 4B, Qwen3-VL 4B, Gemma 4 E4B |
 | 24--32 GB | — | Qwen3-VL 8B, Qwen2.5-VL 7B, Qwen3.5 9B, Gemma 4 26B |
-| 32 GB+ | — | Qwen3-VL 32B, Qwen3.5 27B, Gemma 4 31B |
+| 32 GB+ | — | Qwen3.8 27B, Qwen3-VL 32B, Qwen3.5 27B, Gemma 4 31B |
 | — | 8 GB | Qwen3-VL 8B (FP16), Qwen3.5 9B (Q4), Gemma 4 E4B |
 | — | 16 GB+ | Qwen3.5 27B (Q4), Qwen3-VL 32B (Q4), Gemma 4 31B |
 
@@ -318,7 +329,7 @@ use a current GPT-5.x identifier.)
 | **Ollama vision** | Yes | Yes | Yes (current releases) |
 | **llama.cpp vision** | Yes | Yes | Yes (with mmproj) |
 
-For most users, **Qwen3.5 via Ollama** (`qwen3.5:4b` or `:9b`) is the practical sweet spot now that Ollama wires up its vision path; **Qwen3-VL** remains a well-tested fallback. Qwen3.6 vision is not available via Ollama yet (see above).
+For most users, **Qwen3.5 via Ollama** (`qwen3.5:4b` or `:9b`) is the practical sweet spot now that Ollama wires up its vision path; **Qwen3-VL** remains a well-tested fallback. Qwen3.6 vision is not available via Ollama (see above); the new **Qwen3.8** works on current Ollama but exists only as a 27B — a high-end option, not an everyday one.
 
 ### Description Quality (Subjective)
 
