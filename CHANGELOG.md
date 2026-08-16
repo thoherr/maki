@@ -2,7 +2,9 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## Unreleased
+## v4.9.4 (2026-08-16)
+
+Dependency-migration completion: askama 0.16 and schemars 1.2 — the two items deferred from the v4.9.3 audit. No schema migration.
 
 ### Changed
 
