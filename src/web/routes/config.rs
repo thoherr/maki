@@ -360,3 +360,70 @@ fn needs_restart(
     if old.browse.default_filter != new.browse.default_filter { return true; }
     false
 }
+
+#[cfg(test)]
+mod schema_contract_tests {
+    //! Locks the JSON-Schema shape that the config form's client-side
+    //! walker (templates/config_form_js.html) depends on. If schemars
+    //! changes its output dialect again, these fail before the form
+    //! silently breaks in the browser.
+
+    fn schema_json() -> serde_json::Value {
+        let schema = schemars::schema_for!(crate::config::CatalogConfig);
+        serde_json::to_value(&schema).unwrap()
+    }
+
+    #[test]
+    fn named_types_live_in_defs_and_all_refs_resolve() {
+        let schema = schema_json();
+        let defs = schema
+            .get("$defs")
+            .and_then(|d| d.as_object())
+            .expect("schema must carry named types under $defs");
+        assert!(!defs.is_empty());
+
+        // Walk the whole schema; every $ref must point into $defs.
+        fn walk(node: &serde_json::Value, defs: &serde_json::Map<String, serde_json::Value>) {
+            match node {
+                serde_json::Value::Object(map) => {
+                    if let Some(r) = map.get("$ref").and_then(|r| r.as_str()) {
+                        let name = r
+                            .strip_prefix("#/$defs/")
+                            .unwrap_or_else(|| panic!("ref `{r}` is not a #/$defs/ ref"));
+                        assert!(defs.contains_key(name), "dangling $ref `{r}`");
+                    }
+                    map.values().for_each(|v| walk(v, defs));
+                }
+                serde_json::Value::Array(items) => items.iter().for_each(|v| walk(v, defs)),
+                _ => {}
+            }
+        }
+        walk(&schema, defs);
+    }
+
+    #[test]
+    fn section_fields_are_refs_with_inline_defaults() {
+        // The walker resolves `{"$ref": ..., "default": ...}` by merging
+        // sibling keys onto the resolved definition (draft 2020-12 style).
+        let schema = schema_json();
+        let preview = &schema["properties"]["preview"];
+        assert!(preview.get("$ref").is_some(), "section field must be a $ref");
+        assert!(preview.get("default").is_some(), "section ref must carry its default inline");
+    }
+
+    #[test]
+    fn map_sections_use_additional_properties() {
+        // BTreeMap-backed sections (import.profiles, vlm.model_config)
+        // render as one editable sub-section per existing key; the walker
+        // detects them via `additionalProperties`.
+        let schema = schema_json();
+        let defs = &schema["$defs"];
+        for (def, field) in [("ImportConfig", "profiles"), ("VlmConfig", "model_config")] {
+            let node = &defs[def]["properties"][field];
+            assert!(
+                node.get("additionalProperties").is_some(),
+                "{def}.{field} must expose additionalProperties for the form walker"
+            );
+        }
+    }
+}

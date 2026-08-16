@@ -2,6 +2,26 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## Unreleased
+
+### Changed
+
+- **askama 0.12 → 0.16** — the two dependency migrations deferred from
+  the v4.9.3 audit are done. askama's post-rinja-merge syntax landed
+  with two mechanical changes: every `{% call macro() %}` now carries a
+  closing `{% endcall %}` (48 sites in `results.html`), and the custom
+  template filters are annotated with `#[askama::filter_fn]` and take
+  the new `&dyn askama::Values` environment parameter. Rendered output
+  is unchanged (web-harness tests cover all templates).
+- **schemars 0.8 → 1.2** — the config schema endpoint now emits JSON
+  Schema draft 2020-12: named types under `$defs`, refs as `#/$defs/…`
+  with sibling keywords instead of the old `allOf` wrapper. The Settings
+  form's schema walker resolves both dialects, and a new
+  `schema_contract_tests` module locks the shape the JS depends on
+  ($defs present, all refs resolve, section refs carry inline defaults,
+  map sections expose `additionalProperties`) so a future dialect change
+  fails in `cargo test` instead of silently breaking the form.
+
 ## v4.9.3 (2026-08-15)
 
 August 2026 dependency + model audit: `cargo audit` down to zero vulnerabilities, unmaintained crates retired, AI-model docs brought current. No schema migration.

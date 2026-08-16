@@ -21,41 +21,41 @@
 </div>
 {% else %}
 <div class="results-bar">
-    <span class="results-count">{{ total }} asset{% if total != 1 %}s{% endif %}{% if !query.is_empty() %} matching &ldquo;{{ query }}&rdquo;{% endif %}{% if count_in_stacks > 0 %} <a class="results-count-hint" href="{% call stacks_off_url() %}" hx-get="{% call stacks_off_url() %}" hx-target="#results" hx-push-url="true" title="Show assets currently hidden behind stack collapse">&middot; {{ count_in_stacks }} more in stacks</a>{% endif %}{% if count_filtered_by_default > 0 %} <a class="results-count-hint" href="{% call nodefault_url() %}" hx-get="{% call nodefault_url() %}" hx-target="#results" hx-push-url="true" title="Show assets currently excluded by the configured default filter">&middot; {{ count_filtered_by_default }} more without default filter</a>{% endif %}</span>
+    <span class="results-count">{{ total }} asset{% if total != 1 %}s{% endif %}{% if !query.is_empty() %} matching &ldquo;{{ query }}&rdquo;{% endif %}{% if count_in_stacks > 0 %} <a class="results-count-hint" href="{% call stacks_off_url() %}{% endcall %}" hx-get="{% call stacks_off_url() %}{% endcall %}" hx-target="#results" hx-push-url="true" title="Show assets currently hidden behind stack collapse">&middot; {{ count_in_stacks }} more in stacks</a>{% endif %}{% if count_filtered_by_default > 0 %} <a class="results-count-hint" href="{% call nodefault_url() %}{% endcall %}" hx-get="{% call nodefault_url() %}{% endcall %}" hx-target="#results" hx-push-url="true" title="Show assets currently excluded by the configured default filter">&middot; {{ count_filtered_by_default }} more without default filter</a>{% endif %}</span>
     <a href="#" class="export-all-link" id="export-all-link" title="Download all {{ total }} results as ZIP">Export all</a>
 
     <div class="sort-controls">
         {% if sort == "name_asc" %}
-        <a class="sort-btn active" href="{% call sort_url("name_desc") %}" hx-get="{% call sort_url("name_desc") %}" hx-target="#results" hx-push-url="true">Name<span class="sort-arrow">&#9650;</span></a>
+        <a class="sort-btn active" href="{% call sort_url("name_desc") %}{% endcall %}" hx-get="{% call sort_url("name_desc") %}{% endcall %}" hx-target="#results" hx-push-url="true">Name<span class="sort-arrow">&#9650;</span></a>
         {% else if sort == "name_desc" %}
-        <a class="sort-btn active" href="{% call sort_url("name_asc") %}" hx-get="{% call sort_url("name_asc") %}" hx-target="#results" hx-push-url="true">Name<span class="sort-arrow">&#9660;</span></a>
+        <a class="sort-btn active" href="{% call sort_url("name_asc") %}{% endcall %}" hx-get="{% call sort_url("name_asc") %}{% endcall %}" hx-target="#results" hx-push-url="true">Name<span class="sort-arrow">&#9660;</span></a>
         {% else %}
-        <a class="sort-btn" href="{% call sort_url("name_asc") %}" hx-get="{% call sort_url("name_asc") %}" hx-target="#results" hx-push-url="true">Name</a>
+        <a class="sort-btn" href="{% call sort_url("name_asc") %}{% endcall %}" hx-get="{% call sort_url("name_asc") %}{% endcall %}" hx-target="#results" hx-push-url="true">Name</a>
         {% endif %}
 
         {% if sort == "date_desc" %}
-        <a class="sort-btn active" href="{% call sort_url("date_asc") %}" hx-get="{% call sort_url("date_asc") %}" hx-target="#results" hx-push-url="true">Date<span class="sort-arrow">&#9660;</span></a>
+        <a class="sort-btn active" href="{% call sort_url("date_asc") %}{% endcall %}" hx-get="{% call sort_url("date_asc") %}{% endcall %}" hx-target="#results" hx-push-url="true">Date<span class="sort-arrow">&#9660;</span></a>
         {% else if sort == "date_asc" %}
-        <a class="sort-btn active" href="{% call sort_url("date_desc") %}" hx-get="{% call sort_url("date_desc") %}" hx-target="#results" hx-push-url="true">Date<span class="sort-arrow">&#9650;</span></a>
+        <a class="sort-btn active" href="{% call sort_url("date_desc") %}{% endcall %}" hx-get="{% call sort_url("date_desc") %}{% endcall %}" hx-target="#results" hx-push-url="true">Date<span class="sort-arrow">&#9650;</span></a>
         {% else %}
-        <a class="sort-btn" href="{% call sort_url("date_desc") %}" hx-get="{% call sort_url("date_desc") %}" hx-target="#results" hx-push-url="true">Date</a>
+        <a class="sort-btn" href="{% call sort_url("date_desc") %}{% endcall %}" hx-get="{% call sort_url("date_desc") %}{% endcall %}" hx-target="#results" hx-push-url="true">Date</a>
         {% endif %}
 
         {% if sort == "size_desc" %}
-        <a class="sort-btn active" href="{% call sort_url("size_asc") %}" hx-get="{% call sort_url("size_asc") %}" hx-target="#results" hx-push-url="true">Size<span class="sort-arrow">&#9660;</span></a>
+        <a class="sort-btn active" href="{% call sort_url("size_asc") %}{% endcall %}" hx-get="{% call sort_url("size_asc") %}{% endcall %}" hx-target="#results" hx-push-url="true">Size<span class="sort-arrow">&#9660;</span></a>
         {% else if sort == "size_asc" %}
-        <a class="sort-btn active" href="{% call sort_url("size_desc") %}" hx-get="{% call sort_url("size_desc") %}" hx-target="#results" hx-push-url="true">Size<span class="sort-arrow">&#9650;</span></a>
+        <a class="sort-btn active" href="{% call sort_url("size_desc") %}{% endcall %}" hx-get="{% call sort_url("size_desc") %}{% endcall %}" hx-target="#results" hx-push-url="true">Size<span class="sort-arrow">&#9650;</span></a>
         {% else %}
-        <a class="sort-btn" href="{% call sort_url("size_desc") %}" hx-get="{% call sort_url("size_desc") %}" hx-target="#results" hx-push-url="true">Size</a>
+        <a class="sort-btn" href="{% call sort_url("size_desc") %}{% endcall %}" hx-get="{% call sort_url("size_desc") %}{% endcall %}" hx-target="#results" hx-push-url="true">Size</a>
         {% endif %}
 
         {% if has_similarity %}
         {% if sort == "similarity_desc" %}
-        <a class="sort-btn active" href="{% call sort_url("similarity_asc") %}" hx-get="{% call sort_url("similarity_asc") %}" hx-target="#results" hx-push-url="true">Similarity<span class="sort-arrow">&#9660;</span></a>
+        <a class="sort-btn active" href="{% call sort_url("similarity_asc") %}{% endcall %}" hx-get="{% call sort_url("similarity_asc") %}{% endcall %}" hx-target="#results" hx-push-url="true">Similarity<span class="sort-arrow">&#9660;</span></a>
         {% else if sort == "similarity_asc" %}
-        <a class="sort-btn active" href="{% call sort_url("similarity_desc") %}" hx-get="{% call sort_url("similarity_desc") %}" hx-target="#results" hx-push-url="true">Similarity<span class="sort-arrow">&#9650;</span></a>
+        <a class="sort-btn active" href="{% call sort_url("similarity_desc") %}{% endcall %}" hx-get="{% call sort_url("similarity_desc") %}{% endcall %}" hx-target="#results" hx-push-url="true">Similarity<span class="sort-arrow">&#9650;</span></a>
         {% else %}
-        <a class="sort-btn" href="{% call sort_url("similarity_desc") %}" hx-get="{% call sort_url("similarity_desc") %}" hx-target="#results" hx-push-url="true">Similarity</a>
+        <a class="sort-btn" href="{% call sort_url("similarity_desc") %}{% endcall %}" hx-get="{% call sort_url("similarity_desc") %}{% endcall %}" hx-target="#results" hx-push-url="true">Similarity</a>
         {% endif %}
         {% endif %}
     </div>
@@ -97,9 +97,9 @@
     {% if total_pages > 1 %}
     <div class="top-pagination">
         {% if page > 1 %}
-        <a href="{% call page_url(1) %}" hx-get="{% call page_url(1) %}" hx-target="#results" hx-push-url="true">&laquo;</a>
+        <a href="{% call page_url(1) %}{% endcall %}" hx-get="{% call page_url(1) %}{% endcall %}" hx-target="#results" hx-push-url="true">&laquo;</a>
         {% let prev_page = page - 1 %}
-        <a href="{% call page_url(prev_page) %}" hx-get="{% call page_url(prev_page) %}" hx-target="#results" hx-push-url="true">&lsaquo;</a>
+        <a href="{% call page_url(prev_page) %}{% endcall %}" hx-get="{% call page_url(prev_page) %}{% endcall %}" hx-target="#results" hx-push-url="true">&lsaquo;</a>
         {% else %}
         <span class="disabled">&laquo;</span>
         <span class="disabled">&lsaquo;</span>
@@ -109,7 +109,7 @@
         {% if p == page %}
         <span class="current">{{ p }}</span>
         {% else if p <= 3 || p > total_pages - 3 || (p >= page.saturating_sub(2) && p <= page + 2) %}
-        <a href="{% call page_url(p) %}" hx-get="{% call page_url(p) %}" hx-target="#results" hx-push-url="true">{{ p }}</a>
+        <a href="{% call page_url(p) %}{% endcall %}" hx-get="{% call page_url(p) %}{% endcall %}" hx-target="#results" hx-push-url="true">{{ p }}</a>
         {% else if p == 4 || p == total_pages.saturating_sub(3) %}
         <span>&hellip;</span>
         {% endif %}
@@ -117,8 +117,8 @@
 
         {% if page < total_pages %}
         {% let next_page = page + 1 %}
-        <a href="{% call page_url(next_page) %}" hx-get="{% call page_url(next_page) %}" hx-target="#results" hx-push-url="true">&rsaquo;</a>
-        <a href="{% call page_url(total_pages) %}" hx-get="{% call page_url(total_pages) %}" hx-target="#results" hx-push-url="true">&raquo;</a>
+        <a href="{% call page_url(next_page) %}{% endcall %}" hx-get="{% call page_url(next_page) %}{% endcall %}" hx-target="#results" hx-push-url="true">&rsaquo;</a>
+        <a href="{% call page_url(total_pages) %}{% endcall %}" hx-get="{% call page_url(total_pages) %}{% endcall %}" hx-target="#results" hx-push-url="true">&raquo;</a>
         {% else %}
         <span class="disabled">&rsaquo;</span>
         <span class="disabled">&raquo;</span>
@@ -170,9 +170,9 @@
 {% if total_pages > 1 %}
 <div class="pagination">
     {% if page > 1 %}
-    <a href="{% call page_url(1) %}" hx-get="{% call page_url(1) %}" hx-target="#results" hx-push-url="true">&laquo;</a>
+    <a href="{% call page_url(1) %}{% endcall %}" hx-get="{% call page_url(1) %}{% endcall %}" hx-target="#results" hx-push-url="true">&laquo;</a>
     {% let prev_page = page - 1 %}
-    <a href="{% call page_url(prev_page) %}" hx-get="{% call page_url(prev_page) %}" hx-target="#results" hx-push-url="true">&lsaquo;</a>
+    <a href="{% call page_url(prev_page) %}{% endcall %}" hx-get="{% call page_url(prev_page) %}{% endcall %}" hx-target="#results" hx-push-url="true">&lsaquo;</a>
     {% else %}
     <span class="disabled">&laquo;</span>
     <span class="disabled">&lsaquo;</span>
@@ -182,7 +182,7 @@
     {% if p == page %}
     <span class="current">{{ p }}</span>
     {% else if p <= 3 || p > total_pages - 3 || (p >= page.saturating_sub(2) && p <= page + 2) %}
-    <a href="{% call page_url(p) %}" hx-get="{% call page_url(p) %}" hx-target="#results" hx-push-url="true">{{ p }}</a>
+    <a href="{% call page_url(p) %}{% endcall %}" hx-get="{% call page_url(p) %}{% endcall %}" hx-target="#results" hx-push-url="true">{{ p }}</a>
     {% else if p == 4 || p == total_pages.saturating_sub(3) %}
     <span>&hellip;</span>
     {% endif %}
@@ -190,8 +190,8 @@
 
     {% if page < total_pages %}
     {% let next_page = page + 1 %}
-    <a href="{% call page_url(next_page) %}" hx-get="{% call page_url(next_page) %}" hx-target="#results" hx-push-url="true">&rsaquo;</a>
-    <a href="{% call page_url(total_pages) %}" hx-get="{% call page_url(total_pages) %}" hx-target="#results" hx-push-url="true">&raquo;</a>
+    <a href="{% call page_url(next_page) %}{% endcall %}" hx-get="{% call page_url(next_page) %}{% endcall %}" hx-target="#results" hx-push-url="true">&rsaquo;</a>
+    <a href="{% call page_url(total_pages) %}{% endcall %}" hx-get="{% call page_url(total_pages) %}{% endcall %}" hx-target="#results" hx-push-url="true">&raquo;</a>
     {% else %}
     <span class="disabled">&rsaquo;</span>
     <span class="disabled">&raquo;</span>

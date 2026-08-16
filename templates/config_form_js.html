@@ -9,7 +9,7 @@
     var statusEl = document.getElementById('maintain-cfg-status');
     if (!formEl || !statusEl) return;
 
-    var rawSchema = null;       // full JSON schema (with definitions)
+    var rawSchema = null;       // full JSON schema (with $defs)
     var currentConfig = null;   // current values
     var loaded = false;
 
@@ -20,21 +20,18 @@
         statusEl.style.display = 'block';
     }
 
-    // Resolve `$ref` chains against schema.definitions. Schemars emits
-    // refs of the form `#/definitions/Foo` for every named type.
-    //
-    // Schemars 0.8 has a quirk: when a struct field has a `#[serde(default)]`
-    // attribute AND its type is a named struct, the emitted schema wraps the
-    // $ref inside an `allOf` so the `default` value can sit next to it:
-    //
-    //   { "default": {...}, "allOf": [{"$ref": "#/definitions/Foo"}] }
-    //
-    // Walk through that wrapper so the form gets the underlying object
-    // shape instead of falling through to the unknown-type leaf branch.
+    // Resolve `$ref` chains against the schema's named-type store.
+    // Schemars 1.x emits JSON Schema draft 2020-12: named types live in
+    // `$defs`, refs read `#/$defs/Foo`, and a `$ref` may carry sibling
+    // keywords directly (`{"$ref": "#/$defs/Foo", "default": {...}}`) —
+    // siblings are merged onto the resolved definition below. The older
+    // draft-07 shapes from schemars 0.8 (`definitions`, and the `allOf`
+    // wrapper `{ "default": {...}, "allOf": [{"$ref": ...}] }`) are still
+    // accepted for robustness.
     function resolveRef(node) {
         if (!node || typeof node !== 'object') return node;
-        // allOf with a single $ref entry is the wrapper schemars emits when
-        // a `default` (or `description`) sits next to a ref.
+        // allOf with a single $ref entry: legacy draft-07 wrapper for a
+        // `default` (or `description`) sitting next to a ref.
         if (Array.isArray(node.allOf) && node.allOf.length === 1 && node.allOf[0].$ref) {
             var inner = resolveRef(node.allOf[0]);
             var overlaid = Object.assign({}, inner);
@@ -44,8 +41,8 @@
             return overlaid;
         }
         if (node.$ref) {
-            var name = node.$ref.replace('#/definitions/', '');
-            var def = (rawSchema.definitions || {})[name];
+            var name = node.$ref.replace('#/$defs/', '').replace('#/definitions/', '');
+            var def = (rawSchema.$defs || rawSchema.definitions || {})[name];
             if (!def) return node; // unknown — render as best-effort
             // Merge any overlay fields (description, etc.) onto the def
             var merged = Object.assign({}, def);

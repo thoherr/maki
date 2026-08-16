@@ -1010,19 +1010,23 @@ pub struct StrollPage {
 
 /// Custom askama filters for templates.
 mod filters {
-    pub fn fmt_bytes(bytes: &u64) -> ::askama::Result<String> {
+    #[askama::filter_fn]
+    pub fn fmt_bytes(bytes: &u64, _: &dyn askama::Values) -> ::askama::Result<String> {
         Ok(super::format_size(*bytes))
     }
 
-    pub fn pct1(val: &f64) -> ::askama::Result<String> {
+    #[askama::filter_fn]
+    pub fn pct1(val: &f64, _: &dyn askama::Values) -> ::askama::Result<String> {
         Ok(format!("{val:.1}"))
     }
 
-    pub fn pct0(val: &f64) -> ::askama::Result<String> {
+    #[askama::filter_fn]
+    pub fn pct0(val: &f64, _: &dyn askama::Values) -> ::askama::Result<String> {
         Ok(format!("{val:.0}"))
     }
 
-    pub fn verify_class(pct: &f64) -> ::askama::Result<String> {
+    #[askama::filter_fn]
+    pub fn verify_class(pct: &f64, _: &dyn askama::Values) -> ::askama::Result<String> {
         Ok(if *pct >= 80.0 {
             "fill-good"
         } else if *pct >= 40.0 {
@@ -1033,7 +1037,8 @@ mod filters {
         .to_string())
     }
 
-    pub fn version(_s: &str) -> ::askama::Result<String> {
+    #[askama::filter_fn]
+    pub fn version(_s: &str, _: &dyn askama::Values) -> ::askama::Result<String> {
         let v = env!("CARGO_PKG_VERSION");
         if cfg!(feature = "pro") {
             Ok(format!("{v} Pro"))
@@ -1042,7 +1047,8 @@ mod filters {
         }
     }
 
-    pub fn backup_bar_class(label: &str, min_copies: &u64) -> ::askama::Result<String> {
+    #[askama::filter_fn]
+    pub fn backup_bar_class(label: &str, _: &dyn askama::Values, min_copies: &u64) -> ::askama::Result<String> {
         // Parse leading digit(s) from label like "0 volumes", "1 volume", "3+ volumes"
         let n: u64 = label.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
         Ok(if n < *min_copies {
@@ -1058,7 +1064,8 @@ mod filters {
     /// Escape a string for safe embedding in a JavaScript double-quoted string literal.
     /// Handles `"`, `\`, `<`, newlines, and other special chars.
     /// Returns `Safe` to bypass Askama's HTML auto-escaping (we handle escaping ourselves).
-    pub fn js_string(s: &str) -> ::askama::Result<String> {
+    #[askama::filter_fn]
+    pub fn js_string(s: &str, _: &dyn askama::Values) -> ::askama::Result<String> {
         let mut out = String::with_capacity(s.len());
         for c in s.chars() {
             match c {
@@ -1077,18 +1084,21 @@ mod filters {
 
     /// Display a tag as-is — `|` is the visible hierarchy separator,
     /// aligned with Lightroom/CaptureOne conventions.
-    pub fn tag_display(tag: &str) -> ::askama::Result<String> {
+    #[askama::filter_fn]
+    pub fn tag_display(tag: &str, _: &dyn askama::Values) -> ::askama::Result<String> {
         Ok(tag.to_string())
     }
 
     /// Hash a stack ID to an HSL color for visual grouping.
-    pub fn stack_color(stack_id: &str) -> ::askama::Result<String> {
+    #[askama::filter_fn]
+    pub fn stack_color(stack_id: &str, _: &dyn askama::Values) -> ::askama::Result<String> {
         let hash: u32 = stack_id.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
         let hue = hash % 360;
         Ok(format!("hsl({hue}, 60%, 50%)"))
     }
 
-    pub fn label_color(name: &str) -> ::askama::Result<String> {
+    #[askama::filter_fn]
+    pub fn label_color(name: &str, _: &dyn askama::Values) -> ::askama::Result<String> {
         Ok(match name {
             "Red" => "#e74c3c",
             "Orange" => "#e67e22",
