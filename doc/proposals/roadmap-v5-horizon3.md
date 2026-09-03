@@ -203,7 +203,8 @@ part. Smallest audience — last, or only if asked for.
 | Release | Contents | Status |
 |---|---|---|
 | **v4.9.0** | Edit-history journal + write-through choke point; `maki undo` / `maki history` for field edits | ✅ shipped 2026-06-23 |
-| **v4.9.x** | Undo for tag rename/split/delete; structural-op undo; web undo toast + history panel; (redo) | next |
+| **v4.10.0** | Search by query image (outlier, demand-driven — see `query-image-search.md`) | ✅ shipped 2026-09-03 |
+| **v4.10.x** | Undo for tag rename/split/delete; structural-op undo; web undo toast + history panel; (redo) | next |
 | **v5.0.0** | Multi-machine (after its proposal doc + go/no-go); the Reach headline | proposal-gated |
 | **v5.x** | Mobile/PWA, tethered — interleaved | planned |
 | **when felt** | ANN index (scale-triggered) | deferred |

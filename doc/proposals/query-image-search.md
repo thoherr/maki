@@ -1,6 +1,6 @@
 # Proposal: Search by Query Image (reverse image lookup)
 
-**Status:** implemented on main 2026-09-03 (unreleased) as designed below; the batch "find my originals" and persistence questions remain open.
+**Status:** ✅ shipped in v4.10.0 (2026-09-03) as designed below; the batch "find my originals" and persistence questions remain open.
 
 ## Goal
 

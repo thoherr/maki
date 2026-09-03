@@ -2,7 +2,9 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## Unreleased
+## v4.10.0 (2026-09-03)
+
+Search by query image *(Pro)* — find the catalog assets similar to a local image file that is not in the catalog (the original behind a preview or export), in the CLI and the web UI. No schema migration.
 
 ### Added
 

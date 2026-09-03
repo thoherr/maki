@@ -51,4 +51,4 @@ Technical documentation for integrators and contributors.
 
 ---
 
-**Version**: v4.9.4 | **Source**: [GitHub](https://github.com/thoherr/maki) | **License**: Apache-2.0
+**Version**: v4.10.0 | **Source**: [GitHub](https://github.com/thoherr/maki) | **License**: Apache-2.0
