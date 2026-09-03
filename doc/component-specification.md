@@ -257,6 +257,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 - Negation: `-` prefix excludes matches (`-tag:rejected`, `-sunset`)
 - OR within filters: comma operator (`tag:alice,bob`, `format:nef,cr3`, `label:Red,Orange`)
 - Visual similarity: `similar:<asset-id>` or `similar:<asset-id>:<limit>` (feature-gated: `--features ai`)
+- Search by query image: `maki search --image <file> [QUERY] [--limit N]` — a local file not in the catalog; content-hash exact match pinned first, then SigLIP ranking via the shared `embedding_store::rank_similar` (feature-gated: `--features ai`; module `src/query_image.rs`)
 - Full-text search over name, filename, description, and source metadata
 - Sort by: date, name, file size, import date
 - Output: asset list with summary info, or detailed asset view
@@ -365,6 +366,8 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 - `POST /api/dedup/resolve` — auto-resolve same-volume duplicates with optional filters and prefer (deletes files and co-located recipes, returns `DedupResult` with `locations_removed, recipes_removed, bytes_freed, errors`)
 - `DELETE /api/dedup/location` — remove a specific file location and co-located recipes (JSON: `{content_hash, volume_id, relative_path}`)
 - `GET /stroll` — stroll page for graph-based visual similarity exploration (feature-gated: `--features ai`). Optional `?id=<asset-id>` parameter; without it, picks a random asset with an embedding. Radial layout with center asset and satellite neighbors.
+- `POST /api/query-image` — search-by-image upload (raw body, `Content-Type` image/*, optional `X-Maki-Filename`; 64 MiB route-level body limit; allowed in read-only mode). Hashes the file for an exact variant match, encodes it with SigLIP (RAW/video via the preview generator into a scratch dir), stores the result in the TTL-evicted `AppState.query_images` session store (1 h, 64 entries) and returns `{token, filename, exact_match_id, embedded, warning, thumbnail}`. The browse pipeline references it as `similar:@<token>` (feature-gated: `--features ai`)
+- `GET /api/query-image/{token}` — session data for the browse query pill; 404 once expired (feature-gated: `--features ai`)
 - `GET /api/stroll/neighbors` — returns center asset metadata and neighbor list with preview URLs and similarity scores (JSON: `{center: {...}, neighbors: [{asset_id, preview_url, similarity, ...}, ...]}`). Params: `id` (asset ID), `limit` (5–25, default 12), `q` (optional search query to filter neighbors)
 - `GET /analytics` — analytics dashboard with shooting frequency, camera/lens usage, rating distribution, format breakdown, monthly import volume, and storage per volume charts
 - `GET /api/stack/{id}/members` — returns all members of a stack as JSON array of card data, ordered by stack position (for per-stack expand/collapse)

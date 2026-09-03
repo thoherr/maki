@@ -8,6 +8,7 @@
 //! - [`tags`] — `suggest-tags`, batch `auto-tag`.
 //! - [`embed`] — standalone embed (browse toolbar, asset detail).
 //! - [`similarity`] — `find-similar` and stack-by-similarity.
+//! - [`query_image`] — upload a non-catalog image, `similar:@<token>`.
 //! - [`faces`] — face detection, person assignment, people page.
 //! - [`stroll`] — visual exploration page.
 //!
@@ -16,6 +17,7 @@
 
 mod embed;
 mod faces;
+mod query_image;
 mod review;
 mod similarity;
 mod stroll;
@@ -23,6 +25,7 @@ mod tags;
 
 pub use embed::*;
 pub use faces::*;
+pub use query_image::*;
 pub use review::*;
 pub use similarity::*;
 pub use stroll::*;

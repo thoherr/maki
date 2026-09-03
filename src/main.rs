@@ -79,6 +79,7 @@ PRO (require --features pro)
   faces:2+ / faces:any    face count or any-faces filter
   person:Alice            named person (repeat to AND, comma to OR)
   similar:<id>            visually similar to an asset
+  --image <file>          visually similar to a local image (not in catalog)
   min_sim:90              similarity threshold (0-100%)
   text:sunset             CLIP text-to-image search
   embed:any / embed:none  has / lacks SigLIP embedding
@@ -571,8 +572,8 @@ enum Commands {
     #[command(display_order = 30)]
     Search {
         /// Free-text keywords and filter expressions. Run with --help for the full filter list.
-        #[arg(long_help = SEARCH_QUERY_LONG_HELP)]
-        query: String,
+        #[arg(long_help = SEARCH_QUERY_LONG_HELP, required_unless_present = "image")]
+        query: Option<String>,
 
         /// Output format: ids, short, full, json, or a custom template (e.g. '{id}\t{name}')
         #[arg(long)]
@@ -581,6 +582,17 @@ enum Commands {
         /// Shorthand for --format=ids (one asset ID per line, for scripting)
         #[arg(short = 'q', long = "quiet")]
         quiet: bool,
+
+        /// Find assets visually similar to a local image file that is not
+        /// in the catalog (e.g. locate the original behind a preview).
+        /// Exact byte-copies are matched by content hash first; otherwise
+        /// the file is encoded with the SigLIP model (requires --features ai)
+        #[arg(long, value_name = "FILE", display_order = 40)]
+        image: Option<PathBuf>,
+
+        /// Result-set size for --image (default 40, counts the exact match)
+        #[arg(long, value_name = "N", requires = "image", display_order = 41)]
+        limit: Option<usize>,
     },
 
     /// Show asset details
@@ -2226,6 +2238,16 @@ fn main() {
 
 
 
+/// `  92%` / `  100% exact` suffix for similarity-ranked search rows;
+/// empty for ordinary searches.
+fn similarity_suffix(row: &maki::catalog::SearchRow) -> String {
+    match row.similarity {
+        Some(s) if row.exact_match => format!("  {}% exact", (s * 100.0).round() as u32),
+        Some(s) => format!("  {}%", (s * 100.0).round() as u32),
+        None => String::new(),
+    }
+}
+
 fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
     let verbosity = maki::Verbosity::new(cli.verbose, cli.debug);
     let mut _asset_ids: Vec<String> = Vec::new();
@@ -2322,12 +2344,32 @@ faces/\n\
         Commands::Watch { paths, volume, interval, once } => {
             run_watch_command(paths, volume, interval, once, cli.json, cli.log, verbosity)
         }
-        Commands::Search { query, format, quiet } => {
+        Commands::Search { query, format, quiet, image, limit } => {
             use maki::format::{self, OutputFormat};
 
+            let query = query.unwrap_or_default();
             let (catalog_root, config) = maki::config::load_config()?;
             let engine = QueryEngine::with_default_filter(&catalog_root, config.browse.default_filter);
-            let results = engine.search(&query)?;
+            let results = if let Some(ref image_path) = image {
+                let (rows, info) = engine.search_with_image(
+                    &query,
+                    maki::query::ImageSearch { path: image_path, limit },
+                )?;
+                if let Some(w) = info.warning {
+                    eprintln!("Warning: {w}");
+                    eprintln!("  (exact copy found by content hash; similar-image ranking skipped)");
+                }
+                match info.exact_asset_id {
+                    Some(ref id) => eprintln!("Exact match: {id}"),
+                    None if verbosity.verbose => {
+                        eprintln!("  No byte-identical copy in catalog ({})", info.content_hash)
+                    }
+                    None => {}
+                }
+                rows
+            } else {
+                engine.search(&query)?
+            };
 
             if verbosity.verbose {
                 eprintln!("  Search: query=\"{query}\", {} result(s)", results.len());
@@ -2383,8 +2425,9 @@ faces/\n\
                                 .unwrap_or(&row.original_filename);
                             let short_id = &row.asset_id[..8];
                             println!(
-                                "{}  {} [{}] ({}) — {}",
-                                short_id, display_name, row.asset_type, row.display_format(), row.created_at
+                                "{}  {} [{}] ({}) — {}{}",
+                                short_id, display_name, row.asset_type, row.display_format(), row.created_at,
+                                similarity_suffix(row)
                             );
                         }
                         if !explicit_format {
@@ -2405,9 +2448,9 @@ faces/\n\
                             };
                             let desc = row.description.as_deref().unwrap_or("");
                             println!(
-                                "{}  {} [{}] ({}) — {}{} {}",
+                                "{}  {} [{}] ({}) — {}{}{} {}",
                                 short_id, display_name, row.asset_type, row.display_format(),
-                                row.created_at, tags, desc
+                                row.created_at, similarity_suffix(row), tags, desc
                             );
                         }
                         if !explicit_format {
@@ -2422,7 +2465,7 @@ faces/\n\
                             let tags_str = row.tags.join(", ");
                             let desc = row.description.as_deref().unwrap_or("");
                             let label = row.color_label.as_deref().unwrap_or("");
-                            let values = format::search_row_values(
+                            let mut values = format::search_row_values(
                                 &row.asset_id,
                                 row.name.as_deref(),
                                 &row.original_filename,
@@ -2434,6 +2477,11 @@ faces/\n\
                                 &row.content_hash,
                                 label,
                             );
+                            values.insert(
+                                "similarity",
+                                row.similarity.map(|s| format!("{}", (s * 100.0).round() as u32)).unwrap_or_default(),
+                            );
+                            values.insert("exact", if row.exact_match { "exact".to_string() } else { String::new() });
                             println!("{}", format::render_template(tpl, &values));
                         }
                     }

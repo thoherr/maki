@@ -2,6 +2,50 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## Unreleased
+
+### Added
+
+- **Search by query image** *(Pro)* — find catalog assets similar to an
+  image file that is **not** in the catalog: the preview someone sent
+  back, an export whose original needs locating, a screenshot. Nothing is
+  imported. `maki search --image <file> [QUERY] [--limit N]` hashes the
+  file first (a byte-identical copy is pinned at the top as `100% exact`,
+  no model needed), then encodes it with the SigLIP model and ranks the
+  embedding index like `similar:` — `min_sim:` and every other filter
+  compose with it. Short/full output append the score, JSON rows carry
+  `similarity` / `exact_match`, templates get `{similarity}` / `{exact}`.
+  RAW and video query files go through the preview generator. In the web
+  UI a **📷 Find by image** button sits in the always-visible search row
+  (no selection needed); dropping an image anywhere on the browse page or
+  pasting one from the clipboard does the same. The browse URL references
+  the upload as `similar:@<token>`, so select-all, facets and export see
+  exactly what the grid shows; a query pill above the grid shows the
+  thumbnail, filename and "exact copy in catalog", and clears with its ×.
+  Uploads live in server memory for an hour and the feature works on a
+  `--read-only` server. New endpoints `POST /api/query-image` (raw body,
+  64 MiB limit) and `GET /api/query-image/{token}`.
+
+### Changed
+
+- `similar:<id>` (CLI and web) now goes through one shared ranker
+  (`embedding_store::rank_similar`) together with the query-image path;
+  CLI `similar:` results are sorted by score and carry `similarity` in
+  JSON output (previously date-sorted, no score).
+- `maki search` accepts an empty query when `--image` is given.
+
+### Fixed
+
+- Similarity views started from the browse **form** (typing `similar:<id>`
+  into the search box, or a query-image upload) kept whatever sort was
+  active before — usually date order — because the form always submitted
+  the URL's sort. The sort now follows the similarity filter's lifecycle:
+  a `similar:` filter that was not in the previous URL switches the grid
+  to `similarity_desc`, and removing the filter (pill ×, editing the
+  query) drops a similarity sort again. Server side, a similarity sort
+  without scores (stale URL) falls back to date order instead of the SQL
+  fallback's id order, and an empty `sort=` counts as "no sort given".
+
 ## v4.9.4 (2026-08-16)
 
 Dependency-migration completion: askama 0.16 and schemars 1.2 — the two items deferred from the v4.9.3 audit. No schema migration.

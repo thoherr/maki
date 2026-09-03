@@ -1,0 +1,212 @@
+{#
+    Search by query image — browser side.
+
+    Three entry points feed one upload path: the "Find by image" button in
+    the search row (file picker), drag-and-drop of a file anywhere on the
+    browse page, and pasting an image from the clipboard. The upload
+    (`POST /api/query-image`, raw body) returns a session token; the page
+    rewrites the q field to `similar:@<token> …` and fires the normal
+    htmx search, so every existing filter combines with it and the grid
+    renders its usual similarity view (single page, score badges).
+
+    The query pill in the saved-searches row shows the thumbnail and
+    filename, and survives reloads: on load / popstate / after every
+    results swap the token in q is looked up via GET /api/query-image/{token};
+    a 404 means the server-side session expired and the pill says so.
+#}
+<script>
+(function() {
+    var TOKEN_RE = /similar:@([0-9a-f]+)(?::\d+)?/i;
+    var TOKEN_STRIP_RE = /(^|\s)similar:@[0-9a-f]+(?::\d+)?(?=\s|$)/gi;
+
+    var qInput = document.querySelector('.search-bar [name=q]');
+    var searchRow = document.querySelector('.search-row');
+    var btn = document.getElementById('query-image-btn');
+    var fileInput = document.getElementById('query-image-file');
+    var pill = document.getElementById('query-image-pill');
+    var thumb = document.getElementById('query-image-thumb');
+    var nameEl = document.getElementById('query-image-name');
+    var noteEl = document.getElementById('query-image-note');
+    var clearBtn = document.getElementById('query-image-clear');
+    if (!qInput || !pill) return;
+
+    function currentToken() {
+        var m = TOKEN_RE.exec(qInput.value || '');
+        return m ? m[1].toLowerCase() : null;
+    }
+    function stripToken(q) {
+        return (q || '').replace(TOKEN_STRIP_RE, ' ').replace(/\s+/g, ' ').trim();
+    }
+    function setToken(tok) {
+        var rest = stripToken(qInput.value);
+        qInput.value = ('similar:@' + tok + (rest ? ' ' + rest : ''));
+    }
+    function submit() {
+        if (window.onFilterChange) window.onFilterChange();
+    }
+
+    function showPill(info, expired) {
+        pill.dataset.token = info.token || '';
+        if (info.thumbnail) {
+            thumb.src = info.thumbnail;
+            thumb.hidden = false;
+        } else {
+            thumb.removeAttribute('src');
+            thumb.hidden = true;
+        }
+        nameEl.textContent = info.filename || '';
+        pill.classList.toggle('expired', !!expired);
+        pill.classList.toggle('exact', !!info.exact_match_id);
+        if (expired) {
+            noteEl.textContent = 'query image expired — drop or pick it again';
+            pill.title = 'The server no longer holds this query image (sessions expire after an hour or a restart). Pick or drop the image again.';
+        } else if (info.exact_match_id) {
+            noteEl.textContent = info.embedded ? 'exact copy in catalog' : 'exact copy in catalog (similarity ranking unavailable)';
+            pill.title = info.warning || 'A byte-identical copy of this file is in the catalog — it is the first result (100%).';
+        } else {
+            noteEl.textContent = '';
+            pill.title = 'Results are ranked by visual similarity to this image. Other filters still apply.';
+        }
+        pill.style.display = '';
+    }
+    function hidePill() {
+        pill.style.display = 'none';
+        pill.dataset.token = '';
+    }
+
+    // Keep the pill in step with whatever the q field currently says.
+    function syncPill() {
+        var tok = currentToken();
+        if (!tok) { hidePill(); return; }
+        if (pill.dataset.token === tok && pill.style.display !== 'none') return;
+        fetch('/api/query-image/' + encodeURIComponent(tok))
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(info) {
+                if (info) showPill(info, false);
+                else showPill({ token: tok, filename: '' }, true);
+            })
+            .catch(function() { showPill({ token: tok, filename: '' }, true); });
+    }
+
+    var busy = false;
+    function setBusy(on) {
+        busy = on;
+        if (btn) {
+            btn.disabled = on;
+            btn.textContent = on ? '⏳ Encoding…' : '📷 Find by image';
+        }
+        if (searchRow) searchRow.classList.toggle('query-image-busy', on);
+    }
+    function showError(msg) {
+        showPill({ token: currentToken() || '', filename: '' }, true);
+        noteEl.textContent = msg;
+        pill.style.display = '';
+    }
+
+    function upload(file) {
+        if (!file || busy) return;
+        setBusy(true);
+        fetch('/api/query-image', {
+            method: 'POST',
+            headers: {
+                'Content-Type': file.type || 'application/octet-stream',
+                'X-Maki-Filename': encodeURIComponent(file.name || 'query')
+            },
+            body: file
+        })
+        .then(function(r) {
+            if (r.ok) return r.json();
+            return r.text().then(function(t) { throw new Error(t || ('upload failed (' + r.status + ')')); });
+        })
+        .then(function(info) {
+            setToken(info.token);
+            showPill(info, false);
+            submit();
+        })
+        .catch(function(e) { showError(e.message || 'upload failed'); })
+        .finally(function() { setBusy(false); });
+    }
+
+    // --- Entry point 1: button + file picker ---
+    if (btn && fileInput) {
+        btn.addEventListener('click', function() { fileInput.value = ''; fileInput.click(); });
+        fileInput.addEventListener('change', function() {
+            if (fileInput.files && fileInput.files[0]) upload(fileInput.files[0]);
+        });
+    }
+
+    // --- Entry point 2: drag-and-drop anywhere on the page ---
+    var dragDepth = 0;
+    function hasFiles(e) {
+        var dt = e.dataTransfer;
+        if (!dt || !dt.types) return false;
+        for (var i = 0; i < dt.types.length; i++) if (dt.types[i] === 'Files') return true;
+        return false;
+    }
+    document.addEventListener('dragenter', function(e) {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        dragDepth++;
+        if (searchRow) searchRow.classList.add('drop-active');
+    });
+    document.addEventListener('dragover', function(e) {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+    });
+    document.addEventListener('dragleave', function(e) {
+        if (!hasFiles(e)) return;
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (dragDepth === 0 && searchRow) searchRow.classList.remove('drop-active');
+    });
+    document.addEventListener('drop', function(e) {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        dragDepth = 0;
+        if (searchRow) searchRow.classList.remove('drop-active');
+        var f = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f) upload(f);
+    });
+
+    // --- Entry point 3: paste an image from the clipboard ---
+    document.addEventListener('paste', function(e) {
+        var tag = (e.target && e.target.tagName || '').toLowerCase();
+        // Pasting text into an input/textarea must keep working.
+        if (tag === 'input' || tag === 'textarea' || (e.target && e.target.isContentEditable)) {
+            var hasImage = false;
+            var items0 = e.clipboardData && e.clipboardData.items;
+            if (items0) for (var k = 0; k < items0.length; k++) if (items0[k].kind === 'file') hasImage = true;
+            if (!hasImage) return;
+        }
+        var items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].kind === 'file' && /^image\//.test(items[i].type)) {
+                var f = items[i].getAsFile();
+                if (f) {
+                    e.preventDefault();
+                    if (!f.name || f.name === 'image.png') {
+                        try { f = new File([f], 'clipboard.' + (f.type.split('/')[1] || 'png'), { type: f.type }); } catch (_) {}
+                    }
+                    upload(f);
+                }
+                return;
+            }
+        }
+    });
+
+    // --- Clear ---
+    if (clearBtn) clearBtn.addEventListener('click', function() {
+        qInput.value = stripToken(qInput.value);
+        hidePill();
+        submit();
+    });
+
+    // --- Keep the pill in sync with navigation ---
+    syncPill();
+    window.addEventListener('popstate', function() { setTimeout(syncPill, 0); });
+    document.body.addEventListener('htmx:afterSettle', function(e) {
+        if (e.target && e.target.id === 'results') syncPill();
+    });
+})();
+</script>

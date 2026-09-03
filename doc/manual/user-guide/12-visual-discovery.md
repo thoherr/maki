@@ -159,6 +159,20 @@ maki search "similar:72a0bb4b tag:portrait"     # similar AND portrait-tagged
 
 In the web UI: click **Similar** on the asset detail page, or press `b` in the browse grid to go "browse similar" from the focused card.
 
+### Finding the Original Behind a Preview
+
+The similarity source does not have to be in the catalog. Someone sends back a downsized JPEG from last year's export and asks for the full-resolution file; you have a screenshot of a picture you know you took; a contact sheet frame needs its RAW. Importing the throwaway just to search from it would pollute the catalog, so `search --image` takes the file directly:
+
+```
+maki search --image ~/Downloads/IMG_4711_preview.jpg
+maki search --image ~/Downloads/IMG_4711_preview.jpg "min_sim:90"    # near-duplicates only
+maki search --image frame.png "tag:events|wedding" --json            # narrowed, with scores
+```
+
+Two things happen. First the file is hashed and looked up among the catalog's variants — a byte-identical copy is answered without even loading the model and shows as `100% exact` at the top. Then the file is encoded with the SigLIP model and ranked against the embedding index like any `similar:` search. A resized copy of an original scores very close to 100% and stands well clear of unrelated images; a re-cropped or heavily edited derivative lands lower, which is why the scores are shown rather than a threshold applied. RAW and video query files are rendered through the preview generator first.
+
+In the web UI the same search is the **Find by image** button in the search row (always visible, no selection needed), or simply drop an image file anywhere on the browse page, or paste one from the clipboard. A query pill above the grid shows the thumbnail and filename, notes an exact copy when there is one, and clears with its ×. All other filters keep working on top.
+
 ### Why `min_sim:` Matters
 
 Raw similarity search returns the top N no matter how dissimilar. With a small catalog that's fine. With 100 000 assets, the top 20 similar results might all be visually related; with 10 assets, you'd get back images that have nothing to do with the source.

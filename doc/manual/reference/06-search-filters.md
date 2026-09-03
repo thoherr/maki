@@ -974,6 +974,34 @@ maki search "similar:72a0bb4b min_sim:80 type:image"  # >= 80% AND images only
 
 ---
 
+## --image (search by query image) *(Pro)* {#search-by-query-image}
+
+**Syntax:** `maki search --image <file> [QUERY] [--limit <N>]`
+
+**Description:** Finds assets visually similar to a local image file that is **not** in the catalog -- a preview or downsized copy someone sent back, an export whose original needs locating, a screenshot. Nothing is imported: the query file is never copied, embedded, or stored. A flag rather than a `token:value` filter because Windows paths contain a colon.
+
+Two stages:
+
+1. **Exact copy first.** The file is hashed and looked up among the catalog's variants. A byte-identical copy is answered without loading the model; that asset comes first with `100% exact`.
+2. **Visual similarity.** The file is encoded with the active SigLIP model and ranked against the embedding index, like `similar:`. RAW and video query files are rendered through the preview generator (dcraw / ffmpeg) first. Top N results (default 40, counting the exact match), sorted by similarity.
+
+The `QUERY` is optional with `--image` and composes with AND: `min_sim:` floors the score, every other filter narrows the set.
+
+**Examples:**
+
+```
+maki search --image ~/Downloads/IMG_4711_preview.jpg          # where is the original?
+maki search --image scan.tif "min_sim:90" --json               # near-duplicates, scores in JSON
+maki search --image frame.png "tag:events|wedding rating:3+"   # similar AND filtered
+maki search --image shot.nef --limit 100 --format '{similarity}\t{exact}\t{id}\t{name}'
+```
+
+**Output:** Short and full formats append the score (`92%`, `100% exact`); JSON rows carry `similarity` (0.0--1.0) and `exact_match: true` on the hash hit; templates get `{similarity}` and `{exact}`. The exact-match asset ID is also printed to stderr.
+
+**Behavior:** If the model is not downloaded and the file has an exact copy in the catalog, the exact match is still returned with a warning on stderr (the similarity ranking is skipped). Without an exact copy, a missing model is an error. `--image` cannot be combined with a `similar:` filter in the same query. In the web UI the same search is the **Find by image** button in the search row, drag-and-drop, or clipboard paste (see the web UI guide); the browse URL references the uploaded image as `similar:@<token>`.
+
+---
+
 ## embed *(Pro)*
 
 **Syntax:** `embed:any` | `embed:true` | `embed:none` | `embed:false`
@@ -1177,6 +1205,7 @@ All filters work in the CLI (`maki search`), the web UI search box, and in saved
 | `faces:` | search box | yes |
 | `person:` | dropdown + search box | yes |
 | `similar:` *(Pro)* | "Browse similar" button + search box | no |
+| `--image` *(Pro)* | "Find by image" button, drag-and-drop, paste | no (session-bound) |
 | `min_sim:` *(Pro)* | search box | no |
 | `text:` *(Pro)* | search box | yes |
 | `embed:` *(Pro)* | search box | yes |

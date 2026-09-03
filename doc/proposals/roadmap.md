@@ -64,6 +64,21 @@ web `<audio>` player + key/BPM/technical badges. Next: Phase 2
 **Complexity:** Phase 1 low (shipped), Phase 2 medium, Phase 3 (core
 derivation edges) medium-high.
 
+### Search by Query Image (reverse image lookup) *(Pro)*
+
+Find catalog assets similar to an image file that is not in the catalog
+— locate the original behind a preview or export without importing the
+throwaway. Exact-hash fast path, then SigLIP embedding search through
+the existing `similar:` pipeline. CLI `maki search --image <path>`; web
+"Find by image" button + drag-and-drop in the always-visible search row,
+query pill with thumbnail, `similar:@<token>` session reference. See
+`doc/proposals/query-image-search.md`.
+
+**Status:** Implemented on main 2026-09-03 (unreleased): CLI `--image` /
+`--limit`, web upload + session store + pill, shared ranker, tests, docs.
+
+**Complexity:** Low–Medium (no schema change).
+
 ### Manual Translation (i18n)
 
 Produce the MAKI user manual in English and German from a single source using inline language markers. See `doc/proposals/manual-i18n.md`.

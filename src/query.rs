@@ -403,6 +403,27 @@ pub struct BatchContext {
 /// `[browse] default_filter` config) that's appended to every search query.
 /// Methods cover search/show, group/split, tag operations, edit, XMP
 /// writeback, and stack/batch helpers; see the module-level doc.
+/// Query-image input for [`QueryEngine::search_with_image`] — a local
+/// file that is not in the catalog.
+#[derive(Debug, Clone)]
+pub struct ImageSearch<'a> {
+    pub path: &'a Path,
+    /// Result-set size (counts the exact match); defaults to 40.
+    pub limit: Option<usize>,
+}
+
+/// What a query-image search learned about the query file, alongside
+/// the rows (which carry per-row `similarity` / `exact_match`).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImageSearchInfo {
+    pub content_hash: String,
+    /// Asset owning a byte-identical variant, if any.
+    pub exact_asset_id: Option<String>,
+    /// Set when the model could not encode the query but an exact match
+    /// answered the question anyway (e.g. model not downloaded).
+    pub warning: Option<String>,
+}
+
 pub struct QueryEngine {
     catalog_root: PathBuf,
     default_filter: Option<String>,
@@ -453,6 +474,33 @@ impl QueryEngine {
     /// `height:2000+`, `meta:key=value`.
     /// Remaining tokens are joined as free-text search against name/filename/description/metadata.
     pub fn search(&self, query: &str) -> Result<Vec<SearchRow>> {
+        self.search_impl(query, None).map(|(rows, _)| rows)
+    }
+
+    /// Search by a query image file that is not in the catalog (`maki
+    /// search --image`), optionally narrowed by `query`. Rows come back
+    /// sorted by similarity with `similarity` / `exact_match` filled in;
+    /// see [`crate::query_image`] for the two-stage resolution. Requires
+    /// the `ai` feature — errors otherwise.
+    pub fn search_with_image(
+        &self,
+        query: &str,
+        image: ImageSearch<'_>,
+    ) -> Result<(Vec<SearchRow>, ImageSearchInfo)> {
+        let (rows, info) = self.search_impl(query, Some(image))?;
+        let info = info.ok_or_else(|| anyhow::anyhow!("query-image search produced no query info"))?;
+        Ok((rows, info))
+    }
+
+    fn search_impl(
+        &self,
+        query: &str,
+        image: Option<ImageSearch<'_>>,
+    ) -> Result<(Vec<SearchRow>, Option<ImageSearchInfo>)> {
+        #[cfg(not(feature = "ai"))]
+        if image.is_some() {
+            anyhow::bail!("search by query image requires a build with the `ai` feature");
+        }
         let mut parsed = parse_search_query(query);
 
         // Apply default filter from config (AND semantics)
@@ -534,11 +582,23 @@ impl QueryEngine {
         );
         resolved_filters.apply(&mut opts);
 
-        // Pre-compute similar asset IDs from embedding similarity search
+        // Pre-compute similar asset IDs from embedding similarity search —
+        // either `similar:<id>` (stored embedding of a catalog asset) or a
+        // query image file (`--image`). Both go through the shared ranker
+        // so scores, pinning and min_sim behave identically.
         #[cfg(feature = "ai")]
         let similar_ids;
         #[cfg(feature = "ai")]
+        let mut similarity_scores: HashMap<String, f32> = HashMap::new();
+        #[cfg(feature = "ai")]
+        let mut exact_match_id: Option<String> = None;
+        #[cfg(feature = "ai")]
+        let mut image_info: Option<ImageSearchInfo> = None;
+        #[cfg(feature = "ai")]
         if let Some(ref similar_ref) = parsed.similar {
+            if image.is_some() {
+                anyhow::bail!("--image cannot be combined with a similar: filter");
+            }
             let full_id = catalog
                 .resolve_asset_id(similar_ref)?
                 .ok_or_else(|| anyhow::anyhow!("no asset found matching '{similar_ref}'"))?;
@@ -553,16 +613,63 @@ impl QueryEngine {
             let limit = parsed.similar_limit.unwrap_or(40);
             let dim = query_emb.len();
             let index = crate::embedding_store::EmbeddingIndex::load(catalog.conn(), model_id, dim)?;
-            let results = index.search(&query_emb, limit.saturating_sub(1), Some(&full_id));
             // min_sim is specified as percentage 0-100, convert to 0.0-1.0
             let min_sim = parsed.min_sim.unwrap_or(0.0) / 100.0;
-            // Include the source asset itself
-            similar_ids = std::iter::once(full_id.clone())
-                .chain(results.into_iter()
-                    .filter(|(_id, score)| *score >= min_sim)
-                    .map(|(id, _score)| id))
-                .collect::<Vec<_>>();
+            // The source asset itself is pinned first at 100%
+            let ranked = crate::embedding_store::rank_similar(
+                &index, Some(&query_emb), limit, min_sim, Some(&full_id),
+            );
+            similarity_scores = ranked.iter().cloned().collect();
+            similar_ids = ranked.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
             opts.similar_asset_ids = Some(&similar_ids);
+        } else if let Some(img) = image {
+            let config = crate::config::CatalogConfig::load(&self.catalog_root).unwrap_or_default();
+            let model_id = config.ai.model.clone();
+            let preview_gen = crate::preview::PreviewGenerator::new(
+                &self.catalog_root, crate::Verbosity::quiet(), &config.preview,
+            );
+            let (query_image, warning) = crate::query_image::resolve_query_image(
+                &catalog,
+                img.path,
+                |path| {
+                    let model_dir = crate::config::resolve_model_dir(&config.ai.model_dir, &model_id);
+                    let mgr = crate::model_manager::ModelManager::new(&model_dir, &model_id)?;
+                    if !mgr.model_exists() {
+                        anyhow::bail!(
+                            "Model not downloaded. Run 'maki auto-tag --download --model {model_id}' first."
+                        );
+                    }
+                    let mut model = crate::ai::SigLipModel::load_with_provider(
+                        &model_dir, &model_id, crate::Verbosity::quiet(), &config.ai.execution_provider,
+                    )?;
+                    crate::query_image::encode_query_image(&mut model, &preview_gen, path)
+                },
+            )?;
+            let limit = img.limit.unwrap_or(crate::query_image::DEFAULT_LIMIT);
+            let min_sim = parsed.min_sim.unwrap_or(0.0) / 100.0;
+            let ranked = match query_image.embedding {
+                Some(ref emb) => {
+                    let index = crate::embedding_store::EmbeddingIndex::load(
+                        catalog.conn(), &model_id, emb.len(),
+                    )?;
+                    query_image.rank(&index, limit, min_sim)
+                }
+                // Exact hit without an embedding: the index is irrelevant.
+                None => query_image.rank(
+                    &crate::embedding_store::EmbeddingIndex::from_rows(1, Vec::new()), limit, min_sim,
+                ),
+            };
+            similarity_scores = ranked.iter().cloned().collect();
+            // An empty list is installed on purpose: no hit means no rows,
+            // not "every asset".
+            similar_ids = ranked.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+            opts.similar_asset_ids = Some(&similar_ids);
+            exact_match_id = query_image.exact_asset_id.clone();
+            image_info = Some(ImageSearchInfo {
+                content_hash: query_image.content_hash,
+                exact_asset_id: query_image.exact_asset_id,
+                warning,
+            });
         }
 
         // Pre-compute text search asset IDs from text-to-image embedding similarity
@@ -631,7 +738,30 @@ impl QueryEngine {
             }
         }
 
-        catalog.search_paginated(&opts)
+        #[allow(unused_mut)]
+        let mut rows = catalog.search_paginated(&opts)?;
+
+        // Similarity searches come back in the caller's sort order from
+        // SQL; annotate the rows with their scores and order by score so
+        // the CLI shows the ranking the web grid shows.
+        #[cfg(feature = "ai")]
+        if !similarity_scores.is_empty() {
+            for row in &mut rows {
+                row.similarity = similarity_scores.get(&row.asset_id).copied();
+                row.exact_match = exact_match_id.as_deref() == Some(row.asset_id.as_str());
+            }
+            rows.sort_by(|a, b| {
+                b.similarity
+                    .partial_cmp(&a.similarity)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
+        #[cfg(feature = "ai")]
+        let info = image_info;
+        #[cfg(not(feature = "ai"))]
+        let info = None;
+        Ok((rows, info))
     }
 
     /// Resolve volume label strings to volume UUIDs.
@@ -6017,5 +6147,106 @@ mod tests {
         // After restore, doctor must report no consistency issues.
         let report = crate::doctor::run_doctor(dir.path(), None, false, |_, _| {}).unwrap();
         assert!(report.healthy(), "doctor found issues after undo: {:?}", report.mismatched);
+    }
+}
+
+#[cfg(all(test, feature = "ai"))]
+mod query_image_tests {
+    use super::*;
+    use crate::models::{Asset, AssetType, Variant, VariantRole};
+
+    /// Temp catalog with the model dir pointed at nowhere, so the
+    /// engine's lazy model load fails deterministically.
+    fn catalog_without_model() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("maki.toml"),
+            "[ai]\nmodel_dir = \"/nonexistent/maki-test-models\"\n",
+        )
+        .unwrap();
+        let catalog = Catalog::open(dir.path()).unwrap();
+        catalog.initialize().unwrap();
+        dir
+    }
+
+    fn seed(root: &Path, hash: &str, name: &str) -> String {
+        let catalog = Catalog::open(root).unwrap();
+        let mut asset = Asset::new(AssetType::Image, hash);
+        asset.name = Some(name.to_string());
+        asset.variants.push(Variant {
+            content_hash: hash.to_string(),
+            asset_id: asset.id,
+            role: VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 1,
+            original_filename: format!("{name}.jpg"),
+            source_metadata: Default::default(),
+            locations: vec![],
+        });
+        MetadataStore::new(root).save(&asset).unwrap();
+        catalog.insert_asset(&asset).unwrap();
+        catalog.insert_variant(&asset.variants[0]).unwrap();
+        asset.id.to_string()
+    }
+
+    #[test]
+    fn search_with_image_exact_match_without_model() {
+        let dir = catalog_without_model();
+        let query_file = dir.path().join("preview.jpg");
+        std::fs::write(&query_file, b"bytes of the preview").unwrap();
+        let hash = ContentStore::new(dir.path()).hash_file(&query_file).unwrap();
+        let original = seed(dir.path(), &hash, "original");
+        let _other = seed(dir.path(), "sha256:unrelated", "other");
+
+        let engine = QueryEngine::new(dir.path());
+        let (rows, info) = engine
+            .search_with_image("", ImageSearch { path: &query_file, limit: None })
+            .unwrap();
+        assert_eq!(rows.len(), 1, "only the exact match without an embedding");
+        assert_eq!(rows[0].asset_id, original);
+        assert!(rows[0].exact_match);
+        assert_eq!(rows[0].similarity, Some(1.0));
+        assert_eq!(info.exact_asset_id.as_deref(), Some(original.as_str()));
+        assert_eq!(info.content_hash, hash);
+        assert!(info.warning.unwrap().contains("not downloaded"));
+
+        // Other filters compose (AND) with the pinned match
+        let (rows, _) = engine
+            .search_with_image("type:video", ImageSearch { path: &query_file, limit: None })
+            .unwrap();
+        assert!(rows.is_empty());
+
+        // JSON output carries the similarity fields only when set
+        let json = serde_json::to_string(&engine.search("").unwrap()).unwrap();
+        assert!(!json.contains("similarity"), "plain searches stay unchanged: {json}");
+    }
+
+    #[test]
+    fn search_with_image_errors_without_match_or_model() {
+        let dir = catalog_without_model();
+        let query_file = dir.path().join("stranger.jpg");
+        std::fs::write(&query_file, b"nothing like this in the catalog").unwrap();
+        let engine = QueryEngine::new(dir.path());
+        let err = engine
+            .search_with_image("", ImageSearch { path: &query_file, limit: None })
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("not downloaded"), "{err:#}");
+
+        let missing = dir.path().join("missing.jpg");
+        assert!(engine
+            .search_with_image("", ImageSearch { path: &missing, limit: None })
+            .is_err());
+    }
+
+    #[test]
+    fn search_with_image_rejects_similar_filter() {
+        let dir = catalog_without_model();
+        let query_file = dir.path().join("q.jpg");
+        std::fs::write(&query_file, b"q").unwrap();
+        let engine = QueryEngine::new(dir.path());
+        let err = engine
+            .search_with_image("similar:abcd", ImageSearch { path: &query_file, limit: None })
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("cannot be combined"), "{err:#}");
     }
 }

@@ -38,7 +38,7 @@
       hx-get="/"
       hx-target="#results"
       hx-push-url="true"
-      hx-vals='js:{"q": document.querySelector("[name=q]").value, "type": document.querySelector("[name=type]").value, "tag": getSelectedTags().join(","), "person": (window.getSelectedPeople ? window.getSelectedPeople().join(",") : ""), "format": (window.damFormats ? window.damFormats.getSelected() : ""), "volume": (document.querySelector("[name=volume]") || {value:""}).value, "collection": (document.querySelector("[name=collection]") || {value:""}).value, "path": (document.querySelector("[name=path]") || {value:""}).value, "rating": getFilterRating(), "label": getFilterLabel(), "sort": new URLSearchParams(window.location.search).get("sort") || "date_desc", "page": "1", "stacks": getStackCollapse(), "nodefault": (document.getElementById("default-filter-cb") && !document.getElementById("default-filter-cb").checked) ? "1" : ""}'>
+      hx-vals='js:{"q": document.querySelector("[name=q]").value, "type": document.querySelector("[name=type]").value, "tag": getSelectedTags().join(","), "person": (window.getSelectedPeople ? window.getSelectedPeople().join(",") : ""), "format": (window.damFormats ? window.damFormats.getSelected() : ""), "volume": (document.querySelector("[name=volume]") || {value:""}).value, "collection": (document.querySelector("[name=collection]") || {value:""}).value, "path": (document.querySelector("[name=path]") || {value:""}).value, "rating": getFilterRating(), "label": getFilterLabel(), "sort": getSubmitSort(), "page": "1", "stacks": getStackCollapse(), "nodefault": (document.getElementById("default-filter-cb") && !document.getElementById("default-filter-cb").checked) ? "1" : ""}'>
     {% include "filter_bar.html" %}
 </form>
 
@@ -49,6 +49,17 @@
     <button class="save-search-btn" id="save-search-btn" title="Save current search">&#9733; Save</button>
     <button class="clear-search-btn" id="clear-search-btn" title="Clear all filters and remembered state" style="display:none">&times; Clear</button>
     <span class="restored-filter-pill" id="restored-filter-pill" style="display:none" title="Filter was restored from your previous browsing session. Click Clear above to reset.">Restored from last session</span>
+    {% if ai_enabled %}
+    <!-- Query-image pill: shown while the search carries a `similar:@<token>`
+         reference to an uploaded image. Filled by query_image_js.html. -->
+    <span class="query-image-pill" id="query-image-pill" style="display:none" data-token="">
+        <img id="query-image-thumb" alt="" hidden>
+        <span class="query-image-label">Similar to</span>
+        <span id="query-image-name"></span>
+        <span class="query-image-note" id="query-image-note"></span>
+        <button type="button" class="query-image-clear" id="query-image-clear" title="Clear the query image">&times;</button>
+    </span>
+    {% endif %}
     <a class="ss-manage-link" href="/saved-searches">Manage&hellip;</a>
 </div>
 
@@ -139,6 +150,24 @@
 </div>
 
 <script>
+// Sort to submit with the form. Follows the similarity filter's lifecycle:
+// a `similar:` filter that was not in the previous URL (typed, Browse
+// similar, or a query-image upload) switches to score order regardless of
+// the sort that was active before; removing the filter drops a similarity
+// sort again (the server would otherwise fall back to a meaningless id
+// order). Anything else keeps the URL's sort, or "" = server default.
+function getSubmitSort() {
+    var params = new URLSearchParams(window.location.search);
+    var sort = params.get('sort') || '';
+    var qEl = document.querySelector('[name=q]');
+    var simRe = /(^|\s)similar:/i;
+    var hadSim = simRe.test(params.get('q') || '');
+    var hasSim = simRe.test((qEl && qEl.value) || '');
+    if (hasSim && !hadSim) return 'similarity_desc';
+    if (!hasSim && /^similarity_/.test(sort)) return '';
+    return sort;
+}
+
 // Browse page: filter changes trigger htmx form submit
 function onFilterChange() {
     var form = document.querySelector('.search-bar');
@@ -148,6 +177,7 @@ window.triggerSearch = onFilterChange;
 window.onFilterChange = onFilterChange;
 </script>
 {% include "filter_bar_js.html" %}
+{% if ai_enabled %}{% include "query_image_js.html" %}{% endif %}
 <script>
 (function() {
     // Prevent native form submit on Enter

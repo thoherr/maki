@@ -60,7 +60,7 @@ Rating, tag, description, and label changes are written back to `.xmp` recipe fi
 
 ### Feature Gates
 - `--features pro`: MAKI Pro edition (includes `ai`, plus "Pro" branding, VLM describe, writeback, sync-metadata, and future pro-only features)
-- `--features ai`: SigLIP embeddings, auto-tag, face detection/recognition, stroll page, similarity search, text-to-image search
+- `--features ai`: SigLIP embeddings, auto-tag, face detection/recognition, stroll page, similarity search, text-to-image search, search by query image (`search --image`, web `similar:@<token>` sessions in `src/query_image.rs`)
 - `--features ai-gpu`: CoreML execution provider on macOS (additive to `ai`)
 
 ### Output Formatting Conventions

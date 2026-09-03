@@ -98,6 +98,7 @@ const COMMON_FLAGS: &[&str] = &[
     "--force",
     "--format",
     "--ids",
+    "--image",
     "--json",
     "--log",
     "--query",

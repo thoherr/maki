@@ -167,7 +167,7 @@ pub async fn browse_page(
         let has_similarity = resolved.has_similarity();
 
         let per_page = if has_similarity { u32::MAX } else { state.per_page };
-        let effective_sort = if has_similarity && params.sort.is_none() { "similarity_desc" } else { &sort_str };
+        let effective_sort = params.effective_sort(has_similarity, &sort_str);
         opts.sort = SearchSort::from_str(effective_sort);
         opts.page = if has_similarity { 1 } else { page };
         opts.per_page = per_page;
@@ -387,7 +387,7 @@ pub async fn search_api(
         let has_similarity = resolved.has_similarity();
 
         let per_page = if has_similarity { u32::MAX } else { state.per_page };
-        let effective_sort = if has_similarity && params.sort.is_none() { "similarity_desc" } else { &sort_str };
+        let effective_sort = params.effective_sort(has_similarity, &sort_str);
         opts.sort = SearchSort::from_str(effective_sort);
         opts.page = if has_similarity { 1 } else { page };
         opts.per_page = per_page;
@@ -574,11 +574,7 @@ pub async fn page_ids_api(
         let per_page = state.per_page;
         // A similarity view renders as a single page sorted by score —
         // mirror browse_page so navigation order matches the grid.
-        let effective_sort = if has_similarity && params.sort.is_none() {
-            "similarity_desc"
-        } else {
-            &sort_str
-        };
+        let effective_sort = params.effective_sort(has_similarity, &sort_str);
         opts.sort = SearchSort::from_str(effective_sort);
         opts.page = if has_similarity { 1 } else { page };
         opts.per_page = if has_similarity { u32::MAX } else { per_page };

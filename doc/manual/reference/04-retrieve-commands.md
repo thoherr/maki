@@ -30,6 +30,7 @@ maki-search -- search for assets using filters and free-text keywords
 
 ```
 maki [GLOBAL FLAGS] search <QUERY> [--format <FMT>] [-q]
+maki [GLOBAL FLAGS] search --image <FILE> [QUERY] [--limit <N>] [--format <FMT>] [-q]
 ```
 
 ### DESCRIPTION
@@ -94,7 +95,7 @@ The result count header (e.g., "Found 42 assets") is suppressed when an explicit
 
 ### ARGUMENTS
 
-**QUERY** (required)
+**QUERY** (required unless `--image` is given)
 : Search query string with optional filter prefixes and free-text keywords.
 
 ### OPTIONS
@@ -104,6 +105,12 @@ The result count header (e.g., "Found 42 assets") is suppressed when an explicit
 
 **-q** / **--quiet**
 : Shorthand for `--format=ids`. Prints one asset ID per line with no header, ideal for piping.
+
+**--image \<FILE\>** *(Pro)*
+: Find assets visually similar to a local image file that is not in the catalog (e.g. locate the original behind a preview). A byte-identical copy is matched by content hash first and listed as `100% exact`; otherwise the file is encoded with the SigLIP model and ranked like `similar:`. The optional QUERY narrows the result (AND). See [`--image` in the filter reference](06-search-filters.md#search-by-query-image).
+
+**--limit \<N\>**
+: Result-set size for `--image` (default 40, counting the exact match).
 
 `--json` (global flag) is equivalent to `--format json`.
 
@@ -137,6 +144,13 @@ Custom format template:
 
 ```bash
 maki search "rating:5" --format '{id}\t{name}\t{label}'
+```
+
+Locate the original behind a preview you were sent (Pro):
+
+```bash
+maki search --image ~/Downloads/IMG_4711_preview.jpg
+maki search --image scan.tif "min_sim:90" --json
 ```
 
 Search within a path and pipe to a collection:

@@ -32,6 +32,29 @@ const BADGE_TEXT: Rgb<u8> = Rgb([255, 255, 255]);
 
 static FONT_DATA: &[u8] = include_bytes!("fonts/DejaVuSans.ttf");
 
+/// RAW camera formats rendered through dcraw/libraw.
+pub const RAW_FORMATS: &[&str] = &[
+    "raw", "cr2", "cr3", "crw", "nef", "nrw", "arw", "sr2", "srf",
+    "orf", "rw2", "dng", "raf", "pef", "srw", "mrw",
+    "3fr", "fff", "iiq", "erf", "kdc", "dcr",
+    "mef", "mos", "rwl", "bay", "x3f",
+];
+
+/// Video formats rendered through ffmpeg.
+pub const VIDEO_FORMATS: &[&str] = &[
+    "mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "mpg", "mpeg",
+    "3gp", "mts", "m2ts",
+];
+
+/// True when `ext` (lower-case, no dot) is a format the generator renders
+/// as a real picture — `image`-crate formats, RAW, or a video frame — as
+/// opposed to an audio waveform or an info card.
+pub fn is_visual_format(ext: &str) -> bool {
+    matches!(ext, "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp" | "ico")
+        || RAW_FORMATS.contains(&ext)
+        || VIDEO_FORMATS.contains(&ext)
+}
+
 const AUDIO_FORMATS: &[&str] = &[
     "mp3", "flac", "aac", "ogg", "wav", "wma", "m4a", "aiff", "aif", "opus", "alac", "ape",
     "wv",
@@ -127,6 +150,13 @@ impl PreviewGenerator {
         self.do_generate(content_hash, source_path, format, rotation)
     }
 
+    /// File extension previews are written with (`jpg` or `webp`), for
+    /// callers that generate into a destination of their own via
+    /// [`Self::generate_to`].
+    pub fn preview_extension(&self) -> &'static str {
+        self.format.extension()
+    }
+
     /// Return the path where a smart preview for this content hash would be stored.
     pub fn smart_preview_path(&self, content_hash: &str) -> PathBuf {
         let hex = content_hash.strip_prefix("sha256:").unwrap_or(content_hash);
@@ -192,6 +222,19 @@ impl PreviewGenerator {
     ) -> Result<Option<PathBuf>> {
         let dest = self.preview_path(_content_hash);
         self.do_generate_to(&dest, source_path, format, self.max_edge, self.quality, manual_rotation)
+    }
+
+    /// Generate a preview for `source_path` into an arbitrary destination
+    /// (not the catalog's preview store). Used to make non-`image`-crate
+    /// formats (RAW, video) encodable for a query image without touching
+    /// `<catalog>/previews`. Same tool routing and fallbacks as [`Self::generate`].
+    pub fn generate_to(
+        &self,
+        dest: &Path,
+        source_path: &Path,
+        format: &str,
+    ) -> Result<Option<PathBuf>> {
+        self.do_generate_to(dest, source_path, format, self.max_edge, self.quality, None)
     }
 
     fn do_generate_to(

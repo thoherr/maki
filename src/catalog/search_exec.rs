@@ -43,6 +43,8 @@ fn map_search_row(row: &rusqlite::Row) -> rusqlite::Result<SearchRow> {
         preview_rotation: rotation_val.map(|r| r as u16),
         face_count: face_count_val as u32,
         duration_seconds,
+        similarity: None,
+        exact_match: false,
     })
 }
 

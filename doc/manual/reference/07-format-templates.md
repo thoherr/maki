@@ -95,6 +95,8 @@ Available in `maki search --format`:
 | `{description}` | Description text (empty string if no description) |
 | `{hash}` | Content hash of the best display variant |
 | `{label}` | Color label name (e.g., `Red`, `Blue`; empty string if no label) |
+| `{similarity}` | Similarity percentage (0--100) in a `similar:` / `--image` search; empty otherwise *(Pro)* |
+| `{exact}` | The word `exact` when the row is the byte-identical copy of a `--image` query file; empty otherwise *(Pro)* |
 
 ## Placeholders (duplicates)
 

@@ -93,6 +93,8 @@ The search bar has two rows:
 
 **Row 1** -- a full-width text input for free-text search. Type any keyword, filename, or structured filter (like `camera:"Canon EOS R5"`) and results update as you type with a 300ms debounce. Press Enter to search immediately without waiting for the debounce.
 
+On Pro builds the first row also carries a **📷 Find by image** button: pick a local image file that is not in the catalog and the grid ranks the catalog by visual similarity to it (see [Similarity browse](#similarity-browse) below). You can also drop an image file anywhere on the browse page, or paste one from the clipboard.
+
 The filter bar is collapsible. Press **Shift+F** to toggle its visibility on the browse page. Your preference is saved in the browser. This is useful for maximizing screen space when you want to focus on the grid without changing filters.
 
 **Row 2** -- a row of filter controls, left to right:
@@ -238,6 +240,8 @@ Use **Shift+Left/Right arrow** keys to quickly turn pages from the keyboard. The
 ### Similarity browse
 
 When searching with `similar:<asset-id>`, the browse grid shows visually similar assets with similarity percentage badges. A "Similarity" sort button appears for sorting by visual closeness. Use `min_sim:90` to filter by minimum similarity threshold.
+
+**Search by query image.** The source does not have to be a catalog asset. Click **📷 Find by image** in the search row, drop an image file anywhere on the page, or paste one from the clipboard, and the grid ranks the catalog against that file — the way to locate the original behind a preview or export someone sent back. The upload is hashed first: a byte-identical copy in the catalog is pinned at the top as 100%, and the query pill above the grid says "exact copy in catalog". Otherwise (or in addition) the file is encoded with the SigLIP model and ranked like `similar:`. The search field carries a `similar:@<token>` reference to the uploaded image, so every other filter, select-all, facets and export compose with it as usual. Starting the search switches the grid to similarity order whatever sort was active before; clearing the pill (its ×) returns to the previous default order. Query images live in server memory only, for an hour; a stale link shows an empty grid and a "drop it again" note. Nothing is imported or written to the catalog, so the feature also works on a `--read-only` server. The CLI equivalent is `maki search --image <file>`.
 
 ![Similarity browse with percentage badges and sort control](../screenshots/similarity-browse.png)
 

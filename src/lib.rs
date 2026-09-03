@@ -82,6 +82,8 @@ pub mod ai_vocabulary;
 #[cfg(feature = "ai")]
 pub mod embedding_store;
 #[cfg(feature = "ai")]
+pub mod query_image;
+#[cfg(feature = "ai")]
 pub mod face;
 #[cfg(feature = "ai")]
 pub mod face_store;

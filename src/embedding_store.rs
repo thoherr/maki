@@ -310,6 +310,55 @@ impl EmbeddingIndex {
     }
 }
 
+impl EmbeddingIndex {
+    /// Build an index from in-memory rows (tests and ad-hoc callers).
+    /// Rows whose length differs from `dim` are skipped, like [`Self::load`].
+    pub fn from_rows(dim: usize, rows: Vec<(String, Vec<f32>)>) -> Self {
+        let mut idx = Self { ids: Vec::new(), data: Vec::new(), dim };
+        for (id, emb) in rows {
+            idx.upsert(&id, &emb);
+        }
+        idx
+    }
+}
+
+/// Rank catalog assets against a query embedding — the one similarity
+/// ranking shared by `similar:<id>`, `similar:@<query-image>` (web) and
+/// `maki search --image` (CLI).
+///
+/// - `pinned`: an asset that is the answer by construction (the `similar:`
+///   source asset, or the exact content-hash match of a query image). It
+///   is placed first with score 1.0 and excluded from the index search.
+/// - `query_emb`: `None` when no embedding could be computed (query-image
+///   exact hit without a loadable model) — the result is then just the
+///   pinned asset, or empty.
+/// - `limit` counts the pinned asset; `min_sim` is on the 0.0–1.0 scale and
+///   never filters the pinned asset.
+///
+/// Returns `(asset_id, similarity)` pairs sorted by similarity descending
+/// (pinned first).
+pub fn rank_similar(
+    index: &EmbeddingIndex,
+    query_emb: Option<&[f32]>,
+    limit: usize,
+    min_sim: f32,
+    pinned: Option<&str>,
+) -> Vec<(String, f32)> {
+    let mut out: Vec<(String, f32)> = Vec::new();
+    if let Some(p) = pinned {
+        out.push((p.to_string(), 1.0));
+    }
+    if let Some(q) = query_emb {
+        let remaining = limit.saturating_sub(out.len());
+        for (id, sim) in index.search(q, remaining, pinned) {
+            if sim >= min_sim {
+                out.push((id, sim));
+            }
+        }
+    }
+    out
+}
+
 /// Wrapper for f32 that implements Ord (for BinaryHeap).
 #[derive(PartialEq, PartialOrd)]
 struct OrderedF32(f32);
@@ -824,5 +873,39 @@ mod tests {
                 assert!((emb[0] - 2.0).abs() < 1e-6);
             }
         }
+    }
+
+    #[test]
+    fn rank_similar_pins_first_and_applies_min_sim() {
+        let idx = EmbeddingIndex::from_rows(3, vec![
+            ("a".to_string(), vec![1.0, 0.0, 0.0]),
+            ("b".to_string(), vec![0.0, 1.0, 0.0]),
+            ("c".to_string(), vec![0.6, 0.8, 0.0]),
+        ]);
+        let q = [1.0f32, 0.0, 0.0];
+        // No pin: a (1.0), c (0.6), b (0.0)
+        let r = rank_similar(&idx, Some(&q), 10, 0.0, None);
+        assert_eq!(r.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["a", "c", "b"]);
+        // min_sim drops b
+        let r = rank_similar(&idx, Some(&q), 10, 0.5, None);
+        assert_eq!(r.len(), 2);
+        // Pinned goes first with 1.0, is excluded from the index scan, and
+        // ignores min_sim
+        let r = rank_similar(&idx, Some(&q), 10, 0.5, Some("b"));
+        assert_eq!(r[0], ("b".to_string(), 1.0));
+        assert_eq!(r.iter().filter(|(id, _)| id == "b").count(), 1);
+        assert_eq!(r.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["b", "a", "c"]);
+        // limit counts the pinned entry
+        let r = rank_similar(&idx, Some(&q), 2, 0.0, Some("b"));
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[1].0, "a");
+    }
+
+    #[test]
+    fn rank_similar_without_embedding_returns_only_pinned() {
+        let idx = EmbeddingIndex::from_rows(2, vec![("a".to_string(), vec![1.0, 0.0])]);
+        assert!(rank_similar(&idx, None, 10, 0.0, None).is_empty());
+        let r = rank_similar(&idx, None, 10, 0.0, Some("x"));
+        assert_eq!(r, vec![("x".to_string(), 1.0)]);
     }
 }

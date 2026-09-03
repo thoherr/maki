@@ -91,6 +91,17 @@ impl TestServer {
         let mut vlm_config = crate::config::VlmConfig::default();
         vlm_config.endpoint = "http://127.0.0.1:1".to_string();
 
+        // `[ai]` from the supplied maki.toml (tests point `model_dir` at a
+        // nonexistent path so the lazy SigLIP load fails deterministically
+        // even on a dev machine that has the model downloaded).
+        #[cfg(feature = "ai")]
+        let ai_config = if maki_toml.is_empty() {
+            crate::config::AiConfig::default()
+        } else {
+            crate::config::CatalogConfig::load(&root)
+                .map(|c| c.ai)
+                .unwrap_or_default()
+        };
         #[cfg(feature = "ai")]
         let state = Arc::new(AppState::new(
             root.clone(),
@@ -104,7 +115,7 @@ impl TestServer {
             9,
             200,
             read_only,
-            crate::config::AiConfig::default(),
+            ai_config,
             vlm_config,
             None,
             crate::Verbosity::quiet(),
@@ -173,6 +184,51 @@ impl TestServer {
         body: &str,
     ) -> (StatusCode, HeaderMap, String) {
         self.request(method, uri, Some("application/json"), body).await
+    }
+
+    /// Raw-body request with arbitrary headers (query-image upload).
+    #[cfg(feature = "ai")]
+    async fn raw(
+        &self,
+        method: Method,
+        uri: &str,
+        headers: &[(&str, &str)],
+        body: Vec<u8>,
+    ) -> (StatusCode, HeaderMap, String) {
+        let router = build_router(self.state.clone());
+        let mut builder = Request::builder().method(method).uri(uri);
+        for (k, v) in headers {
+            builder = builder.header(*k, *v);
+        }
+        let request = builder.body(Body::from(body)).unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, headers, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// Seed a second image asset whose only variant has exactly `hash`,
+    /// so a query-image upload with those bytes is a content-hash hit.
+    #[cfg(feature = "ai")]
+    fn seed_asset_with_hash(&self, hash: &str) -> String {
+        let catalog = Catalog::open_fast(&self.root).unwrap();
+        let mut asset = Asset::new(AssetType::Image, hash);
+        asset.name = Some("the original".to_string());
+        asset.variants.push(Variant {
+            content_hash: hash.to_string(),
+            asset_id: asset.id,
+            role: VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 11,
+            original_filename: "original.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        });
+        MetadataStore::new(&self.root).save(&asset).unwrap();
+        catalog.insert_asset(&asset).unwrap();
+        catalog.insert_variant(&asset.variants[0]).unwrap();
+        asset.id.to_string()
     }
 
     /// Load the asset fresh from BOTH stores for dual-store assertions.
@@ -561,6 +617,20 @@ async fn all_ids_honors_person_filters_including_exclude() {
 }
 
 #[tokio::test]
+async fn stale_similarity_sort_without_scores_falls_back_to_date() {
+    // A similarity sort left in the URL after the `similar:` filter is
+    // gone must not order the grid by the SQL fallback (asset id).
+    let srv = TestServer::new();
+    let (status, _, body) = srv.get("/?sort=similarity_desc").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("Date<span class=\"sort-arrow\">"),
+        "date sort must be the active one:\n{body}"
+    );
+    assert!(!body.contains("Similarity<span class=\"sort-arrow\">"));
+}
+
+#[tokio::test]
 async fn all_ids_respects_filters() {
     // The select-all backend must honor the same filters as the grid —
     // this is the endpoint behind the v4.6.0 text-query trap fix.
@@ -569,4 +639,182 @@ async fn all_ids_respects_filters() {
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(json["total"], 0, "no videos seeded, select-all must see none");
+}
+
+// ─── Search by query image ──────────────────────────────────────────────
+//
+// The model is never available in tests (`[ai] model_dir` points at a
+// path that does not exist), so these exercise the content-hash fast path
+// and the session/token plumbing — the parts that must work regardless of
+// whether SigLIP is downloaded.
+
+#[cfg(feature = "ai")]
+const NO_MODEL_TOML: &str = "[ai]\nmodel_dir = \"/nonexistent/maki-test-models\"\n";
+
+#[cfg(feature = "ai")]
+fn sha256_of(bytes: &[u8]) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("q.bin");
+    std::fs::write(&f, bytes).unwrap();
+    crate::content_store::ContentStore::new(dir.path()).hash_file(&f).unwrap()
+}
+
+#[cfg(feature = "ai")]
+#[tokio::test]
+async fn query_image_exact_match_roundtrip_through_browse() {
+    let srv = TestServer::new_with(false, NO_MODEL_TOML);
+    let bytes = b"not really a jpeg, but byte-identical to the variant".to_vec();
+    let original_id = srv.seed_asset_with_hash(&sha256_of(&bytes));
+
+    // Upload → token + exact match, model failure tolerated with a warning
+    let (status, _, body) = srv
+        .raw(
+            Method::POST,
+            "/api/query-image",
+            &[("content-type", "image/jpeg"), ("x-maki-filename", "IMG%204711.jpg")],
+            bytes.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let token = json["token"].as_str().unwrap().to_string();
+    assert_eq!(token.len(), 32);
+    assert_eq!(json["filename"], "IMG 4711.jpg", "filename header is percent-decoded");
+    assert_eq!(json["exact_match_id"], original_id);
+    assert_eq!(json["embedded"], false);
+    assert!(
+        json["warning"].as_str().unwrap_or("").contains("not downloaded"),
+        "warning must explain the missing model: {body}"
+    );
+
+    // Session lookup for the pill
+    let (status, _, body) = srv.get(&format!("/api/query-image/{token}")).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["exact_match_id"], original_id);
+
+    // Select-all sees exactly the pinned exact match
+    let (status, _, body) = srv.get(&format!("/api/all-ids?q=similar%3A%40{token}")).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total"], 1, "only the exact match: {body}");
+    assert_eq!(json["ids"][0], original_id);
+
+    // The grid renders it as a similarity view with the 100% badge
+    let (status, _, body) = srv.get(&format!("/?q=similar%3A%40{token}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains(&original_id), "grid must show the exact match");
+    assert!(body.contains("100%"), "exact match carries a 100% similarity badge");
+    assert!(!body.contains(&srv.asset_id), "unrelated seeded asset must not appear");
+
+    // Other filters still compose: an impossible type narrows to nothing
+    let (_, _, body) = srv.get(&format!("/api/all-ids?q=similar%3A%40{token}&type=video")).await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total"], 0);
+}
+
+#[cfg(feature = "ai")]
+#[tokio::test]
+async fn similarity_view_defaults_to_score_order_unless_sort_is_explicit() {
+    // The browse form submits `sort=` from the URL, empty when the URL has
+    // none. That empty value must count as "no sort given" so a
+    // similarity view lands on score order; an explicit sort still wins.
+    let srv = TestServer::new_with(false, NO_MODEL_TOML);
+    let bytes = b"sort-order query bytes".to_vec();
+    let _ = srv.seed_asset_with_hash(&sha256_of(&bytes));
+    let (_, _, body) = srv
+        .raw(
+            Method::POST,
+            "/api/query-image",
+            &[("content-type", "image/jpeg"), ("x-maki-filename", "q.jpg")],
+            bytes,
+        )
+        .await;
+    let token = serde_json::from_str::<serde_json::Value>(&body).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    for uri in [
+        format!("/?q=similar%3A%40{token}"),
+        format!("/?q=similar%3A%40{token}&sort="),
+    ] {
+        let (status, _, body) = srv.get(&uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        assert!(
+            body.contains("Similarity<span class=\"sort-arrow\">"),
+            "{uri}: similarity sort must be active\n{body}"
+        );
+    }
+    let (_, _, body) = srv.get(&format!("/?q=similar%3A%40{token}&sort=date_desc")).await;
+    assert!(
+        !body.contains("Similarity<span class=\"sort-arrow\">"),
+        "explicit sort=date_desc must win over the similarity default"
+    );
+}
+
+#[cfg(feature = "ai")]
+#[tokio::test]
+async fn query_image_expired_token_is_empty_not_an_error() {
+    let srv = TestServer::new_with(false, NO_MODEL_TOML);
+    let (status, _, _) = srv.get("/api/query-image/deadbeefdeadbeefdeadbeefdeadbeef").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // A stale `similar:@token` in the URL (bookmark, remembered filter)
+    // must render an empty grid, not a 500 page.
+    let (status, _, body) = srv.get("/?q=similar%3A%40deadbeefdeadbeefdeadbeefdeadbeef").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(!body.contains(&srv.asset_id));
+    let (status, _, body) = srv.get("/api/all-ids?q=similar%3A%40deadbeefdeadbeefdeadbeefdeadbeef").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total"], 0);
+}
+
+#[cfg(feature = "ai")]
+#[tokio::test]
+async fn query_image_without_match_and_without_model_is_rejected() {
+    let srv = TestServer::new_with(false, NO_MODEL_TOML);
+    let (status, _, body) = srv
+        .raw(
+            Method::POST,
+            "/api/query-image",
+            &[("content-type", "image/png"), ("x-maki-filename", "unknown.png")],
+            b"no such bytes in the catalog".to_vec(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "body: {body}");
+    assert!(body.contains("not downloaded"), "body: {body}");
+
+    let (status, _, _) = srv
+        .raw(Method::POST, "/api/query-image", &[("content-type", "image/png")], Vec::new())
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "empty upload");
+}
+
+#[cfg(feature = "ai")]
+#[tokio::test]
+async fn query_image_upload_is_allowed_in_read_only_mode() {
+    // The upload is a POST but touches nothing in the catalog — a
+    // read-only viewer may still search by image.
+    let srv = TestServer::new_with(true, NO_MODEL_TOML);
+    let bytes = b"read-only query bytes".to_vec();
+    let original_id = srv.seed_asset_with_hash(&sha256_of(&bytes));
+    let (status, _, body) = srv
+        .raw(
+            Method::POST,
+            "/api/query-image",
+            &[("content-type", "image/jpeg"), ("x-maki-filename", "q.jpg")],
+            bytes,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["exact_match_id"], original_id);
+
+    // …while real mutations stay blocked.
+    let (status, _, _) = srv
+        .form(Method::POST, &format!("/api/asset/{}/rating", srv.asset_id), "rating=5")
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }

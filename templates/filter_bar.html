@@ -1,5 +1,13 @@
 <div class="search-row">
     <input type="text" name="q" placeholder="Search assets..." value="{{ query }}" autocomplete="off">
+    {% if ai_enabled %}
+    <!-- Search by query image: pick a local file (or drop / paste one
+         anywhere on the page). Lives in the always-visible search row on
+         purpose — the batch toolbar only appears with a selection, and
+         this entry point must not require selecting anything. -->
+    <button type="button" class="filter-toggle query-image-btn" id="query-image-btn" title="Find assets similar to a local image that is not in the catalog — e.g. locate the original behind a preview. You can also drop or paste an image anywhere on this page.">&#128247; Find by image</button>
+    <input type="file" id="query-image-file" accept="image/*,.jpg,.jpeg,.png,.webp,.tif,.tiff,.gif,.bmp,.heic,.heif,.dng,.nef,.cr2,.cr3,.arw,.raf,.orf,.rw2,.pef,.srw,.mov,.mp4" hidden>
+    {% endif %}
     <button type="button" class="filter-toggle" id="filter-toggle" title="Toggle filters (Shift+F)">&#9660; Filters</button>
     {% if !default_filter.is_empty() %}
     <label class="default-filter-toggle" title="Default filter from maki.toml [browse]">

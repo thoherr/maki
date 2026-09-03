@@ -127,63 +127,120 @@ pub(super) fn resolve_best_variant_idx(
         .ok_or_else(|| anyhow::anyhow!("asset has no variants"))
 }
 
-/// Resolve `similar:` filter: look up embedding, search index, return matching IDs with scores.
-/// Returns (ordered_ids, score_map). The source asset is included with similarity 100%.
-/// Empty if no `similar:` filter is active.
+/// Resolve the `similar:` filter into `(ordered_ids, score_map)`.
+///
+/// Two forms:
+/// - `similar:<asset-id>` — the stored embedding of a catalog asset; the
+///   source asset is pinned first at 100%.
+/// - `similar:@<token>` — an uploaded query image (see
+///   `routes::ai::query_image`); its exact content-hash match, if any, is
+///   pinned first, then the embedding neighbours. An expired token resolves
+///   to an empty list (the browse JS shows a "drop it again" notice).
+///
+/// Returns `Ok(None)` when no `similar:` filter is active or the configured
+/// model is unknown (filter ignored, historical behavior); `Ok(Some(..))`
+/// whenever the filter resolved — possibly to an empty list, which the
+/// caller installs so that "no hit" means no rows rather than every asset.
 #[cfg(feature = "ai")]
 fn resolve_similar_filter(
     catalog: &crate::catalog::Catalog,
     state: &AppState,
     parsed: &crate::query::ParsedSearch,
-) -> anyhow::Result<(Vec<String>, std::collections::HashMap<String, f32>)> {
+) -> anyhow::Result<Option<(Vec<String>, std::collections::HashMap<String, f32>)>> {
     use std::collections::HashMap;
-    if let Some(ref similar_ref) = parsed.similar {
-        let full_id = resolve_asset_id_or_err(catalog, similar_ref)?;
-        let model_id = &state.ai_config.model;
-        let spec = crate::ai::get_model_spec(model_id);
-        if let Some(spec) = spec {
+    let Some(ref similar_ref) = parsed.similar else {
+        return Ok(None);
+    };
+    let model_id = &state.ai_config.model;
+    let Some(spec) = crate::ai::get_model_spec(model_id) else {
+        return Ok(None);
+    };
+    // limit defaults to 40 results (including the pinned asset);
+    // min_sim is specified as percentage 0-100, convert to 0.0-1.0
+    let limit = parsed.similar_limit.unwrap_or(40);
+    let min_sim = parsed.min_sim.unwrap_or(0.0) / 100.0;
+
+    // (query embedding, pinned asset) for either form
+    let (query_emb, pinned): (Option<Vec<f32>>, Option<String>) =
+        if let Some(token) = similar_ref.strip_prefix('@') {
+            let sessions = state.query_images.lock().unwrap_or_else(|e| e.into_inner());
+            match sessions.get(token) {
+                Some(session) => (
+                    session.query.embedding.clone(),
+                    session.query.exact_asset_id.clone(),
+                ),
+                // Expired (or bogus) token: resolve to "nothing" rather
+                // than failing the page — the browse JS asks
+                // /api/query-image/{token}, gets a 404, and shows the
+                // "drop it again" notice over an empty grid.
+                None => return Ok(Some((Vec::new(), HashMap::new()))),
+            }
+        } else {
+            let full_id = resolve_asset_id_or_err(catalog, similar_ref)?;
             let emb_store = crate::embedding_store::EmbeddingStore::new(catalog.conn());
-            let query_emb = emb_store
-                .get(&full_id, model_id)?
-                .ok_or_else(|| anyhow::anyhow!(
+            let emb = emb_store.get(&full_id, model_id)?.ok_or_else(|| {
+                anyhow::anyhow!(
                     "No embedding for '{similar_ref}'. Run `maki embed --asset {full_id}` first."
-                ))?;
-            // limit defaults to 40 results (including the source asset)
-            let limit = parsed.similar_limit.unwrap_or(40);
-            // min_sim is specified as percentage 0-100, convert to 0.0-1.0
-            let min_sim = parsed.min_sim.unwrap_or(0.0) / 100.0;
-            // Ensure embedding index is loaded
-            let needs_load = state.ai_embedding_index.read().unwrap().is_none();
-            if needs_load {
-                if let Ok(index) = crate::embedding_store::EmbeddingIndex::load(
-                    catalog.conn(), model_id, spec.embedding_dim,
-                ) {
-                    *state.ai_embedding_index.write().unwrap() = Some(index);
-                }
+                )
+            })?;
+            (Some(emb), Some(full_id))
+        };
+
+    // Ensure embedding index is loaded (only needed when there is an embedding)
+    if query_emb.is_some() {
+        let needs_load = state.ai_embedding_index.read().unwrap().is_none();
+        if needs_load {
+            if let Ok(index) = crate::embedding_store::EmbeddingIndex::load(
+                catalog.conn(), model_id, spec.embedding_dim,
+            ) {
+                *state.ai_embedding_index.write().unwrap() = Some(index);
             }
-            // Search excludes the source — we add it back with score 1.0
-            let results = {
-                let idx_guard = state.ai_embedding_index.read().unwrap();
-                if let Some(ref idx) = *idx_guard {
-                    idx.search(&query_emb, limit.saturating_sub(1), Some(&full_id))
-                } else {
-                    Vec::new()
-                }
-            };
-            let mut filtered: Vec<(String, f32)> = Vec::with_capacity(results.len() + 1);
-            // Include the source asset itself at 100%
-            filtered.push((full_id.clone(), 1.0));
-            for (id, sim) in results {
-                if sim >= min_sim {
-                    filtered.push((id, sim));
-                }
-            }
-            let scores: HashMap<String, f32> = filtered.iter().cloned().collect();
-            let ids: Vec<String> = filtered.into_iter().map(|(id, _)| id).collect();
-            return Ok((ids, scores));
         }
     }
-    Ok((Vec::new(), std::collections::HashMap::new()))
+    let ranked = {
+        let idx_guard = state.ai_embedding_index.read().unwrap();
+        match *idx_guard {
+            Some(ref idx) => crate::embedding_store::rank_similar(
+                idx, query_emb.as_deref(), limit, min_sim, pinned.as_deref(),
+            ),
+            None => crate::embedding_store::rank_similar(
+                &crate::embedding_store::EmbeddingIndex::from_rows(1, Vec::new()),
+                None, limit, min_sim, pinned.as_deref(),
+            ),
+        }
+    };
+    let scores: HashMap<String, f32> = ranked.iter().cloned().collect();
+    let ids: Vec<String> = ranked.into_iter().map(|(id, _)| id).collect();
+    Ok(Some((ids, scores)))
+}
+
+impl SearchParams {
+    /// `true` when the request carries a non-empty `sort=`; an absent or
+    /// empty value lets a similarity view default to score order.
+    pub(super) fn sort_explicit(&self) -> bool {
+        self.sort.as_deref().is_some_and(|s| !s.is_empty())
+    }
+
+    /// The sort the grid actually uses, given whether the resolved search
+    /// carries similarity scores:
+    /// - a similarity view with no explicit sort → `similarity_desc`;
+    /// - a similarity sort *without* scores (stale URL after the
+    ///   `similar:` filter was removed) → `date_desc`, because the SQL
+    ///   fallback for similarity sorts is a meaningless id order;
+    /// - otherwise the requested sort.
+    ///
+    /// The browse form mirrors this on the client (`getSubmitSort` in
+    /// `browse.html`): starting a similarity search switches the sort to
+    /// `similarity_desc`, leaving it drops the sort again.
+    pub(super) fn effective_sort<'a>(&self, has_similarity: bool, sort_str: &'a str) -> &'a str {
+        if has_similarity && !self.sort_explicit() {
+            "similarity_desc"
+        } else if !has_similarity && sort_str.starts_with("similarity_") {
+            "date_desc"
+        } else {
+            sort_str
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -290,6 +347,10 @@ pub(super) struct ResolvedSearch {
     pub(super) similarity_scores: std::collections::HashMap<String, f32>,
     #[cfg(feature = "ai")]
     similar_requested: bool,
+    /// `true` once `similar:` resolved (even to an empty list) — drives
+    /// the install of `similar_ids` in [`Self::apply`].
+    #[cfg(feature = "ai")]
+    similar_resolved: bool,
 }
 
 impl ResolvedSearch {
@@ -321,6 +382,8 @@ impl ResolvedSearch {
             similarity_scores: std::collections::HashMap::new(),
             #[cfg(feature = "ai")]
             similar_requested: false,
+            #[cfg(feature = "ai")]
+            similar_resolved: false,
         }
     }
 
@@ -382,9 +445,11 @@ impl ResolvedSearch {
                 }
             }
         }
-        let (ids, scores) = resolve_similar_filter(catalog, state, parsed)?;
-        self.similar_ids = ids;
-        self.similarity_scores = scores;
+        if let Some((ids, scores)) = resolve_similar_filter(catalog, state, parsed)? {
+            self.similar_ids = ids;
+            self.similarity_scores = scores;
+            self.similar_resolved = true;
+        }
         Ok(())
     }
 
@@ -434,7 +499,7 @@ impl ResolvedSearch {
             if let Some(ref ids) = self.text_query_ids {
                 opts.text_search_ids = Some(ids);
             }
-            if !self.similar_ids.is_empty() {
+            if self.similar_resolved {
                 opts.similar_asset_ids = Some(&self.similar_ids);
             }
         }
@@ -449,7 +514,16 @@ pub(super) fn build_parsed_search(params: &SearchParams, state: &AppState) -> Br
     let volume = params.volume.as_deref().unwrap_or("").to_string();
     let rating_str = params.rating.as_deref().unwrap_or("");
     let label_str = params.label.as_deref().unwrap_or("");
-    let sort_str = params.sort.as_deref().unwrap_or("date_desc").to_string();
+    // An empty `sort=` is "no sort given" — the browse form sends it that
+    // way so a similarity view (similar:<id> / similar:@token) can default
+    // to score order instead of being pinned to date order by the form's
+    // implicit default.
+    let sort_str = params
+        .sort
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("date_desc")
+        .to_string();
     let page = params.page.unwrap_or(1).max(1);
     let collection_str = params.collection.as_deref().unwrap_or("");
     let path_str = params.path.as_deref().unwrap_or("");

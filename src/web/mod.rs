@@ -286,6 +286,10 @@ pub struct AppState {
     pub ai_embedding_index: std::sync::RwLock<Option<crate::embedding_store::EmbeddingIndex>>,
     #[cfg(feature = "ai")]
     pub face_detector: tokio::sync::Mutex<Option<crate::face::FaceDetector>>,
+    /// Uploaded query images (search by image), referenced from the
+    /// browse URL as `similar:@<token>`. TTL-evicted, never persisted.
+    #[cfg(feature = "ai")]
+    pub query_images: std::sync::Mutex<crate::query_image::QueryImageSessions>,
     /// Registry of running and recently-completed background jobs (import,
     /// embed, auto-tag, …). Replaces the per-job-type `import_job` slot that
     /// used to live here.
@@ -374,6 +378,7 @@ impl AppState {
             ai_config,
             ai_embedding_index: std::sync::RwLock::new(None),
             face_detector: tokio::sync::Mutex::new(None),
+            query_images: std::sync::Mutex::new(Default::default()),
             jobs: Arc::new(jobs::JobRegistry::new()),
         }
     }
@@ -683,6 +688,18 @@ fn build_router(state: Arc<AppState>) -> Router {
                 "/api/asset/{id}/stack-similar",
                 axum::routing::post(routes::stack_by_similarity),
             )
+            // Search by query image: raw-body upload (own body limit —
+            // the axum default of 2 MiB is far below a camera JPEG).
+            .route(
+                "/api/query-image",
+                axum::routing::post(routes::upload_query_image).layer(
+                    axum::extract::DefaultBodyLimit::max(routes::QUERY_IMAGE_MAX_BYTES),
+                ),
+            )
+            .route(
+                "/api/query-image/{token}",
+                axum::routing::get(routes::query_image_info),
+            )
             .route(
                 "/api/batch/auto-tag",
                 axum::routing::post(routes::batch_auto_tag),
@@ -813,7 +830,16 @@ async fn guard_request(
         }
     }
 
-    if state.read_only && req.method() != Method::GET && req.method() != Method::HEAD {
+    // Read-only mode blocks mutations. The query-image upload is a POST
+    // by necessity (it carries a file body) but touches nothing in the
+    // catalog — a read-only viewer may still search by image.
+    let is_query_image_upload =
+        req.method() == Method::POST && req.uri().path() == "/api/query-image";
+    if state.read_only
+        && req.method() != Method::GET
+        && req.method() != Method::HEAD
+        && !is_query_image_upload
+    {
         return (
             StatusCode::FORBIDDEN,
             "This MAKI server runs in read-only mode; metadata edits and jobs are disabled.",

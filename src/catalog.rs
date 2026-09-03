@@ -106,6 +106,15 @@ pub struct SearchRow {
     pub face_count: u32,
     /// Media duration in seconds (audio and video; None otherwise).
     pub duration_seconds: Option<f64>,
+    /// Cosine similarity (0.0–1.0) to the query of a `similar:` /
+    /// `--image` search; `None` for every other search. Filled in by the
+    /// query engine after the SQL stage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub similarity: Option<f32>,
+    /// `true` when this asset owns a variant whose content hash equals
+    /// the `--image` query file — the "found the original" case.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exact_match: bool,
 }
 
 impl SearchRow {

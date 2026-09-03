@@ -461,6 +461,65 @@ nav .nav-version { margin-left: auto; font-size: 0.75rem; opacity: 0.5; font-wei
     white-space: nowrap;
 }
 
+/* Search by query image: the "Find by image" button sits in the search
+   row; the pill below shows which uploaded image the grid is ranked
+   against (thumbnail + filename + exact-copy note). `.drop-active` on the
+   search row is the drag-over highlight; `.query-image-busy` while the
+   upload is being encoded. */
+.query-image-btn { flex-shrink: 0; }
+.search-row.drop-active input[name="q"] {
+    border-style: dashed;
+    border-color: var(--accent, #e8634a);
+    background: color-mix(in srgb, var(--accent, #e8634a) 6%, var(--bg-input));
+}
+.search-row.query-image-busy .query-image-btn { opacity: 0.7; cursor: progress; }
+.query-image-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0.4rem 0.15rem 0.2rem;
+    font-size: 0.78rem;
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
+    border-radius: 1rem;
+    white-space: nowrap;
+    max-width: 100%;
+}
+.query-image-pill img {
+    width: 28px;
+    height: 28px;
+    object-fit: cover;
+    border-radius: 0.8rem;
+    display: block;
+}
+.query-image-pill .query-image-label { color: var(--text-muted); }
+.query-image-pill #query-image-name {
+    max-width: 16rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.query-image-pill .query-image-note { color: var(--text-muted); font-style: italic; }
+.query-image-pill .query-image-note:empty { display: none; }
+.query-image-pill.exact { border-color: color-mix(in srgb, #2e9e5b 60%, transparent); }
+.query-image-pill.exact .query-image-note { color: #2e9e5b; font-style: normal; }
+.query-image-pill.expired {
+    color: #b45309;
+    border-color: color-mix(in srgb, #b45309 50%, transparent);
+    background: color-mix(in srgb, #b45309 8%, transparent);
+}
+.query-image-pill.expired .query-image-note { color: #b45309; }
+.query-image-clear {
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 0.2rem;
+}
+.query-image-clear:hover { color: var(--accent, #e8634a); }
+
 /* Persistent "selection extends beyond this page" indicator — sits in
    the batch toolbar next to the count whenever any selected asset
    isn't currently rendered as a card. Yellow-toned warning style so
