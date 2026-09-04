@@ -2,7 +2,9 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## Unreleased
+## v4.10.1 (2026-09-05)
+
+Fix release: shell completion, `min_sim:` on `text:`, saved-search OR groups, `--help` completeness — plus a documentation audit pass. No schema migration.
 
 ### Fixed
 
