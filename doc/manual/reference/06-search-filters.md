@@ -912,14 +912,12 @@ maki search "faces:2+ tag:portrait"         # portraits with multiple people
 
 **Description:** Filters to assets that contain at least one face assigned to the named person. Supports quoted values for multi-word names. Name resolution needs the face store, so in a standard (non-Pro) build a `person:` filter matches nothing.
 
-**Multiple people:** Commas within a single entry are OR (`person:Alice,Bob` — either person). Separate `person:` entries combine differently in the two front ends:
-
-- **Web UI** (search box and person chips): separate entries are AND — `person:Alice person:Bob` returns assets showing *both*.
-- **CLI** (`maki search`): separate entries are OR-unioned — `person:Alice person:Bob` returns assets showing *either*, the same as `person:Alice,Bob`.
+**Multiple people:** the same rules as `tag:`. Commas within a single entry are OR (`person:Alice,Bob` — either person); separate `person:` entries are AND (`person:Alice person:Bob` — both in the photo). Excludes union: `-person:Alice -person:Bob` drops every asset showing either of them. CLI and web UI agree (until v4.10.1 the CLI OR-unioned separate entries).
 
 ```
-maki search "person:Alice,Bob"              # either Alice or Bob (CLI and web)
-maki search "person:Alice person:Bob"       # CLI: either; web UI: both
+maki search "person:Alice,Bob"              # either Alice or Bob
+maki search "person:Alice person:Bob"       # both in the photo
+maki search "-person:Alice -person:Bob"     # neither of them
 ```
 
 In the web UI browse filter, each person chip is one `person:` entry, so multiple chips AND together. Type a comma-separated list (`Alice,Bob`) in the query input to get OR semantics.

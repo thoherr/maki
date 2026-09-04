@@ -331,9 +331,8 @@ pub(super) use crate::query::EmptyFilterPolicy;
 pub(super) struct ResolvedSearch {
     pub(super) volume: String,
     pub(super) path_volume_id: Option<String>,
-    /// Collection/person ID resolution shared with the CLI search path.
-    /// The web layer always uses `PersonCombine::AllOf` (separate `person:`
-    /// entries intersect) — see `crate::query::resolve` for the drift matrix.
+    /// Collection/person ID resolution shared with the CLI search path
+    /// (see `crate::query::resolve` for the semantics table).
     pub(super) filters: crate::query::ResolvedFilterIds,
     /// `Some` once the text-query pipeline produced an ID list (installed
     /// even when empty — an unmatched text query yields zero results).
@@ -367,7 +366,6 @@ impl ResolvedSearch {
             catalog,
             parsed,
             empty_filter_policy,
-            crate::query::PersonCombine::AllOf,
         );
 
         Self {

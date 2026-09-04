@@ -11,28 +11,32 @@
 //! difference between the consumers is an explicit parameter or a documented
 //! call-site decision.
 //!
-//! # Drift matrix
+//! # Semantics (unified since v4.10.2)
 //!
-//! | Consumer | Empty-filter policy | Person combine | Person exclude | Collection exclude |
-//! |---|---|---|---|---|
-//! | CLI `QueryEngine::search` | `MatchNothing` | `AnyOf` (OR-union) | yes | yes |
-//! | Web browse family (browse_page, search_api, all_ids/page_ids, facets) | `Ignore` | `AllOf` (intersection) | yes (since v4.7.1) | yes |
-//! | Web calendar_api / map_api | `MatchNothing` | `AllOf` (intersection) | yes (since v4.7.1) | yes |
-//! | Web export-zip (`media.rs`) | `MatchNothing` | `AllOf` (intersection) | yes (since v4.7.1) | yes (since v4.7.1) |
+//! | Filter | Comma within one entry | Separate entries |
+//! |---|---|---|
+//! | `collection:` | OR | OR (union) |
+//! | `-collection:` | OR | OR (union of excluded IDs) |
+//! | `person:` | OR (`person:Alice,Bob` = either) | AND (`person:Alice person:Bob` = both in the photo, like `tag:`) |
+//! | `-person:` | OR | OR (`-person:Alice -person:Bob` drops photos with either, like `-tag:`) |
+//!
+//! Until v4.10.1 the CLI OR-unioned separate `person:` entries while the web
+//! layer intersected them (a drift the dedup of three copies had preserved
+//! verbatim); both now match the tag semantics above. The one remaining
+//! consumer difference is the empty-filter policy ([`EmptyFilterPolicy`]).
+//!
+//! # Empty-filter policy by consumer
+//!
+//! | Consumer | Empty-filter policy |
+//! |---|---|
+//! | CLI `QueryEngine::search` | `MatchNothing` |
+//! | Web browse family (browse_page, search_api, all_ids/page_ids, facets) | `Ignore` |
+//! | Web calendar_api / map_api | `MatchNothing` |
+//! | Web export-zip (`media.rs`) | `MatchNothing` |
 //!
 //! Historical note: until v4.7.0 the web layer silently ignored
 //! `-person:` and the export-zip handler additionally ignored
-//! `-collection:` — exporting a `-collection:`-filtered browse view
-//! could export *more* assets than the grid showed. Both gaps were
-//! documented when this module unified the three drifted copies, then
-//! closed: every consumer now honors all four filter kinds. The
-//! remaining (deliberate, user-visible) drift is the empty-filter
-//! policy and the person-combine semantics.
-//!
-//! Within a single filter entry, a comma is always OR (`person:Alice,Bob` =
-//! either) — all consumers agree on that. The drift is across *separate*
-//! entries (`person:Alice person:Bob`), captured by [`PersonCombine`].
-//! Collection entries are OR-unioned across entries by every consumer.
+//! `-collection:`. Every consumer now honors all four filter kinds.
 
 use crate::catalog::{Catalog, SearchOptions};
 
@@ -61,29 +65,6 @@ pub enum EmptyFilterPolicy {
     /// Install the empty slice so the filter matches nothing
     /// (CLI, web calendar/map, and web export-zip behavior).
     MatchNothing,
-}
-
-/// How multiple separate `person:` filter entries combine.
-///
-/// This documents a discovered drift between the CLI and the web layer; it
-/// is historical behavior made explicit, **not** a design endorsement:
-/// - The CLI (`QueryEngine::search`) uses [`PersonCombine::AnyOf`]:
-///   `person:Alice person:Bob` OR-unions across entries — assets showing
-///   *either* person match.
-/// - The web layer (`ResolvedSearch` for browse/calendar/map, and the
-///   export-zip handler) uses [`PersonCombine::AllOf`]: separate entries
-///   intersect, matching the catalog's tag semantics — `person:Alice
-///   person:Bob` returns assets that contain *both* people.
-///
-/// Both modes treat a comma *within* one entry as OR (`person:Alice,Bob` =
-/// either person), so the modes only diverge when two or more `person:`
-/// entries are present.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PersonCombine {
-    /// OR-union across separate entries (CLI behavior).
-    AnyOf,
-    /// Intersection across separate entries (web behavior).
-    AllOf,
 }
 
 /// Owned holder for the resolved collection/person asset-ID lists.
@@ -115,9 +96,9 @@ impl ResolvedFilterIds {
     /// from `parsed` against the catalog.
     ///
     /// Collection entries are OR-unioned across entries and within comma
-    /// lists (all consumers agree). Person entries combine per
-    /// `person_combine`; person *exclude* entries use the same combine mode
-    /// (the CLI, the only consumer that installs them, OR-unions both).
+    /// lists. Person entries follow the tag semantics: comma within an entry
+    /// is OR, separate entries intersect (AND); person *exclude* entries
+    /// union across entries (`-person:A -person:B` drops photos with either).
     ///
     /// In non-`ai` builds person name resolution is unavailable: person ID
     /// lists resolve to empty, and the `has_*` flags still reflect the parsed
@@ -128,7 +109,6 @@ impl ResolvedFilterIds {
         catalog: &Catalog,
         parsed: &ParsedSearch,
         policy: EmptyFilterPolicy,
-        person_combine: PersonCombine,
     ) -> Self {
         let collection_ids = resolve_collection_ids(&parsed.collections, catalog.conn());
         let collection_exclude_ids =
@@ -136,14 +116,11 @@ impl ResolvedFilterIds {
 
         #[cfg(feature = "ai")]
         let (person_ids, person_exclude_ids) = (
-            resolve_person_ids(catalog, &parsed.persons, person_combine),
-            resolve_person_ids(catalog, &parsed.persons_exclude, person_combine),
+            resolve_person_ids(catalog, &parsed.persons, false),
+            resolve_person_ids(catalog, &parsed.persons_exclude, true),
         );
         #[cfg(not(feature = "ai"))]
-        let (person_ids, person_exclude_ids) = {
-            let _ = person_combine; // only consumed by the ai-gated resolution
-            (Vec::new(), Vec::new())
-        };
+        let (person_ids, person_exclude_ids) = (Vec::<String>::new(), Vec::<String>::new());
 
         Self {
             collection_ids,
@@ -229,23 +206,26 @@ fn resolve_collection_ids(entries: &[String], conn: &rusqlite::Connection) -> Ve
     })
 }
 
-/// Resolve person name entries to asset IDs via the face store, combining
-/// separate entries per `combine` (comma within an entry is always OR).
+/// Resolve person name entries to asset IDs via the face store. Comma
+/// within an entry is always OR; separate include entries intersect (AND,
+/// like tags), separate exclude entries union (`exclude = true`, like
+/// `-tag:` — dropping photos that show *any* of the excluded people).
 #[cfg(feature = "ai")]
-fn resolve_person_ids(catalog: &Catalog, entries: &[String], combine: PersonCombine) -> Vec<String> {
+fn resolve_person_ids(catalog: &Catalog, entries: &[String], exclude: bool) -> Vec<String> {
     if entries.is_empty() {
         return Vec::new();
     }
     let face_store = crate::face_store::FaceStore::new(catalog.conn());
     let lookup = |name: &str| face_store.find_person_asset_ids(name).unwrap_or_default();
-    match combine {
-        PersonCombine::AnyOf => union_name_groups(entries, lookup),
-        PersonCombine::AllOf => intersect_name_groups(entries, lookup),
+    if exclude {
+        union_name_groups(entries, lookup)
+    } else {
+        intersect_name_groups(entries, lookup)
     }
 }
 
 /// OR-union: every name in every entry contributes its IDs to one set
-/// (CLI person semantics; collection semantics everywhere).
+/// (collection semantics; `-person:` exclude semantics).
 fn union_name_groups<F>(entries: &[String], lookup: F) -> Vec<String>
 where
     F: Fn(&str) -> Vec<String>,
@@ -266,7 +246,7 @@ where
 /// these names"), separate entries are AND ("must match all of these"). For
 /// person filters this means `person:Alice person:Bob` returns assets that
 /// contain BOTH Alice and Bob, while `person:Alice,Bob` returns assets that
-/// contain EITHER. (Web person semantics — see [`PersonCombine`].)
+/// contain EITHER.
 #[cfg(any(feature = "ai", test))]
 fn intersect_name_groups<F>(entries: &[String], lookup: F) -> Vec<String>
 where
@@ -367,7 +347,7 @@ mod tests {
         let (catalog, _ids) = setup_catalog();
         let parsed = ParsedSearch::default();
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing, PersonCombine::AnyOf,
+            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
         );
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
@@ -383,7 +363,7 @@ mod tests {
         let mut parsed = ParsedSearch::default();
         parsed.collections.push("Favs".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::Ignore, PersonCombine::AllOf,
+            &catalog, &parsed, EmptyFilterPolicy::Ignore,
         );
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
@@ -396,7 +376,7 @@ mod tests {
         let mut parsed = ParsedSearch::default();
         parsed.collections.push("Favs, Picks".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::Ignore, PersonCombine::AllOf,
+            &catalog, &parsed, EmptyFilterPolicy::Ignore,
         );
         assert_eq!(
             sorted(resolved.collection_ids.clone()),
@@ -412,7 +392,7 @@ mod tests {
         parsed.collections.push("Favs".to_string());
         parsed.collections.push("Picks".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::Ignore, PersonCombine::AllOf,
+            &catalog, &parsed, EmptyFilterPolicy::Ignore,
         );
         assert_eq!(
             sorted(resolved.collection_ids.clone()),
@@ -426,7 +406,7 @@ mod tests {
         let mut parsed = ParsedSearch::default();
         parsed.collections.push("NoSuchCollection".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::Ignore, PersonCombine::AllOf,
+            &catalog, &parsed, EmptyFilterPolicy::Ignore,
         );
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
@@ -439,7 +419,7 @@ mod tests {
         let mut parsed = ParsedSearch::default();
         parsed.collections.push("NoSuchCollection".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing, PersonCombine::AllOf,
+            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
         );
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
@@ -456,7 +436,7 @@ mod tests {
         let mut parsed = ParsedSearch::default();
         parsed.collections_exclude.push("Picks".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing, PersonCombine::AnyOf,
+            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
         );
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
@@ -474,14 +454,14 @@ mod tests {
         parsed.persons.push("NoSuchPerson".to_string());
 
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::Ignore, PersonCombine::AllOf,
+            &catalog, &parsed, EmptyFilterPolicy::Ignore,
         );
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
         assert!(opts.person_asset_ids.is_none());
 
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing, PersonCombine::AnyOf,
+            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
         );
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
@@ -490,15 +470,30 @@ mod tests {
 
     #[cfg(feature = "ai")]
     #[test]
-    fn person_any_of_unions_across_entries() {
+    fn person_exclude_entries_union_across_entries() {
+        // `-person:Alice -person:Bob` drops photos showing either (like -tag:)
+        let (catalog, ids) = setup_catalog();
+        let mut parsed = ParsedSearch::default();
+        parsed.persons_exclude.push("Alice".to_string());
+        parsed.persons_exclude.push("Bob".to_string());
+        let resolved = ResolvedFilterIds::resolve(
+            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
+        );
+        assert_eq!(sorted(resolved.person_exclude_ids.clone()), sorted(ids.clone()));
+    }
+
+    #[cfg(feature = "ai")]
+    #[test]
+    fn person_entries_intersect_across_entries_in_every_policy() {
+        // Same result under both policies — the CLI no longer ORs.
         let (catalog, ids) = setup_catalog();
         let mut parsed = ParsedSearch::default();
         parsed.persons.push("Alice".to_string());
         parsed.persons.push("Bob".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing, PersonCombine::AnyOf,
+            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
         );
-        assert_eq!(sorted(resolved.person_ids.clone()), sorted(ids.clone()));
+        assert_eq!(resolved.person_ids, vec![ids[1].clone()]);
     }
 
     #[cfg(feature = "ai")]
@@ -509,7 +504,7 @@ mod tests {
         parsed.persons.push("Alice".to_string());
         parsed.persons.push("Bob".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::Ignore, PersonCombine::AllOf,
+            &catalog, &parsed, EmptyFilterPolicy::Ignore,
         );
         assert_eq!(resolved.person_ids, vec![ids[1].clone()]);
     }
@@ -521,7 +516,7 @@ mod tests {
         let mut parsed = ParsedSearch::default();
         parsed.persons.push("Alice,Bob".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::Ignore, PersonCombine::AllOf,
+            &catalog, &parsed, EmptyFilterPolicy::Ignore,
         );
         assert_eq!(sorted(resolved.person_ids.clone()), sorted(ids.clone()));
     }
@@ -533,7 +528,7 @@ mod tests {
         let mut parsed = ParsedSearch::default();
         parsed.persons_exclude.push("Alice".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing, PersonCombine::AnyOf,
+            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
         );
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
@@ -553,7 +548,7 @@ mod tests {
         parsed.collections_exclude.push("Picks".to_string());
         parsed.persons_exclude.push("Alice".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing, PersonCombine::AllOf,
+            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
         );
         let mut opts = SearchOptions::default();
         resolved.apply_collections(&mut opts);

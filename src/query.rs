@@ -569,16 +569,13 @@ impl QueryEngine {
         }
 
         // Resolve collection include/exclude and person include/exclude
-        // filters via the shared resolver (see `crate::query::resolve` for
-        // the CLI-vs-web drift matrix). The CLI installs resolved lists
-        // whenever the filter is present in the query — an unmatched filter
-        // matches nothing (MatchNothing) — and OR-unions separate person
-        // entries (AnyOf).
+        // filters via the shared resolver (see `crate::query::resolve`).
+        // The CLI installs resolved lists whenever the filter is present in
+        // the query — an unmatched filter matches nothing (MatchNothing).
         let resolved_filters = ResolvedFilterIds::resolve(
             &catalog,
             &parsed,
             EmptyFilterPolicy::MatchNothing,
-            PersonCombine::AnyOf,
         );
         resolved_filters.apply(&mut opts);
 

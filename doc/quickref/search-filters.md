@@ -50,7 +50,7 @@ Filters combine with **AND** — every filter must match. Free-text tokens that 
 | Stale verification | `stale:<days>` | `stale:30` |
 | Stacked | `stacked:true`, `stacked:false` | `stacked:true` |
 | Face count | `faces:any`, `faces:none`, `faces:<N>+` | `faces:2+` |
-| Person *(Pro)* | `person:<name>` | `person:Alice`, `person:Alice,Bob` (either) |
+| Person *(Pro)* | `person:<name>` | `person:Alice`, `person:Alice,Bob` (either), `person:Alice person:Bob` (both) |
 | Visual similarity *(Pro)* | `similar:<id>`, `similar:<id>:<limit>` | `similar:72a0bb4b:50` (default 40) |
 | Query image *(Pro)* | `maki search --image <file>` | `maki search --image preview.jpg` |
 | Similarity threshold *(Pro)* | `min_sim:<percent>` | `min_sim:90` (with `similar:`, `text:`, `--image`) |

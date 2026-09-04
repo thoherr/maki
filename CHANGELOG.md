@@ -2,6 +2,18 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## Unreleased
+
+### Changed
+
+- **`person:` combines like `tag:` everywhere.** Separate `person:`
+  entries are AND (`person:Alice person:Bob` = both in the photo) in the
+  CLI as well as the web UI — the CLI used to OR-union them, a drift the
+  v4.7.x resolver dedup had preserved on purpose. Comma within one entry
+  stays OR. `-person:` excludes union across entries (`-person:Alice
+  -person:Bob` drops photos showing either), like `-tag:`; the web UI
+  previously intersected them. The `PersonCombine` switch is gone.
+
 ## v4.10.1 (2026-09-05)
 
 Fix release: shell completion, `min_sim:` on `text:`, saved-search OR groups, `--help` completeness — plus a documentation audit pass. No schema migration.

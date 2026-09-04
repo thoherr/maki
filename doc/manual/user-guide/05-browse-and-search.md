@@ -116,7 +116,7 @@ All filters can be combined in a single query. Remaining tokens become free-text
 | Stale verification | `stale:<days>` | `stale:30` |
 | Stacked | `stacked:true` or `stacked:false` | `stacked:true` |
 | Face count | `faces:any`, `faces:none`, `faces:N`, `faces:N+` | `faces:2+` |
-| Person *(Pro)* | `person:<name>` | `person:Alice`, `person:"John Smith"`, `person:Alice,Bob` (either) |
+| Person *(Pro)* | `person:<name>` | `person:Alice`, `person:"John Smith"`, `person:Alice,Bob` (either), `person:Alice person:Bob` (both) |
 | Visual similarity *(Pro)* | `similar:<id>` or `similar:<id>:<limit>` | `similar:72a0bb4b`, `similar:72a0bb4b:50` (default 40) |
 | Query image *(Pro)* | `maki search --image <file>` | `maki search --image preview.jpg` |
 | Similarity threshold *(Pro)* | `min_sim:<percent>` | `min_sim:90` (with `similar:`, `text:`, `--image`) |

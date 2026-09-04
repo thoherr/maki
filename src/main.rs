@@ -82,7 +82,7 @@ AI (any build)
   embed:any / embed:none              has / lacks SigLIP embedding
 
 PRO (require --features pro)
-  person:Alice            named person (comma = OR; repeat = OR in CLI, AND in web)
+  person:Alice            named person (comma = OR, repeat = AND — like tag:)
   similar:<id>[:<limit>]  visually similar to an asset (default 40)
   --image <file>          visually similar to a local image (not in catalog)
   min_sim:90              similarity threshold (0-100%) for similar:/text:/--image
