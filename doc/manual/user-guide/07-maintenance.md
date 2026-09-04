@@ -26,6 +26,21 @@ After `sync`, there are two paths: `sync-metadata` handles both directions (read
 Each command is safe by default -- destructive operations require an explicit `--apply` flag, and most commands support `--dry-run` or report-only mode.
 
 
+## Edit History and Undo
+
+Every metadata edit — rating, label, description, name, date, tag add/remove/clear, single or batch, from the CLI, the shell, or the web UI — is journaled in `<catalog>/history/`. Two commands read that journal:
+
+```bash
+maki history                 # last 20 operations, newest first
+maki history a1b2c3d4        # what changed on one asset, field by field
+maki undo --dry-run          # what the next undo would revert
+maki undo                    # revert the most recent operation
+```
+
+Undo is LIFO at operation granularity: a batch that rated 500 assets is one operation and comes back as one. Before restoring an asset, undo checks that nothing else has touched it since; a conflicting asset is reported and skipped unless you pass `--force`. Import, delete, and structural operations (group, split, stack) are not covered — re-import is idempotent, delete is trash-backed (see [Trash](#trash) below), and structural undo is a planned follow-on.
+
+The journal is neither a sidecar nor part of `catalog.db`: it survives `rebuild-catalog`, `doctor` ignores it, and deleting it loses only the ability to undo. Undo restores catalog and sidecar state; affected `.xmp` recipes are flagged pending, so run `maki writeback` afterwards if you mirror edits to XMP. Retention is `[history] max_operations` in `maki.toml`.
+
 ## Verification
 
 `maki verify` re-hashes every file on disk and compares the result to the content hash stored in the catalog. This detects silent corruption, bit rot, and accidental modifications.
@@ -148,6 +163,19 @@ maki search "stale:0"
 
 See [Browsing & Searching](05-browse-and-search.md) for more on search filters.
 
+
+## Consistency Check (doctor)
+
+`maki verify` checks your files; `maki doctor` checks the catalog against itself. The YAML sidecars are the source of truth and SQLite is a derived cache — every write path is supposed to update both, and doctor confirms it did:
+
+```bash
+maki doctor                  # full comparison, summary by field
+maki doctor --sample 500     # fast probabilistic check on a large catalog
+maki doctor --log            # every finding, per asset
+maki doctor --repair         # rebuild the SQLite side of every flagged asset from YAML
+```
+
+It flags sidecars without a catalog row and phantom rows without a sidecar, then compares metadata fields, denormalized columns, variant / location / recipe sets (including the pending-writeback flag), and face counts. `--repair` rewrites the catalog from the sidecar for flagged assets and deletes phantom rows; it never edits sidecars. Run it after an interrupted operation, before a big reorganisation, or whenever pending-writeback markers look wrong.
 
 ## Sync
 
@@ -607,6 +635,19 @@ Offline volumes are skipped automatically with a note. MAKI never removes record
 maki cleanup --apply --log --time --json
 ```
 
+
+## Trash
+
+File-deleting operations — `maki delete --remove-files`, `maki dedup --apply`, and the web duplicates page — move files into `<catalog>/.trash/<date>/<volume>/<path>` instead of deleting them, so a mistaken batch is recoverable. Derived files (previews, embeddings, face crops) never enter the trash; they are regenerable.
+
+```bash
+maki trash list                                   # what is in the trash, with restore keys
+maki trash restore 2026-09-01/Photos/2026/DSC_0042.nef
+maki trash empty --dry-run                        # what would be purged (older than retention_days)
+maki trash empty --all
+```
+
+`restore` moves the file back to its original location on its volume; the catalog is not updated, so re-register it with `maki import <path>` or `maki refresh`. `[trash] enabled` and `retention_days` (default 30) live in `maki.toml`; every deleting command accepts `--no-trash` for a permanent delete when freeing disk space is the whole point. The trash lives on the catalog volume, so trashing a file from another volume costs one copy.
 
 ## Relocating Assets
 

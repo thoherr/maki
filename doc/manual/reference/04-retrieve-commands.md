@@ -208,7 +208,7 @@ maki-show -- display full details for an asset
 ### SYNOPSIS
 
 ```
-maki [GLOBAL FLAGS] show <ASSET_ID>
+maki [GLOBAL FLAGS] show <ASSET_ID> [--locations]
 ```
 
 ### DESCRIPTION
@@ -230,7 +230,8 @@ The display logic for previews prefers Export > Processed > Original variant pre
 
 ### OPTIONS
 
-This command only accepts [global flags](00-cli-conventions.md#global-flags).
+**--locations**
+: Print only the asset's file locations, one per line as `volume:path` — handy for scripting (`maki show abc123 --locations | xargs ...`).
 
 `--json` outputs an `AssetDetails` object with full asset, variant, and recipe information.
 
@@ -959,6 +960,7 @@ Opens the specified MAKI documentation PDF in the default browser. The PDFs are 
 | `manual` | `man`, `guide` | User Manual |
 | `cheatsheet` | `cheat`, `cs` | Cheat Sheet |
 | `filters` | `search`, `filter`, `sf` | Search Filter Reference |
+| `tagging` | `tags`, `tag` | Tagging Quick Guide |
 
 ### EXAMPLES
 
@@ -1020,7 +1022,7 @@ maki-serve -- start the web UI server
 ### SYNOPSIS
 
 ```
-maki [GLOBAL FLAGS] serve [--port <PORT>] [--bind <ADDR>]
+maki [GLOBAL FLAGS] serve [--port <PORT>] [--bind <ADDR>] [--read-only]
 ```
 
 ### DESCRIPTION
@@ -1042,7 +1044,7 @@ Starts a local web server that provides a browser-based interface for browsing, 
 
 The server defaults to `127.0.0.1:8080`. These can be overridden by CLI flags or the `[serve]` section in `maki.toml`. CLI flags take precedence over configuration.
 
-SQLite connections are opened per-request. Previews are served as static files. Static assets (htmx.min.js, style.css) are embedded at compile time.
+Requests check SQLite connections out of a small pre-opened pool. Previews are served from the catalog directory. Static assets (htmx, Leaflet, style.css, icons) are embedded at compile time.
 
 ### ARGUMENTS
 
@@ -1055,6 +1057,9 @@ None.
 
 **--bind \<ADDR\>**
 : Address to bind to. Default: `127.0.0.1`, or the value from `maki.toml` `[serve]` section.
+
+**--read-only**
+: Safe-sharing mode: every request that is not `GET`/`HEAD` — metadata edits, jobs, deletions — is rejected with 403 and the UI hides its edit controls. Combine with `--bind` to let other people or devices browse without write access. Can be made permanent with `[serve] read_only = true`; HTTP Basic auth is available via `[serve] username`/`password` (the password may also come from the `MAKI_SERVE_PASSWORD` environment variable). Binding to a non-loopback address without either protection prints a startup warning.
 
 `--log` (global flag) enables per-request logging to stderr in the format `METHOD /path -> STATUS (duration)`.
 

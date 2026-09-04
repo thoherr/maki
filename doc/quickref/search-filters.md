@@ -24,8 +24,8 @@ Filters combine with **AND** — every filter must match. Free-text tokens that 
 | ISO | `iso:<N>`, `iso:<min>-<max>` | `iso:100`, `iso:100-800` |
 | Focal length | `focal:<N>`, `focal:<min>-<max>` | `focal:50`, `focal:35-70` |
 | Aperture | `f:<N>`, `f:<min>-<max>` | `f:2.8`, `f:1.4-2.8` |
-| Width | `width:<N>+` | `width:4000+` |
-| Height | `height:<N>+` | `height:2000+` |
+| Width | `width:<N>`, `width:<N>+`, `width:<min>-<max>` | `width:4000+` |
+| Height | `height:<N>`, `height:<N>+` | `height:2160` |
 | Source metadata | `meta:<key>=<value>` | `meta:software=CaptureOne` |
 | Path pattern | `path:<pattern>` (`*` = wildcard) | `path:*/2026/*/party` |
 | Collection | `collection:<name>` | `collection:Favorites` |
@@ -36,29 +36,36 @@ Filters combine with **AND** — every filter must match. Free-text tokens that 
 | Asset ID | `id:<prefix>` | `id:72a0bb4b` |
 | Copies | `copies:<N>`, `copies:<N>+` | `copies:1`, `copies:2+` |
 | Variants | `variants:<N>+` | `variants:2+` |
-| Scattered | `scattered:<N>+`, `scattered:<N>+/<depth>` | `scattered:2+`, `scattered:2+/1` |
+| Tag count (leaves) | `tagcount:<N>`, `tagcount:<N>+`, `tagcount:<A>-<B>` | `tagcount:0` (untagged), `tagcount:5+` |
+| Scattered | `scattered:<N>`, `scattered:<N>+` | `scattered:2+` (files in 2+ session roots) |
 | Duration (seconds) | `duration:<N>`, `duration:<N>+`, `duration:<min>-<max>` | `duration:60`, `duration:30+` |
 | Codec | `codec:<text>` | `codec:h264`, `codec:hevc` |
-| GPS | `geo:<S>,<W>,<N>,<E>` | `geo:47.5,11.0,48.5,13.0` |
+| Musical key | `key:<key>` | `key:Am`, `key:F#m` |
+| Tempo (BPM) | `bpm:<N>`, `bpm:<N>+`, `bpm:<min>-<max>` | `bpm:100-140` |
+| GPS (box) | `geo:<S>,<W>,<N>,<E>` | `geo:47.5,11.0,48.5,13.0` |
+| GPS (radius) | `geo:<lat>,<lng>,<km>` | `geo:52.52,13.405,5` |
 | GPS (any/none) | `geo:any`, `geo:none` | `geo:any` |
 | Orphan | `orphan:true` | `orphan:true` |
 | Missing files | `missing:true` | `missing:true` |
 | Stale verification | `stale:<days>` | `stale:30` |
 | Stacked | `stacked:true`, `stacked:false` | `stacked:true` |
 | Face count | `faces:any`, `faces:none`, `faces:<N>+` | `faces:2+` |
-| Person | `person:<name>` | `person:Alice` |
-| Visual similarity *(Pro)* | `similar:<id>`, `similar:<id>:<limit>` | `similar:72a0bb4b:50` |
-| Similarity threshold *(Pro)* | `min_sim:<percent>` | `min_sim:90` |
-| Text search *(Pro)* | `text:<query>` | `text:"sunset beach"` |
-| Embedding status *(Pro)* | `embed:any`, `embed:none` | `embed:none type:image` |
+| Person *(Pro)* | `person:<name>` | `person:Alice`, `person:Alice,Bob` (either) |
+| Visual similarity *(Pro)* | `similar:<id>`, `similar:<id>:<limit>` | `similar:72a0bb4b:50` (default 40) |
+| Query image *(Pro)* | `maki search --image <file>` | `maki search --image preview.jpg` |
+| Similarity threshold *(Pro)* | `min_sim:<percent>` | `min_sim:90` (with `similar:`, `text:`, `--image`) |
+| Text search *(Pro)* | `text:<query>`, `text:"<query>":<limit>` | `text:"sunset beach"` (quote multi-word) |
+| Embedding status | `embed:any`, `embed:none` | `embed:none type:image` |
 
 \newpage
 
 ## Combining Filters
 
-**AND** — repeat a filter to require all values:
+**AND** — repeat `tag:` (or `meta:`) to require all values:
 
     tag:landscape tag:sunset          both tags required
+
+Repeating any other filter ORs the values (`type:image type:video` = `type:image,video`).
 
 **OR** — comma within a single filter:
 
@@ -66,7 +73,7 @@ Filters combine with **AND** — every filter must match. Free-text tokens that 
     format:nef,cr3                    NEF or CR3
     label:Red,Orange                  Red or Orange
 
-**NOT** — dash prefix excludes matches:
+**NOT** — dash prefix excludes matches (`tag`, `type`, `format`, `label`, `volume`, `camera`, `lens`, `description`, `path`, `collection`, `person`, and free text):
 
     -tag:rejected                     exclude rejected
     -format:xmp                       exclude XMP files
@@ -76,7 +83,7 @@ Filters combine with **AND** — every filter must match. Free-text tokens that 
 
     type:image,video -tag:rejected rating:3+
 
-**Hierarchical tags** — `tag:animals` matches `animals`, `animals|birds`, `animals|birds|eagles`.
+**Hierarchical tags** — `tag:animals` matches `animals`, `animals|birds`, `animals|birds|eagles`. Markers: `tag:=x` whole path only, `tag:/x` leaf only, `tag:^x` case-sensitive, `tag:|x` prefix anchor.
 
 **Numeric filters** — all support: exact (`3`), minimum (`3+`), range (`3-5`), OR (`2,4`), OR+min (`2,4+`).
 
@@ -88,13 +95,13 @@ Filters combine with **AND** — every filter must match. Free-text tokens that 
 
 | Flag | Output |
 |------|--------|
-| *(default)* | One line per result: ID, filename, type, format, date |
+| *(default)* | One line per result: ID, name (or filename), type, format, date |
 | `--format ids` or `-q` | One UUID per line (for scripting) |
 | `--format full` | Default + tags and description |
 | `--format json` or `--json` | JSON array |
 | `--format '{id}\t{name}'` | Custom template |
 
-**Placeholders:** `{id}`, `{name}`, `{filename}`, `{type}`, `{format}`, `{tags}`, `{description}`, `{rating}`, `{label}`, `{date}`, `{size}`
+**Placeholders:** `{id}`, `{short_id}`, `{name}`, `{filename}`, `{type}`, `{format}`, `{date}`, `{tags}`, `{description}`, `{hash}`, `{label}`, `{similarity}`, `{exact}` *(Pro, similarity searches)*
 
 ## Common Recipes
 
@@ -106,8 +113,9 @@ maki search "copies:1 volume:Photos"                  single-copy files
 maki search "stale:90"                                not verified in 90 days
 maki search "orphan:true"                             assets with no files
 maki search "faces:any person:Alice rating:4+"        Alice's best shots
-maki search "similar:72a0bb4b rating:3+" min_sim:80   similar + curated (Pro)
-maki search "text:sunset" min_sim:70                  semantic search (Pro)
+maki search "similar:72a0bb4b rating:3+ min_sim:80"   similar + curated (Pro)
+maki search "text:\"sunset on the beach\""            semantic search (Pro)
+maki search --image preview.jpg "min_sim:90"           find the original (Pro)
 ```
 
 ## Sort Options
@@ -120,7 +128,7 @@ maki search "text:sunset" min_sim:70                  semantic search (Pro)
 | `name_asc` | Name A→Z |
 | `size_desc` | Largest first |
 | `size_asc` | Smallest first |
-| `similarity_desc` | Most similar first *(Pro, with `similar:`)* |
+| `similarity_desc` | Most similar first *(Pro, default for `similar:`/`--image` views)* |
 | `similarity_asc` | Least similar first *(Pro)* |
 
-Usage: `maki search "rating:4+" --sort name_asc`
+Sort applies in the web UI and to saved searches (`maki saved-search save NAME QUERY --sort name_asc`). `maki search` has no `--sort` flag: output is newest-first, or by score for `similar:` / `--image`.

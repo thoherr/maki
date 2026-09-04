@@ -8,7 +8,7 @@ Commands for curating static collections, managing saved searches (smart albums)
 | [saved-search](#maki-saved-search-save) | save, list, run, delete |
 | [stack](#maki-stack-create) | create, add, remove, pick, dissolve, list, show, from-tag |
 | [auto-stack](#maki-auto-stack) *(Pro)* | — |
-| [faces](#maki-faces-detect) *(Pro)* | detect, cluster, people, name, merge, delete-person, unassign, export, download, status |
+| [faces](#maki-faces-detect) *(Pro)* | detect, download, status, cluster, clean, similarity, dump-aligned, people, name, merge, delete-person, unassign, export |
 
 ---
 
@@ -1130,7 +1130,8 @@ maki-faces-detect -- detect faces in asset images
 ### SYNOPSIS
 
 ```
-maki [GLOBAL FLAGS] faces detect [--query <Q>] [--asset <id>] [--volume <label>] [--apply]
+maki [GLOBAL FLAGS] faces detect [--query <Q>] [--asset <id>] [--volume <label>]
+                                 [--min-confidence <F>] [--force] [--apply]
 ```
 
 ### DESCRIPTION

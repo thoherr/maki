@@ -94,7 +94,7 @@ JPEG compression quality for smart previews. Only applies when the preview forma
 
 When `true`, the web server generates smart previews automatically on first request. The first load takes a few seconds while the preview is generated; subsequent requests are served from disk. A pulsing "HD" badge in the lightbox and detail page provides visual feedback during generation.
 
-When `false`, smart previews must be generated explicitly via `maki import --smart`, the "Regenerate previews" button on the asset detail page, or a future batch command.
+When `false`, smart previews must be generated explicitly via `maki import --smart`, `maki generate-previews --smart`, or the "Regenerate previews" button on the asset detail page.
 
 ### Notes
 
@@ -466,10 +466,10 @@ Default settings for `maki contact-sheet`. All fields are optional; CLI flags ov
 | `layout` | string | `"standard"` | Layout preset: `dense`, `standard`, `large` |
 | `paper` | string | `"a4"` | Paper size: `a4`, `letter`, `a3` |
 | `fields` | string | `"filename,date,rating"` | Comma-separated metadata fields |
-| `margin` | float | `15.0` | Page margin in mm |
-| `quality` | integer | `92` | JPEG quality for page images (1--100) |
+| `margin` | float | `10.0` | Page margin in mm |
+| `quality` | integer | `90` | JPEG quality for page images (1--100) |
 | `label_style` | string | `"border"` | Color label display: `border`, `dot`, `none` |
-| `copyright` | string | `""` | Copyright text for page footer |
+| `copyright` | string | unset | Copyright text for page footer. Optional -- omitted from the file when not set (no footer). |
 
 ```toml
 [contact_sheet]
@@ -691,6 +691,13 @@ models = ["moondream", "qwen3-vl:4b"]
 
 The CLI `maki describe --model` flag is unaffected by this setting — it accepts any model name regardless of the `models` list.
 
+### max_image_edge
+
+- **Type:** unsigned 32-bit integer
+- **Default:** `0` (no resizing)
+
+Maximum pixel size of the longest edge for images sent to the VLM. Larger images are downscaled before encoding, which cuts upload size and inference time on models that internally tile or resize anyway. `0` sends the source image (smart preview or original) unchanged. Overridable per model (see [Per-Model Configuration](#per-model-configuration)).
+
 ### num_ctx
 
 - **Type:** unsigned 32-bit integer
@@ -742,7 +749,7 @@ temperature = 0.1
 
 When running `maki describe --model qwen3-vl:4b`, the per-model overrides apply: `timeout` becomes 300, `num_ctx` becomes 4096, and `max_image_edge` becomes 384. All other settings fall through from the global `[vlm]` section.
 
-Per-model sections support all the same fields as the global `[vlm]` section (except `model`, `models`, and `model_config` itself).
+Per-model sections support exactly these fields: `max_tokens`, `temperature`, `timeout`, `max_image_edge`, `num_ctx`, `top_p`, `top_k`, `repeat_penalty`, and `prompt`. The connection-level settings (`endpoint`, `mode`, `concurrency`) and `model`/`models`/`model_config` itself are global only.
 
 ### CLI Override
 
@@ -1045,6 +1052,14 @@ generate_on_demand = true
 port = 8080
 # Bind address. Use "0.0.0.0" to allow network access.
 bind = "127.0.0.1"
+# Assets per browse-grid page.
+per_page = 60
+# Safe-sharing mode: reject every mutating request (also: maki serve --read-only).
+read_only = false
+# HTTP Basic Auth — enforced only when both are set. Prefer the
+# MAKI_SERVE_PASSWORD environment variable over a password in this file.
+# username = "thomas"
+# password = "secret"
 # Stroll page: initial neighbor count and slider maximum.
 stroll_neighbors = 12
 stroll_neighbors_max = 25
@@ -1072,6 +1087,13 @@ embeddings = true
 # Generate VLM descriptions during import (requires running Ollama or compatible endpoint).
 descriptions = true
 
+# Named import profiles (maki import --profile <name>); unset fields inherit from [import].
+[import.profiles.cards]
+auto_tags = ["inbox"]
+smart_previews = false
+include = ["*.NEF", "*.JPG"]
+skip = ["*_backup*"]
+
 [dedup]
 # Default path substring for --prefer (keep files whose path contains this).
 prefer = "Selects"
@@ -1088,13 +1110,13 @@ paper = "a4"
 # Comma-separated metadata fields below each thumbnail.
 fields = "filename,date,rating"
 # Page margin in mm.
-margin = 15.0
+margin = 10.0
 # JPEG quality for page images (1-100).
-quality = 92
+quality = 90
 # Color label display: "border", "dot", "none".
 label_style = "border"
-# Copyright text for page footer.
-copyright = ""
+# Copyright text for page footer (optional; omit for no footer).
+copyright = "© 2026 Thomas Herrmann"
 
 # AI auto-tagging settings (Pro).
 [ai]
@@ -1105,11 +1127,19 @@ model_dir = "~/.maki/models"
 prompt = "a photograph of {}"
 # GPU acceleration (included automatically on macOS Pro builds).
 # execution_provider = "auto"
+# Face recognition: clustering similarity threshold and minimum detection confidence.
+face_cluster_threshold = 0.35
+face_min_confidence = 0.7
+# Default result count for the text: search filter.
+text_limit = 50
 
 # XMP writeback: disabled by default for safety.
 # Enable to write rating/tags/label/description back to .xmp files on disk.
 [writeback]
 enabled = false
+# Reconcile XMP keyword lists against the catalog on every writeback
+# (removes stale keywords; default is additive only).
+mirror_tags = false
 
 # VLM image description settings (Pro).
 [vlm]
@@ -1119,6 +1149,10 @@ max_tokens = 500
 timeout = 300
 temperature = 0.7
 mode = "describe"
+# Concurrent requests (for servers that handle parallelism).
+concurrency = 1
+# Downscale images to this longest edge before sending (0 = no resizing).
+max_image_edge = 0
 # Models offered in web UI dropdown (empty = only default model, no dropdown).
 # models = ["qwen2.5vl:3b", "moondream"]
 # prompt = "Describe this photograph concisely."
@@ -1132,6 +1166,48 @@ mode = "describe"
 # [vlm.model_config."moondream:latest"]
 # max_tokens = 200
 # temperature = 0.1
+
+[browse]
+# Default filter applied to browse/search/stroll views (standard search syntax).
+# default_filter = "-tag:rejected"
+# Lightbox slideshow: seconds per image, and wrap around at the end.
+slideshow_seconds = 5
+slideshow_loop = true
+# Restore the last browse filter on a bare "/" visit.
+remember_latest_filter = true
+
+[trash]
+# Move deleted files into <catalog>/.trash/ instead of unlinking them.
+enabled = true
+# Default age cutoff (days) for `maki trash empty`.
+retention_days = 30
+
+[history]
+# Journal metadata edits under <catalog>/history/ for `maki undo` / `maki history`.
+enabled = true
+# Keep the newest N operations.
+max_operations = 200
+
+[cli]
+# Default global flags (OR'd with the command line).
+log = false
+time = false
+verbose = false
+
+[group]
+# Regex identifying session-root directories for auto-group and the scattered: filter.
+session_root_pattern = '^\d{4}-\d{2}'
+
+[watch]
+# Poll interval in seconds for `maki watch` (minimum 2).
+poll_seconds = 30
+# Extra exclude globs on top of [import] exclude.
+exclude = ["*.partial"]
+
+[audio]
+# External analyzers for `maki audio analyze`.
+key_command = "keyfinder-cli"
+bpm_command = "beat_this"
 ```
 
 ---
@@ -1185,20 +1261,23 @@ When a field is absent from `maki.toml`, these defaults apply:
 | `serve.stroll_fanout` | `5` |
 | `serve.stroll_fanout_max` | `10` |
 | `serve.stroll_discover_pool` | `80` |
+| `serve.read_only` | `false` |
+| `serve.username` / `serve.password` | none (no auth) |
 | `import.exclude` | `[]` |
 | `import.auto_tags` | `[]` |
 | `import.smart_previews` | `false` |
 | `import.embeddings` | `false` |
 | `import.descriptions` | `false` |
+| `import.profiles` | none |
 | `dedup.prefer` | none |
 | `verify.max_age_days` | none |
 | `contact_sheet.layout` | `"standard"` |
 | `contact_sheet.paper` | `"a4"` |
 | `contact_sheet.fields` | `"filename,date,rating"` |
-| `contact_sheet.margin` | `15.0` |
-| `contact_sheet.quality` | `92` |
+| `contact_sheet.margin` | `10.0` |
+| `contact_sheet.quality` | `90` |
 | `contact_sheet.label_style` | `"border"` |
-| `contact_sheet.copyright` | `""` |
+| `contact_sheet.copyright` | none |
 | `ai.model` | `"siglip-vit-b16-256"` |
 | `ai.threshold` | `0.1` |
 | `ai.labels` | none |
@@ -1216,15 +1295,29 @@ When a field is absent from `maki.toml`, these defaults apply:
 | `vlm.temperature` | `0.7` |
 | `vlm.timeout` | `300` |
 | `vlm.concurrency` | `1` |
+| `vlm.max_image_edge` | `0` (no resizing) |
 | `vlm.models` | `[]` (empty) |
 | `vlm.num_ctx` | `0` (server default) |
 | `vlm.top_p` | `0.0` (server default) |
 | `vlm.top_k` | `0` (server default) |
 | `vlm.repeat_penalty` | `0.0` (server default) |
+| `vlm.model_config` | none |
 | `writeback.enabled` | `false` |
+| `writeback.mirror_tags` | `false` |
 | `browse.default_filter` | none |
 | `browse.slideshow_seconds` | `5` |
 | `browse.slideshow_loop` | `true` |
+| `browse.remember_latest_filter` | `true` |
+| `trash.enabled` | `true` |
+| `trash.retention_days` | `30` |
+| `history.enabled` | `true` |
+| `history.max_operations` | `200` |
+| `cli.log` / `cli.time` / `cli.verbose` | `false` |
+| `group.session_root_pattern` | `'^\d{4}-\d{2}'` |
+| `watch.poll_seconds` | `30` |
+| `watch.exclude` | `[]` |
+| `audio.key_command` | `"keyfinder-cli"` |
+| `audio.bpm_command` | `"beat_this"` |
 
 ---
 

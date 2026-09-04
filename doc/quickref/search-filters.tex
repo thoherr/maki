@@ -81,7 +81,7 @@ Description         & \cmd{description:<text>}, \cmd{desc:<text>} & \cmd{descrip
 ISO                 & \cmd{iso:<N>}, \cmd{iso:<min>-<max>}  & \cmd{iso:100}, \cmd{iso:100-800} \\
 Focal length        & \cmd{focal:<N>}, \cmd{focal:<min>-<max>} & \cmd{focal:50}, \cmd{focal:35-70} \\
 Aperture            & \cmd{f:<N>}, \cmd{f:<min>-<max>}      & \cmd{f:2.8}, \cmd{f:1.4-2.8} \\
-Width / Height      & \cmd{width:<N>+}, \cmd{height:<N>+}   & \cmd{width:4000+}, \cmd{height:2000+} \\
+Width / Height      & \cmd{width:<N>}, \cmd{<N>+}, \cmd{<min>-<max>} & \cmd{width:4000+}, \cmd{height:2160} \\
 Source metadata     & \cmd{meta:<key>=<value>}              & \cmd{meta:software=CaptureOne} \\
 Path pattern        & \cmd{path:<pattern>} (\cmd{*}=wild)   & \cmd{path:*/2026/*/party} \\
 Collection          & \cmd{collection:<name>}               & \cmd{collection:Favorites} \\
@@ -92,21 +92,23 @@ Asset ID            & \cmd{id:<prefix>}                     & \cmd{id:72a0bb4b} 
 Copies              & \cmd{copies:<N>}, \cmd{copies:<N>+}   & \cmd{copies:1}, \cmd{copies:2+} \\
 Variants            & \cmd{variants:<N>+}                   & \cmd{variants:2+} \\
 Tag count (leaves)  & \cmd{tagcount:<N>}, \cmd{tagcount:<N>+}, \cmd{tagcount:<A>-<B>} & \cmd{tagcount:0}, \cmd{tagcount:5+} \\
-Scattered           & \cmd{scattered:<N>+}, \cmd{scattered:<N>+/<depth>} & \cmd{scattered:2+/1} \\
+Scattered           & \cmd{scattered:<N>}, \cmd{scattered:<N>+} & \cmd{scattered:2+} (2+ session roots) \\
 Duration (seconds)  & \cmd{duration:<N>}, \cmd{duration:<N>+}, \cmd{duration:<min>-<max>} & \cmd{duration:60}, \cmd{duration:30+} \\
 Codec               & \cmd{codec:<text>}                    & \cmd{codec:h264}, \cmd{codec:hevc} \\
-GPS location        & \cmd{geo:<S>,<W>,<N>,<E>}             & \cmd{geo:47.5,11.0,48.5,13.0} \\
+Musical key / BPM   & \cmd{key:<key>}, \cmd{bpm:<N>}, \cmd{<min>-<max>} & \cmd{key:Am}, \cmd{bpm:100-140} \\
+GPS box / radius    & \cmd{geo:<S>,<W>,<N>,<E>}, \cmd{geo:<lat>,<lng>,<km>} & \cmd{geo:52.52,13.405,5} \\
 GPS any/none        & \cmd{geo:any}, \cmd{geo:none}         & \cmd{geo:any} \\
 Orphan              & \cmd{orphan:true}                     & \cmd{orphan:true} \\
 Missing files       & \cmd{missing:true}                    & \cmd{missing:true} \\
 Stale verification  & \cmd{stale:<days>}                    & \cmd{stale:30} \\
 Stacked             & \cmd{stacked:true}, \cmd{stacked:false} & \cmd{stacked:true} \\
-Face count \pro     & \cmd{faces:any}, \cmd{faces:none}, \cmd{faces:<N>+} & \cmd{faces:2+} \\
-Person \pro         & \cmd{person:<name>}                   & \cmd{person:Alice} (repeat for AND, comma for OR) \\[6pt]
-Visual similarity \pro  & \cmd{similar:<id>}, \cmd{similar:<id>:<limit>} & \cmd{similar:72a0bb4b:50} \\
-Similarity threshold \pro & \cmd{min\_sim:<percent>}           & \cmd{min\_sim:90} \\
-Text search \pro    & \cmd{text:<query>}                    & \cmd{text:"sunset beach"} \\
-Embedding status \pro & \cmd{embed:any}, \cmd{embed:none}   & \cmd{embed:none type:image} \\
+Face count          & \cmd{faces:any}, \cmd{faces:none}, \cmd{faces:<N>+} & \cmd{faces:2+} \\
+Person \pro         & \cmd{person:<name>}                   & \cmd{person:Alice,Bob} (comma = either) \\[6pt]
+Visual similarity \pro  & \cmd{similar:<id>}, \cmd{similar:<id>:<limit>} & \cmd{similar:72a0bb4b:50} (default 40) \\
+Query image \pro    & \cmd{maki search --image <file>}      & \cmd{--image preview.jpg} (find the original) \\
+Similarity threshold \pro & \cmd{min\_sim:<percent>}           & \cmd{min\_sim:90} (similar, text, --image) \\
+Text search \pro    & \cmd{text:<query>}, \cmd{text:"<q>":<limit>} & \cmd{text:"sunset beach"} (quote multi-word) \\
+Embedding status    & \cmd{embed:any}, \cmd{embed:none}     & \cmd{embed:none type:image} \\
 \end{tabularx}
 
 \vspace{6pt}
@@ -137,17 +139,17 @@ All numeric filters support: exact (\cmd{3}), minimum (\cmd{3+}), range (\cmd{3-
 
 \renewcommand{\arraystretch}{1.4}
 \begin{tabularx}{\textwidth}{@{}l X@{}}
-\textbf{AND} & Repeat a filter to require all values \\
+\textbf{AND} & Repeat \cmd{tag:} (or \cmd{meta:}) to require all values; repeating other filters ORs them \\
              & \cmd{tag:landscape tag:sunset} \\[6pt]
 \textbf{OR}  & Comma within a single filter \\
              & \cmd{tag:alice,bob} \quad \cmd{format:nef,cr3} \\[6pt]
-\textbf{NOT} & Dash prefix excludes matches \\
+\textbf{NOT} & Dash prefix excludes (tag, type, format, label, volume, camera, lens, description, path, collection, person, free text) \\
              & \cmd{-tag:rejected} \quad \cmd{-format:xmp} \\[6pt]
 \textbf{Combined} & \cmd{type:image,video -tag:rejected rating:3+} \\
 \end{tabularx}
 
 \vspace{4pt}
-Hierarchical tags: \cmd{tag:bird} matches at any level --- \cmd{animal|bird}, \cmd{animal|bird|eagle}, and standalone \cmd{bird}.
+Hierarchical tags: \cmd{tag:bird} matches at any level --- \cmd{animal|bird}, \cmd{animal|bird|eagle}, and standalone \cmd{bird}. Markers: \cmd{=} whole path, \cmd{/} leaf only, \cmd{\textasciicircum} case-sensitive, \cmd{|} prefix anchor.
 
 \vspace{18pt}
 \section{Sort Options}
@@ -160,19 +162,19 @@ Hierarchical tags: \cmd{tag:bird} matches at any level --- \cmd{animal|bird}, \c
 \cmd{name\_desc}  & Name Z\textrightarrow A \\
 \cmd{size\_desc}  & Largest first \\
 \cmd{size\_asc}   & Smallest first \\
-\cmd{similarity\_desc} & Most similar first \pro \\
+\cmd{similarity\_desc} & Most similar first \pro{} (default for \cmd{similar:} / \cmd{--image}) \\
 \cmd{similarity\_asc}  & Least similar first \pro \\
 \end{tabularx}
 
 \vspace{4pt}
-Usage: \cmd{maki search "rating:4+" --sort name\_asc}
+Web UI and saved searches: \cmd{maki saved-search save NAME QUERY --sort name\_asc}. \cmd{maki search} has no \cmd{--sort}: newest first, or by score for similarity searches.
 
 \vspace{18pt}
 \section{Output Formats}
 
 \renewcommand{\arraystretch}{1.35}
 \begin{tabularx}{\textwidth}{@{}l X@{}}
-\textit{(default)}       & ID, filename, type, format, date \\
+\textit{(default)}       & ID, name (or filename), type, format, date \\
 \cmd{--format ids} / \cmd{-q} & One UUID per line (scripting) \\
 \cmd{--format full}      & Default + tags, description \\
 \cmd{--format json}      & JSON array \\
@@ -180,7 +182,7 @@ Usage: \cmd{maki search "rating:4+" --sort name\_asc}
 \end{tabularx}
 
 \vspace{4pt}
-{\small Placeholders: \cmd{\{id\}}, \cmd{\{name\}}, \cmd{\{filename\}}, \cmd{\{type\}}, \cmd{\{format\}}, \cmd{\{tags\}}, \cmd{\{description\}}, \cmd{\{rating\}}, \cmd{\{label\}}, \cmd{\{date\}}, \cmd{\{size\}}}
+{\small Placeholders: \cmd{\{id\}}, \cmd{\{short\_id\}}, \cmd{\{name\}}, \cmd{\{filename\}}, \cmd{\{type\}}, \cmd{\{format\}}, \cmd{\{date\}}, \cmd{\{tags\}}, \cmd{\{description\}}, \cmd{\{hash\}}, \cmd{\{label\}}, \cmd{\{similarity\}}, \cmd{\{exact\}} \pro}
 
 \end{minipage}%
 \hfill
@@ -209,7 +211,8 @@ The \cmd{path:} filter auto-normalizes in the CLI:
 \recipe{orphan:true}{Assets with no file locations}
 \recipe{faces:any person:Alice rating:4+}{Alice's best shots}
 \recipe{similar:72a0bb4b rating:3+ min\_sim:80 \pro{}}{Visually similar, curated}
-\recipe{text:"sunset on the beach" min\_sim:70 \pro{}}{Semantic image search}
+\recipe{text:"sunset on the beach" \pro{}}{Semantic image search}
+\recipe{--image preview.jpg "min\_sim:90" \pro{}}{Find the original of a local file}
 
 \end{minipage}
 

@@ -14,6 +14,7 @@ Commands for integrity checks, disk reconciliation, metadata sync, file relocati
 | [writeback](#maki-writeback) | Write pending metadata to XMP files *(Pro)* |
 | [cleanup](#maki-cleanup) | Remove stale records and orphaned files |
 | [dedup](#maki-dedup) | Remove same-volume duplicate file locations |
+| [trash](#maki-trash) | Inspect, restore, or empty the catalog trash |
 | [relocate](#maki-relocate) | Copy or move files between volumes |
 | [update-location](#maki-update-location) | Fix catalog path after manual file move |
 | [generate-previews](#maki-generate-previews) | Generate or regenerate preview thumbnails |
@@ -899,7 +900,10 @@ None.
 : Minimum total locations to preserve per variant across all volumes. Prevents removing a location if it would leave fewer than N copies total. Set to 2 to ensure at least one backup copy survives.
 
 **--apply**
-: Apply changes: delete physical files and co-located recipe files from disk, remove location and recipe records from catalog and sidecar YAML.
+: Apply changes: delete physical files and co-located recipe files from disk, remove location and recipe records from catalog and sidecar YAML. Deleted files go to `<catalog>/.trash/` (see [trash](#maki-trash)).
+
+**--no-trash**
+: Delete files permanently instead of moving them to the catalog trash.
 
 `--json` outputs a `DedupResult` with `duplicates_found`, `locations_to_remove`, `locations_removed`, `files_deleted`, `recipes_removed`, `bytes_freed`, `dry_run`, and `errors`.
 

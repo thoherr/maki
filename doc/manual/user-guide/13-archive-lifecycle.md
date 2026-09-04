@@ -8,7 +8,7 @@ Most photography tools focus on individual tasks — importing, tagging, exporti
 
 Files in a well-managed library flow through a predictable lifecycle. Each stage has a different purpose, and MAKI provides tools for every transition:
 
-![Asset & Metadata Workflow — from shutter click to fully managed catalog](../images/asset-workflow.png)
+![Asset & Metadata Workflow — from shutter click to fully managed catalog](../../images/asset-workflow.png)
 
 \newpage
 

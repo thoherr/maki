@@ -1,9 +1,9 @@
 # Proposal: Audio as a First-Class Media Type (and the Audio Workbench Question)
 
-Status: accepted · July 2026 — **Phase 1 (Index) implemented on main
-2026-07-18** (schema v11, lofty extraction, waveform previews,
-`key:`/`bpm:`/shared `duration:` filters, `maki audio analyze`, web
-audio player). Phases 2–4 open.
+Status: accepted · July 2026 — **Phase 1 (Index) shipped in v4.9.3**
+(2026-08-15; on main since 2026-07-18: schema v11, lofty extraction,
+waveform previews, `key:`/`bpm:`/shared `duration:` filters,
+`maki audio analyze`, web audio player). Phases 2–4 open.
 
 ## Goal
 

@@ -441,6 +441,35 @@ maki duplicates --same-volume
 
 See [Finding Duplicates](05-browse-and-search.md#finding-duplicates) for the full workflow and [Maintenance](07-maintenance.md#storage-hygiene) for cleaning up unwanted copies.
 
+## Watching for New Files
+
+`maki import` is a one-shot operation. For a tethered session, a card that fills up during the day, or a hot folder that other tools drop files into, `maki watch` keeps importing without you:
+
+```bash
+maki watch                                   # all online volumes, poll every 30 s
+maki watch --interval 10 /Volumes/Photos/2026-06-11-shoot
+maki watch --volume Archive --log
+```
+
+Watch is **poll-based**: the watched roots are re-scanned every N seconds (`--interval`, or `[watch] poll_seconds`, default 30), which behaves identically on macOS, Linux, and Windows. A new file is imported only once its size and modification time are unchanged on two consecutive scans — a file still being copied never gets half-imported. Everything a normal import does applies (`[import]` config: `auto_tags`, `smart_previews`, `embeddings`, `descriptions`, `exclude`), and `[watch] exclude` adds patterns on top.
+
+Two things watch deliberately does *not* do: it never imports what was already on disk when it started (run `maki import` once for the backlog — the first scan only establishes a baseline), and it never removes anything (deletions are logged with `--verbose` only; catalog cleanup stays an explicit `maki cleanup`). Changed `.xmp` sidecars that already belong to the catalog are refreshed in place, so ratings and tags edited in Capture One or Lightroom flow in as well.
+
+`maki watch --once` runs a single cycle and exits — the cron-friendly form. Unlike the continuous loop it diffs against the catalog rather than a start-time baseline, so untracked stable files are imported. See the [watch reference](../reference/02-ingest-commands.md#maki-watch) for the full option list.
+
+## Audio Files
+
+Audio imports like everything else — content-hashed, sidecar-backed, deduplicated — and since v4.9.3 it is indexed rather than merely stored. Import reads duration, bitrate, sample rate, channels, and embedded title / artist / album tags into the variant's source metadata; the preview is an info card with a waveform strip rendered by ffmpeg (a plain info card when ffmpeg is missing). `duration:` works on audio just as on video, and the web asset page gets an inline player plus technical badges.
+
+Musical key and tempo are **not** detected at import, because those analyzers only make sense on full mixes. Run them explicitly on the material where the answer means something:
+
+```bash
+maki audio analyze "path:BackingTracks" --log
+maki search "key:am bpm:100-140"
+```
+
+`maki audio analyze` shells out to `[audio] key_command` (default `keyfinder-cli`) and `[audio] bpm_command` (default `beat_this`); a missing tool warns and skips its half. MAKI never processes audio itself — it records what the tools report. See the [audio analyze reference](../reference/02-ingest-commands.md#maki-audio-analyze).
+
 ## AI Auto-Tagging *(Pro)*
 
 After importing, you can use AI to automatically suggest tags for your images:

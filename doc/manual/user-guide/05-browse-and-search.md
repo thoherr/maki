@@ -49,6 +49,8 @@ maki search "-format:xmp -type:other"     # exclude XMP files and "other" types
 maki search "-sunset"                     # exclude free-text match on "sunset"
 ```
 
+Negation is available for free text and for `tag:`, `type:`, `format:`, `label:`, `volume:`, `camera:`, `lens:`, `description:`, `path:`, `collection:` and `person:`; on other filters the leading `-` is ignored.
+
 **OR within a filter** matches any of several values using commas:
 
 ```
@@ -58,11 +60,13 @@ maki search "type:image,video"            # images or videos
 maki search "label:Red,Orange"            # Red or Orange labeled
 ```
 
-**Repeated filters = AND**. To require multiple tags, repeat the filter:
+**Repeated `tag:` filters = AND**. To require multiple tags, repeat the filter:
 
 ```
 maki search "tag:landscape tag:sunset"    # BOTH landscape AND sunset tags
 ```
+
+This AND-on-repeat rule holds for `tag:` and `meta:` only. Repeating any other filter ORs the values, exactly like a comma list (`type:image type:video` = `type:image,video`).
 
 ---
 
@@ -79,14 +83,15 @@ All filters can be combined in a single query. Remaining tokens become free-text
 | Rating (minimum) | `rating:<N>+` | `rating:3+` |
 | Rating (range) | `rating:<N>-<M>` | `rating:3-5` |
 | Rating (OR) | `rating:<N>,<M>` | `rating:2,4`, `rating:2,4+` |
-| Color label | `label:<color>` | `label:Red`, `label:Blue` |
+| Color label | `label:<color>`, `label:none` | `label:Red`, `label:none` |
 | Camera | `camera:<text>` | `camera:fuji`, `camera:"Canon EOS R5"` |
 | Lens | `lens:<text>` | `lens:56mm`, `lens:"RF 50mm f/1.2"` |
+| Description | `description:<text>`, `desc:<text>` | `description:sunset` |
 | ISO (exact or range) | `iso:<N>` or `iso:<min>-<max>` | `iso:100`, `iso:100-800` |
 | Focal length | `focal:<N>` or `focal:<min>-<max>` | `focal:50`, `focal:35-70` |
 | Aperture | `f:<N>` or `f:<min>-<max>` | `f:2.8`, `f:1.4-2.8` |
-| Width (minimum) | `width:<N>+` | `width:4000+` |
-| Height (minimum) | `height:<N>+` | `height:2000+` |
+| Width | `width:<N>`, `width:<N>+`, `width:<min>-<max>` | `width:4000+` |
+| Height | `height:<N>`, `height:<N>+` | `height:2160` |
 | Source metadata | `meta:<key>=<value>` | `meta:software=CaptureOne` |
 | Path prefix | `path:<prefix>` | `path:Capture/2026-02-22` |
 | Collection | `collection:<name>` | `collection:Favorites` |
@@ -97,22 +102,30 @@ All filters can be combined in a single query. Remaining tokens become free-text
 | Asset ID | `id:<prefix>` | `id:72a0bb4b` |
 | Copies | `copies:<N>`, `copies:<N>+` | `copies:1`, `copies:2+` |
 | Variants | `variants:<N>`, `variants:<N>+` | `variants:2+` |
-| Scattered | `scattered:<N>+`, `scattered:<N>+/<depth>` | `scattered:2+`, `scattered:2+/1` |
+| Tag count (leaves) | `tagcount:<N>`, `tagcount:<N>+` | `tagcount:0` (untagged), `tagcount:5+` |
+| Scattered | `scattered:<N>`, `scattered:<N>+` | `scattered:2+` (files in 2+ session roots) |
 | Duration (seconds) | `duration:<N>`, `duration:<N>+`, `duration:<min>-<max>` | `duration:60`, `duration:30+`, `duration:10-120` |
 | Codec | `codec:<text>` | `codec:h264`, `codec:hevc`, `codec:prores` |
-| GPS | `geo:<south>,<west>,<north>,<east>` | `geo:47.5,11.0,48.5,13.0` |
+| Musical key | `key:<key>` | `key:Am`, `key:F#m` |
+| Tempo (BPM) | `bpm:<N>`, `bpm:<N>+`, `bpm:<min>-<max>` | `bpm:100-140` |
+| GPS (bounding box) | `geo:<south>,<west>,<north>,<east>` | `geo:47.5,11.0,48.5,13.0` |
+| GPS (radius) | `geo:<lat>,<lng>,<km>` | `geo:52.52,13.405,5` |
+| GPS (any/none) | `geo:any`, `geo:none` | `geo:none` |
 | Orphan assets | `orphan:true` | `orphan:true` |
 | Missing files | `missing:true` | `missing:true` |
 | Stale verification | `stale:<days>` | `stale:30` |
 | Stacked | `stacked:true` or `stacked:false` | `stacked:true` |
 | Face count | `faces:any`, `faces:none`, `faces:N`, `faces:N+` | `faces:2+` |
-| Person | `person:<name>` | `person:Alice`, `person:"John Smith"` |
-| Visual similarity *(Pro)* | `similar:<id>` or `similar:<id>:<limit>` | `similar:72a0bb4b`, `similar:72a0bb4b:50` |
-| Similarity threshold *(Pro)* | `min_sim:<percent>` | `min_sim:90` |
-| Text search *(Pro)* | `text:<query>` | `text:sunset beach` |
-| Embedding status *(Pro)* | `embed:any`, `embed:none` | `embed:none type:image` |
+| Person *(Pro)* | `person:<name>` | `person:Alice`, `person:"John Smith"`, `person:Alice,Bob` (either) |
+| Visual similarity *(Pro)* | `similar:<id>` or `similar:<id>:<limit>` | `similar:72a0bb4b`, `similar:72a0bb4b:50` (default 40) |
+| Query image *(Pro)* | `maki search --image <file>` | `maki search --image preview.jpg` |
+| Similarity threshold *(Pro)* | `min_sim:<percent>` | `min_sim:90` (with `similar:`, `text:`, `--image`) |
+| Text search *(Pro)* | `text:<query>`, `text:"<query>":<limit>` | `text:"sunset beach"` (quote multi-word queries) |
+| Embedding status | `embed:any`, `embed:none` | `embed:none type:image` |
 
-**Hierarchical tag matching**: The `tag:` filter matches hierarchically. Searching for `tag:animals` finds assets tagged `animals`, `animals|birds`, `animals|birds|eagles`, and any other descendant of `animals`. To match only the exact tag, use the full path (e.g., `tag:animals|birds|eagles`).
+**Hierarchical tag matching**: The `tag:` filter matches hierarchically. Searching for `tag:animals` finds assets tagged `animals`, `animals|birds`, `animals|birds|eagles`, and any other descendant of `animals` — and a full path like `tag:animals|birds` still includes its descendants. To match one tag value and nothing else, use the whole-path marker: `tag:=animals|birds`. Three more leading markers exist: `tag:/x` (leaf only — the tag with no deeper child on the asset), `tag:^x` (case-sensitive), and `tag:|x` (prefix anchor: any component starting with `x`). They combine, e.g. `tag:=^Legoland`. See [tag](../reference/06-search-filters.md#tag) in the reference.
+
+**Pro filters on a standard build**: `similar:`, `min_sim:`, `text:` and `--image` are silently ignored when MAKI was built without the `ai` feature; `person:` matches nothing there.
 
 **Multilingual `text:` search** *(Pro)*: The default AI model is English-only. To search in German, French, Spanish, etc., switch to the multilingual model in `maki.toml` and re-embed: see [AI Models](02-setup.md#ai-models-pro) in the setup guide.
 
@@ -227,7 +240,7 @@ For the complete format reference, see [Format Templates](../reference/07-format
 
 ## Sort Options
 
-The web UI provides inline sort toggle buttons (Name, Date, Size) with ascending/descending direction indicators. In the CLI, sort order is available when saving searches:
+The web UI provides inline sort toggle buttons (Name, Date, Size, and Similarity on a similarity view) with ascending/descending direction indicators. In the CLI, sort order is available when saving searches:
 
 ```
 maki saved-search save "landscapes" "tag:landscape" --sort name_asc
@@ -243,8 +256,10 @@ Available sort values:
 | `name_desc` | Alphabetical Z-A |
 | `size_asc` | Smallest first |
 | `size_desc` | Largest first |
+| `similarity_desc` | Most similar first *(Pro; the default for `similar:` and query-image views)* |
+| `similarity_asc` | Least similar first *(Pro)* |
 
-The default sort for `maki search` is `date_desc` (newest first).
+`maki search` itself has no `--sort` flag: output is newest first, except that `similar:` and `--image` searches come back ordered by similarity score.
 
 ---
 
@@ -678,12 +693,14 @@ For the full command reference, see [export](../reference/04-retrieve-commands.m
 With image embeddings generated (via `maki embed` or `maki import --embed`), you can find visually similar assets:
 
 ```
-maki search "similar:72a0bb4b"              # top 20 similar assets
+maki search "similar:72a0bb4b"              # top 40 similar assets (source first)
 maki search "similar:72a0bb4b:50"           # top 50 similar
 maki search "similar:72a0bb4b rating:4+"    # similar AND 4+ stars
+maki search "similar:72a0bb4b min_sim:85"   # only close matches
+maki search --image ~/Downloads/preview.jpg # similar to a file that is NOT in the catalog
 ```
 
-The `similar:` filter uses SigLIP image embeddings for fast dot-product similarity search. It composes with all other filters.
+The `similar:` filter uses SigLIP image embeddings for fast dot-product similarity search. It composes with all other filters, results are ordered by score, and `min_sim:` floors the score. `--image` does the same for a local file (a byte-identical copy in the catalog is pinned first as `100% exact`); see [Finding the Original Behind a Preview](12-visual-discovery.md#finding-the-original-behind-a-preview).
 
 For an interactive visual exploration experience, the web UI offers a **Stroll page** (`/stroll`) where you can navigate through your collection by clicking visually similar neighbors arranged around a center image. A fan-out slider (0--10) controls L2 transitive neighbor discovery: when fan-out is greater than 0, hovering or arrow-keying to a satellite reveals its own nearest neighbors fanning out behind it -- useful for exploring broader visual themes. See [Web UI -- Stroll Page](06-web-ui.md#stroll-page) for details.
 

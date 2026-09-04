@@ -28,10 +28,10 @@ Man-page style documentation for every command, filter, and configuration option
 
 - [CLI Conventions](reference/00-cli-conventions.md) — Global flags, scripting patterns, exit codes
 - [Setup Commands](reference/01-setup-commands.md) — `init`, `volume` (`add`, `list`, `set-purpose`, `combine`, `split`, `rename`, `remove`)
-- [Ingest Commands](reference/02-ingest-commands.md) — `import`, `delete`, `tag` (`rename`, `split`, `clear`, `expand-ancestors`, `export-vocabulary`), `edit`, `group`, `split`, `auto-group`, `auto-tag`, `embed`, `describe`
+- [Ingest Commands](reference/02-ingest-commands.md) — `import`, `watch`, `delete`, `tag` (`rename`, `split`, `delete`, `clear`, `fix-unicode`, `scan`, `expand-ancestors`, `export-vocabulary`), `edit`, `group`, `split`, `auto-group`, `auto-tag`, `embed`, `ai export-vocabulary`, `audio analyze`, `describe`
 - [Organize Commands](reference/03-organize-commands.md) — `collection`, `saved-search`, `stack`, `auto-stack`, `faces`
 - [Retrieve Commands](reference/04-retrieve-commands.md) — `search`, `show`, `preview`, `export`, `contact-sheet`, `duplicates`, `stats`, `status`, `backup-status`, `doc`, `licenses`, `serve`, `shell`
-- [Maintain Commands](reference/05-maintain-commands.md) — `verify`, `sync`, `refresh`, `sync-metadata`, `writeback`, `cleanup`, `dedup`, `relocate`, `update-location`, `generate-previews`, `fix-roles`, `fix-dates`, `fix-recipes`, `create-sidecars`, `rebuild-catalog`, `migrate`
+- [Maintain Commands](reference/05-maintain-commands.md) — `undo`, `history`, `doctor`, `verify`, `sync`, `refresh`, `sync-metadata`, `writeback`, `cleanup`, `dedup`, `trash`, `relocate`, `update-location`, `generate-previews`, `fix-roles`, `fix-dates`, `fix-recipes`, `create-sidecars`, `rebuild-catalog`, `migrate`
 - [Search Filters](reference/06-search-filters.md) — Complete filter syntax reference
 - [Format Templates](reference/07-format-templates.md) — Output format presets, custom templates, placeholders
 - [Configuration](reference/08-configuration.md) — `maki.toml` reference

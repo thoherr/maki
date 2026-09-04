@@ -216,15 +216,22 @@ Commands that modify or delete data use conservative defaults:
 
 | Command | Default behavior | Flag to commit changes |
 |---------|-----------------|----------------------|
-| `sync` | Report-only (no changes) | `--apply` |
-| `cleanup` | Report-only (no changes) | `--apply` |
-| `auto-group` | Report-only (no changes) | `--apply` |
-| `fix-roles` | Report-only (no changes) | `--apply` |
-| `fix-dates` | Report-only (no changes) | `--apply` |
-| `volume remove` | Report-only (no changes) | `--apply` |
-| `volume combine` | Report-only (no changes) | `--apply` |
+| `delete` | Report-only (no changes) | `--apply` |
+| `auto-group`, `auto-tag`, `auto-stack` | Report-only (no changes) | `--apply` |
+| `describe` | Report-only (`--dry-run` previews without contacting the VLM) | `--apply` |
+| `tag rename`, `tag split`, `tag delete`, `tag fix-unicode`, `tag expand-ancestors` | Report-only (no changes) | `--apply` |
+| `sync`, `cleanup`, `dedup` | Report-only (no changes) | `--apply` |
+| `fix-roles`, `fix-dates`, `fix-recipes`, `create-sidecars` | Report-only (no changes) | `--apply` |
+| `volume remove`, `volume combine`, `volume split` | Report-only (no changes) | `--apply` |
+| `stack from-tag` | Report-only (no changes) | `--apply` |
+| `faces detect`, `faces cluster`, `faces clean` | Report-only (no changes) | `--apply` |
 | `import` | Imports immediately | `--dry-run` to preview |
 | `relocate` | Copies immediately | `--dry-run` to preview |
+| `export`, `contact-sheet` | Writes immediately | `--dry-run` to preview |
+| `refresh`, `sync-metadata`, `writeback` | Writes immediately | `--dry-run` to preview |
+| `undo` | Reverts immediately | `--dry-run` to preview |
+| `audio analyze` | Analyzes immediately | `--dry-run` to preview |
+| `trash empty` | Deletes immediately | `--dry-run` to preview |
 
 The pattern is consistent: commands that scan and potentially alter many records default to showing you what they *would* do. You opt in to changes with `--apply`. Commands that operate on explicitly named files (import, relocate) run immediately but offer `--dry-run` for previewing.
 
@@ -235,14 +242,15 @@ Quick reference of all maki commands, organized by workflow stage:
 
 | Category | Commands | Purpose |
 |----------|----------|---------|
-| **Setup** | `init`, `volume add`, `volume list`, `volume combine`, `volume remove` | Create catalog, register and manage storage volumes |
-| **Ingest** | `import`, `tag`, `edit`, `group`, `auto-group` | Bring files in, apply metadata, merge variants |
-| **Organize** | `collection` (`col`), `saved-search` (`ss`) | Curate static and smart albums |
-| **Retrieve** | `search`, `show`, `export`, `duplicates`, `stats`, `serve` | Find assets, inspect details, export files, browse in web UI |
-| **Maintain** | `verify`, `sync`, `refresh`, `cleanup`, `relocate`, `update-location`, `generate-previews`, `fix-roles`, `fix-dates`, `rebuild-catalog` | Integrity checks, disk reconciliation, housekeeping |
+| **Setup** | `init`, `volume` (`add`, `list`, `combine`, `split`, `rename`, `remove`, `set-purpose`) | Create catalog, register and manage storage volumes |
+| **Ingest & Edit** | `import`, `watch`, `delete`, `tag` (`rename`, `split`, `delete`, `clear`, `scan`, `expand-ancestors`, `fix-unicode`, `export-vocabulary`), `edit`, `group`, `split`, `auto-group`, `audio analyze`, `describe` *(Pro)*, `auto-tag` *(Pro)*, `auto-stack` *(Pro)*, `embed` *(Pro)*, `faces` *(Pro)* (`detect`, `download`, `status`, `cluster`, `clean`, `similarity`, `dump-aligned`, `people`, `name`, `merge`, `delete-person`, `unassign`, `export`), `ai export-vocabulary` *(Pro)* | Bring files in, apply metadata, merge variants, AI enrichment |
+| **Organize** | `collection` (`col`: `create`, `list`, `show`, `add`, `remove`, `delete`), `saved-search` (`ss`: `save`, `list`, `run`, `delete`), `stack` (`st`: `create`, `add`, `remove`, `pick`, `dissolve`, `list`, `show`, `from-tag`) | Curate static and smart albums, scene stacks |
+| **Retrieve** | `search`, `show`, `preview`, `export`, `contact-sheet`, `duplicates`, `stats`, `status`, `backup-status`, `doc`, `licenses` | Find assets, inspect details, export files, catalog health at a glance |
+| **Maintain** | `undo`, `history`, `doctor`, `verify`, `sync`, `refresh`, `sync-metadata` *(Pro)*, `writeback` *(Pro)*, `cleanup`, `dedup`, `trash` (`list`, `restore`, `empty`), `relocate`, `update-location`, `generate-previews`, `fix-roles`, `fix-dates`, `fix-recipes`, `create-sidecars`, `rebuild-catalog`, `migrate` | Reversibility, integrity checks, disk reconciliation, housekeeping |
+| **Interactive** | `serve`, `shell` | Web UI, interactive shell with variables and tab completion |
 
 Commands with aliases are shown with the alias in parentheses. For example, `maki col add` is equivalent to `maki collection add`, and `maki ss run` is equivalent to `maki saved-search run`.
 
 ---
 
-Next: [Setup Commands](01-setup-commands.md) -- `init`, `volume add`, `volume list`, `volume combine`, `volume remove`.
+Next: [Setup Commands](01-setup-commands.md) -- `init`, `volume add`, `volume list`, `volume combine`, `volume split`, `volume rename`, `volume remove`, `volume set-purpose`.

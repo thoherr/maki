@@ -310,7 +310,10 @@ maki search -q "orphan:true" | maki delete --apply
 : Execute the deletion. Without this flag, the command only reports what it would do.
 
 **--remove-files**
-: Also delete physical files (variant media and recipe files) from disk. Requires `--apply`. Skips files on offline volumes with a warning.
+: Also delete physical files (variant media and recipe files) from disk. Requires `--apply`. Skips files on offline volumes with a warning. Files go to `<catalog>/.trash/` (recoverable via `maki trash restore`) unless trash is disabled.
+
+**--no-trash**
+: With `--remove-files`, delete permanently instead of moving files to the catalog trash.
 
 `--json` outputs a `DeleteResult` with `deleted`, `not_found`, `files_removed`, `previews_removed`, `dry_run`, and `errors`.
 
@@ -1397,6 +1400,7 @@ maki [GLOBAL FLAGS] auto-tag [OPTIONS] --volume <LABEL>
 maki [GLOBAL FLAGS] auto-tag --download [<MODEL_ID> | --model <ID>]
 maki [GLOBAL FLAGS] auto-tag --remove-model [<MODEL_ID> | --model <ID>]
 maki [GLOBAL FLAGS] auto-tag --list-models
+maki [GLOBAL FLAGS] auto-tag --list-labels
 maki [GLOBAL FLAGS] auto-tag --similar <ASSET_ID>
 ```
 
@@ -1659,6 +1663,41 @@ maki embed --export
 
 [auto-tag](#maki-auto-tag) -- AI tag suggestion and visual similarity search.
 [Configuration](08-configuration.md#ai-section) -- `[ai]` section for model and model directory settings.
+
+---
+
+## maki ai export-vocabulary *(Pro)* {#maki-ai-export-vocabulary}
+
+### NAME
+
+maki-ai-export-vocabulary -- export the AI label vocabulary (labels + hierarchical mapping) as YAML
+
+### SYNOPSIS
+
+```
+maki [GLOBAL FLAGS] ai export-vocabulary [--output <FILE>] [--default]
+```
+
+### DESCRIPTION
+
+Writes the vocabulary that `auto-tag` and "Suggest tags" score against — the flat SigLIP labels and their mapping to hierarchical MAKI tags — as a YAML file you can edit and point `[ai] labels` at.
+
+Without flags, emits the *active* vocabulary: whatever `[ai] labels` in `maki.toml` points to, or the built-in default when no labels file is configured. With `--default`, always emits the built-in default regardless of config. When the active vocabulary is a legacy `.txt` flat-list file, the export converts it to YAML with identity mappings (`label: null`) so you can start adding hierarchy without reordering anything.
+
+Typical use: `maki ai export-vocabulary --default > my-labels.yaml`, edit the right-hand sides into your own taxonomy, set `[ai] labels = "my-labels.yaml"`, and every suggestion then lands on your hierarchy. See the [Tagging Guide](../user-guide/11-tagging-guide.md) for the workflow. (Not to be confused with [`tag export-vocabulary`](#maki-tag-export-vocabulary), which exports the tags *in the catalog*.)
+
+### OPTIONS
+
+**-o, --output \<FILE\>**
+: Output file. Default: stdout (use shell redirection to save).
+
+**--default**
+: Emit the built-in default vocabulary instead of the active one.
+
+### SEE ALSO
+
+[auto-tag](#maki-auto-tag) -- apply the vocabulary to assets.
+[tag export-vocabulary](#maki-tag-export-vocabulary) -- export the catalog's tag vocabulary.
 
 ---
 

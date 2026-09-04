@@ -11,13 +11,13 @@ Launch the server with `maki serve`:
 maki serve
 ```
 
-Output:
+Output (on stderr):
 
 ```
-Listening on http://127.0.0.1:8080
+MAKI 4.10.0 web UI: http://127.0.0.1:8080
 ```
 
-Open that URL in your browser to start browsing. The server runs in the foreground; press Ctrl+C to stop it.
+Open that URL in your browser to start browsing. The server runs in the foreground; press Ctrl+C to stop it. Two more lines may follow the address: `Read-only mode: metadata edits and jobs are disabled.` when started with `--read-only` (or `[serve] read_only = true`), and `Basic authentication: enabled.` when `[serve] username`/`password` are set. Binding to a non-loopback address without either protection prints a three-line `WARNING:` block instead — see [Read-only mode and authentication](#read-only-mode-and-authentication) below.
 
 ### Custom port and bind address
 
@@ -27,7 +27,13 @@ Use `--port` and `--bind` to change the listening address:
 maki serve --port 9090 --bind 0.0.0.0
 ```
 
-Binding to `0.0.0.0` makes the UI accessible from other devices on your local network (use with caution on untrusted networks).
+Binding to `0.0.0.0` makes the UI accessible from other devices on your local network. Anyone who can reach the address can then edit metadata and delete files, so combine it with `--read-only` or basic authentication (next section).
+
+### Read-only mode and authentication
+
+`maki serve --read-only` starts the server in safe-sharing mode: every request that is not `GET`/`HEAD` — metadata edits, batch operations, maintenance jobs, deletions — is rejected with `403`, and the UI hides its edit affordances (`/api/build-info` reports `read_only`). The one exception is the query-image upload behind "Find by image", which is a POST by necessity but writes nothing. The mode can be made permanent with `[serve] read_only = true` in `maki.toml`.
+
+HTTP Basic authentication protects every route — pages, API, previews, and the job event streams — when `[serve] username` and `[serve] password` are set. The password may also come from the `MAKI_SERVE_PASSWORD` environment variable, which takes precedence over the config value, so the secret need not live in `maki.toml`. Both mechanisms compose: a read-only, password-protected server is the recommended way to expose a catalog beyond the local machine. See the [Configuration Reference](../reference/08-configuration.md#serve-section) for the exact keys.
 
 ### Request logging
 
@@ -42,19 +48,28 @@ Output on stderr:
 ```
 GET / -> 200 (12ms)
 GET /static/style.css -> 200 (1ms)
-GET /previews/ab/ab3f...jpg -> 200 (2ms)
+GET /preview/ab/ab3f...jpg -> 200 (2ms)
 ```
 
 This is useful for debugging slow requests or understanding access patterns.
 
 ### Configuration via maki.toml
 
-You can set default values for port and bind address in the `[serve]` section of `maki.toml`:
+You can set default values for port and bind address in the `[serve]` section of `maki.toml`, alongside the settings that have no CLI flag:
 
 ```toml
 [serve]
 port = 9090
 bind = "127.0.0.1"
+per_page = 60              # results per browse page
+read_only = false          # same as --read-only
+# username = "thomas"      # HTTP Basic auth (password may come from MAKI_SERVE_PASSWORD)
+# password = "secret"
+stroll_neighbors = 12      # stroll page defaults, see the Stroll section
+stroll_neighbors_max = 25
+stroll_fanout = 5
+stroll_fanout_max = 10
+stroll_discover_pool = 80
 ```
 
 Command-line flags always override `maki.toml` settings. See the [Configuration Reference](../reference/08-configuration.md) for details.
@@ -233,7 +248,7 @@ When results span multiple pages, pagination controls appear both above and belo
 - First page, previous page, numbered page links, next page, last page
 - A "Page X of Y" indicator
 
-Page numbers with ellipsis keep the controls compact for large result sets. The number of results per page defaults to 60 and can be configured via `[serve] per_page` in `maki.toml` or the `--per-page` CLI flag.
+Page numbers with ellipsis keep the controls compact for large result sets. The number of results per page defaults to 60 and is configured via `[serve] per_page` in `maki.toml` (there is no CLI flag for it).
 
 Use **Shift+Left/Right arrow** keys to quickly turn pages from the keyboard. The results grid fades during loading to provide visual feedback while the new page loads. In the lightbox, regular arrow keys at page boundaries automatically navigate to the next/previous page with a loading spinner overlay.
 
@@ -474,6 +489,8 @@ The right side contains the asset's metadata, all editable inline:
 
 **Suggest tags** *(Pro)* -- a "Suggest tags" button appears below the tag input in the Pro edition. Click it to analyze the asset image with the SigLIP vision model. The button shows "Analyzing..." while the model processes (the first request may take a few seconds while the model loads). Results appear as suggestion chips, each showing the tag name and a confidence percentage. Tags already on the asset appear dimmed with an "already applied" label. Click ✓ to accept a new tag (it is added immediately), click × to dismiss it, or click "Accept new" to apply all unapplied suggestions at once.
 
+**Similar images** *(Pro)* -- a collapsible section with three buttons: **Embed** builds the asset's SigLIP embedding (no tags applied), **Find similar** lists the nearest assets inline with similarity percentages, **Browse similar** opens the browse grid as a `similar:<id>` search, and **Stack similar** proposes a stack from the nearest neighbours above a threshold.
+
 **Re-import metadata** -- a "Re-import metadata" button appears below the tag section. Click it to clear the asset's tags, description, rating, and color label, then re-extract metadata from variant source files (XMP recipe sidecars and embedded XMP in JPEG/TIFF files). A confirmation dialog asks before proceeding since the operation is destructive. This is useful for cleaning up metadata after splitting mis-grouped assets, where tags from multiple unrelated images may have been merged together. The page reloads after completion to reflect all changes. Offline volumes are silently skipped during re-extraction.
 
 ### Asset information
@@ -484,17 +501,21 @@ Below the editable fields:
 - **Type**: image, video, audio, or document
 - **Date**: the asset's creation date (from EXIF or import time). Click the pencil icon to edit it inline with a date input and Save/Cancel buttons.
 
+The badge row under the title shows the type, the identity format, and — for media — codec, resolution, and duration. Audio assets add their musical **key** and **BPM** (set by `maki audio analyze`) plus a technical badge (sample rate / channels / bitrate), and the preview area shows an HTML5 `<audio>` player above the waveform info card.
+
 ### Collections
 
 If the asset belongs to any collections, they appear as clickable chips. Click a chip to browse that collection. Click the x button on a chip to remove the asset from that collection.
 
 ### Stack members
 
-If the asset belongs to a stack, a section shows all members in position order with thumbnail previews. The pick is indicated. You can click any member to navigate to its detail page.
+If the asset belongs to a stack, a section shows all members in position order with thumbnail previews. The pick is indicated. You can click any member to navigate to its detail page. Three buttons act on the stack from here: **Set as pick** makes this asset the stack's cover, **Remove from stack** takes it out (a stack left with one member auto-dissolves), and **Dissolve stack** removes the stack entirely, leaving every member as an independent asset.
 
 ### Variants
 
 An expandable section lists all variants of the asset in a table with columns for role, filename, format, size, and file locations (volume and path). This gives you a complete picture of where the asset's files live across your storage volumes.
+
+For assets with multiple variants, two more controls appear. An **Extract as new asset(s)** button above the table splits the checked variants out into standalone assets (tags, rating, and label are copied) — the web equivalent of `maki split`. The last column holds a star per row: the filled star marks the variant whose preview represents the asset in grids and the lightbox; click the hollow star on another row to make it the **preview representative** instead (persisted per asset).
 
 For assets with multiple variants, the **role column** is an inline dropdown. Click it to change a variant's role (original, alternate, processed, export, sidecar). Changes are saved immediately — a green flash confirms success. This is useful for correcting roles after import or `fix-roles` assigns an incorrect role (e.g. marking a re-exported JPEG as "alternate" when it should be "export").
 
@@ -541,9 +562,11 @@ A fixed toolbar appears at the bottom of the screen whenever one or more assets 
 - When you are **not** browsing a collection, a "+ Collection" button adds the selected assets to the chosen collection.
 - When you **are** browsing a collection (the collection filter is active), a "- Collection" button removes the selected assets from that collection. The dropdown auto-selects the current collection.
 
-**Stack**: creates a stack from the selected assets (or adds them to an existing stack if one of the selected assets is already stacked). The first selected asset becomes the pick. This is a lightweight, reversible grouping -- assets remain independent.
+**Stack**: creates a stack from the selected assets. The first selected asset becomes the pick. This is a lightweight, reversible grouping -- assets remain independent. When the selection already touches an existing stack, the button gives way to three context-sensitive ones: **+ Stack** adds the unstacked selection to that stack, **− Stack** removes the selected members from it, and **Set pick** makes the single selected member the stack's pick.
 
 **Unstack**: removes the selected assets from their stacks. If a stack has one or fewer members after removal, it auto-dissolves.
+
+**Group**: merges the selected assets into one asset with multiple variants, exactly as selected — no filename matching. A confirmation dialog explains the action. This cannot be undone.
 
 **Group by name**: merges the selected assets by filename stem. A confirmation dialog explains the action. Assets whose filenames share a common prefix (e.g., `DSC_001.nef` and `DSC_001.jpg`) are merged into a single asset with multiple variants. This cannot be undone.
 
@@ -560,7 +583,13 @@ A fixed toolbar appears at the bottom of the screen whenever one or more assets 
 
 The collection pass runs at half the configured `[ai].threshold` so the slider has range both above and below your normal floor. Commit applies the checked subset via the same batch tag endpoint as the toolbar's regular tag operations — no destructive cleanup, no removals, just additive writes. This is the interception point for cleanup-after-auto-tag workflows: where Auto-tag commits to disk immediately, Review tags lets you reason about each AI choice in context with thumbnails.
 
+**Embed** *(Pro)*: generates the SigLIP visual-similarity embedding for each selected asset without applying any tags — coverage for `similar:`, "Find by image", auto-stack, and the stroll page. Runs as a background job with the progress toast.
+
 **Detect faces** *(Pro)*: runs face detection on each selected asset's preview image using YuNet and ArcFace. Detected faces are stored with bounding boxes, embeddings, and crop thumbnails. A summary reports how many faces were found.
+
+**Model dropdown** *(Pro)*: when `[vlm] models` lists more than one model, a small dropdown next to Describe picks the VLM for that request.
+
+**Delete**: removes the selected assets (and their sidecars) from the catalog after a confirmation dialog that previews the selection. An "Also delete media files from disk" checkbox in the dialog moves the files into the catalog trash as well — the web equivalent of `maki delete --apply [--remove-files]`.
 
 **Export**: downloads the selected assets as a ZIP archive. A modal dialog lets you choose layout (flat — all files in root with hash-suffix collision resolution, or mirror — preserves original directory structure), the content source (**Originals**, **Previews**, or **Smart previews** — the preview sources come from the catalog directory, so they work even when the originals' volumes are offline; picking one disables the all-variants toggle since previews are keyed to the best variant), whether to include all variants or just the best, and whether to include sidecar/recipe files. The ZIP is streamed to the browser as a download. If any files could not be included — originals on offline volumes, previews not yet generated — a warning reports how many were skipped and why; the ZIP still contains everything that was available.
 
@@ -625,9 +654,10 @@ The focused card has a blue outline, visually distinct from the selection highli
 |-----|--------|
 | Shift+Left | Previous page |
 | Shift+Right | Next page |
-| Enter | Open the focused card in the lightbox |
+| Enter, l | Open the focused card in the lightbox |
 | d | Open the focused card's detail page |
 | Space | Toggle selection of the focused card |
+| c | Open the compare view for the selected cards (2–4) |
 | 1-5 | Set rating (applies to focused card, or to all selected if a batch selection is active) |
 | 0 | Clear rating |
 | Alt+1 through Alt+7 | Set color label (1=Red, 2=Orange, 3=Yellow, 4=Green, 5=Blue, 6=Pink, 7=Purple). On macOS, use Option+number. |
@@ -641,6 +671,8 @@ The focused card has a blue outline, visually distinct from the selection highli
 | u | Set Purple label |
 | x | Clear label |
 | Shift+F | Toggle filter bar visibility |
+| f | Toggle the facet sidebar |
+| m | Toggle the map view |
 | s | Open the stroll page for the focused card (visual similarity exploration) |
 
 Single-letter label shortcuts and number keys for rating operate on the focused card when no batch selection is active. When assets are selected (selection count > 0), rating keys apply to the entire batch.
@@ -724,6 +756,10 @@ The `(N as leaf)` text is **clickable** — it lands on the browse page with `ta
 - **Live text filter**: type in the filter input to narrow the tag list. Filtering begins at 2 characters. The count display updates to show "X of Y" tags. A leading `|` anchors to a hierarchy component start (e.g. `|wed` matches `wedding` and `events|wedding` but not `midweek`).
 - **Multi-column layout**: tags flow into multiple columns automatically, adapting to the viewport width.
 
+### Export vocabulary
+
+The **Export vocabulary…** button in the page header downloads the whole tag vocabulary through `GET /api/tags/export-vocabulary`. A small modal picks the format — YAML (the `[ai] labels` vocabulary format, hierarchy preserved), plain keyword text (one tag per line, importable into Lightroom / Capture One), or JSON — and two options: include asset counts, and prune entries that exist in the vocabulary file but are unused in the catalog. The CLI equivalent is `maki tag export-vocabulary`.
+
 ### Inline edit actions
 
 Hover over any tag row to reveal three icons that open Preview/Apply modals — same dry-run-by-default safety pattern across all three. Each modal supports the **Enter twice** rhythm: first Enter previews (gives a count), unlocks Apply; second Enter commits.
@@ -771,10 +807,10 @@ Navigate to `/people` or click "People" in the navigation bar to manage detected
 
 The people page displays:
 
-- **Person cards**: each person is shown as a card with a representative face crop thumbnail, name (or "Unknown" for unnamed clusters), and the number of detected faces. Click a card to browse assets containing that person.
-- **Inline rename**: click the name on a person card to edit it in place.
-- **Merge**: drag a person card onto another to merge them, or use the merge controls.
-- **Delete**: click the delete button on a person card to remove the person (faces become unassigned).
+- **Person cards**: each person is shown as a card with a representative face crop thumbnail, name (or "Unknown" for unnamed clusters), and the number of detected faces. Click a card to browse assets containing that person. A name filter above the grid narrows the cards as you type.
+- **Rename**: click the pencil button on a person card and enter the new name.
+- **Merge**: tick the checkbox on two or more cards. A selection toolbar appears with a **Merge…** button; click the bullseye badge on one of the selected cards to make it the merge target (the others are merged into it), then confirm in the modal, which previews the people being merged. A **merge suggestions** panel lists pairs of clusters whose face embeddings are close enough to be the same person, each with a one-click merge.
+- **Delete**: click the × button on a person card to remove the person (faces become unassigned).
 - **Cluster button**: runs face auto-clustering from the UI, grouping unassigned faces into new person groups.
 
 Faces are detected via `maki faces detect` on the CLI, the "Detect faces" button on the asset detail page, or the batch "Detect faces" button on the browse toolbar. After detection, use clustering (CLI or web UI) to group faces into people, then name them.
@@ -835,13 +871,22 @@ A fan-out slider in the bottom-left corner (range 0--10, configurable via `[serv
 | Key | Action |
 |-----|--------|
 | Arrow Left / Right | Navigate focus between neighbor thumbnails at the current level |
-| Arrow Up | Move focus from an L2 thumbnail back to its parent L1 satellite |
-| Arrow Down | Move focus from an L1 satellite into its L2 fan-out thumbnails (when fan-out > 0) |
-| Enter | Make the focused neighbor the new center |
+| Arrow Up | Focus the center image; from an L2 thumbnail, return to its parent L1 satellite |
+| Arrow Down | Focus the first satellite; from an L1 satellite, drop into its L2 fan-out thumbnails (when fan-out > 0) |
+| Enter | Make the focused neighbor the new center (or open the detail page when the center is focused) |
+| d | Open the detail page for the focused asset |
+| l | Open the focused asset in the lightbox |
 | Shift+F | Toggle filter bar visibility |
-| Escape | Return to the browse page |
+| Shift+B | Back to the browse grid |
+| Escape | Go back (browser history) |
 | ? | Open keyboard help |
 
+
+## Duplicates Page
+
+Navigate to `/duplicates` (under the Catalog ▾ menu) to review files that exist more than once. Summary cards show the number of duplicate groups, the wasted space, and how many groups are same-volume. Three tabs switch the mode: **All**, **Same Volume** (unwanted copies — the ones `maki dedup` targets), and **Cross Volume** (wanted backups). A filter row narrows the list by path prefix, format, and volume.
+
+Each group lists its file locations with a per-location **Remove** button that deletes that copy (into the catalog trash, like the CLI). The **Auto-resolve** button removes every same-volume duplicate in the current filter using the `maki dedup` heuristic (`[dedup] prefer` decides which copy survives). Click a group's thumbnail to open a lightbox: Left/Right arrows step through the groups, `d` opens the asset's detail page, Escape closes. This is the web equivalent of `maki duplicates` plus `maki dedup`; the endpoints are `POST /api/dedup/resolve` and `DELETE /api/dedup/location`. In read-only mode the page is view-only.
 
 ## Analytics Page
 
@@ -901,7 +946,7 @@ Both routes share the same dialog. The form lets you:
 - Specify an optional **subfolder** within the volume (e.g. `DCIM/100CANON` for a memory card). The field has **shell-style path autocomplete**: type to see directory entries under the volume's mount point, `↑`/`↓` to navigate, `Tab` or `Enter` on a directory drills in for the next level, on a file commits the value. `Esc` dismisses the dropdown. Server-side path resolution is clamped to the volume mount, so symlinks or `..` segments that would escape the mount are rejected.
 - Choose an **import profile** from `[import.profiles.*]` in `maki.toml` (or default).
 - Add **tags** to apply to every imported asset, via a chip picker matching the filter bar's tag UX. Type to autocomplete from existing tags, `Enter` or `,` adds a chip, `Backspace` on the empty input removes the last chip.
-- Toggle **auto-group variants** and **smart previews**.
+- Toggle **auto-group variants** and **smart previews**, plus — on AI / Pro builds — **Generate embeddings (visual similarity)** and **Generate descriptions (VLM)**, which run the same post-import phases as `maki import --embed` / `--describe`. Their initial state follows `[import] smart_previews` / `embeddings` / `descriptions` in `maki.toml`.
 - Run a **dry run** first to see how many files would be imported.
 - Click **Import** to start the actual import.
 

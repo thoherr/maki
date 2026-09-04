@@ -22,7 +22,7 @@ maki search "landscape -tag:processed"    # landscapes that aren't tagged proces
 maki search "-sunset"                     # exclude free-text match on "sunset"
 ```
 
-Negation works with all filter types and free-text terms.
+Negation is supported for free-text terms and for the filters that have an exclude form: `tag:`, `type:`, `format:`, `label:`, `volume:`, `camera:`, `lens:`, `description:`/`desc:`, `path:`, `collection:`, and `person:`. A leading `-` on any other filter (`-rating:3`, `-date:2026`, `-iso:800`, `-id:`, `-similar:`, …) is ignored and the filter applies as if it were positive.
 
 ### OR Within a Filter (Comma Operator)
 
@@ -41,6 +41,8 @@ The comma operator works within a single filter value. To require multiple tags,
 ```
 maki search "tag:landscape tag:sunset"    # assets with BOTH landscape AND sunset tags
 ```
+
+**Repeating a filter means AND only for `tag:` and `meta:`.** Every other repeatable filter flattens its repeated values into one OR list, exactly as if they had been written with commas: `type:image type:video` is the same as `type:image,video`, `camera:sony camera:nikon` matches either camera, `format:nef format:cr3` matches either format. The same holds for `label:`, `lens:`, `description:`, `path:`, `volume:`, and `collection:`. `person:` is the one filter whose repeat semantics differ between front ends — see [person](#person).
 
 ### Combining Negation and OR
 
@@ -68,7 +70,7 @@ maki search "golden hour mountains"
 maki search "sunset tag:landscape"       # "sunset" is free text, tag:landscape is a filter
 ```
 
-**SQL behavior:** `WHERE (a.name LIKE '%text%' OR a.original_filename LIKE '%text%' OR a.description LIKE '%text%' OR v.source_metadata LIKE '%text%')`. Triggers a JOIN to the variants table for metadata matching.
+**SQL behavior:** Terms of three or more characters go through the `assets_fts` FTS5 index (trigram tokenizer, schema v9): `WHERE a.id IN (SELECT asset_id FROM assets_fts WHERE assets_fts MATCH '"text"')` — an index-accelerated, case-insensitive substring match over name, filename, description, and source metadata. The term is always quoted as an FTS string literal, so it is never interpreted as FTS query syntax. Terms shorter than three characters fall back to `(a.name LIKE '%text%' OR bv.original_filename LIKE '%text%' OR a.description LIKE '%text%' OR bv.source_metadata LIKE '%text%')` against the best-variant columns. Negated free text (`-term`) uses the same two paths wrapped in `NOT IN` / `NOT (...)`.
 
 ---
 
@@ -78,7 +80,7 @@ maki search "sunset tag:landscape"       # "sunset" is free text, tag:landscape 
 
 **Values:** `image`, `video`, `audio`, `document`, `other`
 
-**Description:** Filters by asset type. Exact match, case-sensitive.
+**Description:** Filters by asset type. Exact match, case-insensitive (`type:Image` and `type:image` are the same).
 
 **Examples:**
 
@@ -87,7 +89,7 @@ maki search "type:image"
 maki search "type:video rating:3+"
 ```
 
-**SQL behavior:** `WHERE a.asset_type = ?`. Pure assets-table filter, no JOIN required.
+**SQL behavior:** `WHERE a.asset_type = ? COLLATE NOCASE` (comma lists become `COLLATE NOCASE IN (...)`, negation `(a.asset_type IS NULL OR a.asset_type != ? COLLATE NOCASE)`). Pure assets-table filter, no JOIN required.
 
 ---
 
@@ -113,7 +115,7 @@ In the web UI, click the mode indicator on a tag chip to cycle through the three
 
 **Prefix anchor (`|`):** Prefix the value with `|` to match any hierarchy component that **starts with** the rest of the value, at any level (root or descendant). `tag:|wed` matches assets tagged `wedding`, `wedding-2024`, `events|wedding`, `events|wedding|2024-05-12`, etc. — anything where the letter combination "wed" begins a tag component. This is the search-side counterpart of the `|xyz` autocomplete syntax in the web UI tag filter and tags page. Useful for finding tag families with shared prefixes (e.g. all date-stamped tags `2024-*`, all event tags `wedding-*`). The `|` marker implicitly includes descendants (the `=` and `/` markers are silently ignored when `|` is present, since they conflict).
 
-The `=`, `/`, `^`, and `|` prefixes can be combined in any order: `tag:=^Foo`, `tag:/^Foo`, `tag:^|Wed`, etc. `=` and `/` together resolve to `=` (whole-path is stricter). `|` paired with `=` or `/` resolves to `|`.
+The `=`, `/`, `^`, and `|` prefixes can be combined in any order: `tag:=^Foo`, `tag:/^Foo`, `tag:^|Wed`, etc. `=` and `/` together **combine**: `tag:=/location|Germany` matches the exact path `location|Germany` *and* requires that the asset carries no descendant of it — this is the form the tags page uses for its "(N as leaf)" link. `|` paired with `=` or `/` resolves to `|` (the prefix anchor wins, the other markers are dropped).
 
 `/` and `=` when positioned after another modifier or inside the name are treated as literal characters in tag names (e.g., `f/1.4` works naturally without escaping). Only a **leading** marker is interpreted as a prefix.
 
@@ -138,7 +140,7 @@ maki search "tag:|wed"                          # prefix anchor: wedding, weddin
 maki search "tag:^|Wed"                         # case-sensitive prefix anchor: Wedding but not wedding
 ```
 
-**SQL behavior:** Four LIKE patterns match the tag at any hierarchy level: `%"stored"%` (standalone), `%"stored|%` (parent from root), `%|stored"%` (leaf child), `%|stored|%` (mid-path). The JSON quoting provides natural word boundaries — `tag:eagle` cannot match `eagles`. With `=` prefix: a single `LIKE '%"stored"%'` — whole-path equality, bounded by the JSON quotes. With `/` prefix: `WHERE (LIKE '%"stored"%' OR LIKE '%|stored"%') AND NOT LIKE '%"stored|%' AND NOT LIKE '%|stored|%'` — matches the tag at any level but only as a leaf (no descendants). With `^` prefix: SQLite `GLOB` is used instead of `LIKE` — GLOB is case-sensitive and uses `*` as the wildcard (literal `*` and `?` in tag names are an unsupported edge case for case-sensitive search).
+**SQL behavior:** Four LIKE patterns match the tag at any hierarchy level: `%"stored"%` (standalone), `%"stored|%` (parent from root), `%|stored"%` (leaf child), `%|stored|%` (mid-path). The JSON quoting provides natural word boundaries — `tag:eagle` cannot match `eagles`. With `=` prefix: a single `LIKE '%"stored"%'` — whole-path equality, bounded by the JSON quotes; with `=/` combined, that clause is ANDed with `NOT LIKE '%"stored|%' AND NOT LIKE '%|stored|%'` (no descendants). With `/` prefix: `WHERE (LIKE '%"stored"%' OR LIKE '%|stored"%') AND NOT LIKE '%"stored|%' AND NOT LIKE '%|stored|%'` — matches the tag at any level but only as a leaf (no descendants). With `^` prefix: SQLite `GLOB` is used instead of `LIKE` — GLOB is case-sensitive and uses `*` as the wildcard (literal `*` and `?` in tag names are an unsupported edge case for case-sensitive search).
 
 ---
 
@@ -233,7 +235,7 @@ maki search "label:Green rating:4+"
 
 **Syntax:** `camera:<text>` or `camera:"<multi-word text>"`
 
-**Description:** Partial match against the `camera_model` field in variant source metadata. Case-insensitive substring match.
+**Description:** Partial match against the camera model of any variant. Case-insensitive substring match. Comma-separated values and repeated `camera:` entries are both OR.
 
 **Examples:**
 
@@ -243,7 +245,7 @@ maki search 'camera:"Canon EOS R5"'
 maki search 'camera:"NIKON Z 9" rating:4+'
 ```
 
-**SQL behavior:** `WHERE v.source_metadata LIKE '%camera_model%' AND v.source_metadata LIKE '%value%'`. Triggers a JOIN to the variants table.
+**SQL behavior:** `WHERE v.camera_model LIKE '%value%'` on the typed `camera_model` column of the variants table (populated at import from EXIF). Negation: `(v.camera_model IS NULL OR v.camera_model NOT LIKE '%value%')`. Triggers a JOIN to the variants table.
 
 ---
 
@@ -251,7 +253,7 @@ maki search 'camera:"NIKON Z 9" rating:4+'
 
 **Syntax:** `lens:<text>` or `lens:"<multi-word text>"`
 
-**Description:** Partial match against the `lens` field in variant source metadata. Case-insensitive substring match.
+**Description:** Partial match against the lens model of any variant. Case-insensitive substring match. Comma-separated values and repeated `lens:` entries are both OR.
 
 **Examples:**
 
@@ -261,7 +263,7 @@ maki search 'lens:"RF 50mm f/1.2"'
 maki search 'lens:"24-70" camera:sony'
 ```
 
-**SQL behavior:** `WHERE v.source_metadata LIKE '%lens%' AND v.source_metadata LIKE '%value%'`. Triggers a JOIN to the variants table.
+**SQL behavior:** `WHERE v.lens_model LIKE '%value%'` on the typed `lens_model` column of the variants table. Triggers a JOIN to the variants table.
 
 ---
 
@@ -285,15 +287,15 @@ maki search "description:sunset,dawn,dusk"          # any of three terms (OR)
 
 **Comparison with free-text:** A bare term like `maki search "sunset"` matches the asset's name, filename, description, AND source metadata at once — convenient for broad lookups but noisy when you specifically want description hits. Use `description:sunset` to scope the match.
 
-**SQL behavior:** `WHERE a.description LIKE '%value%'`. Pure assets-table filter, no JOIN required. Multiple positive `description:` entries are AND-combined; comma-separated values within an entry are OR-combined.
+**SQL behavior:** `WHERE a.description LIKE '%value%'`. Pure assets-table filter, no JOIN required. Comma-separated values and repeated `description:` entries are both OR-combined (`description:cat description:dog` matches either); each negated entry adds `(a.description IS NULL OR a.description NOT LIKE '%value%')`.
 
 ---
 
 ## iso
 
-**Syntax:** `iso:<N>` (exact) or `iso:<N>+` (minimum) or `iso:<min>-<max>` (range)
+**Syntax:** `iso:<N>` (exact) | `iso:<N>+` (minimum) | `iso:<min>-<max>` (range) | `iso:<N>,<M>` (OR list) | `iso:<N>,<M>+`
 
-**Description:** Filters by ISO sensitivity from variant source metadata. Supports exact match, minimum threshold, and inclusive range.
+**Description:** Filters by ISO sensitivity. Supports the full numeric filter syntax (see [rating](#rating) for the table).
 
 **Examples:**
 
@@ -303,19 +305,15 @@ maki search "iso:3200+"         # ISO 3200 or higher
 maki search "iso:100-800"       # ISO between 100 and 800 inclusive
 ```
 
-**SQL behavior:** Extracts the `iso` value from `v.source_metadata` JSON and applies numeric comparison. Triggers a JOIN to the variants table.
-
-- Exact: sets both min and max to the same value
-- Minimum (`+` suffix): sets min only, no upper bound
-- Range: sets both min and max
+**SQL behavior:** Numeric comparison on the typed `v.iso` column of the variants table (`= ?`, `>= ?`, `BETWEEN`, `IN (...)`), populated at import from EXIF. Triggers a JOIN to the variants table.
 
 ---
 
 ## focal
 
-**Syntax:** `focal:<N>` (exact) or `focal:<N>+` (minimum) or `focal:<min>-<max>` (range)
+**Syntax:** `focal:<N>` (exact) | `focal:<N>+` (minimum) | `focal:<min>-<max>` (range) | `focal:<N>,<M>`
 
-**Description:** Filters by focal length in millimeters from variant source metadata.
+**Description:** Filters by focal length in millimeters. Full numeric filter syntax.
 
 **Examples:**
 
@@ -325,15 +323,15 @@ maki search "focal:200+"        # 200mm or longer
 maki search "focal:35-70"       # between 35mm and 70mm inclusive
 ```
 
-**SQL behavior:** Same pattern as `iso` but on the `focal_length` metadata field. Triggers a JOIN to the variants table.
+**SQL behavior:** Same pattern as `iso` on the typed `v.focal_length_mm` column. Triggers a JOIN to the variants table.
 
 ---
 
 ## f (aperture)
 
-**Syntax:** `f:<N>` (exact) or `f:<N>+` (minimum) or `f:<min>-<max>` (range)
+**Syntax:** `f:<N>` (exact) | `f:<N>+` (minimum) | `f:<min>-<max>` (range) | `f:<N>,<M>`
 
-**Description:** Filters by f-number (aperture) from variant source metadata. Supports decimal values.
+**Description:** Filters by f-number (aperture). Supports decimal values and the full numeric filter syntax.
 
 **Examples:**
 
@@ -343,15 +341,15 @@ maki search "f:1.4+"           # f/1.4 or wider (numerically >= 1.4)
 maki search "f:1.4-2.8"        # between f/1.4 and f/2.8 inclusive
 ```
 
-**SQL behavior:** Same pattern as `iso` but on the `f_number` metadata field with floating-point comparison. Triggers a JOIN to the variants table.
+**SQL behavior:** Same pattern as `iso` on the typed `v.f_number` column (floating-point). Triggers a JOIN to the variants table.
 
 ---
 
 ## width
 
-**Syntax:** `width:<N>` (exact/minimum) or `width:<N>+` (minimum, explicit)
+**Syntax:** `width:<N>` (exact) | `width:<N>+` (minimum) | `width:<min>-<max>` (range) | `width:<N>,<M>`
 
-**Description:** Filters by image width in pixels from variant source metadata.
+**Description:** Filters by image width in pixels. A bare number is an **exact** match — use `+` for "at least".
 
 **Examples:**
 
@@ -361,15 +359,15 @@ maki search "width:3840"        # exactly 3840 pixels (4K UHD width)
 maki search "width:4000+ height:2000+"
 ```
 
-**SQL behavior:** `WHERE CAST(json_extract(v.source_metadata, '$.width') AS INTEGER) >= ?`. Triggers a JOIN to the variants table. Both bare numbers and `+`-suffixed numbers set a minimum threshold.
+**SQL behavior:** Numeric comparison on the typed `v.image_width` column (`= ?` for a bare number, `>= ?` with `+`, `BETWEEN` for a range). Triggers a JOIN to the variants table.
 
 ---
 
 ## height
 
-**Syntax:** `height:<N>` (exact/minimum) or `height:<N>+` (minimum, explicit)
+**Syntax:** `height:<N>` (exact) | `height:<N>+` (minimum) | `height:<min>-<max>` (range) | `height:<N>,<M>`
 
-**Description:** Filters by image height in pixels from variant source metadata.
+**Description:** Filters by image height in pixels. A bare number is an exact match.
 
 **Examples:**
 
@@ -378,7 +376,7 @@ maki search "height:2000+"      # 2000 pixels tall or more
 maki search "height:2160"       # exactly 2160 pixels (4K UHD height)
 ```
 
-**SQL behavior:** Same pattern as `width` but on the `height` metadata field. Triggers a JOIN to the variants table.
+**SQL behavior:** Same pattern as `width` on the typed `v.image_height` column. Triggers a JOIN to the variants table.
 
 ---
 
@@ -386,7 +384,7 @@ maki search "height:2160"       # exactly 2160 pixels (4K UHD height)
 
 **Syntax:** `meta:<key>=<value>`
 
-**Description:** Generic key-value match against variant source metadata. The key and value are matched against the JSON source_metadata blob. Useful for filtering on metadata fields that don't have a dedicated prefix filter.
+**Description:** Generic key-value match against variant source metadata. The key selects a field in the `source_metadata` JSON blob, the value is a case-insensitive substring match on that field. Useful for filtering on metadata fields that don't have a dedicated prefix filter. A `meta:` token without `=` is ignored.
 
 **Examples:**
 
@@ -396,7 +394,7 @@ maki search "meta:camera_make=SONY"
 maki search "meta:color_space=sRGB"
 ```
 
-**SQL behavior:** `WHERE v.source_metadata LIKE '%key%value%'`. Triggers a JOIN to the variants table. Multiple `meta:` filters can be specified and all must match (AND).
+**SQL behavior:** `WHERE json_extract(v.source_metadata, '$.<key>') LIKE '%value%'`. Triggers a JOIN to the variants table. Multiple `meta:` filters can be specified and all must match (AND). Negation is not supported.
 
 ---
 
@@ -521,7 +519,7 @@ maki search 'collection:"My Favorites"'
 maki search 'collection:"Travel 2026" rating:4+'
 ```
 
-**SQL behavior:** Pre-computes the set of asset IDs in the named collection, then filters with `WHERE a.id IN (...)`. Pure in-memory filter after initial lookup.
+**SQL behavior:** Pre-computes the set of asset IDs in the named collection(s), then filters with `WHERE a.id IN (...)`; `-collection:` uses `NOT IN`. Comma-separated names and repeated `collection:` entries are both OR (the ID sets are unioned). An unknown collection name matches nothing.
 
 ---
 
@@ -547,7 +545,7 @@ In the web UI, the volume filter is also available as a dropdown control that pa
 
 **SQL behavior:**
 - `volume:<label>`: Label is resolved to a volume UUID via DeviceRegistry. `WHERE fl.volume_id IN (...)`. Triggers a JOIN to the file_locations table.
-- `-volume:<label>`: Resolved to UUID, then `WHERE a.id NOT IN (SELECT DISTINCT fl2.asset_id FROM file_locations fl2 WHERE fl2.volume_id IN (...))`.
+- `-volume:<label>`: Resolved to UUID, then `WHERE a.id NOT IN (SELECT DISTINCT v2.asset_id FROM variants v2 JOIN file_locations fl2 ON fl2.content_hash = v2.content_hash WHERE fl2.volume_id IN (...))` — excludes assets with *any* file on those volumes.
 - `volume:none`: Pre-computes online volume IDs from DeviceRegistry. Adds `WHERE NOT EXISTS (SELECT 1 FROM file_locations fl JOIN variants v ... WHERE fl.volume_id IN (...online_ids...))`.
 
 ---
@@ -881,11 +879,11 @@ Pure assets-table filter, no JOIN required. Uses the composite index on `(latitu
 
 ---
 
-## faces *(Pro)*
+## faces
 
 **Syntax:** `faces:any` | `faces:none` | `faces:<N>` | `faces:<N>+`
 
-**Description:** Filters by the number of detected faces on an asset. Requires face detection to have been run.
+**Description:** Filters by the number of detected faces on an asset. The filter itself works in every build; the counts are only populated by `maki faces detect` *(Pro)*, so on a standard build every asset has `faces:none`.
 
 **Modes:**
 
@@ -909,17 +907,19 @@ maki search "faces:2+ tag:portrait"         # portraits with multiple people
 
 ---
 
-## person
-
+## person *(Pro)* {#person}
 **Syntax:** `person:<name>` or `person:"<multi-word name>"`
 
-**Description:** Filters to assets that contain at least one face assigned to the named person. Supports quoted values for multi-word names.
+**Description:** Filters to assets that contain at least one face assigned to the named person. Supports quoted values for multi-word names. Name resolution needs the face store, so in a standard (non-Pro) build a `person:` filter matches nothing.
 
-**Multiple people:** Repeat the filter to require multiple people in the same asset (AND). Use commas within a single filter to match any of a list (OR). Matches tag semantics.
+**Multiple people:** Commas within a single entry are OR (`person:Alice,Bob` — either person). Separate `person:` entries combine differently in the two front ends:
+
+- **Web UI** (search box and person chips): separate entries are AND — `person:Alice person:Bob` returns assets showing *both*.
+- **CLI** (`maki search`): separate entries are OR-unioned — `person:Alice person:Bob` returns assets showing *either*, the same as `person:Alice,Bob`.
 
 ```
-maki search "person:Alice person:Bob"       # assets with BOTH Alice and Bob
-maki search "person:Alice,Bob"              # assets with EITHER Alice or Bob
+maki search "person:Alice,Bob"              # either Alice or Bob (CLI and web)
+maki search "person:Alice person:Bob"       # CLI: either; web UI: both
 ```
 
 In the web UI browse filter, each person chip is one `person:` entry, so multiple chips AND together. Type a comma-separated list (`Alice,Bob`) in the query input to get OR semantics.
@@ -934,7 +934,7 @@ maki search "-person:Alice"                 # exclude assets with Alice
 maki search "person:Alice person:Bob"       # both in the photo
 ```
 
-**SQL behavior:** Looks up the person ID by name, then filters via `WHERE EXISTS (SELECT 1 FROM faces WHERE faces.asset_id = a.id AND faces.person_id = ?)`.
+**SQL behavior:** Resolves each name to the set of asset IDs carrying a face assigned to that person (via the face store), combines the sets per the rules above, then filters with `WHERE a.id IN (...)`; `-person:` uses `NOT IN`.
 
 ---
 
@@ -942,18 +942,20 @@ maki search "person:Alice person:Bob"       # both in the photo
 
 **Syntax:** `similar:<asset-id>` or `similar:<asset-id>:<limit>`
 
-**Description:** Finds visually similar assets using stored SigLIP embeddings. Returns the top N most similar assets (default 20). Requires embeddings to have been generated via `maki embed` or `maki import --embed`. The reference asset ID supports prefix matching (e.g. `similar:abc1` resolves like all other asset ID references).
+**Description:** Finds visually similar assets using stored SigLIP embeddings. Returns the top N most similar assets (default 40, counting the reference asset itself, which is always first at 100%). Requires embeddings to have been generated via `maki embed` or `maki import --embed`. The reference asset ID supports prefix matching (e.g. `similar:abc1` resolves like all other asset ID references).
 
 **Examples:**
 
 ```
-maki search "similar:72a0bb4b"                          # top 20 similar to this asset
+maki search "similar:72a0bb4b"                          # top 40 similar to this asset
 maki search "similar:72a0bb4b:50"                       # top 50 similar
 maki search "similar:72a0bb4b rating:3+ tag:landscape"  # similar AND 3+ stars AND landscape tag
 maki search -q "similar:72a0bb4b"                       # just IDs, for scripting
 ```
 
-**Behavior:** Looks up the stored embedding for the reference asset, loads all embeddings into an in-memory index, and performs a dot-product similarity search. If no embedding exists for the reference asset, exits with an error suggesting `maki embed --asset <id>`. The result set can be further filtered by all other search filters (AND logic).
+**Behavior:** Looks up the stored embedding for the reference asset, loads all embeddings into an in-memory index, and performs a dot-product similarity search. If no embedding exists for the reference asset, exits with an error suggesting `maki embed --asset <id>`. The result set can be further filtered by all other search filters (AND logic). Results come back sorted by similarity, with the score shown as a badge in the web UI and appended to CLI short/full output (`92%`); JSON rows carry `similarity`.
+
+`similar:`, `min_sim:`, `text:` and `--image` are Pro features: in a standard build these tokens are consumed without effect (the query runs as if they were not there).
 
 ---
 
@@ -961,13 +963,15 @@ maki search -q "similar:72a0bb4b"                       # just IDs, for scriptin
 
 **Syntax:** `min_sim:<percent>`
 
-**Description:** Sets a minimum similarity threshold (0--100) when used with `similar:`. Only assets with similarity at or above this percentage are included. Without `min_sim:`, all results from the similarity search are returned.
+**Description:** Sets a minimum similarity threshold (0--100) for the three embedding searches: `similar:`, `text:`, and `--image`. Only assets with similarity at or above this percentage are included. Without `min_sim:`, all top-N results of the similarity search are returned. The pinned source asset of `similar:` (and the exact-copy hit of `--image`) is never filtered out.
 
 **Examples:**
 
 ```
 maki search "similar:72a0bb4b min_sim:90"          # only >= 90% similar
 maki search "similar:72a0bb4b min_sim:80 type:image"  # >= 80% AND images only
+maki search "text:sunset min_sim:20"                # drop weak text-to-image matches
+maki search --image preview.jpg "min_sim:90"        # near-duplicates of a local file
 ```
 
 **Behavior:** The percentage is converted to a 0.0--1.0 cosine similarity threshold internally. Values are clamped to the 0--100 range. Most useful for finding near-duplicates (min_sim:95) or visually very close images (min_sim:85).
@@ -1002,11 +1006,11 @@ maki search --image shot.nef --limit 100 --format '{similarity}\t{exact}\t{id}\t
 
 ---
 
-## embed *(Pro)*
+## embed
 
 **Syntax:** `embed:any` | `embed:true` | `embed:none` | `embed:false`
 
-**Description:** Filters by whether an asset has a stored AI embedding (SigLIP image embedding). Requires embeddings to have been generated via `maki embed` or `maki import --embed`.
+**Description:** Filters by whether an asset has a stored AI embedding (SigLIP image embedding). The filter works in every build (the `embeddings` table always exists); embeddings are only generated by `maki embed` or `maki import --embed` *(Pro)*, so on a standard build `embed:none` matches everything.
 
 **Examples:**
 
@@ -1026,6 +1030,8 @@ maki search "embed:none type:image"         # images that still need embeddings
 
 **Syntax:** `text:<query>`, `text:"<multi-word query>"`, or `text:"<query>":<limit>`
 
+Multi-word queries **must** be quoted: `text:sunset beach` searches for "sunset" and treats `beach` as a separate free-text term.
+
 **Description:** Natural language image search using SigLIP's text encoder. Encodes the query text into the same embedding space as image embeddings, then finds the most similar images via dot-product similarity. Requires embeddings to have been generated via `maki embed` or `maki import --embed`.
 
 The result limit defaults to 50 and can be configured at three levels (highest priority wins):
@@ -1043,7 +1049,7 @@ maki search "text:\"person on a beach\" rating:3+"          # combined with othe
 maki search "text:\"mountain landscape\":100"               # return top 100 matches
 ```
 
-**Behavior:** Loads the SigLIP model (text encoder), encodes the query string into an embedding vector, loads the in-memory embedding index, and returns the top N assets by dot-product similarity (default 50, configurable). The result set can be further filtered by all other search filters (AND logic). Since SigLIP is a vision-language model trained on image-text pairs, queries describe visual content ("red car", "sunset over water", "portrait of a woman") rather than metadata. Results quality depends on how well the SigLIP model generalizes.
+**Behavior:** Loads the SigLIP model (text encoder), encodes the query string into an embedding vector, loads the in-memory embedding index, and returns the top N assets by dot-product similarity (default 50, configurable). `min_sim:` applies to the scores. The result set can be further filtered by all other search filters (AND logic). Since SigLIP is a vision-language model trained on image-text pairs, queries describe visual content ("red car", "sunset over water", "portrait of a woman") rather than metadata. Results quality depends on how well the SigLIP model generalizes.
 
 **Multilingual queries:** The default model (`siglip-vit-b16-256`) is English-only. For German, French, Spanish, Italian, Japanese, Chinese, and many other languages, switch to the multilingual model:
 
@@ -1163,7 +1169,7 @@ maki search 'tag:subject'  # matches all descendants — no | needed
 | Space | Splits into multiple tokens | `tag:"golden hour"` |
 | `-` | Interpreted as negation | `tag:"my - project"` |
 | `\|` | Shell pipe | `'tag:"subject\|nature"'` |
-| `"` | Ends quoted value | `tag:"say \"hello\""` (rare) |
+| `"` | Ends quoted value | No escape sequence exists — a literal `"` cannot be typed in a query value. Match such tags via the web UI tag chips or the tags page. |
 
 ---
 
@@ -1174,13 +1180,14 @@ All filters work in the CLI (`maki search`), the web UI search box, and in saved
 | Filter | Web UI control | Saved Searches |
 |--------|----------------|:-:|
 | Free text | search box | yes |
-| `type:` | dropdown + search box | yes |
+| `type:` | dropdown (image/video/audio/document; `other` via search box) + search box | yes |
 | `tag:` | tag chips + search box | yes |
 | `format:` | multi-select panel + search box | yes |
 | `rating:` | star clicks + search box | yes |
 | `label:` | color dots + search box | yes |
 | `camera:` | search box | yes |
 | `lens:` | search box | yes |
+| `description:` / `desc:` | search box | yes |
 | `iso:` | search box | yes |
 | `focal:` | search box | yes |
 | `f:` | search box | yes |
@@ -1192,6 +1199,7 @@ All filters work in the CLI (`maki search`), the web UI search box, and in saved
 | `volume:` | dropdown + search box | yes |
 | `copies:` | search box | yes |
 | `variants:` | search box | yes |
+| `tagcount:` | search box | yes |
 | `scattered:` | search box | yes |
 | `date:` | search box | yes |
 | `dateFrom:` | search box | yes |
@@ -1201,14 +1209,18 @@ All filters work in the CLI (`maki search`), the web UI search box, and in saved
 | `missing:true` | search box | yes |
 | `stale:` | search box | yes |
 | `stacked:` | search box | yes |
-| `geo:` | search box | yes |
+| `geo:` | search box (+ map view) | yes |
+| `duration:` | search box | yes |
+| `codec:` | search box | yes |
+| `key:` | search box | yes |
+| `bpm:` | search box | yes |
 | `faces:` | search box | yes |
-| `person:` | dropdown + search box | yes |
-| `similar:` *(Pro)* | "Browse similar" button + search box | no |
-| `--image` *(Pro)* | "Find by image" button, drag-and-drop, paste | no (session-bound) |
-| `min_sim:` *(Pro)* | search box | no |
+| `person:` *(Pro)* | people chips (multi-select with autocomplete) + search box | yes |
+| `similar:` *(Pro)* | "Browse similar" button + search box | yes |
+| `--image` *(Pro)* | "Find by image" button, drag-and-drop, paste | no (session-bound `similar:@<token>`) |
+| `min_sim:` *(Pro)* | search box | yes |
 | `text:` *(Pro)* | search box | yes |
-| `embed:` *(Pro)* | search box | yes |
+| `embed:` | search box | yes |
 
 ---
 

@@ -18,9 +18,13 @@ The top-level entity. An Asset represents a single logical media item -- "photo 
 | `asset_type` | AssetType | One of: `image`, `video`, `audio`, `document`, `other`. Inferred from file extension at import. |
 | `description` | Option\<String\> | Free-text description. Extracted from XMP `dc:description` during import, or set manually. |
 | `tags` | Vec\<String\> | Keyword list. Merged from XMP `dc:subject`, embedded XMP, and manual tagging. Deduplicated. |
+| `tag_sources` | BTreeMap\<String, TagSource\> | Provenance per tag value: `user`, `xmp-import`, `auto-tag`, or `vlm`. A tag absent from the map is `user`. Only tags with a machine source are stored, so pre-provenance sidecars stay byte-identical. Mutated only through `Asset::add_tags_with_source` / `remove_tags` / `rename_tag_value`; mirrored in the SQLite `tag_sources` column (schema v10) and checked by `maki doctor`. |
 | `rating` | Option\<u8\> | Star rating, 1--5. Extracted from XMP `xmp:Rating` during import, or set manually. |
 | `color_label` | Option\<String\> | One of 7 canonical colors: Red, Orange, Yellow, Green, Blue, Pink, Purple. Extracted from XMP `xmp:Label`, or set manually. Stored as title-case English name. |
 | `created_at` | DateTime\<Utc\> | Creation timestamp. Preferentially from EXIF `DateTimeOriginal`, falling back to filesystem modification time. |
+| `face_scan_status` | Option\<String\> | `None` = never scanned for faces; `"done"` = scan completed (whether or not faces were found). Keeps zero-face assets from being re-scanned after a `rebuild-catalog`. *(Pro)* |
+| `preview_rotation` | Option\<u16\> | Manual preview rotation override in degrees (0/90/180/270). |
+| `preview_variant` | Option\<String\> | Content hash of a user-chosen preview representative, overriding the [Display Priority](#display-priority) algorithm. |
 | `variants` | Vec\<Variant\> | The physical files belonging to this asset (in YAML sidecar). |
 | `recipes` | Vec\<Recipe\> | Processing sidecars attached to this asset's variants (in YAML sidecar). |
 
@@ -34,8 +38,19 @@ The top-level entity. An Asset represents a single logical media item -- "photo 
 | `face_count` | Integer | Number of detected faces. Shown as a badge on browse cards. *(Pro)* |
 | `stack_id` | Option\<UUID\> | Foreign key to the Stack this asset belongs to. `None` if unstacked. |
 | `stack_position` | Option\<Integer\> | Position within the stack (0 = pick). `None` if unstacked. |
+| `latitude`, `longitude` | Option\<Real\> | GPS position lifted from variant metadata (map view, `geo:` filter). |
+| `preview_rotation` | Option\<Integer\> | Mirror of the sidecar field (schema v3). |
+| `preview_variant` | Option\<String\> | Mirror of the sidecar field (schema v3). |
+| `duration_seconds` | Option\<Real\> | Media duration for audio and video (`duration:` filter, duration badges). Added as `video_duration` in schema v4, renamed in v11 when audio started filling it. |
+| `video_codec` | Option\<String\> | Video codec name (`codec:` filter, schema v5). |
+| `face_scan_status` | Option\<String\> | Mirror of the sidecar field (schema v7). |
+| `leaf_tag_count` | Integer | Number of leaf tags (`tagcount:` filter, schema v8). |
+| `tag_sources` | Text (JSON) | Mirror of the sidecar map (schema v10). |
+| `audio_sample_rate`, `audio_channels`, `audio_bitrate` | Option\<Integer\> | Typed audio properties from variant metadata (schema v11). |
+| `audio_key` | Option\<String\> | Musical key (`key:` filter; from `maki audio analyze`, schema v11). |
+| `audio_bpm` | Option\<Real\> | Tempo (`bpm:` filter; from `maki audio analyze`, schema v11). |
 
-The variant-related columns are updated by `insert_asset()`, `update_denormalized_variant_columns()`, and `fix_roles`. The stack columns are updated by `StackStore` operations. All are backfilled during schema migration and rebuilt by `rebuild-catalog`.
+The variant-related columns are updated by `insert_asset()`, `update_denormalized_variant_columns()`, and `fix_roles`. The stack columns are updated by `StackStore` operations, `face_count` by `FaceStore::update_face_count`. All are backfilled during schema migration and rebuilt by `rebuild-catalog`, with one exception: the v6→v7 migration does not rewrite every sidecar to stamp `face_scan_status` (too slow on large catalogs); `rebuild-catalog` stamps `done` on assets that have face records, and `faces detect` writes the flag for every asset it touches from then on.
 
 ### Variant
 
@@ -92,6 +107,7 @@ When importing, if a recipe's content hash is already known for the asset (from 
 | `volume_id` | UUID | Foreign key to the Volume where the recipe file resides. |
 | `relative_path` | String | Path relative to the volume's mount point. |
 | `verified_at` | Option\<DateTime\<Utc\>\> | Last verification timestamp. |
+| `pending_writeback` | bool | `true` when metadata was edited in MAKI but the `.xmp` file could not be updated yet (volume offline, or `[writeback] enabled = false`). Cleared by a successful `maki writeback`. In SQLite since schema v2. |
 
 **Supported recipe file extensions**:
 
@@ -156,18 +172,19 @@ A named query (smart album) stored in `searches.toml`. Re-evaluated every time i
 | `name` | String | Unique identifier. |
 | `query` | String | Search filter string in the same syntax as `maki search` (e.g. `type:image tag:landscape rating:4+`). |
 | `sort` | Option\<String\> | Sort order (e.g. `date_desc`, `name_asc`). Omitted means default (`date_desc`). |
+| `favorite` | bool | Whether the search is shown as a chip on the browse page. |
 
 ### Embedding *(Pro)*
 
-A stored image embedding vector for an asset, used by `maki auto-tag` for classification, `--similar` for visual similarity search, and `maki embed` for batch generation.
+A stored SigLIP image embedding for an asset, produced by `maki embed`, `maki import --embed`, or as a side effect of `maki auto-tag`; it powers the `similar:` filter, `maki search --image`, the stroll page, and `maki auto-stack`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `asset_id` | String | Primary key. Foreign key to the parent Asset. |
-| `embedding` | Blob | 768-dimensional float32 vector (3072 bytes), stored as little-endian binary. |
-| `model` | String | Model identifier (default: `siglip-vit-b16-256`). Ensures embeddings from different models are not compared. |
+| `asset_id` | String | Foreign key to the parent Asset. Primary key together with `model`. |
+| `model` | String | Model identifier (default: `siglip-vit-b16-256`). Embeddings from different models are never compared; switching models only generates the missing rows. |
+| `embedding` | Blob | float32 vector, stored as little-endian binary. The dimension is per model: 768 for `siglip-vit-b16-256` and `siglip2-base-256-multi` (3072 bytes), 1024 for `siglip-vit-l16-256` and `siglip2-large-256-multi` (4096 bytes). |
 
-Storage overhead: ~3 KB per asset. For 100,000 assets: ~300 MB in SQLite.
+Storage overhead: ~3--4 KB per asset and model. For 100,000 assets with the default model: ~300 MB in SQLite, plus a binary copy under `embeddings/<model>/` for rebuild resilience.
 
 **In-memory index**: For fast similarity search, the web server loads all embeddings into an `EmbeddingIndex` — a contiguous `Vec<f32>` buffer — on first query. Search uses dot product (SigLIP embeddings are L2-normalized) with a min-heap for top-K selection. At 100k assets, search completes in <10ms. The index is updated in-place when new embeddings are stored.
 
@@ -188,11 +205,10 @@ A detected face within an asset image, with bounding box, confidence, recognitio
 | `bbox_h` | f32 | Bounding box height (normalized 0–1). |
 | `confidence` | f32 | Detection confidence score (0–1). |
 | `embedding` | Blob | 512-dimensional float32 ArcFace vector (2048 bytes), stored as little-endian binary. The face is aligned to a canonical 112×112 template via a 5-point similarity transform before embedding. |
-| `crop_path` | Option\<String\> | Path to 150×150 JPEG face crop thumbnail (relative to catalog root). |
 | `recognition_model` | Option\<String\> | Identifier of the ArcFace variant that produced this embedding (e.g. `arcface-resnet100-fp32-aligned-v2`). Added in schema v6. Clustering only mixes embeddings from the same model — older ones are skipped with a warning until re-embedded via `maki faces detect --force`. |
 | `created_at` | DateTime\<Utc\> | When the face was detected. |
 
-Storage overhead: ~2 KB per face (embedding + metadata). Face crops: ~5–15 KB each as JPEG.
+The 150×150 JPEG crop thumbnail is not a field: its path is derived from the face ID as `faces/<2-char prefix>/<face_id>.jpg` under the catalog root. Storage overhead: ~2 KB per face (embedding + metadata). Face crops: ~5–15 KB each as JPEG.
 
 ### Person *(Pro)*
 
@@ -243,7 +259,7 @@ maki uses a dual-storage architecture. Neither tier alone is sufficient; togethe
 
 ### YAML Sidecar Files (source of truth)
 
-One `.yml` file per Asset, stored at `metadata/<id-prefix>/<id>.yaml` within the catalog directory. Contains the complete Asset record: metadata, all Variants (with their FileLocations and source_metadata), and all Recipes. Human-readable, diffable, and version-control friendly.
+One `.yaml` file per Asset, stored at `metadata/<id-prefix>/<id>.yaml` within the catalog directory. Writes take an advisory lock on `metadata/.write.lock` so concurrent MAKI processes cannot interleave sidecar writes. Contains the complete Asset record: metadata, all Variants (with their FileLocations and source_metadata), and all Recipes. Human-readable, diffable, and version-control friendly.
 
 ```
 catalog/
@@ -258,15 +274,24 @@ catalog/
 
 A single `catalog.db` file providing fast indexed queries. Contains denormalized columns for efficient browse-grid rendering. The catalog is always rebuildable from the YAML sidecars via `maki rebuild-catalog` -- it is a performance optimization, not a source of truth.
 
-**Tables**: `assets`, `variants`, `file_locations`, `volumes`, `recipes`, `collections`, `collection_assets`, `stacks`, `embeddings`, `faces`, `people` (last three *(Pro)* only)
+**Tables**: `assets`, `variants`, `file_locations`, `volumes`, `recipes`, `collections`, `collection_assets`, `stacks`, `embeddings` (created in every build; only filled by Pro), `schema_version` (single row, see [Schema Migrations](#schema-migrations)), `assets_fts` (FTS5 trigram index over name, filename, description and source metadata, kept current by six triggers on `assets` and `variants` -- schema v9), and `faces`, `people` (*(Pro)* builds only)
 
 **Performance indexes** (created automatically via schema migrations):
 
 - `variants(asset_id)`, `variants(format)`, `variants(camera_model)`, `variants(lens_model)`, `variants(iso)`, `variants(focal_length_mm)` — variant lookups and filter queries
 - `file_locations(content_hash)`, `file_locations(volume_id)` — join and volume filter performance
 - `assets(created_at)`, `assets(best_variant_hash)` — sort-by-date and best-variant join
+- `assets(stack_id)`, partial `assets(stack_position, created_at DESC) WHERE stack_id IS NOT NULL` — stack collapsing in the browse grid
+- partial `assets(latitude, longitude) WHERE latitude IS NOT NULL` — map view and `geo:` filter
+- partial `assets(face_count) WHERE face_count > 0`, partial `assets(face_scan_status) WHERE face_scan_status IS NULL` — `faces:` filter and "assets still to scan" lookups
+- `assets(leaf_tag_count)` — `tagcount:` filter
 - `recipes(variant_hash)` — recipe lookups by variant
 - `collection_assets(asset_id)` — collection membership queries
+- `faces(asset_id)`, `faces(person_id)` — face lookups per asset and per person *(Pro)*
+
+### Schema Migrations
+
+The `schema_version` table stores the catalog's schema version (`SCHEMA_VERSION` in `src/catalog.rs`, currently 11). Every command except `init` and `migrate` checks it at startup with one query and exits with an error if the catalog is older than the binary expects; migrations themselves run only in `maki init`, `maki migrate`, and `maki rebuild-catalog`. Migrations are idempotent `ALTER TABLE ... ADD COLUMN` / `CREATE INDEX IF NOT EXISTS` blocks with guarded backfills, executed only for versions above the stored one.
 
 ### Other Files
 
@@ -276,9 +301,18 @@ A single `catalog.db` file providing fast indexed queries. Contains denormalized
 | `searches.toml` | TOML | Saved search definitions (name, query, sort) |
 | `collections.yaml` | YAML | Collection definitions with ordered asset ID lists |
 | `stacks.yaml` | YAML | Stack definitions with ordered asset ID lists |
-| `maki.toml` | TOML | User configuration (preview settings, serve settings, import settings) |
-| `previews/<prefix>/<hash>.jpg` | JPEG | Preview thumbnails keyed by variant content hash |
+| `maki.toml` | TOML | User configuration (see [Configuration](08-configuration.md)) |
+| `vocabulary.yaml` | YAML | Tag vocabulary for auto-tagging, seeded with the built-in default by `maki init` |
+| `.gitignore` | text | Written by `maki init`; excludes the derived files below so a catalog can be version-controlled |
+| `previews/<prefix>/<hash>.jpg` | JPEG | Preview thumbnails keyed by variant content hash (`.webp` when `[preview] format = "webp"`) |
+| `smart-previews/<prefix>/<hash>.jpg` | JPEG | Larger smart previews (same keying) |
+| `embeddings/<model>/<prefix>/<asset_id>.bin` | binary | Image embeddings, one file per asset and model — rebuild source for the `embeddings` table *(Pro)* |
+| `embeddings/arcface/<prefix>/<face_id>.bin` | binary | Face recognition embeddings — rebuild source for `faces.embedding` *(Pro)* |
+| `faces.yaml`, `people.yaml` | YAML | Face and person records — rebuild source for the `faces` / `people` tables *(Pro)* |
 | `faces/<prefix>/<face_id>.jpg` | JPEG | Face crop thumbnails (150×150, *(Pro)*) |
+| `history/<epoch-millis>-<opid>.json`, `history/undone/` | JSON | Edit-history journal for `maki undo` / `maki history`; undone operations move to `undone/`. Independent, non-authoritative, freely deletable |
+| `.trash/` | files | Quarantine for deleted files (`delete --remove-files`, `dedup`, web duplicates page); recoverable via `maki trash` |
+| `metadata/.write.lock` | lock file | Advisory lock serialising sidecar writes across processes |
 
 ### Entity Relationships
 

@@ -2,6 +2,45 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## Unreleased
+
+### Fixed
+
+- **Shell tag/volume completion was silently degraded.** `maki shell`
+  opened `<catalog>/.maki/catalog.db` for completion data; the catalog
+  opener appends `catalog.db` itself, so the path never existed and
+  completion fell back to the vocabulary file. Shell history is now
+  saved reliably too (its `.maki/` directory is created on save).
+- **`min_sim:` now applies to `text:` searches** (CLI and web), as the
+  quick reference always claimed; previously only `similar:` honored it.
+- **Saved searches turned `tag:a,b` (OR) into `a AND b`.** OR-groups are
+  kept in the query text instead of being split into AND chips.
+- **`maki --help` listed 49 of 53 commands** — `status`, `audio`, `ai`
+  and `create-sidecars` were invocable but invisible.
+- `faces cluster --help` stated the wrong `--min-confidence` default
+  (0.5; the effective default is 0.7).
+
+### Removed
+
+- The `scattered:N/depth` suffix. It was parsed but never applied — the
+  filter always counted distinct session roots. `scattered:N` /
+  `scattered:N+` are unchanged.
+
+### Documentation
+
+- Audit pass across the manual, README, specification and component
+  specification: audio phase 1 recorded under v4.9.3 (it shipped there
+  without a changelog entry) and the v4.9.2 heading restored; README
+  command list and count; CLI conventions command table; undocumented
+  flags (`serve --read-only`, `show --locations`, `delete`/`dedup
+  --no-trash`, `doc tagging`, `ai export-vocabulary`); search-filter
+  reference (`key:`, `bpm:`, `tagcount:`, geo radius, negation and
+  repeat semantics, `person:` CLI-vs-web combine, current SQL
+  behavior); configuration defaults and missing sections; data-model
+  columns, tables, indexes and catalog layout; web guide (people page,
+  shortcuts, duplicates page, read-only / basic auth, batch and detail
+  controls); component specification routes regenerated from the router.
+
 ## v4.10.0 (2026-09-03)
 
 Search by query image *(Pro)* — find the catalog assets similar to a local image file that is not in the catalog (the original behind a preview or export), in the CLI and the web UI. No schema migration.
@@ -72,7 +111,46 @@ Dependency-migration completion: askama 0.16 and schemars 1.2 — the two items 
 
 ## v4.9.3 (2026-08-15)
 
-August 2026 dependency + model audit: `cargo audit` down to zero vulnerabilities, unmaintained crates retired, AI-model docs brought current. No schema migration.
+August 2026 dependency + model audit: `cargo audit` down to zero vulnerabilities, unmaintained crates retired, AI-model docs brought current. Also ships **audio as a first-class media type, phase 1** (landed on main 2026-07-18 and previously unrecorded here). **Schema v10 → v11** (`maki migrate`).
+
+### Added
+
+- **Audio indexing (phase 1 of the audio proposal).** Audio files were
+  "importable with a placeholder thumbnail"; they now index like photos
+  and video, under the "no audio processing in MAKI" ground rule (MAKI
+  records what lofty reads and what external analyzers report).
+  - **Extraction:** lofty routes duration, bitrate, sample rate,
+    channels and embedded title/artist/album into
+    `variant.source_metadata` (`audio_*` keys, sidecar-first) at
+    import; `refresh --media` and the detail-page lazy backfill cover
+    pre-existing catalogs.
+  - **Schema v11:** `video_duration` renamed to the shared
+    `duration_seconds` (audio and video both fill it); new typed
+    `audio_sample_rate` / `audio_channels` / `audio_bitrate` /
+    `audio_key` / `audio_bpm` columns, denormalized from variant
+    metadata and backfilled by the migration.
+  - **Search:** `duration:` now matches audio; new `key:`
+    (case-insensitive exact) and `bpm:` (numeric filter) filters.
+  - **Previews:** audio info cards carry a waveform strip rendered by
+    ffmpeg `showwavespic` (plain info card when ffmpeg is missing).
+  - **`maki audio analyze [QUERY] [--force] [--dry-run]`:** opt-in
+    key / tempo detection through configurable `[audio] key_command`
+    (default `keyfinder-cli`) and `bpm_command` (default `beat_this`;
+    BPM from the median inter-beat interval). Missing tools warn and
+    skip their half; analyzed assets are skipped unless `--force`.
+  - **Web:** `<audio>` player on the asset detail page
+    (`GET /audio/{hash}`, range-capable, shared with video), key / BPM /
+    technical badges, duration badges on audio browse cards.
+
+### Fixed
+
+- **v11 migration ran for hours on large catalogs.** The audio-column
+  backfill ran six whole-table `UPDATE`s whose `WHERE … IS NULL`
+  clauses matched every asset; SQLite fires the FTS5 trigram triggers
+  for every processed row even when nothing changes, so a 266k-asset
+  catalog faced ~1.6 million no-op FTS rebuilds. The backfill is now a
+  single `UPDATE` restricted to `asset_type = 'audio'` plus an `instr()`
+  prescan for `"audio_` metadata — zero rows on upgrade, idempotent.
 
 ### Security / Dependencies
 
@@ -160,6 +238,8 @@ August 2026 dependency + model audit: `cargo audit` down to zero vulnerabilities
   setup/config VLM tables now point at the current model generations
   (Qwen3.5, Gemma 4) covered by the VLM guide.
 
+## v4.9.2 (2026-07-14)
+
 Web export trust + preview export. No schema migration.
 
 ### Fixed
@@ -241,14 +321,6 @@ Security + polish patch. No schema migration.
 
 ### Changed
 
-- **Tag autocomplete completes into the input instead of committing.**
-  In all three tag pickers — import dialog, browse filter bar, and
-  asset detail page — selecting a suggestion (click, Tab, or Enter on
-  a highlighted item) now fills the input and keeps the dropdown open,
-  so a hierarchical tag can be extended (`person|ens` → pick
-  `person|ensemble|band` → add `|Metallica`) before committing.
-  Committing stays an explicit Enter on un-highlighted input (comma in
-  the import dialog).
 - **Import dialog checkboxes honor `[import]` config.** The web import
   dialog's "Smart previews" / "Generate embeddings" / "Generate
   descriptions" checkboxes now default from `[import] smart_previews` /

@@ -911,7 +911,7 @@ The vocabulary file and the auto-tagging label file (`labels` in `[ai]` config) 
 
 Every principle in this chapter plays out on a single photo. Consider a shot from Jane's wedding reception in Bayern:
 
-![One photo, nine tags, seven facets — each answering a different question.](../images/maki-tagging.png){width=90%}
+![One photo, nine tags, seven facets — each answering a different question.](../../images/maki-tagging.png){width=90%}
 
 Nine leaf tags across seven facets. Ancestor expansion bumps the stored count to roughly fifteen — but you only think about the nine leaves you picked.
 
