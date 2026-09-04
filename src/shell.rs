@@ -138,11 +138,14 @@ impl ShellHelper {
 
 /// Load tag names and volume labels from the catalog for completion.
 fn load_completion_data(catalog_root: &Path) -> (Vec<String>, Vec<String>) {
-    let db_path = catalog_root.join(".maki").join("catalog.db");
     let mut tags: Vec<String>;
     let volumes: Vec<String>;
 
-    if let Ok(catalog) = crate::catalog::Catalog::open_fast(&db_path) {
+    // `Catalog::open_fast` takes the catalog root and appends `catalog.db`
+    // itself. (This used to pass `<root>/.maki/catalog.db`, which resolved
+    // to a nonexistent `…/catalog.db/catalog.db` — completion silently fell
+    // back to the vocabulary file.)
+    if let Ok(catalog) = crate::catalog::Catalog::open_fast(catalog_root) {
         let mut tag_set: std::collections::HashSet<String> = catalog
             .list_all_tags()
             .unwrap_or_default()
@@ -387,7 +390,8 @@ fn run_interactive(
     let mut rl = rustyline::Editor::new().unwrap();
     rl.set_helper(Some(helper));
 
-    // Load history (ignore errors — file may not exist yet)
+    // Load history (ignore errors — file may not exist yet). The `.maki/`
+    // directory is created on save; nothing else lives there.
     let history_path = catalog_root.join(".maki").join("shell_history");
     if history_path.exists() {
         let _ = rl.load_history(&history_path);
@@ -454,6 +458,9 @@ fn run_interactive(
     }
 
     // Save history
+    if let Some(parent) = history_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     if let Some(parent) = history_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -1236,6 +1243,37 @@ mod tests {
 
     fn noop_executor(_args: Vec<String>) -> Result<Vec<String>> {
         Ok(vec![])
+    }
+
+    #[test]
+    fn completion_data_loads_tags_from_catalog() {
+        // Regression: the loader used to open `<root>/.maki/catalog.db`
+        // (which the opener turned into `…/catalog.db/catalog.db`), so
+        // catalog tags never reached completion.
+        use crate::models::{Asset, AssetType, Variant, VariantRole};
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = crate::catalog::Catalog::open(dir.path()).unwrap();
+        catalog.initialize().unwrap();
+        let mut asset = Asset::new(AssetType::Image, "sha256:shellcomp");
+        asset.tags = vec!["completion-probe".to_string()];
+        asset.variants.push(Variant {
+            content_hash: "sha256:shellcomp".to_string(),
+            asset_id: asset.id,
+            role: VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 1,
+            original_filename: "x.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        });
+        catalog.insert_asset(&asset).unwrap();
+        drop(catalog);
+
+        let (tags, _volumes) = load_completion_data(dir.path());
+        assert!(
+            tags.iter().any(|t| t == "completion-probe"),
+            "catalog tags must feed completion: {tags:?}"
+        );
     }
 
     #[test]

@@ -66,8 +66,14 @@ impl SavedSearch {
         if let Some(t) = parsed.asset_types.first() {
             params.push(format!("type={}", urlencoded(t)));
         }
-        if !parsed.tags.is_empty() {
-            params.push(format!("tag={}", urlencoded(&parsed.tags.join(","))));
+        // The browse `tag=` param is comma-separated AND (one chip per
+        // entry). A `tag:a,b` OR-group must therefore stay in q=, where the
+        // search engine keeps its OR semantics — only single tags become
+        // chips.
+        let chip_tags: Vec<&String> = parsed.tags.iter().filter(|t| !t.contains(',')).collect();
+        if !chip_tags.is_empty() {
+            let joined = chip_tags.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(",");
+            params.push(format!("tag={}", urlencoded(&joined)));
         }
         if let Some(f) = parsed.formats.first() {
             params.push(format!("format={}", urlencoded(f)));
@@ -200,7 +206,13 @@ fn remainder_query(raw: &str) -> String {
                 .copied()
                 .unwrap();
             if multi_value.contains(&prefix) {
-                // tag / person — every occurrence handled by the URL param.
+                // tag / person — every occurrence handled by the URL param,
+                // except a `tag:a,b` OR-group (see to_url_params).
+                let is_or_group = prefix == "tag:" && tok.contains(',');
+                if !is_or_group {
+                    continue;
+                }
+                kept.push(requote_token(&tok));
                 continue;
             }
             // Single-value URL params absorb only the first occurrence.
@@ -299,6 +311,22 @@ mod tests {
         assert!(params.contains("tag=landscape"));
         assert!(params.contains("rating=4%2B"));
         assert!(params.contains("sort=name_asc"));
+    }
+
+    #[test]
+    fn to_url_params_keeps_tag_or_group_in_query() {
+        // `tag:a,b` is OR; the browse `tag=` param is AND per comma, so the
+        // OR-group must round-trip through q= while single tags become chips.
+        let ss = SavedSearch {
+            name: "Test".to_string(),
+            query: "tag:cat,dog tag:pets rating:3+".to_string(),
+            sort: None,
+            favorite: false,
+        };
+        let params = ss.to_url_params();
+        assert!(params.contains("tag=pets"), "{params}");
+        assert!(!params.contains("tag=cat"), "OR-group must not become AND chips: {params}");
+        assert!(params.contains("q=tag:cat,dog"), "{params}");
     }
 
     #[test]

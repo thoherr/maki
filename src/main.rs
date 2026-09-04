@@ -57,7 +57,7 @@ NUMERIC (all support: N exact / N+ min / A-B range / A,B OR-list)
   height:2000+            minimum pixel height
   copies:2+               number of file copies across volumes
   variants:2+             number of variants on the asset
-  scattered:2+            distinct directories (add `/N` for depth)
+  scattered:2+            distinct session roots (files spread across shoots)
   duration:30+            video duration (seconds)
 
 DATE
@@ -73,16 +73,20 @@ STATUS
   volume:Archive                on specific volume (or volume:none)
   geo:any / geo:none            has / lacks GPS coordinates
   geo:<S,W,N,E>                 GPS bounding box
+  geo:<lat>,<lng>,<km>          within radius
   codec:h264                    video codec (substring)
+  key:Am / bpm:120+             audio musical key / tempo
+
+AI (any build)
+  faces:2+ / faces:any / faces:none   face count filters
+  embed:any / embed:none              has / lacks SigLIP embedding
 
 PRO (require --features pro)
-  faces:2+ / faces:any    face count or any-faces filter
-  person:Alice            named person (repeat to AND, comma to OR)
-  similar:<id>            visually similar to an asset
+  person:Alice            named person (comma = OR; repeat = OR in CLI, AND in web)
+  similar:<id>[:<limit>]  visually similar to an asset (default 40)
   --image <file>          visually similar to a local image (not in catalog)
-  min_sim:90              similarity threshold (0-100%)
-  text:sunset             CLIP text-to-image search
-  embed:any / embed:none  has / lacks SigLIP embedding
+  min_sim:90              similarity threshold (0-100%) for similar:/text:/--image
+  text:sunset[:<limit>]   SigLIP text-to-image search (default 50); quote multi-word
 
 COMBINING
   tag:a,b                 a OR b (comma within one filter)
@@ -1855,7 +1859,7 @@ enum FacesCommands {
         /// Skip face detections with confidence below this value (0.0–1.0).
         /// Low-quality detections (blurry, partial, profile) produce noisy
         /// embeddings that hurt clustering. Defaults to `[ai] face_min_confidence`
-        /// from maki.toml (default 0.5).
+        /// from maki.toml (default 0.7).
         #[arg(long)]
         min_confidence: Option<f32>,
 
@@ -2074,7 +2078,8 @@ Ingest & Edit:
   group              Group variants into one asset
   split              Split variants out of an asset into new standalone assets
   auto-group         Auto-group assets by filename stem
-{describe}{auto_tag}{auto_stack}{embed}{faces}
+  audio              Audio analysis (key / BPM via external analyzers)
+{describe}{auto_tag}{auto_stack}{embed}{faces}{ai}
 
 Organize:
   collection         Manage collections (static albums)  [alias: col]
@@ -2089,6 +2094,7 @@ Retrieve:
   contact-sheet      Generate a PDF contact sheet from search results
   duplicates         Find duplicate files
   stats              Show catalog statistics
+  status             Show catalog health at a glance (volumes, previews, pending work)
   backup-status      Check backup coverage and find under-backed-up assets
   doc                Open documentation in the browser (manual, cheatsheet, filters, tagging)
   licenses           Show MAKI license and third-party crate licenses
@@ -2109,6 +2115,7 @@ Maintain:
   fix-roles          Fix variant roles in RAW+non-RAW groups
   fix-dates          Fix asset dates from EXIF metadata and file timestamps
   fix-recipes        Re-attach recipe files that were imported as standalone assets
+  create-sidecars    Create missing YAML sidecars from catalog rows
   rebuild-catalog    Rebuild SQLite catalog from sidecar files
   migrate            Run database schema migrations
 
@@ -2132,6 +2139,7 @@ Options:
         auto_stack = if cfg!(feature = "ai") { "\n  auto-stack         Cluster visually similar assets into stacks" } else { "" },
         embed = if cfg!(feature = "ai") { "\n  embed              Generate embeddings for visual similarity search" } else { "" },
         faces = if cfg!(feature = "ai") { "\n  faces              Face detection and recognition" } else { "" },
+        ai = if cfg!(feature = "ai") { "\n  ai                 AI vocabulary tools (export-vocabulary)" } else { "" },
         sync_metadata = if cfg!(feature = "pro") { "\n  sync-metadata      Bidirectional metadata sync: read XMP changes + write back pending edits" } else { "" },
         writeback = if cfg!(feature = "pro") { "\n  writeback          Write back pending metadata changes to XMP recipe files" } else { "" },
     );

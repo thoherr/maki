@@ -111,7 +111,6 @@ pub struct ParsedSearch {
     pub copies: Option<NumericFilter>,
     pub variant_count: Option<NumericFilter>,
     pub scattered: Option<NumericFilter>,
-    pub scattered_depth: Option<u32>,
     pub face_count: Option<NumericFilter>,
     /// `tagcount:N` — number of leaf tags (intentional tags the user applied,
     /// excluding auto-expanded ancestors). See `tag_util::leaf_tag_count`.
@@ -260,7 +259,6 @@ impl ParsedSearch {
             copies: self.copies.clone(),
             variant_count: self.variant_count.clone(),
             scattered: self.scattered.clone(),
-            scattered_depth: self.scattered_depth,
             face_count: self.face_count.clone(),
             tag_count: self.tag_count.clone(),
             duration: self.duration.clone(),
@@ -448,7 +446,7 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
 
         // Table-driven dispatch for filter shapes that fit one of the four
         // patterns. The custom-parsing block below handles filters with their
-        // own per-token logic (volume:none, scattered:N/D, geo:any/lat,lng,r,
+        // own per-token logic (volume:none, scattered:N, geo:any/lat,lng,r,
         // faces:any/N, embed:any/true, similar:id:limit, text:"q":limit, meta:k=v).
 
         for (prefix, setter) in SIMPLE_FILTERS {
@@ -502,13 +500,10 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
                 parsed.color_labels.push(value.to_string());
             }
         } else if let Some(value) = token_body.strip_prefix("scattered:") {
-            // scattered:N+/D — N is the numeric filter, /D is the path depth.
-            if let Some((num_part, depth_part)) = value.rsplit_once('/') {
-                parsed.scattered = parse_numeric_filter(num_part);
-                parsed.scattered_depth = depth_part.parse::<u32>().ok();
-            } else {
-                parsed.scattered = parse_numeric_filter(value);
-            }
+            // scattered:N / scattered:N+ — count of distinct session roots
+            // (the former `/depth` suffix was parsed but never applied; it
+            // is gone).
+            parsed.scattered = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("geo:") {
             if value == "any" {
                 parsed.has_gps = Some(true);

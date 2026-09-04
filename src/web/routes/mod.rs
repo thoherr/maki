@@ -439,8 +439,15 @@ impl ResolvedSearch {
                                 Vec::new()
                             }
                         };
-                        self.text_query_ids =
-                            Some(results.into_iter().map(|(id, _)| id).collect());
+                        // min_sim: applies to text queries too (percent → 0.0–1.0)
+                        let min_sim = parsed.min_sim.unwrap_or(0.0) / 100.0;
+                        self.text_query_ids = Some(
+                            results
+                                .into_iter()
+                                .filter(|(_, score)| *score >= min_sim)
+                                .map(|(id, _)| id)
+                                .collect(),
+                        );
                     }
                 }
             }

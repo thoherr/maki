@@ -705,8 +705,14 @@ impl QueryEngine {
             let index = crate::embedding_store::EmbeddingIndex::load(
                 catalog.conn(), model_id, spec.embedding_dim,
             )?;
+            // min_sim: applies to text queries too (percent → 0.0–1.0)
+            let min_sim = parsed.min_sim.unwrap_or(0.0) / 100.0;
             let results = index.search(query_emb, limit, None);
-            text_query_ids = results.into_iter().map(|(id, _score)| id).collect::<Vec<_>>();
+            text_query_ids = results
+                .into_iter()
+                .filter(|(_id, score)| *score >= min_sim)
+                .map(|(id, _score)| id)
+                .collect::<Vec<_>>();
             opts.text_search_ids = Some(&text_query_ids);
         }
 
@@ -4061,24 +4067,7 @@ mod tests {
     fn parse_scattered_with_plus_suffix() {
         let p = parse_search_query("scattered:2+");
         assert_eq!(p.scattered, Some(NumericFilter::Min(2.0)));
-        assert_eq!(p.scattered_depth, None);
     }
-
-    #[test]
-    fn parse_scattered_with_depth() {
-        let p = parse_search_query("scattered:2+/3");
-        assert_eq!(p.scattered, Some(NumericFilter::Min(2.0)));
-        assert_eq!(p.scattered_depth, Some(3));
-    }
-
-    #[test]
-    fn parse_scattered_exact_with_depth() {
-        let p = parse_search_query("scattered:2/1");
-        assert_eq!(p.scattered, Some(NumericFilter::Exact(2.0)));
-        assert_eq!(p.scattered_depth, Some(1));
-    }
-
-    // ── duration filter parse tests ──────────────────────────────────
 
     #[test]
     fn parse_duration_exact() {
