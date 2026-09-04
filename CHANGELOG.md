@@ -2,7 +2,9 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## Unreleased
+## v4.10.2 (2026-09-05)
+
+`person:` filter semantics unified between CLI and web UI. No schema migration.
 
 ### Changed
 
