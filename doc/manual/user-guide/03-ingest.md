@@ -419,7 +419,7 @@ maki import /Volumes/Backup/Shoot-2026-02-20/
 
 The second import adds backup locations to the existing variants. Each variant now has two file locations (one per volume), but the catalog contains only one copy of each asset.
 
-### Finding Duplicates
+### Finding Duplicates {#finding-duplicates-during-import}
 
 After importing from multiple volumes, the same file will appear at multiple locations -- this is expected and healthy. Use `maki duplicates --cross-volume` to confirm that your backup copies were recognized:
 

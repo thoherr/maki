@@ -1213,8 +1213,8 @@ Session management:
 
 Examples:
   $picks = search \"rating:5 date:2024\"
-  tag --add \"portfolio\" $picks
-  export --target /tmp/best $picks
+  tag $picks portfolio
+  export $picks /tmp/best
   set --log
   source post-import.dam
 

@@ -154,12 +154,11 @@ maki verify --volume "Photos 2024" --log --time
 Use the `stale:N` search filter to find assets that have not been verified recently:
 
 ```bash
-# Assets not verified in the last 30 days
+# Assets not verified in the last 30 days (or never verified)
 maki search "stale:30"
-
-# Assets never verified
-maki search "stale:0"
 ```
+
+`stale:N` always includes never-verified files, but there is no filter for *only* those: `stale:0` matches every location verified before the current moment, i.e. effectively everything.
 
 See [Browsing & Searching](05-browse-and-search.md) for more on search filters.
 

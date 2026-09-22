@@ -1648,11 +1648,7 @@ Rebuild with timing:
 maki rebuild-catalog --time
 ```
 
-Rebuild with progress logging:
-
-```bash
-maki rebuild-catalog --log --time
-```
+The global `--log` flag has no effect on `rebuild-catalog`; it prints a summary when finished (or JSON with `--json`).
 
 ### SEE ALSO
 

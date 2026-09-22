@@ -24,9 +24,11 @@ maki search "-sunset"                     # exclude free-text match on "sunset"
 
 Negation is supported for free-text terms and for the filters that have an exclude form: `tag:`, `type:`, `format:`, `label:`, `volume:`, `camera:`, `lens:`, `description:`/`desc:`, `path:`, `collection:`, and `person:`. A leading `-` on any other filter (`-rating:3`, `-date:2026`, `-iso:800`, `-id:`, `-similar:`, …) is ignored and the filter applies as if it were positive.
 
+The special `none` forms are not negatable either: `-label:none` behaves exactly like `label:none` (unlabeled assets) and `-volume:none` like `volume:none`. To find labeled assets or assets on an online volume, use the positive filters (`label:Red,Orange,...`, `volume:<label>`) or `orphan:false` instead.
+
 ### OR Within a Filter (Comma Operator)
 
-Use commas within a single filter value to match any of the given options (OR logic):
+Use commas within a single filter value to match any of the given options (OR logic). This works for the list-valued filters (`tag:`, `type:`, `format:`, `label:`, `camera:`, `lens:`, `description:`/`desc:`, `path:`, `volume:`, `collection:`, `person:`) and for every numeric filter (`rating:`, `iso:`, `focal:`, `f:`, `width:`, `height:`, `copies:`, `variants:`, `tagcount:`, `scattered:`, `duration:`, `bpm:`, `faces:N`). It does **not** apply to `id:`, `codec:`, `key:`, `date:`/`dateFrom:`/`dateUntil:`, or `meta:` -- there the comma is part of the value. (`id:` can be repeated instead: `id:abc id:def` matches either prefix.)
 
 ```
 maki search "tag:alice,bob"               # assets tagged alice OR bob (or both)
@@ -58,9 +60,9 @@ maki search "format:nef,cr3 -tag:rejected rating:3+"    # RAW files (NEF or CR3)
 
 ## Free Text
 
-**Syntax:** any token that does not match a recognized `prefix:value` pattern
+**Syntax:** any token that does not match a recognized `prefix:value` pattern; `-<word>` excludes a term
 
-**Description:** Remaining tokens after all prefix filters are extracted are joined into a single free-text string. This text is matched against asset names, original filenames, descriptions, and source metadata values (partial, case-insensitive).
+**Description:** Remaining tokens after all prefix filters are extracted are joined into a single free-text string. This text is matched against asset names, original filenames, descriptions, and source metadata values (partial, case-insensitive). A token prefixed with `-` is an exclusion instead: assets matching that term anywhere in the same columns are dropped from the result. Each excluded term is applied separately (`-draft -test` excludes both), while the positive terms are matched as one string.
 
 **Examples:**
 
@@ -68,6 +70,7 @@ maki search "format:nef,cr3 -tag:rejected rating:3+"    # RAW files (NEF or CR3)
 maki search "sunset"
 maki search "golden hour mountains"
 maki search "sunset tag:landscape"       # "sunset" is free text, tag:landscape is a filter
+maki search "sunset -draft"              # "sunset" but not anything matching "draft"
 ```
 
 **SQL behavior:** Terms of three or more characters go through the `assets_fts` FTS5 index (trigram tokenizer, schema v9): `WHERE a.id IN (SELECT asset_id FROM assets_fts WHERE assets_fts MATCH '"text"')` — an index-accelerated, case-insensitive substring match over name, filename, description, and source metadata. The term is always quoted as an FTS string literal, so it is never interpreted as FTS query syntax. Terms shorter than three characters fall back to `(a.name LIKE '%text%' OR bv.original_filename LIKE '%text%' OR a.description LIKE '%text%' OR bv.source_metadata LIKE '%text%')` against the best-variant columns. Negated free text (`-term`) uses the same two paths wrapped in `NOT IN` / `NOT (...)`.
@@ -609,15 +612,16 @@ maki search "missing:true type:video"
 
 **Syntax:** `stale:<N>`
 
-**Values:** Number of days (0 or more)
+**Values:** Number of days (0 or more). The other numeric forms (`N+`, `A-B`, `A,B`) are accepted, but only the first (or lower) number is used as the day count.
 
 **Description:** Finds assets with at least one file location that has not been verified in the specified number of days, or that has never been verified. Useful for identifying files due for integrity checks.
+
+`stale:0` is not a "never verified" filter: the cutoff is `now - 0 days`, so it matches every location that has never been verified *and* every location verified before the current moment -- in practice, everything. There is no dedicated filter for never-verified files.
 
 **Examples:**
 
 ```
 maki search "stale:30"          # not verified in 30+ days (or never)
-maki search "stale:0"           # never verified at all
 maki search "stale:90 type:image"
 ```
 
@@ -649,7 +653,7 @@ Pure assets-table filter, no JOIN required.
 
 ## copies
 
-**Syntax:** `copies:<N>` (exact) or `copies:<N>+` (minimum)
+**Syntax:** `copies:<N>` (exact) | `copies:<N>+` (minimum) | `copies:<A>-<B>` (range) | `copies:<A>,<B>` (OR list)
 
 **Values:** Non-negative integer
 
@@ -676,7 +680,7 @@ maki search "copies:2+ type:video"  # backed-up videos
 
 ## variants
 
-**Syntax:** `variants:<N>` (exact) or `variants:<N>+` (minimum)
+**Syntax:** `variants:<N>` (exact) | `variants:<N>+` (minimum) | `variants:<A>-<B>` (range) | `variants:<A>,<B>` (OR list)
 
 **Values:** Non-negative integer
 
@@ -735,7 +739,7 @@ maki search "tagcount:1 tag:sunset"           # assets tagged ONLY with sunset
 
 ## scattered
 
-**Syntax:** `scattered:<N>` or `scattered:<N>+`
+**Syntax:** `scattered:<N>` (exact) | `scattered:<N>+` (minimum) | `scattered:<A>-<B>` (range) | `scattered:<A>,<B>` (OR list)
 
 **Values:** Positive integer (number of distinct session roots)
 
@@ -799,7 +803,7 @@ maki search "type:video codec:h264 rating:4+"   # highly rated H.264 videos
 maki search "codec:hevc duration:60+"           # HEVC videos at least 1 minute
 ```
 
-**SQL behavior:** `WHERE a.video_codec LIKE '%value%'` (case-insensitive via SQLite `COLLATE NOCASE`). Pure assets-table filter, no JOIN required.
+**SQL behavior:** `WHERE a.video_codec LIKE '%value%'`. A plain SQLite `LIKE`, so the match is case-insensitive for ASCII letters only (`codec:HEVC` and `codec:hevc` are equivalent). Pure assets-table filter, no JOIN required.
 
 ---
 
@@ -881,7 +885,7 @@ Pure assets-table filter, no JOIN required. Uses the composite index on `(latitu
 
 ## faces
 
-**Syntax:** `faces:any` | `faces:none` | `faces:<N>` | `faces:<N>+`
+**Syntax:** `faces:any` | `faces:none` | `faces:<N>` | `faces:<N>+` | `faces:<A>-<B>` | `faces:<A>,<B>`
 
 **Description:** Filters by the number of detected faces on an asset. The filter itself works in every build; the counts are only populated by `maki faces detect` *(Pro)*, so on a standard build every asset has `faces:none`.
 

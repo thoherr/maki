@@ -36,9 +36,11 @@ The following files and directories are created:
 - `maki.toml` -- catalog configuration file (preview settings, serve settings, import exclusions)
 - `metadata/` -- directory for YAML sidecar files (source of truth for asset metadata)
 - `previews/` -- directory for generated preview thumbnails (800px)
-- `smart_previews/` -- directory for high-resolution smart previews (2560px, generated with `--smart`)
+- `smart-previews/` -- directory for high-resolution smart previews (2560px, generated with `--smart`)
 - `catalog.db` -- SQLite database (derived cache for fast queries)
 - `volumes.yaml` -- storage volume registry
+- `vocabulary.yaml` -- default tag vocabulary (only written if the file does not exist yet)
+- `.gitignore` -- excludes the derived cache (`catalog.db*`), generated previews, and AI artifacts from an optional git-based backup of the catalog (only written if the file does not exist yet)
 
 If `maki.toml` already exists in the current directory, the command fails with an error to prevent accidental re-initialization.
 

@@ -90,7 +90,7 @@ Date from / until   & \cmd{dateFrom:<date>}, \cmd{dateUntil:<date>} & \cmd{dateF
 Volume              & \cmd{volume:<label>}                  & \cmd{volume:Archive}, \cmd{volume:none} \\
 Asset ID            & \cmd{id:<prefix>}                     & \cmd{id:72a0bb4b} \\
 Copies              & \cmd{copies:<N>}, \cmd{copies:<N>+}   & \cmd{copies:1}, \cmd{copies:2+} \\
-Variants            & \cmd{variants:<N>+}                   & \cmd{variants:2+} \\
+Variants            & \cmd{variants:<N>}, \cmd{variants:<N>+} & \cmd{variants:1}, \cmd{variants:2+} \\
 Tag count (leaves)  & \cmd{tagcount:<N>}, \cmd{tagcount:<N>+}, \cmd{tagcount:<A>-<B>} & \cmd{tagcount:0}, \cmd{tagcount:5+} \\
 Scattered           & \cmd{scattered:<N>}, \cmd{scattered:<N>+} & \cmd{scattered:2+} (2+ session roots) \\
 Duration (seconds)  & \cmd{duration:<N>}, \cmd{duration:<N>+}, \cmd{duration:<min>-<max>} & \cmd{duration:60}, \cmd{duration:30+} \\
@@ -98,17 +98,17 @@ Codec               & \cmd{codec:<text>}                    & \cmd{codec:h264}, 
 Musical key / BPM   & \cmd{key:<key>}, \cmd{bpm:<N>}, \cmd{<min>-<max>} & \cmd{key:Am}, \cmd{bpm:100-140} \\
 GPS box / radius    & \cmd{geo:<S>,<W>,<N>,<E>}, \cmd{geo:<lat>,<lng>,<km>} & \cmd{geo:52.52,13.405,5} \\
 GPS any/none        & \cmd{geo:any}, \cmd{geo:none}         & \cmd{geo:any} \\
-Orphan              & \cmd{orphan:true}                     & \cmd{orphan:true} \\
+Orphan              & \cmd{orphan:true}, \cmd{orphan:false} & \cmd{orphan:true} (no file locations) \\
 Missing files       & \cmd{missing:true}                    & \cmd{missing:true} \\
 Stale verification  & \cmd{stale:<days>}                    & \cmd{stale:30} \\
 Stacked             & \cmd{stacked:true}, \cmd{stacked:false} & \cmd{stacked:true} \\
-Face count          & \cmd{faces:any}, \cmd{faces:none}, \cmd{faces:<N>+} & \cmd{faces:2+} \\
+Face count          & \cmd{faces:any}, \cmd{faces:none}, \cmd{faces:<N>}, \cmd{<N>+} & \cmd{faces:1}, \cmd{faces:2+} \\
 Person \pro         & \cmd{person:<name>}                   & \cmd{person:Alice,Bob} (comma = either; repeat = both) \\[6pt]
 Visual similarity \pro  & \cmd{similar:<id>}, \cmd{similar:<id>:<limit>} & \cmd{similar:72a0bb4b:50} (default 40) \\
 Query image \pro    & \cmd{maki search --image <file>}      & \cmd{--image preview.jpg} (find the original) \\
 Similarity threshold \pro & \cmd{min\_sim:<percent>}           & \cmd{min\_sim:90} (similar, text, --image) \\
 Text search \pro    & \cmd{text:<query>}, \cmd{text:"<q>":<limit>} & \cmd{text:"sunset beach"} (quote multi-word) \\
-Embedding status    & \cmd{embed:any}, \cmd{embed:none}     & \cmd{embed:none type:image} \\
+Embedding status    & \cmd{embed:any}/\cmd{true}, \cmd{embed:none}/\cmd{false} & \cmd{embed:none type:image} \\
 \end{tabularx}
 
 \vspace{6pt}
@@ -144,7 +144,8 @@ All numeric filters support: exact (\cmd{3}), minimum (\cmd{3+}), range (\cmd{3-
 \textbf{OR}  & Comma within a single filter \\
              & \cmd{tag:alice,bob} \quad \cmd{format:nef,cr3} \\[6pt]
 \textbf{NOT} & Dash prefix excludes (tag, type, format, label, volume, camera, lens, description, path, collection, person, free text) \\
-             & \cmd{-tag:rejected} \quad \cmd{-format:xmp} \\[6pt]
+             & \cmd{-tag:rejected} \quad \cmd{-format:xmp} \\
+             & {\small Numeric, date and boolean filters ignore the dash; \cmd{-label:none} / \cmd{-volume:none} are not honoured} \\[6pt]
 \textbf{Combined} & \cmd{type:image,video -tag:rejected rating:3+} \\
 \end{tabularx}
 

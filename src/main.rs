@@ -27,8 +27,11 @@ use maki::query::QueryEngine;
 const SEARCH_QUERY_LONG_HELP: &str = "\
 Free-text keywords and filter expressions.
 
-Combining: space = AND (repeat a filter to AND), comma = OR within one filter.
-Prefix `-` on any filter to exclude (e.g. `-tag:rejected`).
+Combining: space = AND (repeat a filter to AND), comma = OR within one filter
+(not for id:, codec:, key:, date*:, meta: — those take a single value).
+Prefix `-` to exclude (e.g. `-tag:rejected`) on list-style filters only: tag, type,
+format, camera, lens, description, collection, path, person, volume, label, and
+free text. Numeric, date, and boolean filters ignore the `-`.
 
 TEXT & METADATA
   tag:landscape           tag match at any level
@@ -36,7 +39,7 @@ TEXT & METADATA
   tag:/Foo                leaf only at any level
   tag:^Foo                case-sensitive
   tag:|wed                prefix anchor (wedding, wedding-2024, ...)
-  type:image              asset type (image, video, audio, document)
+  type:image              asset type (image, video, audio, document, other)
   format:nef              file format (e.g. format:jpg,jpeg)
   label:Red / label:none  colour label (or \"unlabeled\")
   camera:fuji             camera (substring match on EXIF)
@@ -58,7 +61,7 @@ NUMERIC (all support: N exact / N+ min / A-B range / A,B OR-list)
   copies:2+               number of file copies across volumes
   variants:2+             number of variants on the asset
   scattered:2+            distinct session roots (files spread across shoots)
-  duration:30+            video duration (seconds)
+  duration:30+            audio/video duration (seconds)
 
 DATE
   date:2026               year prefix (also 2026-03, 2026-03-15)
@@ -2058,7 +2061,7 @@ enum TrashCommands {
 fn print_custom_help() {
     let version = env!("CARGO_PKG_VERSION");
     let edition = if cfg!(feature = "pro") { " Pro" } else { "" };
-    let ai_note = if cfg!(feature = "pro") { "" } else { "  (download MAKI Pro for: describe, auto-tag, auto-stack, embed, faces, stroll, writeback, sync-metadata)" };
+    let ai_note = if cfg!(feature = "pro") { "" } else { "  (download MAKI Pro for: describe, auto-tag, auto-stack, embed, faces, writeback, sync-metadata)" };
 
     let help = format!("\
 maki{edition} {version} — Media Asset Keeper & Indexer{ai_note}
@@ -2115,7 +2118,7 @@ Maintain:
   fix-roles          Fix variant roles in RAW+non-RAW groups
   fix-dates          Fix asset dates from EXIF metadata and file timestamps
   fix-recipes        Re-attach recipe files that were imported as standalone assets
-  create-sidecars    Create missing YAML sidecars from catalog rows
+  create-sidecars    Create missing XMP sidecar files for assets with metadata
   rebuild-catalog    Rebuild SQLite catalog from sidecar files
   migrate            Run database schema migrations
 

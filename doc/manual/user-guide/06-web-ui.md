@@ -80,8 +80,8 @@ Command-line flags always override `maki.toml` settings. See the [Configuration 
 Every page has a horizontal nav bar across the top. From left to right:
 
 - **Brand** (MAKI logo) — link to the browse page.
-- **Browse** and (on AI builds) **Stroll** — primary content views.
-- **Tags**, **People** (Pro), **Collections**, **Searches** — catalog organisation pages.
+- **Browse** and **Stroll** *(Pro)* — primary content views.
+- **Tags**, **People** *(Pro)*, **Collections**, **Searches** — catalog organisation pages (see [Saved Searches Page](#saved-searches-page) for **Searches**).
 - **Catalog ▾** dropdown — collapses Stats, Analytics, Backup, Volumes, Duplicates into one menu so the bar stays compact. Click the trigger to open; click outside or press Escape to close. The caret rotates when open. These pages are read-mostly catalog inspection views, used a few times a week rather than daily.
 - **Import●** and **Maintain●** — long-running command launchers (see [Importing from a volume](#importing-from-a-volume) and [Maintain Dialog](#maintain-dialog) below). The pulsing dot lights up when a job of that kind is running anywhere in the catalog; clicking the entry while a job is in flight re-attaches to its progress feed.
 - **Settings** — opens the schema-driven `maki.toml` editor (see [Settings Dialog](#settings-dialog) below).
@@ -108,7 +108,7 @@ The search bar has two rows:
 
 **Row 1** -- a full-width text input for free-text search. Type any keyword, filename, or structured filter (like `camera:"Canon EOS R5"`) and results update as you type with a 300ms debounce. Press Enter to search immediately without waiting for the debounce.
 
-On Pro builds the first row also carries a **Find by image** button: pick a local image file that is not in the catalog and the grid ranks the catalog by visual similarity to it (see [Similarity browse](#similarity-browse) below). You can also drop an image file anywhere on the browse page, or paste one from the clipboard.
+In the Pro edition the first row also carries a **Find by image** button: pick a local image file that is not in the catalog and the grid ranks the catalog by visual similarity to it (see [Similarity browse](#similarity-browse) below). You can also drop an image file anywhere on the browse page, or paste one from the clipboard.
 
 The filter bar is collapsible. Press **Shift+F** to toggle its visibility on the browse page. Your preference is saved in the browser. This is useful for maximizing screen space when you want to focus on the grid without changing filters.
 
@@ -264,13 +264,12 @@ When searching with `similar:<asset-id>`, the browse grid shows visually similar
 
 ![Saved search chips row on the browse page](../screenshots/saved-search-chips.png)
 
-Below the search bar, a row of saved search chips provides quick access to your named searches (smart albums). Each chip loads its stored query and filters into the search bar when clicked.
+Below the search bar, a row of saved search chips provides quick access to your **favorite** named searches (smart albums). Each chip loads its stored query, filters and sort order when clicked.
 
-- **Save the current search**: click the "Save" button at the end of the chip row. A prompt asks for a name, and the current search state (text query, filters, sort order) is saved.
-- **Rename**: hover over a chip to reveal the rename button. Click it and enter a new name.
-- **Delete**: hover over a chip to reveal the delete button. Click it and confirm.
+- **Save the current search**: click the "Save" button at the end of the chip row. A prompt asks for a name, and the current search state (text query, filters, sort order) is saved and marked as a favorite, so the new chip appears immediately.
+- Only favorites are shown as chips. Renaming, deleting, and toggling the favorite star are done on the [Saved Searches Page](#saved-searches-page) (**Searches** in the navigation bar).
 
-Saved searches are stored in `searches.toml` at the catalog root and work identically to CLI saved searches (see [Organizing Assets](04-organize.md) for the `maki saved-search` command).
+Saved searches are stored in `searches.toml` at the catalog root and work identically to CLI saved searches (see [Organizing Assets](04-organize.md) for the `maki saved-search` command). Searches saved from the CLI start out as non-favorites (unless `maki saved-search save --favorite` was used) and do not show up as chips until starred.
 
 ### How page updates work
 
@@ -785,6 +784,22 @@ Navigate to `/collections` or click "Collections" in the navigation bar.
 Collections created here are the same as those created via the CLI `maki collection create` command. See [Organizing Assets](04-organize.md) for full details on managing collections.
 
 
+## Saved Searches Page
+
+The saved searches page lists every named search (smart album) in the catalog, whether it was saved from the browse page or with `maki saved-search save`.
+
+Navigate to `/saved-searches` or click "Searches" in the navigation bar.
+
+### Features
+
+- **Table of searches**: one row per saved search with its name, the stored query string, and the sort order (`date_desc` when none was stored). If nothing has been saved yet, the page says so and points to the Save button on the browse page.
+- **Run**: click the name to open the browse page with the stored query, filters and sort applied.
+- **Favorite star**: the star in the first column toggles whether the search appears as a chip on the browse page. Filled means "shown on browse page"; hollow means the search is kept but hidden from the chip row.
+- **Rename**: prompts for a new name. Renaming to a name that already exists is rejected.
+- **Delete**: asks for confirmation, then removes the search.
+
+Every action writes straight to `searches.toml` and reloads the page, so the CLI (`maki saved-search list`) sees the same state. All four actions are unavailable in `--read-only` mode.
+
 ## Stats Page
 
 Navigate to `/stats` or click "Stats" in the navigation bar to see a visual overview of your catalog.
@@ -946,7 +961,7 @@ Both routes share the same dialog. The form lets you:
 - Specify an optional **subfolder** within the volume (e.g. `DCIM/100CANON` for a memory card). The field has **shell-style path autocomplete**: type to see directory entries under the volume's mount point, `↑`/`↓` to navigate, `Tab` or `Enter` on a directory drills in for the next level, on a file commits the value. `Esc` dismisses the dropdown. Server-side path resolution is clamped to the volume mount, so symlinks or `..` segments that would escape the mount are rejected.
 - Choose an **import profile** from `[import.profiles.*]` in `maki.toml` (or default).
 - Add **tags** to apply to every imported asset, via a chip picker matching the filter bar's tag UX. Type to autocomplete from existing tags, `Enter` or `,` adds a chip, `Backspace` on the empty input removes the last chip.
-- Toggle **auto-group variants** and **smart previews**, plus — on AI / Pro builds — **Generate embeddings (visual similarity)** and **Generate descriptions (VLM)**, which run the same post-import phases as `maki import --embed` / `--describe`. Their initial state follows `[import] smart_previews` / `embeddings` / `descriptions` in `maki.toml`.
+- Toggle **auto-group variants** and **smart previews**, plus — in the Pro edition — **Generate embeddings (visual similarity)** and **Generate descriptions (VLM)**, which run the same post-import phases as `maki import --embed` / `--describe`. Their initial state follows `[import] smart_previews` / `embeddings` / `descriptions` in `maki.toml`.
 - Run a **dry run** first to see how many files would be imported.
 - Click **Import** to start the actual import.
 
@@ -1013,7 +1028,9 @@ The **Settings** entry in the top navigation (next to Maintain) opens a modal th
 
 Widgets follow types: checkboxes for `bool`, number inputs for integers / floats, text inputs for strings, `<select>` for enums, comma-separated text for `Vec<String>`, collapsible `<details>` sections for nested structs (`[preview]`, `[serve]`, …). Hashmap-typed config (`[import.profiles.<name>]`, `[vlm.model_config."<model>"]`) renders each existing key as an editable sub-section.
 
-Fields bound at server startup (`[serve].port`, `[preview].max_edge`, `[ai].model`, etc.) show a small **restart required** pill next to the label. After Save, a toast appears bottom-right: green if every change took effect immediately, amber if any restart-required field changed.
+Fields bound at server startup (`[serve].port`, `[preview].max_edge`, `[ai].model`, etc.) show a small **restart required** pill next to the label. After Save, a toast appears bottom-right: green means the file was saved and validated, amber means a field flagged restart-required changed.
+
+A green toast does not guarantee that every change is already live. The restart-required flag currently covers `[serve]` port/bind/per_page/stroll_*, all of `[preview]`, `[ai]` model/model_dir/execution_provider, and `[browse] default_filter`. Several other settings are also read once at startup but are not flagged yet: `[serve] read_only`/`username`/`password`, `[import] smart_previews`/`embeddings`/`descriptions`, `[dedup] prefer`, the `[browse]` slideshow fields, all of `[vlm]`, and most of `[ai]`. Restart `maki serve` after changing any of those.
 
 Before each save the previous file is copied to `maki.toml.bak`, so a bad edit is recoverable. Validation runs server-side by deserialising the submitted JSON back into the typed config struct — type errors and unknown keys are rejected before the file is written.
 

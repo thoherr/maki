@@ -47,27 +47,30 @@ Searches the catalog for assets matching the given query. The query string suppo
 | `tag:` | Tag name (hierarchical: matches descendants) | `tag:landscape`, `tag:"golden hour"`, `tag:animals|birds` |
 | `format:` | File format | `format:jpg`, `format:nef`, `format:mp4` |
 | `rating:` | Star rating (exact, range, OR) | `rating:5`, `rating:3+`, `rating:3-5`, `rating:2,4` |
-| `label:` | Color label | `label:Red`, `label:Green` |
+| `label:` | Color label (`none` = unlabeled) | `label:Red`, `label:Green`, `label:none` |
 | `camera:` | Camera model (partial match) | `camera:fuji`, `camera:"Canon EOS R5"` |
 | `lens:` | Lens model (partial match) | `lens:56mm`, `lens:"RF 50mm f/1.2"` |
+| `description:` / `desc:` | Description text (partial match) | `description:sunset`, `desc:"colorful flowers"` |
 | `iso:` | ISO value or range | `iso:100`, `iso:100-800` |
 | `focal:` | Focal length or range (mm) | `focal:50`, `focal:35-70` |
 | `f:` | Aperture or range | `f:1.4`, `f:1.4-2.8` |
-| `width:` | Minimum width (pixels) | `width:4000`, `width:4000+` |
-| `height:` | Minimum height (pixels) | `height:2000`, `height:2000+` |
+| `width:` | Width in pixels (exact, minimum, range) | `width:3840`, `width:4000+`, `width:3000-5000` |
+| `height:` | Height in pixels (exact, minimum, range) | `height:2160`, `height:2000+`, `height:2000-3000` |
 | `meta:` | Source metadata key=value | `meta:Copyright=2026` |
 | `path:` | File location path prefix | `path:Capture/2026-02`, `path:/Volumes/Photos/2026` |
 | `collection:` | Collection membership | `collection:Favorites`, `collection:"My Picks"` |
 | `date:` | Creation date (prefix match) | `date:2026-02-25`, `date:2026-02`, `date:2026` |
 | `dateFrom:` | Creation date lower bound (inclusive) | `dateFrom:2026-01-01` |
 | `dateUntil:` | Creation date upper bound (inclusive) | `dateUntil:2026-12-31` |
-| `copies:` | File location count (exact) | `copies:1`, `copies:2` |
-| `copies:N+` | File location count (minimum) | `copies:2+`, `copies:3+` |
+| `copies:` | Number of distinct volumes holding the asset's files | `copies:1`, `copies:2+`, `copies:1-2` |
 | `id:` | Asset ID (prefix match) | `id:72a0bb4b` |
-| `variants:` | Variant count (exact or minimum) | `variants:2`, `variants:2+` |
-| `scattered:` | Variants in N+ distinct directories | `scattered:2+`, `scattered:2+/1` |
-| `duration:` | Video duration in seconds | `duration:60`, `duration:30+`, `duration:10-120` |
+| `variants:` | Variant count (exact, minimum, range) | `variants:2`, `variants:2+`, `variants:2-4` |
+| `tagcount:` | Number of leaf tags (`0` = untagged) | `tagcount:0`, `tagcount:5+`, `tagcount:2-4` |
+| `scattered:` | Files spread over N distinct session roots | `scattered:2+`, `scattered:1` |
+| `duration:` | Audio/video duration in seconds | `duration:60`, `duration:30+`, `duration:10-120` |
 | `codec:` | Video codec (partial match) | `codec:h264`, `codec:hevc`, `codec:prores` |
+| `key:` | Musical key of analyzed audio (exact, case-insensitive) | `key:Am`, `key:F#m` |
+| `bpm:` | Tempo of analyzed audio (exact, minimum, range) | `bpm:120`, `bpm:160+`, `bpm:100-140` |
 | `orphan:true` | Assets with zero file locations | `orphan:true` |
 | `orphan:false` | Assets with at least one file location | `orphan:false` |
 | `missing:true` | Assets with files missing on disk | `missing:true` |
@@ -76,12 +79,12 @@ Searches the catalog for assets matching the given query. The query string suppo
 | `stacked:true` | Assets in a stack | `stacked:true` |
 | `stacked:false` | Assets not in any stack | `stacked:false` |
 | `geo:` | GPS geolocation | `geo:any`, `geo:none`, `geo:52.5,13.4,10` |
-| `faces:` | Face count *(Pro)* | `faces:any`, `faces:none`, `faces:2+` |
+| `faces:` | Face count (counts populated by `faces detect`, Pro) | `faces:any`, `faces:none`, `faces:3`, `faces:2+` |
 | `person:` | Named person *(Pro)* | `person:Alice`, `person:"John Smith"` |
 | `similar:` | Visual similarity *(Pro)* | `similar:72a0bb4b`, `similar:72a0bb4b:50` |
 | `min_sim:` | Minimum similarity threshold *(Pro)* | `min_sim:90` |
 | `text:` | Semantic text-to-image search *(Pro)* | `text:sunset`, `text:"woman reading"` |
-| `embed:` | Embedding status *(Pro)* | `embed:any`, `embed:none` |
+| `embed:` | Embedding status (embeddings created by `embed`, Pro) | `embed:any`, `embed:none` |
 
 Filters can be freely combined. Free-text tokens that do not match a filter prefix are joined as a text search against filenames and metadata.
 
@@ -89,7 +92,7 @@ Filters can be freely combined. Free-text tokens that do not match a filter pref
 
 **Output formats**: The `--format` flag controls output. Presets: `ids` (one UUID per line), `short` (default: abbreviated ID, name, type, format, date), `full` (adds tags, description, rating, label), `json` (JSON array). Custom templates use `{placeholder}` substitution with escape sequences (`\t`, `\n`).
 
-Available placeholders: `{id}`, `{name}`, `{filename}`, `{type}`, `{format}`, `{tags}`, `{description}`, `{rating}`, `{label}`, `{date}`, `{size}`.
+Available placeholders: `{id}`, `{short_id}` (first 8 characters), `{name}`, `{filename}`, `{type}`, `{format}`, `{date}`, `{tags}`, `{description}`, `{label}`, `{hash}` (best-variant content hash), `{similarity}` (rounded percentage, empty unless the query is a `similar:`/`text:`/`--image` search), and `{exact}` (the word `exact` for a byte-identical `--image` match, otherwise empty). Unknown placeholders are left in place verbatim.
 
 The result count header (e.g., "Found 42 assets") is suppressed when an explicit `--format` is given.
 
@@ -106,8 +109,8 @@ The result count header (e.g., "Found 42 assets") is suppressed when an explicit
 **-q** / **--quiet**
 : Shorthand for `--format=ids`. Prints one asset ID per line with no header, ideal for piping.
 
-**--image \<FILE\>** *(Pro)*
-: Find assets visually similar to a local image file that is not in the catalog (e.g. locate the original behind a preview). A byte-identical copy is matched by content hash first and listed as `100% exact`; otherwise the file is encoded with the SigLIP model and ranked like `similar:`. The optional QUERY narrows the result (AND). See [`--image` in the filter reference](06-search-filters.md#search-by-query-image).
+**--image \<FILE\>**
+: Find assets visually similar to a local image file that is not in the catalog (e.g. locate the original behind a preview). A byte-identical copy is matched by content hash first and listed as `100% exact`; otherwise the file is encoded with the SigLIP model and ranked like `similar:`. The flag exists in every build; exact-hash matching works everywhere, while the similarity ranking needs a Pro (AI) build. The optional QUERY narrows the result (AND). See [`--image` in the filter reference](06-search-filters.md#search-by-query-image).
 
 **--limit \<N\>**
 : Result-set size for `--image` (default 40, counting the exact match).
@@ -1162,7 +1165,7 @@ These commands are available only inside the shell (interactive, script, and `-c
 | `vars` | List all named variables with asset counts, plus active session defaults |
 | `unset $name` | Remove a named variable |
 | `unset --flag` | Remove a session default flag |
-| `set --flag` | Add a session default flag. Settable flags: `--json`, `--log`, `--debug`, `--time` |
+| `set --flag` | Add a session default flag. Settable flags: `--json`, `--log`, `--verbose`, `--debug`, `--time` |
 | `reload` | Re-read config, refresh completions, clear all variables and defaults |
 | `source <file>` | Execute a script file in the current session, sharing variables and defaults. Paths are resolved relative to the catalog root |
 

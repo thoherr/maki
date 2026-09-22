@@ -317,7 +317,7 @@ maki auto-group --json            # structured JSON result
 maki auto-group --log --apply     # per-group progress on stderr
 ```
 
-### Web UI
+### Web UI {#auto-group-web-ui}
 
 In the web UI, select multiple assets on the browse page, then click the
 **"Group by name"** button in the batch toolbar. A confirmation dialog shows
@@ -431,7 +431,7 @@ maki search "collection:\"Best of 2024\" rating:4+"
 
 Note the quoted value for collection names with spaces.
 
-### Web UI
+### Web UI {#collections-web-ui}
 
 - The **`/collections`** page lists all collections with a **"+ New Collection"**
   button.
@@ -561,7 +561,7 @@ maki --json stack list
 maki --json stack show <stack-id>
 ```
 
-### Web UI
+### Web UI {#stacks-web-ui}
 
 See [Web UI](06-web-ui.md) for the stack experience in the browse grid, batch
 operations, and asset detail page.
@@ -635,7 +635,7 @@ Combine saved searches with other commands:
 maki ss run "Five Stars" --format ids | xargs maki col add "Portfolio"
 ```
 
-### Web UI
+### Web UI {#saved-searches-web-ui}
 
 - **Clickable chips** on the browse page load saved searches into the filter
   UI with a single click.
@@ -768,7 +768,7 @@ maki search "person:Alice"              # assets containing Alice
 maki search "person:Alice rating:4+"    # Alice's best photos
 ```
 
-### Web UI
+### Web UI {#people-web-ui}
 
 The web UI provides the full face management experience:
 

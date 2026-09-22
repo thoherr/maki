@@ -395,7 +395,7 @@ Embeddings are stored per `(asset_id, model_id)` in both the SQLite catalog and 
 
 ### Choosing a model
 
-If you only ever type `text:` queries in English, the default `siglip-vit-b16-256` is the right choice. If you want to type queries in your native language — `text:Sonnenuntergang am Strand`, `text:coucher de soleil sur la plage`, `text:atardecer en la playa` — switch to `siglip2-base-256-multi`.
+If you only ever type `text:` queries in English, the default `siglip-vit-b16-256` is the right choice. If you want to type queries in your native language — `text:"Sonnenuntergang am Strand"`, `text:"coucher de soleil sur la plage"`, `text:"atardecer en la playa"` — switch to `siglip2-base-256-multi`.
 
 ### Switching models
 

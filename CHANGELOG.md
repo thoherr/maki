@@ -2,6 +2,68 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## Unreleased
+
+Documentation audit (2026-09-22): every command, flag, config key, search
+filter, web route and manual link was checked against the code. Help-text
+strings in `src/main.rs` / `src/shell.rs` corrected; no behaviour changes.
+
+### Fixed
+
+- **README** claimed 44 commands with an incomplete list; now 53 (95 leaf
+  commands) with every subcommand group spelled out. Shell example used
+  nonexistent `--target` / `tag --add` flags (also fixed in the shell's
+  own `help` text). "20+ filter types" → "40+". External tools now list
+  ffprobe, ffmpeg's waveform role, and the optional keyfinder-cli /
+  beat_this analyzers.
+- **`doc/specification.md`** configuration paragraph rewritten from
+  `src/config.rs`: nine missing sections (`[browse]`, `[writeback]`,
+  `[trash]`, `[history]`, `[cli]`, `[group]`, `[watch]`, `[audio]`,
+  `[vlm.model_config]`), bogus `[contact_sheet]` keys removed, missing
+  `profiles` / `text_limit` / `max_image_edge` added. Command entries
+  added for every undocumented (sub)command; `contact-sheet` (PDF, real
+  flags), `relocate`, `auto-tag`, `edit`, `delete`, `refresh`, `verify`,
+  `faces similarity` synopses corrected; `similar:` default is 40, not
+  20; `describe` / `writeback` / `sync-metadata` marked Pro-gated.
+- **`doc/component-specification.md`** CLI block rewritten from the clap
+  definitions; `face_scan_status` value is `done`; Stack vs StackSummary
+  fields; `.maki/shell_history` in the directory tree; `--format` / `-q`
+  availability corrected; version stamp v4.10.3.
+- **Manual**: `init` creates `smart-previews/` (plus `vocabulary.yaml`,
+  `.gitignore`); `--clear-date` resets the date to now rather than
+  clearing it; `tag expand-ancestors --asset` documented; retrieve-command
+  filter table corrected (`width:`/`height:` exact vs `N+`, `copies:` =
+  distinct volumes, `scattered:` has no `/depth` suffix, `faces:` /
+  `embed:` work in every build, missing `desc:` / `tagcount:` / `key:` /
+  `bpm:` rows) and template placeholder list matches `src/format.rs`;
+  `search --image` exists in every build (SigLIP ranking needs Pro);
+  shell `set` accepts `--verbose`; `rebuild-catalog` ignores `--log`;
+  `stale:0` does *not* mean "never verified"; `codec:` is a plain LIKE;
+  `-label:none` / `-volume:none` are not negatable; comma-OR scope
+  stated; `-word` free-text exclusion documented; the configuration
+  Full Example used globs where `include`/`skip` take file-type group
+  names; `[vlm] mode` documented as honoured only by `import --describe`;
+  multi-word `text:` examples quoted; new Saved Searches page section and
+  corrected chip behaviour in the web UI guide; Pro labels made
+  consistent; settings-toast wording no longer promises every change
+  applies immediately.
+- **Manual PDF cross-references**: `#finding-duplicates` and `#web-ui`
+  anchors collided across chapters in the concatenated PDF; explicit
+  heading ids added so links land on the right section.
+- **Quick references**: cheat sheet flags corrected (`--include-sidecars`,
+  `--same-volume`/`--cross-volume`, `--min-copies`, positional shell
+  script / split hashes / sync paths, `doc tagging`) and missing commands
+  added (`watch`, `undo`, `history`, `doctor`, `trash`, `audio`,
+  `auto-stack`, `ai`, more `tag` / `faces` subcommands); search-filter
+  sheet gains `orphan:false`, `label:none`, `faces:N`, `embed:true/false`,
+  `variants:N`.
+- **`maki search --help`**: comma-OR and `-` negation scope stated
+  precisely, `type:other` listed, `duration:` covers audio; `maki --help`
+  no longer lists `stroll` as a CLI command and describes
+  `create-sidecars` as XMP (not YAML).
+- **CLAUDE.md / architecture overview**: key-crate and external-tool lists
+  completed; Query Image and Audio Pipeline modules added to the overview.
+
 ## v4.10.3 (2026-09-22)
 
 Docs-and-dependencies currency release (September 2026 check). No code

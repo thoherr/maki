@@ -911,7 +911,15 @@ Scans assets and adds missing ancestor paths for hierarchical tags. For example,
 
 This is a one-time cleanup for tags created before ancestor expansion was implemented. New tags added via `maki tag` already expand ancestors automatically.
 
+### ARGUMENTS
+
+**QUERY** (optional)
+: Optional search query (same syntax as `maki search`) selecting the assets to scan. Without a query and without `--asset`, all assets are scanned.
+
 ### OPTIONS
+
+**--asset \<ID\>**
+: Limit the scan to a single asset (full or short ID).
 
 **--apply**
 : Execute changes. Without this flag, only reports what would change.
@@ -1092,7 +1100,7 @@ Asset IDs support unique prefix matching (see [CLI Conventions](00-cli-conventio
 : Set the asset's creation date (accepts ISO date or datetime strings).
 
 **--clear-date**
-: Remove the asset's creation date.
+: Reset the asset's creation date to the current time. The date is a required field, so it cannot be removed entirely; use `--date` to set a specific value.
 
 **--role \<ROLE\>**
 : Change a variant's role. Must be used with `--variant`. Accepts: original, alternate, processed, export, sidecar.

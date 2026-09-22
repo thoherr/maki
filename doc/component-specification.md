@@ -1,6 +1,6 @@
 # Component Specification
 
-> **As of v4.10.0 (September 2026).** Reviewed against the code at that
+> **As of v4.10.3 (September 2026).** Reviewed against the code at that
 > version: the data model below matches `src/models/*.rs` and the SQLite
 > schema in `src/catalog/schema.rs` (schema v11), the routes list is
 > generated from `build_router` in `src/web/mod.rs`, and the config
@@ -27,7 +27,7 @@ The central entity. Represents a logical asset (e.g. "photo of sunset at beach, 
 | description | Option<String> | Free-text description |
 | rating | Option<u8> | User/XMP rating 1–5, or unset |
 | color_label | Option<String> | Red, Orange, Yellow, Green, Blue, Pink, Purple, or unset |
-| face_scan_status | Option<String> | Face detection bookkeeping (`scanned` once `faces detect` ran, even with zero faces) so detection does not rescan |
+| face_scan_status | Option<String> | Face detection bookkeeping (`done` once `faces detect` ran, even with zero faces) so detection does not rescan |
 | preview_rotation | Option<u16> | Manual preview rotation override (0/90/180/270) |
 | preview_variant | Option<String> | Content hash of the variant to render previews from, overriding the automatic best-variant choice |
 | variants | Vec<Variant> | The files of this asset |
@@ -147,7 +147,9 @@ A scene grouping that collapses multiple assets into a single pick in the browse
 |---|---|---|
 | id | UUID | Stable identifier |
 | created_at | DateTime | When the stack was created |
-| member_count | u64 | Number of assets in the stack |
+| asset_ids | Vec<String> | Ordered member asset IDs; index 0 is the pick |
+
+The listing type `StackSummary` (`stack list`, web stack badges) is derived from it and carries `id`, `created_at`, `member_count` and `pick_asset_id`; `member_count` is not a stored field of `Stack`.
 
 Stack membership is tracked on the `assets` table via `stack_id` and `stack_position` columns. Position 0 is the pick. Stacks are persisted in both SQLite (`stacks` table) and `stacks.yaml` at the catalog root for rebuild resilience.
 
@@ -288,9 +290,9 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 **Module**: `src/format.rs` — template engine with `{placeholder}` substitution and escape sequences.
 
 **Capabilities**:
-- **Global `--json` flag**: available on all commands. Outputs structured JSON to stdout; human-readable messages go to stderr. All result types derive `serde::Serialize`.
-- **`--format` flag** (on `search` and `duplicates`): presets (`ids`, `short`, `full`, `json`) or custom templates (`'{id}\t{name}\t{tags}'`). When `--format` is explicit, result counts are suppressed.
-- **`-q`/`--quiet`** (on `search`): shorthand for `--format=ids`, outputting one UUID per line for scripting.
+- **Global `--json` flag**: honoured by every command except `ai export-vocabulary` (which always emits YAML). Outputs structured JSON to stdout; human-readable messages go to stderr. All result types derive `serde::Serialize`.
+- **`--format` flag** (on `search`, `duplicates`, `backup-status`, `saved-search run`, `collection show`, `stack show`): presets (`ids`, `short`, `full`, `json`) or custom templates (`'{id}\t{name}\t{tags}'`). When `--format` is explicit, result counts are suppressed.
+- **`-q`/`--quiet`** (on `search` and `backup-status`): shorthand for `--format=ids`, outputting one UUID per line for scripting.
 - **Template placeholders**: `{id}`, `{short_id}`, `{name}`, `{filename}`, `{type}`, `{format}`, `{date}`, `{tags}`, `{description}`, `{label}`, `{hash}`. Templates support `\t` and `\n` escape sequences.
 
 ### 9. Stats
@@ -426,7 +428,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 - `POST /api/maintain/sync` — `{volume, path?, apply}`
 - `POST /api/maintain/refresh` — `{volume?, media, dry_run}`
 - `POST /api/maintain/cleanup` — `{volume?, path?, apply}`
-- `POST /api/maintain/suggest-tags-review` *(ai)* — `{asset_ids, threshold?}` — batch suggestion job feeding the tag review page
+- `POST /api/maintain/suggest-tags-review` *(ai)* — `{asset_ids, threshold?}` — batch suggestion job feeding the per-tag review modal (`templates/tag_review.html`, included from `base.html`)
 
 *Settings and OS integration*
 - `GET /api/config` / `POST /api/config` — read / save `maki.toml` (`{config}`; written with `toml_edit` so comments survive)
@@ -630,49 +632,78 @@ After each write, the file is re-hashed and the recipe's `content_hash` is updat
 - `-d` / `--debug` — show stderr output from external tools (ffmpeg, dcraw, dcraw_emu, curl); implies `--verbose`
 - `-t` / `--time` — show elapsed time after command execution
 
-53 top-level commands (95 leaf commands counting subcommands); the full list with flags is in `doc/manual/reference/0[1-5]-*-commands.md` and `CLAUDE.md`. Representative forms:
+53 top-level commands (95 leaf commands counting subcommands; 96 if `tag` itself, which takes arguments as well as subcommands, is counted); the full list with flags is in `doc/manual/reference/0[1-5]-*-commands.md` and `CLAUDE.md`. Representative forms:
 
 **Subcommands**:
 ```
 maki init                                          # initialize a new catalog
-maki volume add <label> <path>                     # register a volume
-maki volume list                                   # list volumes and status
-maki import <paths...> [--volume V] [--include G] [--skip G]  # import files
+maki volume add [<label>] <path> [--purpose P]     # register a volume (label derived from path if omitted)
+maki volume list [--purpose P] [--online|--offline]  # list volumes and status
+maki volume rename <vol> <new-label>               # rename a volume
+maki volume set-purpose <vol> <purpose|none>       # media / working / archive / backup / cloud
+maki volume combine <source> <target> [--apply]    # merge a volume into another, rewriting paths
+maki volume split <source> <new-label> --path P [--purpose P] [--apply]  # split a subdirectory into a new volume
+maki volume remove <vol> [--apply]                 # drop a volume with its locations, recipes, orphaned assets
+maki import <paths...> [--volume V] [--profile NAME] [--include G] [--skip G] [--add-tag T] [--auto-group] [--smart] [--embed] [--describe] [--dry-run]  # import files
+maki watch [PATHS...] [--volume V] [--interval S] [--once]  # poll directories and auto-import new files (default: all online volumes)
 maki search <query> [--format F] [-q]              # search assets (see the filter reference)
 maki search --image <file> [QUERY] [--limit N]     # similar to a local image not in the catalog (ai feature)
-maki show <asset-id>                               # show asset details
+maki show <asset-id> [--locations]                 # show asset details
+maki preview <asset-id>                            # open the preview in the OS image viewer
 maki tag <asset-id> [--remove] <tags...>           # add/remove tags
-maki edit <id> [--name N] [--description T] [--rating R] [--label C] [--role ROLE --variant HASH] [--clear-*]  # edit metadata
-maki delete <ids...> [--apply] [--remove-files]    # remove assets from catalog
-maki contact-sheet <query> <output> [--columns N] [--thumb-size N] [--title T] [--metadata]  # generate thumbnail grid image
+maki tag rename <old> <new> [--apply]              # rename across the catalog (=/^ markers as in tag: filter)
+maki tag split <old> <new...> [--keep] [--apply]   # replace one tag by several
+maki tag delete <tag> [--apply]                    # remove a tag everywhere (cascades to descendants)
+maki tag clear <asset-id> [--source S]             # remove all (or one provenance's) tags from an asset
+maki tag scan [--json]                             # report malformed tag values (read-only)
+maki tag expand-ancestors [QUERY] [--asset ID] [--apply]  # add ancestor paths of hierarchical tags
+maki tag fix-unicode [--apply]                     # normalise tags to NFC
+maki tag export-vocabulary [--output F] [--format yaml|text|json] [--prune] [--default] [--counts]  # tag tree as vocabulary file
+maki edit <id> [--name N] [--description T] [--rating R] [--label C] [--date D] [--role ROLE --variant HASH] [--clear-*]  # edit metadata
+maki delete <ids...> [--apply] [--remove-files] [--no-trash]  # remove assets from catalog (files go to the trash)
+maki contact-sheet <query> <output.pdf> [--layout dense|standard|large] [--columns N] [--rows N] [--paper a4|letter|a3] [--landscape] [--title T] [--fields F] [--sort S] [--group-by G] [--no-smart] [--margin MM] [--label-style S] [--quality Q] [--copyright C] [--dry-run]  # PDF contact sheet
+maki export <query> <target> [--layout flat|mirror] [--all-variants] [--include-sidecars] [--previews|--smart-previews] [--symlink] [--zip] [--overwrite] [--dry-run]  # copy matching files to a directory or ZIP
 maki group <variant-hashes...>                     # group variants into one asset
 maki split <asset-id> <variant-hashes...>          # split variants into new assets
-maki relocate <id> <vol> [--remove-source] [--dry-run]  # copy/move asset
+maki relocate [IDS...] [--query Q] --target VOL [--remove-source] [--create-sidecars] [--dry-run]  # copy/move asset files to another volume
 maki verify [PATHS...] [--volume V] [--asset ID] [--include G] [--skip G] [--max-age N] [--force]  # check file integrity
 maki sync <PATHS...> [--volume V] [--apply] [--remove-stale]  # reconcile catalog with disk
-maki refresh [PATHS...] [--volume V] [--asset ID] [--dry-run] [--media]  # re-read metadata from changed sidecars
+maki refresh [PATHS...] [--volume V] [--asset ID] [--dry-run] [--media] [--reimport] [--exif-only]  # re-read metadata from changed sidecars
+maki sync-metadata [QUERY] [--volume V] [--asset ID] [--media] [--dry-run]  # bidirectional XMP sync (pro)
+maki writeback [QUERY] [--volume V] [--asset ID] [--all] [--mirror-tags] [--force] [--embed] [--no-trash] [--dry-run]  # flush pending edits to XMP / embedded XMP (pro)
 maki update-location <id> --from <old> --to <new> [--volume V]  # update path after manual move
-maki cleanup [--volume V] [--list] [--apply]       # remove stale locations, orphaned assets, and previews
+maki cleanup [--volume V] [--path P] [--list] [--apply]  # remove stale locations, orphaned assets, and previews
 maki duplicates [--same-volume] [--cross-volume] [--volume V] [--filter-format F] [--path P] [--format FMT]  # find duplicates
-maki dedup [--volume V] [--prefer S] [--filter-format F] [--path P] [--min-copies N] [--apply]  # remove same-volume duplicates
-maki generate-previews [PATHS...] [--asset ID] [--volume V] [--include G] [--skip G] [--force]  # generate thumbnails
+maki dedup [--volume V] [--prefer S] [--filter-format F] [--path P] [--min-copies N] [--apply] [--no-trash]  # remove same-volume duplicates
+maki generate-previews [PATHS...] [--asset ID] [--volume V] [--include G] [--skip G] [--force] [--upgrade] [--smart]  # generate thumbnails
 maki stats [--types] [--volumes] [--tags] [--verified] [--all] [--limit N]  # catalog statistics
-maki auto-group [QUERY] [--apply]                  # group assets by filename stem
-maki embed [--query Q] [--asset ID] [--volume V] [--model M] [--force]  # generate embeddings (ai feature)
-maki faces detect|cluster|people|name|merge|delete-person|unassign|download  # face recognition (ai feature)
+maki status [--min-copies N]                       # catalog health summary
+maki backup-status [QUERY] [--at-risk] [--min-copies N] [--volume V] [--format F] [-q]  # backup coverage
+maki auto-group [QUERY] [--apply] [--global]       # group assets by filename stem
+maki auto-tag [QUERY] [--asset ID] [--volume V] [--model M] [--threshold T] [--labels FILE] [--apply] [--download] [--remove-model] [--list-models] [--list-labels] [--similar ID]  # zero-shot tagging (ai feature)
+maki embed [QUERY] [--asset ID] [--volume V] [--model M] [--force] [--export]  # generate embeddings (ai feature)
+maki ai export-vocabulary [-o FILE] [--default]    # active or built-in AI vocabulary as YAML (ai feature)
+maki faces detect|download|status|cluster|clean|similarity|dump-aligned|people|name|merge|delete-person|unassign|export  # face recognition (ai feature)
+maki stack create|add|remove|pick|dissolve|list|show|from-tag  # manage stacks (alias: st; show supports --format)
 maki fix-roles [PATHS...] [--volume V] [--asset ID] [--apply]  # fix variant roles in RAW+non-RAW groups
-maki saved-search save|list|run|delete             # manage saved searches (alias: ss, save supports --favorite)
-maki collection create|list|show|add|remove|delete # manage collections (alias: col)
-maki rebuild-catalog                               # rebuild SQLite from sidecars
-maki describe [--query Q] [--asset ID] [--volume V] [--mode M] [--apply]  # VLM image descriptions/tags
+maki fix-dates [QUERY] [--volume V] [--asset ID] [--apply]  # set asset dates from EXIF / file mtime
+maki fix-recipes [QUERY] [--volume V] [--asset ID] [--apply]  # re-attach recipes imported as standalone assets
+maki create-sidecars [QUERY] [--volume V] [--asset ID] [--apply]  # write XMP sidecars for assets without a recipe
+maki saved-search save|list|run|delete             # manage saved searches (alias: ss; save supports --sort/--favorite, run --format)
+maki collection create|list|show|add|remove|delete # manage collections (alias: col; show supports --format)
+maki rebuild-catalog [--asset ID]                  # rebuild SQLite from sidecars
+maki migrate                                       # run pending schema migrations
+maki describe [QUERY] [--asset ID] [--volume V] [--model M] [--endpoint URL] [--mode describe|tags|both] [--apply] [--force] [--dry-run] [--check]  # VLM image descriptions/tags (pro)
 maki serve [--port P] [--bind ADDR] [--read-only] [--log]  # start web UI server (--log for request logging)
-maki watch <paths...> [--interval S] [--volume V]  # poll directories and auto-import new files
-maki undo | history [--asset ID]                   # edit-history journal
+maki undo [--dry-run] [--force]                    # revert the newest metadata edit
+maki history [ASSET] [--limit N]                   # list journaled edits (newest first)
 maki doctor [--sample N] [--repair]                 # sidecar ↔ SQLite consistency check
-maki trash list|restore|empty                       # deletion quarantine
+maki trash list | restore <path> | empty [--older-than N] [--all] [--dry-run]  # deletion quarantine
 maki audio analyze [QUERY] [--force] [--dry-run]    # external key/BPM detection
-maki auto-stack [QUERY] [--threshold N] [--apply]  # similarity clustering into stacks (ai feature)
-maki status                                         # catalog health summary
+maki auto-stack [QUERY] [--threshold N] [--min-size N] [--apply]  # similarity clustering into stacks (ai feature)
+maki doc [manual|cheatsheet|filters|tagging]       # open documentation in the browser
+maki licenses [--summary]                          # MAKI and third-party licenses
+maki shell [SCRIPT] [-c CMD] [--strict]            # interactive shell / run a .maki script
 ```
 
 ## Catalog Directory Structure
@@ -708,4 +739,6 @@ maki status                                         # catalog health summary
     undone/                           # operations that were undone
   .trash/
     <date>/<volume>/...               # quarantined files and sidecars from deleting operations (maki trash)
+  .maki/
+    shell_history                     # readline history of `maki shell` (created on first save)
 ```

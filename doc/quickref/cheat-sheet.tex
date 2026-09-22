@@ -99,6 +99,9 @@ Import files into the catalog. \\
 \opt{--embed} \pro{} \opt{--describe} \pro{} \opt{--dry-run} \\
 \opt{--include GROUP} \opt{--skip GROUP}
 
+\subsection{maki watch \textit{[PATHS...]}}
+Poll directories and auto-import new files. \opt{--volume} \opt{--interval SECS} \opt{--once}
+
 \subsection{maki delete \textit{ASSET\_IDS...}}
 Delete assets. \opt{--apply} \opt{--remove-files}
 
@@ -112,6 +115,12 @@ OLD accepts \cmd{=} (exact level) and \cmd{\textasciicircum} (case-sensitive) pr
 \subsection{maki tag delete \textit{TAG}}
 Delete a tag (cascades to descendants) from every asset. \opt{--apply} \\
 TAG accepts the same \cmd{=} / \cmd{\textasciicircum} markers as \cmd{tag rename}.
+
+\subsection{maki tag split \textit{OLD NEW...}}
+Replace one leaf tag by two or more tags. \opt{--keep} \opt{--apply}
+
+\subsection{maki tag scan / expand-ancestors \textit{[QUERY]}}
+Report malformed tags (read-only); add missing ancestor levels. \opt{--asset} \opt{--apply}
 
 \subsection{maki tag clear \textit{ASSET\_ID}}
 Remove all tags from an asset.
@@ -132,7 +141,7 @@ Edit metadata fields. \\
 \subsection{maki group \textit{HASHES...}}
 Group variants into one asset.
 
-\subsection{maki split \textit{ASSET\_ID} --variant \textit{HASH}}
+\subsection{maki split \textit{ASSET\_ID HASHES...}}
 Split variants out of an asset.
 
 \subsection{maki auto-group \textit{[QUERY]}}
@@ -152,6 +161,16 @@ AI auto-tagging with SigLIP. \\
 \subsection{maki embed \textit{[QUERY]} \pro}
 Generate image embeddings. \\
 \opt{--asset} \opt{--volume} \opt{--force} \opt{--export}
+
+\subsection{maki auto-stack \textit{[QUERY]} \pro}
+Cluster visually similar assets into stacks. \\
+\opt{--threshold PCT} \opt{--min-size N} \opt{--apply}
+
+\subsection{maki ai export-vocabulary \pro}
+Dump the active AI label vocabulary as YAML. \opt{--default} \opt{-o FILE}
+
+\subsection{maki audio analyze \textit{[QUERY]}}
+Detect musical key / BPM via external tools. \opt{--force} \opt{--dry-run}
 
 \section{Organize}
 
@@ -173,10 +192,10 @@ Stack management commands.
 \subsection{maki stack from-tag \textit{PATTERN}}
 Convert tag patterns to stacks. \opt{--apply} \opt{--remove-tags}
 
-\subsection{maki faces detect / cluster / clean / name / merge \pro}
-Face detection and recognition. \\
+\subsection{maki faces detect / cluster / clean / name / merge / people \pro}
+Face detection and recognition (\cmd{download} fetches the models). \\
 \opt{--query} \opt{--asset} \opt{--apply} \opt{--force} \opt{--threshold} \opt{--min-confidence} \\
-Diagnostics: \cmd{faces similarity}, \cmd{faces dump-aligned}, \cmd{faces status}
+Also: \cmd{faces status}, \cmd{faces export}, \cmd{faces similarity}, \cmd{faces dump-aligned}
 
 \section{Retrieve}
 
@@ -193,7 +212,7 @@ Open preview in OS default image viewer.
 
 \subsection{maki export \textit{QUERY TARGET}}
 Export to directory. \opt{--zip} \opt{--layout flat|mirror} \\
-\opt{--all-variants} \opt{--sidecars}
+\opt{--all-variants} \opt{--include-sidecars}
 
 \subsection{maki contact-sheet \textit{QUERY OUTPUT}}
 Generate PDF contact sheet. \\
@@ -201,7 +220,7 @@ Generate PDF contact sheet. \\
 \opt{--title} \opt{--fields} \opt{--sort}
 
 \subsection{maki duplicates}
-Find duplicate files. \opt{--mode same|cross} \opt{--volume} \opt{--format}
+Find duplicate files. \opt{--same-volume} \opt{--cross-volume} \opt{--volume} \opt{--format}
 
 \subsection{maki stats}
 Catalog statistics breakdown. \opt{--tags} \opt{--verified}
@@ -210,9 +229,9 @@ Catalog statistics breakdown. \opt{--tags} \opt{--verified}
 Health overview with next-step hints. \opt{--min-copies N}
 
 \subsection{maki backup-status}
-Show backup coverage and at-risk assets. \opt{--copies N}
+Show backup coverage and at-risk assets. \opt{--at-risk} \opt{--min-copies N}
 
-\subsection{maki doc \textit{[manual|cheatsheet|filters]}}
+\subsection{maki doc \textit{[manual|cheatsheet|filters|tagging]}}
 Open documentation PDF in browser.
 
 \subsection{maki licenses}
@@ -221,16 +240,22 @@ Show MAKI license + 3rd-party crate licenses. \opt{--summary}
 \subsection{maki serve}
 Start web UI. \opt{--port} \opt{--bind}
 
-\subsection{maki shell}
-Interactive shell. \opt{-c CMD} \opt{--script FILE}
+\subsection{maki shell \textit{[SCRIPT]}}
+Interactive shell, or run a script file. \opt{-c CMD} \opt{--strict}
 
 \section{Maintain}
+
+\subsection{maki undo / history \textit{[ASSET\_ID]}}
+Revert the latest metadata edit; list recent edits. \opt{--dry-run} \opt{--force} \opt{--limit N}
+
+\subsection{maki doctor}
+Check YAML sidecars against the SQLite catalog. \opt{--sample N} \opt{--repair}
 
 \subsection{maki verify \textit{[PATHS...]}}
 Check file integrity. \\
 \opt{--volume} \opt{--asset} \opt{--force} \opt{--max-age DAYS}
 
-\subsection{maki sync \textit{[PATHS...]}}
+\subsection{maki sync \textit{PATHS...}}
 Sync with disk changes. \opt{--apply} \opt{--remove-stale}
 
 \subsection{maki sync-metadata \textit{[QUERY]} \pro}
@@ -251,6 +276,9 @@ Remove stale records. \opt{--apply} \opt{--list} \opt{--path}
 
 \subsection{maki dedup}
 Remove same-volume duplicate file locations. \opt{--apply} \opt{--prefer}
+
+\subsection{maki trash list / restore \textit{PATH} / empty}
+Files trashed by \cmd{delete --remove-files}. \opt{--older-than DAYS} \opt{--all} \opt{--dry-run}
 
 \subsection{maki generate-previews \textit{[PATHS...]}}
 Generate/regenerate previews. \\

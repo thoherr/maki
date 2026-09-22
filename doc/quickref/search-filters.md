@@ -17,7 +17,7 @@ Filters combine with **AND** — every filter must match. Free-text tokens that 
 | Rating (minimum) | `rating:<N>+` | `rating:3+` |
 | Rating (range) | `rating:<N>-<M>` | `rating:3-5` |
 | Rating (OR) | `rating:<N>,<M>` | `rating:2,4` |
-| Color label | `label:<color>` | `label:Red`, `label:Blue` |
+| Color label | `label:<color>`, `label:none` | `label:Red`, `label:none` (unlabeled) |
 | Camera | `camera:<text>` | `camera:fuji`, `camera:"Canon EOS R5"` |
 | Lens | `lens:<text>` | `lens:56mm`, `lens:"RF 50mm"` |
 | Description | `description:<text>`, `desc:<text>` | `description:sunset` |
@@ -35,7 +35,7 @@ Filters combine with **AND** — every filter must match. Free-text tokens that 
 | Volume | `volume:<label>` | `volume:Archive`, `volume:none` |
 | Asset ID | `id:<prefix>` | `id:72a0bb4b` |
 | Copies | `copies:<N>`, `copies:<N>+` | `copies:1`, `copies:2+` |
-| Variants | `variants:<N>+` | `variants:2+` |
+| Variants | `variants:<N>`, `variants:<N>+` | `variants:1`, `variants:2+` |
 | Tag count (leaves) | `tagcount:<N>`, `tagcount:<N>+`, `tagcount:<A>-<B>` | `tagcount:0` (untagged), `tagcount:5+` |
 | Scattered | `scattered:<N>`, `scattered:<N>+` | `scattered:2+` (files in 2+ session roots) |
 | Duration (seconds) | `duration:<N>`, `duration:<N>+`, `duration:<min>-<max>` | `duration:60`, `duration:30+` |
@@ -45,17 +45,17 @@ Filters combine with **AND** — every filter must match. Free-text tokens that 
 | GPS (box) | `geo:<S>,<W>,<N>,<E>` | `geo:47.5,11.0,48.5,13.0` |
 | GPS (radius) | `geo:<lat>,<lng>,<km>` | `geo:52.52,13.405,5` |
 | GPS (any/none) | `geo:any`, `geo:none` | `geo:any` |
-| Orphan | `orphan:true` | `orphan:true` |
+| Orphan | `orphan:true`, `orphan:false` | `orphan:true` (no file locations) |
 | Missing files | `missing:true` | `missing:true` |
 | Stale verification | `stale:<days>` | `stale:30` |
 | Stacked | `stacked:true`, `stacked:false` | `stacked:true` |
-| Face count | `faces:any`, `faces:none`, `faces:<N>+` | `faces:2+` |
+| Face count | `faces:any`, `faces:none`, `faces:<N>`, `faces:<N>+` | `faces:1`, `faces:2+` |
 | Person *(Pro)* | `person:<name>` | `person:Alice`, `person:Alice,Bob` (either), `person:Alice person:Bob` (both) |
 | Visual similarity *(Pro)* | `similar:<id>`, `similar:<id>:<limit>` | `similar:72a0bb4b:50` (default 40) |
 | Query image *(Pro)* | `maki search --image <file>` | `maki search --image preview.jpg` |
 | Similarity threshold *(Pro)* | `min_sim:<percent>` | `min_sim:90` (with `similar:`, `text:`, `--image`) |
 | Text search *(Pro)* | `text:<query>`, `text:"<query>":<limit>` | `text:"sunset beach"` (quote multi-word) |
-| Embedding status | `embed:any`, `embed:none` | `embed:none type:image` |
+| Embedding status | `embed:any`/`embed:true`, `embed:none`/`embed:false` | `embed:none type:image` |
 
 \newpage
 
@@ -78,6 +78,8 @@ Repeating any other filter ORs the values (`type:image type:video` = `type:image
     -tag:rejected                     exclude rejected
     -format:xmp                       exclude XMP files
     -type:other                       exclude "other" type
+
+Numeric, date, and boolean filters ignore the dash; `-label:none` and `-volume:none` are not honoured either (they behave like the positive form).
 
 **Combined:**
 

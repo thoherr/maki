@@ -25,7 +25,7 @@ A command-line digital asset manager built in Rust, designed for large collectio
 - **Face recognition** — detect faces with YuNet, generate ArcFace embeddings, auto-cluster into people groups, and manage named people across your catalog (*MAKI Pro*)
 - **Interactive shell** — `maki shell` REPL with named variables (`$picks = search "rating:5"`), tab completion, session defaults, `.maki` script files, and `source` for script composition
 - **Web UI** — browser-based interface with search, inline editing, batch operations, keyboard navigation, lightbox viewer, dark mode, grid density controls, calendar heatmap, faceted sidebar, visual similarity stroll page, per-tag review of AI suggestions before applying, and OS integration (reveal in Finder, open terminal)
-- **Flexible output** — JSON on all commands, custom format templates, quiet mode for scripting
+- **Flexible output** — JSON on virtually all commands, custom format templates, quiet mode for scripting
 
 ## Quick Start
 
@@ -52,18 +52,18 @@ maki serve
 # Or use the interactive shell
 maki shell
 # photos> $picks = search "rating:5 date:2024"
-# photos [picks=38]> export --target /tmp/best $picks
+# photos [picks=38]> export $picks /tmp/best
 ```
 
 ## Commands
 
-44 commands covering setup, import, search, editing, maintenance, and more:
+53 commands (95 leaf commands counting subcommands) covering setup, import, search, editing, maintenance, and more:
 
-`init` · `volume add/list/combine/split/rename/remove/set-purpose` · `import` · `delete` · `export` · `contact-sheet` · `describe` · `search` · `show` · `preview` · `edit` · `tag` · `group` · `split` · `auto-group` · `auto-tag` · `embed` · `faces` · `stack` · `duplicates` · `dedup` · `generate-previews` · `create-sidecars` · `relocate` · `update-location` · `verify` · `sync` · `sync-metadata` · `refresh` · `cleanup` · `writeback` · `stats` · `backup-status` · `fix-roles` · `fix-dates` · `fix-recipes` · `rebuild-catalog` · `migrate` · `saved-search` · `collection` · `serve` · `doc` · `licenses` · `shell`
+`init` · `volume add/list/combine/split/rename/remove/set-purpose` · `import` · `watch` · `delete` · `export` · `contact-sheet` · `describe` · `search` · `show` · `preview` · `tag rename/split/delete/clear/scan/expand-ancestors/fix-unicode/export-vocabulary` · `edit` · `group` · `split` · `auto-group` · `auto-tag` · `auto-stack` · `embed` · `ai export-vocabulary` · `audio analyze` · `faces detect/download/status/cluster/clean/similarity/dump-aligned/people/name/merge/delete-person/unassign/export` · `stack create/add/remove/pick/dissolve/list/show/from-tag` · `duplicates` · `dedup` · `trash list/restore/empty` · `generate-previews` · `fix-roles` · `fix-dates` · `fix-recipes` · `create-sidecars` · `rebuild-catalog` · `undo` · `history` · `doctor` · `migrate` · `relocate` · `update-location` · `verify` · `sync` · `sync-metadata` · `refresh` · `cleanup` · `writeback` · `backup-status` · `status` · `stats` · `serve` · `doc` · `licenses` · `saved-search save/list/run/delete` · `collection create/list/show/add/remove/delete` · `shell`
 
 **Global flags**: `--json`, `--log`, `--verbose`, `--debug`, `--time`. Run `maki --help` or `maki <command> --help` for usage.
 
-See the [Command Reference](doc/manual/reference/01-setup-commands.md) for detailed documentation of every command, or the [Search Filters Reference](doc/manual/reference/06-search-filters.md) for the 20+ filter types available in `maki search`.
+See the [Command Reference](doc/manual/reference/01-setup-commands.md) for detailed documentation of every command, or the [Search Filters Reference](doc/manual/reference/06-search-filters.md) for the 40+ filter types available in `maki search`.
 
 ## Architecture
 
@@ -89,14 +89,16 @@ Configuration is documented in the [Configuration Reference](doc/manual/referenc
 ## External Tools (Highly Recommended)
 
 - **dcraw** or **LibRaw** (dcraw_emu) — RAW file preview extraction
-- **ffmpeg** — video thumbnail extraction
+- **ffmpeg** — video thumbnail extraction and audio waveform strips
+- **ffprobe** — video metadata (duration, codec, resolution, framerate); ships with ffmpeg
 - **curl** — model file download for AI auto-tagging (only needed with `--features ai`) and VLM image descriptions (`maki describe`)
+- **keyfinder-cli** and **beat_this** (optional) — musical key and BPM detection for `maki audio analyze`; substitutes configurable via `[audio]` in `maki.toml`
 
 Install on macOS: `brew install libraw ffmpeg curl`
 Install on Linux: `sudo apt install libraw-bin ffmpeg curl` (Debian/Ubuntu)
 Install on Windows: `winget install LibRaw.LibRaw Gyan.FFmpeg cURL.cURL` or `scoop install libraw ffmpeg curl`
 
-When missing, RAW and video files get an info card preview instead. maki prints a warning on first use when a tool is not found.
+When missing, RAW and video files get an info card preview instead (audio files get an info card without the waveform strip, and `maki audio analyze` skips the missing analyzer). maki prints a warning on first use when a tool is not found.
 
 ## AI Auto-Tagging (MAKI Pro)
 

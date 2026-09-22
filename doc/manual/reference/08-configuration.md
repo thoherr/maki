@@ -653,7 +653,9 @@ prompt = "Describe the architectural style, materials, and notable design featur
 - **Type:** string
 - **Default:** `"describe"`
 
-Default output mode for `maki describe`. One of: `describe` (natural language description), `tags` (JSON tag suggestions), `both` (two separate VLM calls: one for description, one for tags).
+Output mode for the VLM description phase of `maki import --describe` (and the web import dialog's "Generate descriptions"). One of: `describe` (natural language description), `tags` (JSON tag suggestions), `both` (two separate VLM calls: one for description, one for tags).
+
+This setting is currently **not** honoured by `maki describe`, whose `--mode` flag has its own built-in default of `describe` -- pass `--mode tags` or `--mode both` explicitly. The web UI's Describe button likewise always uses `describe`.
 
 ### temperature
 
@@ -1091,8 +1093,10 @@ descriptions = true
 [import.profiles.cards]
 auto_tags = ["inbox"]
 smart_previews = false
-include = ["*.NEF", "*.JPG"]
-skip = ["*_backup*"]
+# File-type groups, not globs: images, video, audio, xmp, documents,
+# captureone, rawtherapee, dxo, on1 (see [import.profiles.<name>] above).
+include = ["captureone"]
+skip = ["audio", "documents"]
 
 [dedup]
 # Default path substring for --prefer (keep files whose path contains this).
