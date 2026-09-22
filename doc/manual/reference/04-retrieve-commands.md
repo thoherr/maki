@@ -47,7 +47,7 @@ Searches the catalog for assets matching the given query. The query string suppo
 | `tag:` | Tag name (hierarchical: matches descendants) | `tag:landscape`, `tag:"golden hour"`, `tag:animals|birds` |
 | `format:` | File format | `format:jpg`, `format:nef`, `format:mp4` |
 | `rating:` | Star rating (exact, range, OR) | `rating:5`, `rating:3+`, `rating:3-5`, `rating:2,4` |
-| `label:` | Color label (`none` = unlabeled) | `label:Red`, `label:Green`, `label:none` |
+| `label:` | Color label (`none` = unlabeled, `-label:none` = any label) | `label:Red`, `label:Green`, `label:none` |
 | `camera:` | Camera model (partial match) | `camera:fuji`, `camera:"Canon EOS R5"` |
 | `lens:` | Lens model (partial match) | `lens:56mm`, `lens:"RF 50mm f/1.2"` |
 | `description:` / `desc:` | Description text (partial match) | `description:sunset`, `desc:"colorful flowers"` |
@@ -74,8 +74,8 @@ Searches the catalog for assets matching the given query. The query string suppo
 | `orphan:true` | Assets with zero file locations | `orphan:true` |
 | `orphan:false` | Assets with at least one file location | `orphan:false` |
 | `missing:true` | Assets with files missing on disk | `missing:true` |
-| `stale:N` | Not verified in N days | `stale:30`, `stale:90` |
-| `volume:` | Assets on a specific volume | `volume:Archive`, `volume:none` |
+| `stale:` | Not verified in N days (or never); `never` = never verified | `stale:30`, `stale:90`, `stale:never` |
+| `volume:` | Assets on a specific volume (`none` = no online copy, `-volume:none` = on an online volume) | `volume:Archive`, `volume:none` |
 | `stacked:true` | Assets in a stack | `stacked:true` |
 | `stacked:false` | Assets not in any stack | `stacked:false` |
 | `geo:` | GPS geolocation | `geo:any`, `geo:none`, `geo:52.5,13.4,10` |

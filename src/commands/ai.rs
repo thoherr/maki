@@ -4,10 +4,10 @@ use super::*;
 
 /// Dispatch `maki ai <subcommand>`.
 #[cfg(feature = "ai")]
-pub fn run_ai_command(cmd: AiCommands) -> anyhow::Result<()> {
+pub fn run_ai_command(cmd: AiCommands, json: bool) -> anyhow::Result<()> {
     match cmd {
         AiCommands::ExportVocabulary { output, default } => {
-            run_ai_export_vocabulary(output, default)
+            run_ai_export_vocabulary(output, default, json)
         }
     }
 }
@@ -16,13 +16,13 @@ pub fn run_ai_command(cmd: AiCommands) -> anyhow::Result<()> {
 /// emit the AI vocabulary as YAML. See the `AiCommands::ExportVocabulary`
 /// doc-comment for behaviour.
 #[cfg(feature = "ai")]
-fn run_ai_export_vocabulary(output: Option<String>, default: bool) -> anyhow::Result<()> {
+fn run_ai_export_vocabulary(output: Option<String>, default: bool, json: bool) -> anyhow::Result<()> {
     use std::io::Write;
 
     const BUILTIN_DEFAULT: &str = include_str!("../default-vocabulary.yaml");
 
-    let content = if default {
-        BUILTIN_DEFAULT.to_string()
+    let (content, source): (String, &str) = if default {
+        (BUILTIN_DEFAULT.to_string(), "builtin-default")
     } else {
         // Try to load the user's active config. If we're outside a
         // catalog (or there's no [ai].labels), fall back to the
@@ -41,16 +41,16 @@ fn run_ai_export_vocabulary(output: Option<String>, default: bool) -> anyhow::Re
                     .to_lowercase();
                 if ext == "yaml" || ext == "yml" {
                     // Verbatim — preserves the user's comments + key order.
-                    std::fs::read_to_string(&p)
-                        .map_err(|e| anyhow::anyhow!("read {}: {e}", p.display()))?
+                    (std::fs::read_to_string(&p)
+                        .map_err(|e| anyhow::anyhow!("read {}: {e}", p.display()))?, "config-yaml")
                 } else {
                     // Convert flat .txt to YAML with identity mappings so
                     // the user can start adding hierarchy without
                     // reordering anything.
-                    convert_txt_to_yaml(&p)?
+                    (convert_txt_to_yaml(&p)?, "config-txt")
                 }
             }
-            None => BUILTIN_DEFAULT.to_string(),
+            None => (BUILTIN_DEFAULT.to_string(), "builtin-default"),
         }
     };
 
@@ -58,10 +58,23 @@ fn run_ai_export_vocabulary(output: Option<String>, default: bool) -> anyhow::Re
         Some(path) => {
             std::fs::write(&path, &content)
                 .map_err(|e| anyhow::anyhow!("write {path}: {e}"))?;
-            eprintln!("Wrote {} bytes to {path}", content.len());
+            if json {
+                println!("{}", serde_json::json!({
+                    "source": source, "bytes": content.len(), "output": path,
+                }));
+            } else {
+                eprintln!("Wrote {} bytes to {path}", content.len());
+            }
         }
         None => {
-            std::io::stdout().write_all(content.as_bytes())?;
+            if json {
+                // The YAML document is the payload; wrap it so stdout stays JSON.
+                println!("{}", serde_json::json!({
+                    "source": source, "bytes": content.len(), "output": null, "yaml": content,
+                }));
+            } else {
+                std::io::stdout().write_all(content.as_bytes())?;
+            }
         }
     }
     Ok(())
@@ -711,7 +724,7 @@ pub fn run_describe_command(
         prompt: Option<String>,
         max_tokens: Option<u32>,
         timeout: Option<u32>,
-        mode: String,
+        mode: Option<String>,
         temperature: Option<f32>,
         num_ctx: Option<u32>,
         top_p: Option<f32>,
@@ -733,7 +746,9 @@ pub fn run_describe_command(
 
     let endpoint = endpoint.as_deref().unwrap_or(&config.vlm.endpoint);
     let model = model.as_deref().unwrap_or(&config.vlm.model);
-    let vlm_mode = maki::vlm::DescribeMode::from_str(&mode)?;
+    // CLI --mode > [vlm] mode > describe
+    let mode = mode.as_deref().unwrap_or(&config.vlm.mode);
+    let vlm_mode = maki::vlm::DescribeMode::from_str(mode)?;
 
     // Build params: per-model config merged with CLI overrides
     let mut vlm_params = config.vlm.params_for_model(model);

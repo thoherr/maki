@@ -290,7 +290,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 **Module**: `src/format.rs` — template engine with `{placeholder}` substitution and escape sequences.
 
 **Capabilities**:
-- **Global `--json` flag**: honoured by every command except `ai export-vocabulary` (which always emits YAML). Outputs structured JSON to stdout; human-readable messages go to stderr. All result types derive `serde::Serialize`.
+- **Global `--json` flag**: honoured by every command. Outputs structured JSON to stdout; human-readable messages go to stderr. All result types derive `serde::Serialize`. (`ai export-vocabulary --json` wraps its YAML payload in a JSON object rather than emitting raw YAML.)
 - **`--format` flag** (on `search`, `duplicates`, `backup-status`, `saved-search run`, `collection show`, `stack show`): presets (`ids`, `short`, `full`, `json`) or custom templates (`'{id}\t{name}\t{tags}'`). When `--format` is explicit, result counts are suppressed.
 - **`-q`/`--quiet`** (on `search` and `backup-status`): shorthand for `--format=ids`, outputting one UUID per line for scripting.
 - **Template placeholders**: `{id}`, `{short_id}`, `{name}`, `{filename}`, `{type}`, `{format}`, `{date}`, `{tags}`, `{description}`, `{label}`, `{hash}`. Templates support `\t` and `\n` escape sequences.

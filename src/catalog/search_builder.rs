@@ -195,6 +195,9 @@ impl Catalog {
         if opts.color_label_none {
             clauses.push("a.color_label IS NULL".to_string());
         }
+        if opts.color_label_any {
+            clauses.push("a.color_label IS NOT NULL".to_string());
+        }
         Self::add_equality_filter(&mut clauses, &mut params, opts.color_labels, opts.color_labels_exclude, "a.color_label", &mut false, false);
 
         Self::add_path_filter(&mut clauses, &mut params, opts.path_prefixes, opts.path_prefixes_exclude, &mut needs_fl_join);
@@ -610,15 +613,45 @@ impl Catalog {
                 NumericFilter::Values(v) => v.first().copied().unwrap_or(30.0) as u64,
                 NumericFilter::ValuesOrMin { min, .. } => *min as u64,
             };
+            // `verified_at` is stored as RFC 3339 (`2026-09-22T18:41:03.123+00:00`,
+            // UTC). SQLite's datetime() renders with a space, so compare on
+            // the parsed value, not the raw string — the first 19 characters
+            // are the unambiguous `YYYY-MM-DDTHH:MM:SS` part.
             clauses.push(format!(
                 "EXISTS (SELECT 1 FROM file_locations fl2 \
                  JOIN variants v2 ON fl2.content_hash = v2.content_hash \
                  WHERE v2.asset_id = a.id AND \
-                 (fl2.verified_at IS NULL OR fl2.verified_at < datetime('now', '-{} days')))",
+                 (fl2.verified_at IS NULL OR \
+                  datetime(substr(fl2.verified_at, 1, 19)) < datetime('now', '-{} days')))",
                 days
             ));
         }
+        if opts.stale_never {
+            clauses.push(
+                "EXISTS (SELECT 1 FROM file_locations fl2 \
+                 JOIN variants v2 ON fl2.content_hash = v2.content_hash \
+                 WHERE v2.asset_id = a.id AND fl2.verified_at IS NULL)"
+                    .to_string(),
+            );
+        }
         Self::add_id_list_filter(clauses, params, opts.missing_asset_ids, false);
+        if let Some(online_ids) = opts.has_online_locations {
+            if online_ids.is_empty() {
+                // No volume is online → nothing can match.
+                clauses.push("0".to_string());
+            } else {
+                let placeholders: Vec<&str> = online_ids.iter().map(|_| "?").collect();
+                clauses.push(format!(
+                    "EXISTS (SELECT 1 FROM file_locations fl2 \
+                     JOIN variants v2 ON fl2.content_hash = v2.content_hash \
+                     WHERE v2.asset_id = a.id AND fl2.volume_id IN ({}))",
+                    placeholders.join(",")
+                ));
+                for id in online_ids {
+                    params.push(Box::new(id.clone()));
+                }
+            }
+        }
         if let Some(online_ids) = opts.no_online_locations {
             if !online_ids.is_empty() {
                 let placeholders: Vec<&str> = online_ids.iter().map(|_| "?").collect();

@@ -25,7 +25,7 @@ A command-line digital asset manager built in Rust, designed for large collectio
 - **Face recognition** — detect faces with YuNet, generate ArcFace embeddings, auto-cluster into people groups, and manage named people across your catalog (*MAKI Pro*)
 - **Interactive shell** — `maki shell` REPL with named variables (`$picks = search "rating:5"`), tab completion, session defaults, `.maki` script files, and `source` for script composition
 - **Web UI** — browser-based interface with search, inline editing, batch operations, keyboard navigation, lightbox viewer, dark mode, grid density controls, calendar heatmap, faceted sidebar, visual similarity stroll page, per-tag review of AI suggestions before applying, and OS integration (reveal in Finder, open terminal)
-- **Flexible output** — JSON on virtually all commands, custom format templates, quiet mode for scripting
+- **Flexible output** — JSON on all commands, custom format templates, quiet mode for scripting
 
 ## Quick Start
 

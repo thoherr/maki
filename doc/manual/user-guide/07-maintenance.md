@@ -158,7 +158,12 @@ Use the `stale:N` search filter to find assets that have not been verified recen
 maki search "stale:30"
 ```
 
-`stale:N` always includes never-verified files, but there is no filter for *only* those: `stale:0` matches every location verified before the current moment, i.e. effectively everything.
+`stale:N` always includes never-verified files. To list *only* those, use `stale:never` -- do not reach for `stale:0`, which matches every location verified before the current moment, i.e. effectively everything:
+
+```bash
+# Files no verify run has ever covered
+maki search "stale:never"
+```
 
 See [Browsing & Searching](05-browse-and-search.md) for more on search filters.
 

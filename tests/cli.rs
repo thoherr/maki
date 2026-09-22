@@ -1172,6 +1172,58 @@ fn rebuild_catalog_restores_data() {
 }
 
 #[test]
+fn rebuild_catalog_log_prints_per_sidecar_progress() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let file = create_test_file(&root, "logged.jpg", b"logged data");
+    maki().current_dir(&root).args(["import", file.to_str().unwrap()]).assert().success();
+
+    // --log: one stderr line per sidecar (id + name); summary still on stdout.
+    maki()
+        .current_dir(&root)
+        .args(["--log", "rebuild-catalog"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Rebuild complete"))
+        .stderr(predicate::str::contains("logged"));
+
+    // Without --log the per-sidecar lines are absent.
+    maki()
+        .current_dir(&root)
+        .arg("rebuild-catalog")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("logged").not());
+}
+
+#[cfg(feature = "ai")]
+#[test]
+fn ai_export_vocabulary_honours_json() {
+    let out = maki()
+        .args(["--json", "ai", "export-vocabulary", "--default"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["source"], "builtin-default");
+    assert!(v["output"].is_null());
+    assert!(v["yaml"].as_str().unwrap().contains(':'), "yaml document wrapped in JSON");
+    assert!(v["bytes"].as_u64().unwrap() > 0);
+
+    // With --output, stdout is a JSON summary and the file holds the YAML.
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("vocab.yaml");
+    let out = maki()
+        .args(["--json", "ai", "export-vocabulary", "--default", "--output", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["output"], path.to_str().unwrap());
+    assert!(std::fs::read_to_string(&path).unwrap().contains(':'));
+}
+
+#[test]
 fn verify_all_passes() {
     let dir = tempdir().unwrap();
     let root = init_catalog(dir.path());

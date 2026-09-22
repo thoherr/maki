@@ -31,7 +31,8 @@ Combining: space = AND (repeat a filter to AND), comma = OR within one filter
 (not for id:, codec:, key:, date*:, meta: — those take a single value).
 Prefix `-` to exclude (e.g. `-tag:rejected`) on list-style filters only: tag, type,
 format, camera, lens, description, collection, path, person, volume, label, and
-free text. Numeric, date, and boolean filters ignore the `-`.
+free text (`-label:none` = labeled, `-volume:none` = on an online volume).
+Numeric, date, and boolean filters ignore the `-`.
 
 TEXT & METADATA
   tag:landscape           tag match at any level
@@ -71,7 +72,8 @@ DATE
 STATUS
   orphan:true / orphan:false    with/without file locations
   missing:true                  files missing on disk
-  stale:30                      unverified for N days
+  stale:30                      not verified within N days (or never)
+  stale:never                   never verified
   stacked:true / stacked:false  in a stack (collapsed in browse)
   volume:Archive                on specific volume (or volume:none)
   geo:any / geo:none            has / lacks GPS coordinates
@@ -515,8 +517,9 @@ enum Commands {
         timeout: Option<u32>,
 
         /// What to generate: describe (prose), tags (structured), both
-        #[arg(long, display_order = 9, default_value = "describe")]
-        mode: String,
+        /// (default from `[vlm] mode` in maki.toml, or describe)
+        #[arg(long, display_order = 9)]
+        mode: Option<String>,
 
         /// Sampling temperature (0.0 = deterministic, 1.0+ = creative)
         #[arg(long, display_order = 10)]
@@ -2710,7 +2713,7 @@ faces/\n\
         }
         #[cfg(feature = "ai")]
         Commands::Ai(cmd) => {
-            run_ai_command(cmd)?;
+            run_ai_command(cmd, cli.json)?;
             Ok(())
         }
 
@@ -3009,7 +3012,7 @@ faces/\n\
             cli.log,
             verbosity,
         ),
-        Commands::RebuildCatalog { asset } => run_rebuild_catalog_command(asset, cli.json),
+        Commands::RebuildCatalog { asset } => run_rebuild_catalog_command(asset, cli.json, cli.log),
         Commands::Licenses {
             summary,
         } => run_licenses_command(

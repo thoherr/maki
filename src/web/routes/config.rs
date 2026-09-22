@@ -325,13 +325,13 @@ text_limit = 100
 
 /// Detect changes that require a process restart to take effect.
 ///
-/// Conservative: include any option that's bound at server startup
-/// (port/bind, pool capacity, AI model load, cached file extensions).
-/// Hot-reload-safe options (`[browse]`, `[contact_sheet]`, `[ai].labels`,
-/// `[vlm].prompt`, etc.) are read on each request and don't need a
-/// restart. The classification could move into the schema as a custom
-/// vocabulary later; for now it's a single function the front-end can
-/// trust.
+/// Conservative: include any option that's copied into `AppState` at
+/// server startup (port/bind, pool capacity, AI model load, the whole
+/// `[vlm]` section, basic-auth credentials, slideshow settings, …).
+/// Options that handlers re-read from `maki.toml` on each request (the
+/// import dialog's defaults, `[trash]`, `[history]`, …) and CLI-only
+/// sections (`[contact_sheet]`, `[cli]`) don't need a restart. Keep this in sync with `BOOT_TIME` in
+/// `templates/config_form_js.html`, which shows the pill before save.
 fn needs_restart(
     old: &crate::config::CatalogConfig,
     new: &crate::config::CatalogConfig,
@@ -352,12 +352,25 @@ fn needs_restart(
     // [preview] — PreviewConfig is cloned into AppState and the
     // PreviewGenerator is built once. Changes need a restart.
     if old.preview != new.preview { return true; }
-    // [ai].model and execution_provider — model is loaded once.
-    if old.ai.model != new.ai.model { return true; }
-    if old.ai.execution_provider != new.ai.execution_provider { return true; }
-    if old.ai.model_dir != new.ai.model_dir { return true; }
-    // [browse].default_filter — held by AppState. Restart to refresh.
-    if old.browse.default_filter != new.browse.default_filter { return true; }
+    // [ai] — the whole section is cloned into AppState (model load,
+    // thresholds, vocabulary path, prompt template, text_limit).
+    if old.ai != new.ai { return true; }
+    // [browse] — default_filter and the slideshow settings are AppState
+    // fields (served to the lightbox via /api/build-info).
+    if old.browse != new.browse { return true; }
+    // [serve] read_only / username / password — resolved into AppState.
+    if old.serve.read_only != new.serve.read_only { return true; }
+    if old.serve.username != new.serve.username { return true; }
+    if old.serve.password != new.serve.password { return true; }
+    // [import] toggles the web import dialog shows — AppState fields.
+    if old.import.smart_previews != new.import.smart_previews { return true; }
+    if old.import.embeddings != new.import.embeddings { return true; }
+    if old.import.descriptions != new.import.descriptions { return true; }
+    // [dedup] prefer — AppState field used by duplicate auto-resolve.
+    if old.dedup != new.dedup { return true; }
+    // [vlm] — the whole section is cloned into AppState (Describe button,
+    // batch describe, model dropdown).
+    if old.vlm != new.vlm { return true; }
     false
 }
 
@@ -425,5 +438,39 @@ mod schema_contract_tests {
                 "{def}.{field} must expose additionalProperties for the form walker"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::needs_restart;
+    use crate::config::CatalogConfig;
+
+    #[test]
+    fn startup_bound_settings_flag_restart() {
+        let base = CatalogConfig::default();
+        assert!(!needs_restart(&base, &base.clone()));
+
+        let mut c = base.clone(); c.vlm.model = "other-model".into();
+        assert!(needs_restart(&base, &c), "[vlm] is cloned into AppState");
+        let mut c = base.clone(); c.browse.slideshow_seconds = base.browse.slideshow_seconds + 1;
+        assert!(needs_restart(&base, &c), "[browse] slideshow is an AppState field");
+        let mut c = base.clone(); c.serve.read_only = !base.serve.read_only;
+        assert!(needs_restart(&base, &c));
+        let mut c = base.clone(); c.import.embeddings = !base.import.embeddings;
+        assert!(needs_restart(&base, &c));
+        let mut c = base.clone(); c.ai.threshold += 0.05;
+        assert!(needs_restart(&base, &c), "[ai] is cloned into AppState");
+        let mut c = base.clone(); c.dedup.prefer = Some("largest".into());
+        assert!(needs_restart(&base, &c));
+    }
+
+    #[test]
+    fn hot_reloaded_settings_do_not_flag_restart() {
+        let base = CatalogConfig::default();
+        let mut c = base.clone(); c.trash.retention_days = base.trash.retention_days + 1;
+        assert!(!needs_restart(&base, &c));
+        let mut c = base.clone(); c.contact_sheet.quality = 42;
+        assert!(!needs_restart(&base, &c), "[contact_sheet] is CLI-only");
     }
 }

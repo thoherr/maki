@@ -137,9 +137,18 @@
         'preview.max_edge': 1, 'preview.format': 1, 'preview.quality': 1,
         'preview.smart_max_edge': 1, 'preview.smart_quality': 1,
         'preview.generate_on_demand': 1,
-        'ai.model': 1, 'ai.execution_provider': 1, 'ai.model_dir': 1,
-        'browse.default_filter': 1
+        'browse.default_filter': 1, 'browse.slideshow_seconds': 1,
+        'browse.slideshow_loop': 1, 'browse.remember_latest_filter': 1,
+        'serve.read_only': 1, 'serve.username': 1, 'serve.password': 1,
+        'import.smart_previews': 1, 'import.embeddings': 1,
+        'import.descriptions': 1,
+        'dedup.prefer': 1
     };
+    // The whole [vlm] section (including per-model overrides) and the
+    // whole [ai] section are cloned into AppState at startup.
+    function isBootTime(path) {
+        return !!BOOT_TIME[path.join('.')] || path[0] === 'vlm' || path[0] === 'ai';
+    }
 
     // Render a form-row label with optional "Restart required" pill +
     // description from the schema's doc-comment. Returns a `<label>`
@@ -150,7 +159,7 @@
         var lbl = document.createElement('label');
         lbl.className = 'config-label';
         lbl.textContent = label;
-        if (BOOT_TIME[path.join('.')]) {
+        if (isBootTime(path)) {
             var pill = document.createElement('span');
             pill.className = 'config-restart-pill';
             pill.textContent = 'restart required';

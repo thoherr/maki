@@ -529,7 +529,7 @@ fn vlm_describe_asset_inner(
     let mode = mode_str
         .map(|s| DescribeMode::from_str(s).map_err(|e| e.to_string()))
         .transpose()?
-        .unwrap_or(DescribeMode::Describe);
+        .unwrap_or_else(|| DescribeMode::from_str(&vlm.mode).unwrap_or(DescribeMode::Describe));
     let model = model_override.unwrap_or(&vlm.model);
     let params = vlm.params_for_model(model);
     let prompt = params.prompt.as_deref()
@@ -703,7 +703,7 @@ fn batch_vlm_describe_inner(
     let mode = mode_str
         .map(|s| DescribeMode::from_str(s).map_err(|e| e.to_string()))
         .transpose()?
-        .unwrap_or(DescribeMode::Describe);
+        .unwrap_or_else(|| DescribeMode::from_str(&vlm.mode).unwrap_or(DescribeMode::Describe));
     let vlm_model = model_override.unwrap_or(&vlm.model);
     let params = vlm.params_for_model(vlm_model);
     let prompt = params.prompt.as_deref()

@@ -2,13 +2,55 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## Unreleased
+## v4.10.4 (2026-09-22)
 
-Documentation audit (2026-09-22): every command, flag, config key, search
-filter, web route and manual link was checked against the code. Help-text
-strings in `src/main.rs` / `src/shell.rs` corrected; no behaviour changes.
+Fix release from the September 2026 documentation audit: every command,
+flag, config key, search filter, web route and manual link was checked
+against the code. The doc drift is corrected below, and the handful of
+places where the *code* was wrong are fixed. No schema migration.
 
-### Fixed
+### Fixed (behaviour)
+
+- **`[vlm] mode` is now honoured by `maki describe` and the web Describe
+  button.** The CLI `--mode` flag used to carry a hard default of
+  `describe`, so the config value only ever reached `import --describe`;
+  the web UI hard-coded `describe` too. Precedence is now CLI flag >
+  `[vlm] mode` > `describe`, on all three paths.
+- **`-label:none` and `-volume:none` negate.** Both forms silently
+  behaved like the positive filter. `-label:none` now means "has a colour
+  label" and `-volume:none` means "has at least one location on a
+  currently online volume".
+- **`stale:N` compared timestamps as strings.** `verified_at` is stored
+  as RFC 3339 (`…T…`) while SQLite's cutoff renders with a space, so a
+  location verified earlier on the cutoff day was never considered stale.
+  The comparison now parses both sides. New `stale:never` form matches
+  locations that were never verified (`stale:0` never meant that; it
+  matches everything not verified within 0 days, i.e. everything).
+- **`maki ai export-vocabulary --json`** was ignored. It now prints a
+  JSON summary (`source`, `bytes`, `output`) — and, without `--output`,
+  the YAML document wrapped as `yaml` — so stdout stays JSON.
+- **`maki rebuild-catalog --log`** did nothing. It now prints one line per
+  sidecar (`<id>  <name>`) to stderr during the full rebuild.
+- **Web config editor restart flags** were incomplete: the whole `[vlm]`
+  and `[ai]` sections (incl. per-model overrides, thresholds, vocabulary
+  path, prompt), `[browse]` slideshow settings, `[serve]`
+  read_only/username/password, `[import]`
+  smart_previews/embeddings/descriptions and `[dedup] prefer` are copied
+  into the server at startup but were not flagged, so the green "saved"
+  toast implied they were live. All are now flagged, both as the pre-save
+  pill and in the post-save banner.
+- **Search parser housekeeping**: three unreachable branches
+  (`person:`, `duration:`, `tagcount:` were already caught by the
+  dispatch tables) removed; the `parse_search_query` rustdoc was attached
+  to the `SIMPLE_FILTERS` table by mistake; stale filter lists in doc
+  comments replaced by a pointer to the reference. The saved-search code
+  used `has_faces:` as an example filter — it is `faces:any`.
+- **Cheat sheet is a two-page card again.** It had grown to three pages
+  (the front side spilled onto page 2). Spacing tightened, margins to
+  0.6 cm, the Organize section moved to the back side; no command or
+  flag dropped.
+
+### Fixed (documentation)
 
 - **README** claimed 44 commands with an incomplete list; now 53 (95 leaf
   commands) with every subcommand group spelled out. Shell example used

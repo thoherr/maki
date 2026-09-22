@@ -1648,7 +1648,13 @@ Rebuild with timing:
 maki rebuild-catalog --time
 ```
 
-The global `--log` flag has no effect on `rebuild-catalog`; it prints a summary when finished (or JSON with `--json`).
+Watch the full rebuild progress sidecar by sidecar:
+
+```bash
+maki rebuild-catalog --log --time
+```
+
+With the global `--log` flag, the full rebuild prints one line per sidecar to stderr as it is inserted (`  <asset-id>  <name>`), which is the only way to see progress during a multi-hour rebuild. Without it, only the summary is printed when finished (or JSON with `--json`). `--log` has no effect on `--asset` rebuilds.
 
 ### SEE ALSO
 

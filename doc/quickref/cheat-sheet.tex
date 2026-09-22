@@ -1,5 +1,5 @@
 \documentclass[a4paper,landscape,8pt]{article}
-\usepackage[margin=0.8cm]{geometry}
+\usepackage[margin=0.6cm]{geometry}
 \usepackage{multicol}
 \usepackage{xcolor}
 \usepackage{graphicx}
@@ -19,8 +19,8 @@
 
 % Compact formatting
 \setlength{\parindent}{0pt}
-\setlength{\parskip}{1.5pt}
-\setlength{\columnsep}{12pt}
+\setlength{\parskip}{1pt}
+\setlength{\columnsep}{10pt}
 \raggedright
 
 % Header/footer with logo, version and site
@@ -32,10 +32,10 @@
 \fancyhead[R]{\scriptsize\color{maki-stone} maki-dam.com}
 
 % Section styling — salmon header, thin rule below
-\titleformat{\section}{\small\bfseries\color{maki-salmon}}{}{0em}{}[\vspace{-2pt}{\color{maki-salmon!40}\hrule height 0.3pt}\vspace{2pt}]
+\titleformat{\section}{\small\bfseries\color{maki-salmon}}{}{0em}{}[\vspace{-2pt}{\color{maki-salmon!40}\hrule height 0.3pt}\vspace{1pt}]
 \titleformat{\subsection}{\footnotesize\ttfamily\bfseries\color{maki-nori}}{}{0em}{}
-\titlespacing{\section}{0pt}{3pt}{0pt}
-\titlespacing{\subsection}{0pt}{1.5pt}{0pt}
+\titlespacing{\section}{0pt}{2pt}{0pt}
+\titlespacing{\subsection}{0pt}{1pt}{0pt}
 
 % Compact list
 \setlist{nosep, leftmargin=1.2em, itemsep=0pt, parsep=0pt, topsep=0pt}
@@ -47,7 +47,7 @@
 
 % Body text is scriptsize, commands (subsection titles) are larger
 % Slightly more breathing room between lines
-\linespread{1.1}
+\linespread{1.05}
 \AtBeginDocument{\scriptsize}
 
 \begin{document}
@@ -172,31 +172,6 @@ Dump the active AI label vocabulary as YAML. \opt{--default} \opt{-o FILE}
 \subsection{maki audio analyze \textit{[QUERY]}}
 Detect musical key / BPM via external tools. \opt{--force} \opt{--dry-run}
 
-\section{Organize}
-
-\subsection{maki collection create / add / remove / list / show / delete}
-Static albums. \cmd{create NAME}, \cmd{add NAME IDS...}, \cmd{remove NAME IDS...}
-
-\subsection{maki saved-search save / list / run / delete}
-Dynamic smart albums. \cmd{save NAME QUERY} \opt{--sort} \opt{--favorite}
-
-\subsection{maki stack create \textit{ASSET\_IDS...}}
-Create a stack. First = pick.
-
-\subsection{maki stack add \textit{REF ASSET\_IDS...}}
-Add assets to existing stack.
-
-\subsection{maki stack remove / pick / dissolve / list / show}
-Stack management commands.
-
-\subsection{maki stack from-tag \textit{PATTERN}}
-Convert tag patterns to stacks. \opt{--apply} \opt{--remove-tags}
-
-\subsection{maki faces detect / cluster / clean / name / merge / people \pro}
-Face detection and recognition (\cmd{download} fetches the models). \\
-\opt{--query} \opt{--asset} \opt{--apply} \opt{--force} \opt{--threshold} \opt{--min-confidence} \\
-Also: \cmd{faces status}, \cmd{faces export}, \cmd{faces similarity}, \cmd{faces dump-aligned}
-
 \section{Retrieve}
 
 \subsection{maki search \textit{QUERY}}
@@ -308,7 +283,7 @@ Rebuild SQLite from YAML sidecars. \opt{--asset ID} (per-asset)
 \end{center}
 \vspace{-4pt}
 
-\renewcommand{\arraystretch}{1.2}
+\renewcommand{\arraystretch}{1.1}
 \begin{multicols}{3}
 
 \section{Core Concepts}
@@ -355,6 +330,31 @@ Rebuild SQLite from YAML sidecars. \opt{--asset ID} (per-asset)
 \item \cmd{maki export "collection:Client" ./out --zip}
 \item \cmd{maki contact-sheet "rating:5" portfolio.pdf}
 \end{enumerate}
+
+\section{Organize}
+
+\subsection{maki collection create / add / remove / list / show / delete}
+Static albums. \cmd{create NAME}, \cmd{add NAME IDS...}, \cmd{remove NAME IDS...}
+
+\subsection{maki saved-search save / list / run / delete}
+Dynamic smart albums. \cmd{save NAME QUERY} \opt{--sort} \opt{--favorite}
+
+\subsection{maki stack create \textit{ASSET\_IDS...}}
+Create a stack. First = pick.
+
+\subsection{maki stack add \textit{REF ASSET\_IDS...}}
+Add assets to existing stack.
+
+\subsection{maki stack remove / pick / dissolve / list / show}
+Stack management commands.
+
+\subsection{maki stack from-tag \textit{PATTERN}}
+Convert tag patterns to stacks. \opt{--apply} \opt{--remove-tags}
+
+\subsection{maki faces detect / cluster / clean / name / merge / people \pro}
+Face detection and recognition (\cmd{download} fetches the models). \\
+\opt{--query} \opt{--asset} \opt{--apply} \opt{--force} \opt{--threshold} \opt{--min-confidence} \\
+Also: \cmd{faces status}, \cmd{faces export}, \cmd{faces similarity}, \cmd{faces dump-aligned}
 
 \columnbreak
 
@@ -474,7 +474,7 @@ Placeholders: \cmd{\{id\}}, \cmd{\{name\}}, \cmd{\{filename\}}, \cmd{\{type\}}, 
 \vfill
 
 \begin{center}
-\includegraphics[height=1.2cm]{maki-wordmark-tagline.png}\\[4pt]
+\includegraphics[height=1cm]{maki-wordmark-tagline.png}\\[2pt]
 {\small\color{maki-stone} \texttt{https://maki-dam.com/}}
 \end{center}
 

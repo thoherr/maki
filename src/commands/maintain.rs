@@ -6,6 +6,7 @@ use super::*;
 pub fn run_rebuild_catalog_command(
     asset: Option<String>,
     json: bool,
+    log: bool,
 ) -> anyhow::Result<()> {
     struct Ctx { json: bool }
     let cli = Ctx { json };
@@ -155,7 +156,7 @@ pub fn run_rebuild_catalog_command(
 
     // Sync sidecar files into catalog
     let store = MetadataStore::new(&catalog_root);
-    let result = store.sync_to_catalog(&catalog)?;
+    let result = store.sync_to_catalog_with_log(&catalog, log)?;
 
     // Restore collections from YAML
     let collections_restored = {

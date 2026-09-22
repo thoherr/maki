@@ -492,6 +492,7 @@ pub struct SearchOptions<'a> {
     pub color_labels: &'a [String],
     pub color_labels_exclude: &'a [String],
     pub color_label_none: bool,
+    pub color_label_any: bool,
     pub cameras: &'a [String],
     pub cameras_exclude: &'a [String],
     pub lenses: &'a [String],
@@ -522,11 +523,13 @@ pub struct SearchOptions<'a> {
     pub audio_key: Option<String>,
     pub audio_bpm: Option<NumericFilter>,
     pub stale_days: Option<NumericFilter>,
+    pub stale_never: bool,
     pub meta_filters: Vec<(&'a str, &'a str)>,
     pub orphan: bool,
     pub orphan_false: bool,
     pub missing_asset_ids: Option<&'a [String]>,
     pub no_online_locations: Option<&'a [String]>,
+    pub has_online_locations: Option<&'a [String]>,
     pub collection_asset_ids: Option<&'a [String]>,
     pub collection_exclude_ids: Option<&'a [String]>,
     pub date_prefix: Option<&'a str>,
@@ -562,6 +565,7 @@ impl<'a> Default for SearchOptions<'a> {
             color_labels: &[],
             color_labels_exclude: &[],
             color_label_none: false,
+            color_label_any: false,
             cameras: &[],
             cameras_exclude: &[],
             lenses: &[],
@@ -592,11 +596,13 @@ impl<'a> Default for SearchOptions<'a> {
             audio_key: None,
             audio_bpm: None,
             stale_days: None,
+            stale_never: false,
             meta_filters: Vec::new(),
             orphan: false,
             orphan_false: false,
             missing_asset_ids: None,
             no_online_locations: None,
+            has_online_locations: None,
             collection_asset_ids: None,
             collection_exclude_ids: None,
             date_prefix: None,
@@ -1456,6 +1462,89 @@ mod tests {
         let results_up = catalog.search_paginated(&opts_up).unwrap();
         assert_eq!(results_up.len(), 1);
         assert_eq!(results_up[0].original_filename, "rl2.jpg");
+    }
+
+    #[test]
+    fn search_color_label_any_is_complement_of_none() {
+        let catalog = setup_rating_label_catalog();
+        let all = catalog.search_paginated(&SearchOptions { per_page: u32::MAX, ..Default::default() }).unwrap();
+        let none = catalog.search_paginated(&SearchOptions { color_label_none: true, per_page: u32::MAX, ..Default::default() }).unwrap();
+        let any = catalog.search_paginated(&SearchOptions { color_label_any: true, per_page: u32::MAX, ..Default::default() }).unwrap();
+        assert_eq!(none.len() + any.len(), all.len());
+        assert!(none.iter().any(|r| r.original_filename == "rl4.jpg"));
+        assert!(any.iter().all(|r| r.original_filename != "rl4.jpg"));
+    }
+
+    fn setup_stale_catalog() -> Catalog {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        let volume = crate::models::Volume::new(
+            "vol".to_string(),
+            std::path::PathBuf::from("/mnt/vol"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+        let now = chrono::Utc::now();
+        let cases: [(&str, &str, Option<chrono::DateTime<chrono::Utc>>); 3] = [
+            ("sha256:st-never", "never.jpg", None),
+            // 25 h ago: same calendar day as a `stale:1` cutoff most of the
+            // time — the case the old string comparison got wrong.
+            ("sha256:st-old", "old.jpg", Some(now - chrono::Duration::hours(25))),
+            ("sha256:st-fresh", "fresh.jpg", Some(now - chrono::Duration::hours(23))),
+        ];
+        for (hash, name, verified) in cases {
+            let asset = crate::models::Asset::new(crate::models::AssetType::Image, hash);
+            let variant = crate::models::Variant {
+                content_hash: hash.to_string(),
+                asset_id: asset.id.clone(),
+                role: crate::models::VariantRole::Original,
+                format: "jpg".to_string(),
+                file_size: 100,
+                original_filename: name.to_string(),
+                source_metadata: Default::default(),
+                locations: vec![],
+            };
+            let mut asset = asset;
+            asset.variants.push(variant.clone());
+            catalog.insert_asset(&asset).unwrap();
+            catalog.insert_variant(&variant).unwrap();
+            let loc = crate::models::FileLocation {
+                volume_id: volume.id.clone(),
+                relative_path: std::path::PathBuf::from(format!("photos/{name}")),
+                verified_at: verified,
+            };
+            catalog.insert_file_location(hash, &loc).unwrap();
+        }
+        catalog
+    }
+
+    #[test]
+    fn search_stale_days_compares_timestamps_not_strings() {
+        let catalog = setup_stale_catalog();
+        let opts = SearchOptions { stale_days: Some(NumericFilter::Exact(1.0)), per_page: u32::MAX, ..Default::default() };
+        let mut names: Vec<String> = catalog.search_paginated(&opts).unwrap().into_iter().map(|r| r.original_filename).collect();
+        names.sort();
+        assert_eq!(names, vec!["never.jpg", "old.jpg"]);
+    }
+
+    #[test]
+    fn search_stale_never_matches_only_unverified() {
+        let catalog = setup_stale_catalog();
+        let opts = SearchOptions { stale_never: true, per_page: u32::MAX, ..Default::default() };
+        let names: Vec<String> = catalog.search_paginated(&opts).unwrap().into_iter().map(|r| r.original_filename).collect();
+        assert_eq!(names, vec!["never.jpg"]);
+    }
+
+    #[test]
+    fn search_has_online_locations() {
+        let catalog = setup_stale_catalog();
+        let vol_id: String = catalog.conn.query_row("SELECT id FROM volumes LIMIT 1", [], |r| r.get(0)).unwrap();
+        let ids = vec![vol_id];
+        let opts = SearchOptions { has_online_locations: Some(&ids), per_page: u32::MAX, ..Default::default() };
+        assert_eq!(catalog.search_paginated(&opts).unwrap().len(), 3);
+        let none: Vec<String> = vec![];
+        let opts = SearchOptions { has_online_locations: Some(&none), per_page: u32::MAX, ..Default::default() };
+        assert_eq!(catalog.search_paginated(&opts).unwrap().len(), 0);
     }
 
     #[test]

@@ -202,6 +202,12 @@ impl MetadataStore {
 
     /// Rebuild SQLite catalog from sidecar files.
     pub fn sync_to_catalog(&self, catalog: &crate::catalog::Catalog) -> Result<SyncResult> {
+        self.sync_to_catalog_with_log(catalog, false)
+    }
+
+    /// [`sync_to_catalog`](Self::sync_to_catalog) with optional per-sidecar
+    /// progress on stderr (`maki rebuild-catalog --log`).
+    pub fn sync_to_catalog_with_log(&self, catalog: &crate::catalog::Catalog, log: bool) -> Result<SyncResult> {
         let summaries = self.list()?;
         let mut synced = 0u64;
         let mut errors = 0u64;
@@ -209,6 +215,9 @@ impl MetadataStore {
         for summary in &summaries {
             match self.load(summary.id) {
                 Ok(asset) => {
+                    if log {
+                        eprintln!("  {}  {}", asset.id, asset.name.as_deref().unwrap_or("-"));
+                    }
                     if let Err(e) = catalog.insert_asset(&asset) {
                         eprintln!("Error inserting asset {}: {e}", summary.id);
                         errors += 1;

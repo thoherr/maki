@@ -1702,6 +1702,18 @@ Typical use: `maki ai export-vocabulary --default > my-labels.yaml`, edit the ri
 **--default**
 : Emit the built-in default vocabulary instead of the active one.
 
+**--json** (global)
+: Emit a JSON object on stdout instead of the raw YAML. With `--output FILE`: `{"source": "...", "bytes": N, "output": "FILE"}`. Without `--output`: `{"source": "...", "bytes": N, "output": null, "yaml": "<the YAML document>"}`. `source` is `builtin-default`, `config-yaml` (the `[ai] labels` file was YAML and is passed through verbatim), or `config-txt` (a legacy flat list converted to YAML).
+
+### EXAMPLES
+
+```bash
+maki ai export-vocabulary --default > my-labels.yaml     # built-in default, raw YAML
+maki ai export-vocabulary --output vocab.yaml            # active vocabulary to a file
+maki ai export-vocabulary --json | jq -r .yaml           # same YAML, via the JSON wrapper
+maki ai export-vocabulary --output vocab.yaml --json     # {"source":"config-yaml","bytes":2311,"output":"vocab.yaml"}
+```
+
 ### SEE ALSO
 
 [auto-tag](#maki-auto-tag) -- apply the vocabulary to assets.
@@ -1789,9 +1801,9 @@ maki [GLOBAL FLAGS] describe [QUERY] [OPTIONS]
 
 Sends preview images to a VLM server and generates natural language descriptions and/or tags. The command uses the OpenAI-compatible chat completions API, which is implemented by Ollama, LM Studio, vLLM, and most local inference servers.
 
-Three modes are available via `--mode`:
+Three modes are available via `--mode` (default from `[vlm] mode` in `maki.toml`, or `describe`):
 
-- **describe** (default) — generates a natural language description for each asset.
+- **describe** — generates a natural language description for each asset.
 - **tags** — asks the VLM to suggest tags, returned as a JSON array. Tags are deduplicated (case-insensitive) and existing asset tags are preserved.
 - **both** — runs describe and tags as two separate VLM calls per asset, combining the results. This is equivalent to running `--mode describe` and `--mode tags` independently, so each call uses its optimal prompt.
 
@@ -1832,7 +1844,7 @@ For each asset, the command:
 : Timeout for each VLM request. Default from `[vlm] timeout` in `maki.toml`, or `300`. Increase for larger models or first-time model loading.
 
 **--mode \<MODE\>**
-: Output mode: `describe` (default), `tags`, or `both`. In `both` mode, two VLM calls are made per asset — one for description, one for tags.
+: Output mode: `describe`, `tags`, or `both`. Default from `[vlm] mode` in `maki.toml`, or `describe`. In `both` mode, two VLM calls are made per asset — one for description, one for tags.
 
 **--temperature \<FLOAT\>**
 : Sampling temperature controlling randomness. `0.0` = deterministic (always picks the most likely token), `0.7` = balanced (default), `1.0+` = more creative. Lower values produce more consistent but potentially blander output. Default from `[vlm] temperature` in `maki.toml`, or `0.7`.

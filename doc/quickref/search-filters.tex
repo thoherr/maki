@@ -74,7 +74,7 @@ Tag prefix anchor   & \cmd{tag:|<text>}                     & \cmd{tag:|wed} (we
 Exclude tag         & \cmd{-tag:<name>}                     & \cmd{-tag:rejected} \\
 Format              & \cmd{format:<ext>}                    & \cmd{format:nef}, \cmd{format:jpg} \\
 Rating              & \cmd{rating:<N>}, \cmd{<N>+}, \cmd{<N>-<M>}, \cmd{<N>,<M>} & \cmd{rating:4+}, \cmd{rating:3-5}, \cmd{rating:0} (unrated) \\
-Color label         & \cmd{label:<color>}, \cmd{label:none}  & \cmd{label:Red}, \cmd{label:none} \\
+Color label         & \cmd{label:<color>}, \cmd{label:none}  & \cmd{label:Red}, \cmd{label:none}, \cmd{-label:none} \\
 Camera              & \cmd{camera:<text>}                   & \cmd{camera:fuji}, \cmd{camera:"Canon EOS R5"} \\
 Lens                & \cmd{lens:<text>}                     & \cmd{lens:56mm}, \cmd{lens:"RF 50mm"} \\
 Description         & \cmd{description:<text>}, \cmd{desc:<text>} & \cmd{description:sunset} \\
@@ -87,7 +87,7 @@ Path pattern        & \cmd{path:<pattern>} (\cmd{*}=wild)   & \cmd{path:*/2026/*
 Collection          & \cmd{collection:<name>}               & \cmd{collection:Favorites} \\
 Date                & \cmd{date:<prefix>}                   & \cmd{date:2026}, \cmd{date:2026-02} \\
 Date from / until   & \cmd{dateFrom:<date>}, \cmd{dateUntil:<date>} & \cmd{dateFrom:2026-01-01} \\
-Volume              & \cmd{volume:<label>}                  & \cmd{volume:Archive}, \cmd{volume:none} \\
+Volume              & \cmd{volume:<label>}, \cmd{volume:none} & \cmd{volume:Archive}, \cmd{volume:none}, \cmd{-volume:none} \\
 Asset ID            & \cmd{id:<prefix>}                     & \cmd{id:72a0bb4b} \\
 Copies              & \cmd{copies:<N>}, \cmd{copies:<N>+}   & \cmd{copies:1}, \cmd{copies:2+} \\
 Variants            & \cmd{variants:<N>}, \cmd{variants:<N>+} & \cmd{variants:1}, \cmd{variants:2+} \\
@@ -100,7 +100,7 @@ GPS box / radius    & \cmd{geo:<S>,<W>,<N>,<E>}, \cmd{geo:<lat>,<lng>,<km>} & \c
 GPS any/none        & \cmd{geo:any}, \cmd{geo:none}         & \cmd{geo:any} \\
 Orphan              & \cmd{orphan:true}, \cmd{orphan:false} & \cmd{orphan:true} (no file locations) \\
 Missing files       & \cmd{missing:true}                    & \cmd{missing:true} \\
-Stale verification  & \cmd{stale:<days>}                    & \cmd{stale:30} \\
+Stale verification  & \cmd{stale:<days>}, \cmd{stale:never} & \cmd{stale:30}, \cmd{stale:never} \\
 Stacked             & \cmd{stacked:true}, \cmd{stacked:false} & \cmd{stacked:true} \\
 Face count          & \cmd{faces:any}, \cmd{faces:none}, \cmd{faces:<N>}, \cmd{<N>+} & \cmd{faces:1}, \cmd{faces:2+} \\
 Person \pro         & \cmd{person:<name>}                   & \cmd{person:Alice,Bob} (comma = either; repeat = both) \\[6pt]
@@ -145,7 +145,7 @@ All numeric filters support: exact (\cmd{3}), minimum (\cmd{3+}), range (\cmd{3-
              & \cmd{tag:alice,bob} \quad \cmd{format:nef,cr3} \\[6pt]
 \textbf{NOT} & Dash prefix excludes (tag, type, format, label, volume, camera, lens, description, path, collection, person, free text) \\
              & \cmd{-tag:rejected} \quad \cmd{-format:xmp} \\
-             & {\small Numeric, date and boolean filters ignore the dash; \cmd{-label:none} / \cmd{-volume:none} are not honoured} \\[6pt]
+             & {\small Numeric, date and boolean filters ignore the dash; \cmd{-label:none} = has a label, \cmd{-volume:none} = on an online volume} \\[6pt]
 \textbf{Combined} & \cmd{type:image,video -tag:rejected rating:3+} \\
 \end{tabularx}
 
@@ -209,6 +209,7 @@ The \cmd{path:} filter auto-normalizes in the CLI:
 \recipe{format:nef -tag:processed}{Unprocessed RAWs}
 \recipe{copies:1 volume:Photos}{Single-copy files (backup candidates)}
 \recipe{stale:90}{Not verified in 90 days}
+\recipe{stale:never}{Never verified}
 \recipe{orphan:true}{Assets with no file locations}
 \recipe{faces:any person:Alice rating:4+}{Alice's best shots}
 \recipe{similar:72a0bb4b rating:3+ min\_sim:80 \pro{}}{Visually similar, curated}

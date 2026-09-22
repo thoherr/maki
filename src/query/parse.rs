@@ -92,6 +92,8 @@ pub struct ParsedSearch {
     pub color_labels: Vec<String>,
     pub color_labels_exclude: Vec<String>,
     pub color_label_none: bool,
+    /// `-label:none` — assets that have a colour label.
+    pub color_label_any: bool,
     pub cameras: Vec<String>,
     pub cameras_exclude: Vec<String>,
     pub lenses: Vec<String>,
@@ -122,6 +124,8 @@ pub struct ParsedSearch {
     /// `bpm:120` / `bpm:100-140` — tempo (set by `maki audio analyze`).
     pub audio_bpm: Option<NumericFilter>,
     pub stale_days: Option<NumericFilter>,
+    /// `stale:never` — locations that have never been verified.
+    pub stale_never: bool,
     pub meta_filters: Vec<(String, String)>,
     pub orphan: bool,
     pub orphan_false: bool,
@@ -129,6 +133,8 @@ pub struct ParsedSearch {
     pub volumes: Vec<String>,
     pub volumes_exclude: Vec<String>,
     pub volume_none: bool,
+    /// `-volume:none` — assets with at least one location on an online volume.
+    pub volume_any_online: bool,
     pub date_prefix: Option<String>,
     pub date_from: Option<String>,
     pub date_until: Option<String>,
@@ -222,7 +228,10 @@ impl ParsedSearch {
         self.orphan_false = self.orphan_false || other.orphan_false;
         self.missing = self.missing || other.missing;
         self.volume_none = self.volume_none || other.volume_none;
+        self.volume_any_online = self.volume_any_online || other.volume_any_online;
         self.color_label_none = self.color_label_none || other.color_label_none;
+        self.color_label_any = self.color_label_any || other.color_label_any;
+        self.stale_never = self.stale_never || other.stale_never;
     }
 
     /// Convert to `SearchOptions` for passing to catalog search methods.
@@ -240,6 +249,7 @@ impl ParsedSearch {
             color_labels: &self.color_labels,
             color_labels_exclude: &self.color_labels_exclude,
             color_label_none: self.color_label_none,
+            color_label_any: self.color_label_any,
             cameras: &self.cameras,
             cameras_exclude: &self.cameras_exclude,
             lenses: &self.lenses,
@@ -266,6 +276,7 @@ impl ParsedSearch {
             audio_key: self.audio_key.clone(),
             audio_bpm: self.audio_bpm.clone(),
             stale_days: self.stale_days.clone(),
+            stale_never: self.stale_never,
             meta_filters: self
                 .meta_filters
                 .iter()
@@ -342,41 +353,6 @@ pub fn tokenize_query(query: &str) -> Vec<String> {
 
 // ═══ SEARCH PARSER ═══
 
-/// Parse a search query string into structured filters.
-///
-/// Supports prefix filters: `type:image`, `tag:landscape`, `format:jpg`, `rating:3+`,
-/// `camera:fuji`, `lens:56mm`, `iso:3200`, `iso:100-800`, `focal:50`, `focal:35-70`,
-/// `f:2.8`, `f:1.4-2.8`, `width:4000+`, `height:2000+`, `meta:key=value`.
-/// Values with spaces can be quoted: `tag:"Fools Theater"`, `camera:"Canon EOS R5"`.
-/// Remaining tokens are joined as free-text search.
-///
-/// # Examples
-///
-/// ```
-/// use maki::query::{parse_search_query, NumericFilter};
-///
-/// let p = parse_search_query("tag:sunset type:image rating:3+");
-/// assert_eq!(p.tags, vec!["sunset"]);
-/// assert_eq!(p.asset_types, vec!["image"]);
-/// assert_eq!(p.rating, Some(NumericFilter::Min(3.0)));
-///
-/// // Negation with - prefix
-/// let p = parse_search_query("-tag:rejected");
-/// assert_eq!(p.tags_exclude, vec!["rejected"]);
-///
-/// // Quoted values with spaces
-/// let p = parse_search_query("tag:\"Fools Theater\" camera:\"Canon EOS R5\"");
-/// assert_eq!(p.tags, vec!["Fools Theater"]);
-/// assert_eq!(p.cameras, vec!["Canon EOS R5"]);
-///
-/// // Rating range
-/// let p = parse_search_query("rating:3-5");
-/// assert_eq!(p.rating, Some(NumericFilter::Range(3.0, 5.0)));
-///
-/// // Free text (unrecognized tokens)
-/// let p = parse_search_query("sunset beach");
-/// assert_eq!(p.text, Some("sunset beach".to_string()));
-/// ```
 /// Filters whose value is appended verbatim to a `Vec<String>` field, with
 /// the negation flag selecting between include and exclude lists.
 ///
@@ -412,6 +388,7 @@ const NUMERIC_FILTERS: &[(&str, fn(&mut ParsedSearch, Option<NumericFilter>))] =
     ("copies:",   |p, n| p.copies = n),
     ("variants:", |p, n| p.variant_count = n),
     ("duration:", |p, n| p.duration = n),
+    // Intentional (leaf) tags only — `tagcount:0` finds untagged assets.
     ("tagcount:", |p, n| p.tag_count = n),
 ];
 
@@ -432,6 +409,41 @@ const STRING_FILTERS: &[(&str, fn(&mut ParsedSearch, &str))] = &[
     ("dateUntil:", |p, v| p.date_until = Some(v.to_string())),
 ];
 
+/// Parse a search query string into structured filters.
+///
+/// Supports prefix filters: `type:image`, `tag:landscape`, `format:jpg`, `rating:3+`,
+/// `camera:fuji`, `lens:56mm`, `iso:3200`, `iso:100-800`, `focal:50`, `focal:35-70`,
+/// `f:2.8`, `f:1.4-2.8`, `width:4000+`, `height:2000+`, `meta:key=value`.
+/// Values with spaces can be quoted: `tag:"Fools Theater"`, `camera:"Canon EOS R5"`.
+/// Remaining tokens are joined as free-text search.
+///
+/// # Examples
+///
+/// ```
+/// use maki::query::{parse_search_query, NumericFilter};
+///
+/// let p = parse_search_query("tag:sunset type:image rating:3+");
+/// assert_eq!(p.tags, vec!["sunset"]);
+/// assert_eq!(p.asset_types, vec!["image"]);
+/// assert_eq!(p.rating, Some(NumericFilter::Min(3.0)));
+///
+/// // Negation with - prefix
+/// let p = parse_search_query("-tag:rejected");
+/// assert_eq!(p.tags_exclude, vec!["rejected"]);
+///
+/// // Quoted values with spaces
+/// let p = parse_search_query("tag:\"Fools Theater\" camera:\"Canon EOS R5\"");
+/// assert_eq!(p.tags, vec!["Fools Theater"]);
+/// assert_eq!(p.cameras, vec!["Canon EOS R5"]);
+///
+/// // Rating range
+/// let p = parse_search_query("rating:3-5");
+/// assert_eq!(p.rating, Some(NumericFilter::Range(3.0, 5.0)));
+///
+/// // Free text (unrecognized tokens)
+/// let p = parse_search_query("sunset beach");
+/// assert_eq!(p.text, Some("sunset beach".to_string()));
+/// ```
 pub fn parse_search_query(query: &str) -> ParsedSearch {
     let mut parsed = ParsedSearch::default();
     let mut text_parts = Vec::new();
@@ -443,6 +455,13 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
         } else {
             (false, token.as_str())
         };
+
+        // `stale:never` is the one non-numeric form of an otherwise numeric
+        // filter; catch it before the numeric table swallows the token.
+        if token_body == "stale:never" {
+            parsed.stale_never = true;
+            continue 'token;
+        }
 
         // Table-driven dispatch for filter shapes that fit one of the four
         // patterns. The custom-parsing block below handles filters with their
@@ -485,7 +504,7 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
             }
         } else if let Some(value) = token_body.strip_prefix("volume:") {
             if value == "none" {
-                parsed.volume_none = true;
+                if negated { parsed.volume_any_online = true } else { parsed.volume_none = true }
             } else if negated {
                 parsed.volumes_exclude.push(value.to_string());
             } else {
@@ -493,7 +512,7 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
             }
         } else if let Some(value) = token_body.strip_prefix("label:") {
             if value == "none" {
-                parsed.color_label_none = true;
+                if negated { parsed.color_label_any = true } else { parsed.color_label_none = true }
             } else if negated {
                 parsed.color_labels_exclude.push(value.to_string());
             } else {
@@ -525,8 +544,6 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
                     parsed.geo_bbox = Some((parts[0], parts[1], parts[2], parts[3]));
                 }
             }
-        } else if let Some(value) = token_body.strip_prefix("duration:") {
-            parsed.duration = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("codec:") {
             parsed.codec = Some(value.to_string());
         } else if let Some(value) = token_body.strip_prefix("key:") {
@@ -541,23 +558,11 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
             } else {
                 parsed.face_count = parse_numeric_filter(value);
             }
-        } else if let Some(value) = token_body.strip_prefix("tagcount:") {
-            // Number of intentional (leaf) tags on the asset — the tags
-            // the user actually applied, excluding auto-expanded ancestors.
-            // `tagcount:0` finds untagged assets; `tagcount:5+` finds
-            // heavily-tagged ones. Useful for tag restructuring.
-            parsed.tag_count = parse_numeric_filter(value);
         } else if let Some(value) = token_body.strip_prefix("embed:") {
             if value == "any" || value == "true" {
                 parsed.has_embed = Some(true);
             } else if value == "none" || value == "false" {
                 parsed.has_embed = Some(false);
-            }
-        } else if let Some(value) = token_body.strip_prefix("person:") {
-            if negated {
-                parsed.persons_exclude.push(value.to_string());
-            } else {
-                parsed.persons.push(value.to_string());
             }
         } else if let Some(_value) = token_body.strip_prefix("similar:") {
             #[cfg(feature = "ai")]
@@ -620,13 +625,11 @@ pub fn parse_search_query(query: &str) -> ParsedSearch {
     parsed
 }
 
-/// Parse an integer range value: "3200" (exact), "3200+" (min), "100-800" (range).
-/// Unified numeric filter supporting exact, minimum, range, and OR values.
-///
 // ═══ NUMERIC FILTER ═══
 
-/// All numeric search filters (rating, iso, focal, f, width, height, copies,
-/// variants, scattered, face_count) use this type for consistent syntax:
+/// All numeric search filters (`rating:`, `iso:`, `focal:`, `f:`, `width:`,
+/// `height:`, `copies:`, `variants:`, `scattered:`, `faces:N`, `tagcount:`,
+/// `duration:`, `bpm:`, `stale:`) use this type for consistent syntax:
 /// `x` (exact), `x+` (minimum), `x-y` (range), `x,y` (OR), `x,y+` (combined).
 #[derive(Debug, Clone, PartialEq)]
 pub enum NumericFilter {

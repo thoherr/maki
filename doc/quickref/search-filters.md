@@ -17,7 +17,7 @@ Filters combine with **AND** — every filter must match. Free-text tokens that 
 | Rating (minimum) | `rating:<N>+` | `rating:3+` |
 | Rating (range) | `rating:<N>-<M>` | `rating:3-5` |
 | Rating (OR) | `rating:<N>,<M>` | `rating:2,4` |
-| Color label | `label:<color>`, `label:none` | `label:Red`, `label:none` (unlabeled) |
+| Color label | `label:<color>`, `label:none` | `label:Red`, `label:none` (unlabeled), `-label:none` (any label) |
 | Camera | `camera:<text>` | `camera:fuji`, `camera:"Canon EOS R5"` |
 | Lens | `lens:<text>` | `lens:56mm`, `lens:"RF 50mm"` |
 | Description | `description:<text>`, `desc:<text>` | `description:sunset` |
@@ -32,7 +32,7 @@ Filters combine with **AND** — every filter must match. Free-text tokens that 
 | Date | `date:<prefix>` | `date:2026`, `date:2026-02` |
 | Date from | `dateFrom:<date>` | `dateFrom:2026-01-01` |
 | Date until | `dateUntil:<date>` | `dateUntil:2026-12-31` |
-| Volume | `volume:<label>` | `volume:Archive`, `volume:none` |
+| Volume | `volume:<label>`, `volume:none` | `volume:Archive`, `volume:none` (no online copy), `-volume:none` (online copy) |
 | Asset ID | `id:<prefix>` | `id:72a0bb4b` |
 | Copies | `copies:<N>`, `copies:<N>+` | `copies:1`, `copies:2+` |
 | Variants | `variants:<N>`, `variants:<N>+` | `variants:1`, `variants:2+` |
@@ -47,7 +47,7 @@ Filters combine with **AND** — every filter must match. Free-text tokens that 
 | GPS (any/none) | `geo:any`, `geo:none` | `geo:any` |
 | Orphan | `orphan:true`, `orphan:false` | `orphan:true` (no file locations) |
 | Missing files | `missing:true` | `missing:true` |
-| Stale verification | `stale:<days>` | `stale:30` |
+| Stale verification | `stale:<days>`, `stale:never` | `stale:30`, `stale:never` |
 | Stacked | `stacked:true`, `stacked:false` | `stacked:true` |
 | Face count | `faces:any`, `faces:none`, `faces:<N>`, `faces:<N>+` | `faces:1`, `faces:2+` |
 | Person *(Pro)* | `person:<name>` | `person:Alice`, `person:Alice,Bob` (either), `person:Alice person:Bob` (both) |
@@ -79,7 +79,7 @@ Repeating any other filter ORs the values (`type:image type:video` = `type:image
     -format:xmp                       exclude XMP files
     -type:other                       exclude "other" type
 
-Numeric, date, and boolean filters ignore the dash; `-label:none` and `-volume:none` are not honoured either (they behave like the positive form).
+Numeric, date, and boolean filters ignore the dash. `-label:none` = has a color label; `-volume:none` = has a file on an online volume.
 
 **Combined:**
 
@@ -113,6 +113,7 @@ maki search "date:2026-03 tag:landscape"              March landscapes
 maki search "format:nef -tag:processed"               unprocessed RAWs
 maki search "copies:1 volume:Photos"                  single-copy files
 maki search "stale:90"                                not verified in 90 days
+maki search "stale:never"                             never verified
 maki search "orphan:true"                             assets with no files
 maki search "faces:any person:Alice rating:4+"        Alice's best shots
 maki search "similar:72a0bb4b rating:3+ min_sim:80"   similar + curated (Pro)

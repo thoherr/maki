@@ -1309,7 +1309,7 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
         btn.textContent = 'Generating...';
         btn.disabled = true;
 
-        var payload = {mode: 'describe'};
+        var payload = {};   // mode: server default ([vlm] mode)
         var modelSelect = document.getElementById('vlm-model-select');
         if (modelSelect) payload.model = modelSelect.value;
 

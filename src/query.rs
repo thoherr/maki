@@ -469,9 +469,9 @@ impl QueryEngine {
 
     /// Search assets by a free-text query string.
     ///
-    /// Supports prefix filters: `type:image`, `tag:landscape`, `format:jpg`, `rating:3+`,
-    /// `camera:fuji`, `lens:56mm`, `iso:3200`, `focal:50`, `f:2.8`, `width:4000+`,
-    /// `height:2000+`, `meta:key=value`.
+    /// The query syntax (some forty `prefix:value` filters plus free text) is
+    /// parsed by [`parse_search_query`]; the full filter list is documented in
+    /// `doc/manual/reference/06-search-filters.md` and `maki search --help`.
     /// Remaining tokens are joined as free-text search against name/filename/description/metadata.
     pub fn search(&self, query: &str) -> Result<Vec<SearchRow>> {
         self.search_impl(query, None).map(|(rows, _)| rows)
@@ -717,7 +717,7 @@ impl QueryEngine {
         let resolved_volume_ids;
         let resolved_volume_exclude_ids;
         let online_vol_ids;
-        if !parsed.volumes.is_empty() || !parsed.volumes_exclude.is_empty() || parsed.volume_none {
+        if !parsed.volumes.is_empty() || !parsed.volumes_exclude.is_empty() || parsed.volume_none || parsed.volume_any_online {
             let registry = DeviceRegistry::new(&self.catalog_root);
             let volumes = registry.list()?;
 
@@ -731,13 +731,18 @@ impl QueryEngine {
                 opts.volume_ids_exclude = &resolved_volume_exclude_ids;
             }
 
-            if parsed.volume_none {
+            if parsed.volume_none || parsed.volume_any_online {
                 online_vol_ids = volumes
                     .iter()
                     .filter(|v| v.is_online)
                     .map(|v| v.id.to_string())
                     .collect::<Vec<_>>();
-                opts.no_online_locations = Some(&online_vol_ids);
+                if parsed.volume_none {
+                    opts.no_online_locations = Some(&online_vol_ids);
+                }
+                if parsed.volume_any_online {
+                    opts.has_online_locations = Some(&online_vol_ids);
+                }
             }
         }
 
@@ -3968,6 +3973,33 @@ mod tests {
         assert!(p.color_label_none);
         assert!(p.color_labels.is_empty());
         assert!(p.text.is_none());
+    }
+
+    #[test]
+    fn parse_label_none_negated_means_labeled() {
+        let p = parse_search_query("-label:none");
+        assert!(p.color_label_any);
+        assert!(!p.color_label_none);
+        assert!(p.color_labels_exclude.is_empty());
+    }
+
+    #[test]
+    fn parse_volume_none_negated_means_online() {
+        let p = parse_search_query("-volume:none");
+        assert!(p.volume_any_online);
+        assert!(!p.volume_none);
+        assert!(p.volumes_exclude.is_empty());
+    }
+
+    #[test]
+    fn parse_stale_never() {
+        let p = parse_search_query("stale:never");
+        assert!(p.stale_never);
+        assert!(p.stale_days.is_none());
+        assert!(p.text.is_none());
+        let p = parse_search_query("stale:30");
+        assert!(!p.stale_never);
+        assert_eq!(p.stale_days, Some(NumericFilter::Exact(30.0)));
     }
 
     #[test]

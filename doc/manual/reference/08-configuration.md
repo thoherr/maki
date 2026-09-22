@@ -653,9 +653,9 @@ prompt = "Describe the architectural style, materials, and notable design featur
 - **Type:** string
 - **Default:** `"describe"`
 
-Output mode for the VLM description phase of `maki import --describe` (and the web import dialog's "Generate descriptions"). One of: `describe` (natural language description), `tags` (JSON tag suggestions), `both` (two separate VLM calls: one for description, one for tags).
+Default output mode for every VLM pass: `maki describe` (when `--mode` is not given), the description phase of `maki import --describe` (and the web import dialog's "Generate descriptions"), and the web UI's Describe button and batch Describe. One of: `describe` (natural language description), `tags` (JSON tag suggestions, applied with `vlm` tag provenance), `both` (two separate VLM calls: one for description, one for tags).
 
-This setting is currently **not** honoured by `maki describe`, whose `--mode` flag has its own built-in default of `describe` -- pass `--mode tags` or `--mode both` explicitly. The web UI's Describe button likewise always uses `describe`.
+Precedence for `maki describe` is CLI `--mode` > `[vlm] mode` > `describe`. The web UI reads this value at server startup (restart `maki serve` after changing it); a per-request `mode` in the JSON body of `/api/asset/{id}/vlm-describe` or `/api/batch/describe` still overrides it.
 
 ### temperature
 

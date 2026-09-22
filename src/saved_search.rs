@@ -40,7 +40,7 @@ impl SavedSearch {
     ///      widget reflects the filter and the user can refine via the UI.
     ///   2. **Remainder tokens** — everything else: free text, exclude
     ///      variants (`-tag:rejected`), niche structured filters
-    ///      (`camera:`, `iso:`, `tagcount:`, `geo:`, `has_faces:`, …),
+    ///      (`camera:`, `iso:`, `tagcount:`, `geo:`, `faces:`, …),
     ///      multi-value tokens that overflow the single-value URL params
     ///      (`format:jpg format:tiff` keeps the second in q=). Joined back
     ///      with spaces and stuffed into `q=`. Tokens whose value contains
@@ -379,20 +379,20 @@ mod tests {
         assert!(params.contains("person=Alice"), "missing person: {params}");
     }
 
-    /// Niche filters without dedicated widgets (camera, iso, has_faces,
+    /// Niche filters without dedicated widgets (camera, iso, faces,
     /// tagcount, geo, etc.) round-trip through the q= remainder.
     #[test]
     fn to_url_params_preserves_niche_filters() {
         let ss = SavedSearch {
             name: "Test".to_string(),
-            query: "camera:Sony iso:3200 tagcount:0 has_faces:true".to_string(),
+            query: "camera:Sony iso:3200 tagcount:0 faces:any".to_string(),
             sort: None,
             favorite: false,
         };
         let params = ss.to_url_params();
         // None of these have dedicated URL params, so they should survive
         // in q=. URL-encoded form: spaces → %20, colons stay as-is.
-        assert!(params.contains("q=camera:Sony%20iso:3200%20tagcount:0%20has_faces:true"),
+        assert!(params.contains("q=camera:Sony%20iso:3200%20tagcount:0%20faces:any"),
             "niche filters dropped: {params}");
     }
 

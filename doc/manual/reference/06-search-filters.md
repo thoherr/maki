@@ -24,7 +24,7 @@ maki search "-sunset"                     # exclude free-text match on "sunset"
 
 Negation is supported for free-text terms and for the filters that have an exclude form: `tag:`, `type:`, `format:`, `label:`, `volume:`, `camera:`, `lens:`, `description:`/`desc:`, `path:`, `collection:`, and `person:`. A leading `-` on any other filter (`-rating:3`, `-date:2026`, `-iso:800`, `-id:`, `-similar:`, …) is ignored and the filter applies as if it were positive.
 
-The special `none` forms are not negatable either: `-label:none` behaves exactly like `label:none` (unlabeled assets) and `-volume:none` like `volume:none`. To find labeled assets or assets on an online volume, use the positive filters (`label:Red,Orange,...`, `volume:<label>`) or `orphan:false` instead.
+The special `none` forms negate too: `-label:none` matches assets that *have* a color label (any color), and `-volume:none` matches assets with at least one file location on a currently online volume -- the complement of `volume:none`.
 
 ### OR Within a Filter (Comma Operator)
 
@@ -215,11 +215,11 @@ Pure assets-table filter, no JOIN required.
 
 ## label
 
-**Syntax:** `label:<color>` or `label:none`
+**Syntax:** `label:<color>`, `label:none`, `-label:none`
 
-**Values:** `Red`, `Orange`, `Yellow`, `Green`, `Blue`, `Pink`, `Purple` (case-insensitive input, stored as title-case), `none` (unlabeled)
+**Values:** `Red`, `Orange`, `Yellow`, `Green`, `Blue`, `Pink`, `Purple` (case-insensitive input, stored as title-case), `none` (unlabeled); `-label:none` = any label
 
-**Description:** Filters by color label. The 7-color set is a superset of Lightroom's 5 colors, matching CaptureOne's label palette. Use `label:none` to find assets without any color label.
+**Description:** Filters by color label. The 7-color set is a superset of Lightroom's 5 colors, matching CaptureOne's label palette. Use `label:none` to find assets without any color label, and `-label:none` to find assets that carry any label at all (the complement). Individual colors can be excluded with `-label:Red`.
 
 **Examples:**
 
@@ -227,10 +227,11 @@ Pure assets-table filter, no JOIN required.
 maki search "label:Red"
 maki search "label:blue"
 maki search "label:none"
+maki search "-label:none"                  # any color label set
 maki search "label:Green rating:4+"
 ```
 
-**SQL behavior:** `WHERE a.color_label = ? COLLATE NOCASE` for color values; `WHERE a.color_label IS NULL` for `label:none`. Pure assets-table filter, no JOIN required. The `COLLATE NOCASE` makes the comparison case-insensitive so users can type `label:red`, `label:Red`, or `label:RED` interchangeably regardless of how the label is stored in the catalog.
+**SQL behavior:** `WHERE a.color_label = ? COLLATE NOCASE` for color values; `WHERE a.color_label IS NULL` for `label:none`, `WHERE a.color_label IS NOT NULL` for `-label:none`. Pure assets-table filter, no JOIN required. The `COLLATE NOCASE` makes the comparison case-insensitive so users can type `label:red`, `label:Red`, or `label:RED` interchangeably regardless of how the label is stored in the catalog.
 
 ---
 
@@ -528,9 +529,9 @@ maki search 'collection:"Travel 2026" rating:4+'
 
 ## volume
 
-**Syntax:** `volume:<label>`, `volume:<label1>,<label2>`, `-volume:<label>`, `volume:none`
+**Syntax:** `volume:<label>`, `volume:<label1>,<label2>`, `-volume:<label>`, `volume:none`, `-volume:none`
 
-**Description:** Restricts results to assets that have at least one file location on the specified volume. Volume labels are matched case-insensitively. Supports negation (`-volume:Archive`) and comma-separated OR (`volume:Photos,Working`). The special value `volume:none` finds assets with no file locations on any currently online volume.
+**Description:** Restricts results to assets that have at least one file location on the specified volume. Volume labels are matched case-insensitively. Supports negation (`-volume:Archive`) and comma-separated OR (`volume:Photos,Working`). The special value `volume:none` finds assets with no file locations on any currently online volume; its negation `-volume:none` finds the complement -- assets with at least one file location on an online volume.
 
 **Examples:**
 
@@ -541,6 +542,7 @@ maki search "volume:Photos,Working"          # assets on either volume
 maki search "-volume:Archive"                # exclude assets on the Archive volume
 maki search "volume:none"                    # assets not on any online volume
 maki search "volume:none orphan:false"       # has locations, but all on offline volumes
+maki search "-volume:none"                   # reachable now: at least one file on an online volume
 maki search "volume:\"External SSD\""        # volume label with spaces (quoted)
 ```
 
@@ -550,6 +552,7 @@ In the web UI, the volume filter is also available as a dropdown control that pa
 - `volume:<label>`: Label is resolved to a volume UUID via DeviceRegistry. `WHERE fl.volume_id IN (...)`. Triggers a JOIN to the file_locations table.
 - `-volume:<label>`: Resolved to UUID, then `WHERE a.id NOT IN (SELECT DISTINCT v2.asset_id FROM variants v2 JOIN file_locations fl2 ON fl2.content_hash = v2.content_hash WHERE fl2.volume_id IN (...))` — excludes assets with *any* file on those volumes.
 - `volume:none`: Pre-computes online volume IDs from DeviceRegistry. Adds `WHERE NOT EXISTS (SELECT 1 FROM file_locations fl JOIN variants v ... WHERE fl.volume_id IN (...online_ids...))`.
+- `-volume:none`: Same online-ID list, `WHERE EXISTS (...)` instead of `NOT EXISTS`. When no volume is online the clause is a constant false, so the result is empty.
 
 ---
 
@@ -610,22 +613,23 @@ maki search "missing:true type:video"
 
 ## stale
 
-**Syntax:** `stale:<N>`
+**Syntax:** `stale:<N>` or `stale:never`
 
-**Values:** Number of days (0 or more). The other numeric forms (`N+`, `A-B`, `A,B`) are accepted, but only the first (or lower) number is used as the day count.
+**Values:** Number of days (0 or more), or the word `never`. The other numeric forms (`N+`, `A-B`, `A,B`) are accepted, but only the first (or lower) number is used as the day count.
 
-**Description:** Finds assets with at least one file location that has not been verified in the specified number of days, or that has never been verified. Useful for identifying files due for integrity checks.
+**Description:** `stale:N` finds assets with at least one file location that has not been verified within the last N days, or that has never been verified. `stale:never` finds only the never-verified ones -- locations whose `verified_at` is unset because no `maki verify` run has covered them yet. Both are useful for identifying files due for integrity checks.
 
-`stale:0` is not a "never verified" filter: the cutoff is `now - 0 days`, so it matches every location that has never been verified *and* every location verified before the current moment -- in practice, everything. There is no dedicated filter for never-verified files.
+`stale:0` is not a shortcut for `stale:never`: the cutoff is `now - 0 days`, so it matches every location verified before the current moment -- in practice, everything. Use `stale:never` for never-verified files. The day comparison is exact to the second, so a location verified earlier today is not reported by `stale:1`.
 
 **Examples:**
 
 ```
 maki search "stale:30"          # not verified in 30+ days (or never)
 maki search "stale:90 type:image"
+maki search "stale:never"       # never verified at all
 ```
 
-**SQL behavior:** `WHERE EXISTS (SELECT 1 FROM file_locations fl JOIN variants v ... WHERE (fl.verified_at IS NULL OR fl.verified_at < datetime('now', '-N days')))`. Pure SQL, no disk I/O.
+**SQL behavior:** `stale:N` adds `WHERE EXISTS (SELECT 1 FROM file_locations fl JOIN variants v ... WHERE (fl.verified_at IS NULL OR datetime(substr(fl.verified_at, 1, 19)) < datetime('now', '-N days')))` -- `verified_at` is stored as an RFC 3339 UTC string, and the `substr`/`datetime` pair compares parsed timestamps rather than raw strings. `stale:never` adds the same `EXISTS` with `fl.verified_at IS NULL` alone. Pure SQL, no disk I/O.
 
 ---
 
