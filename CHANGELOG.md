@@ -2,6 +2,55 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.10.3 (2026-09-22)
+
+Docs-and-dependencies currency release (September 2026 check). No code
+changes, no schema migration — the binary differs from v4.10.2 only by
+the refreshed lockfile.
+
+### Changed
+
+- **VLM model guide brought up to date** (`doc/manual/reference/10-vlm-models.md`):
+  - **Qwen3.6 vision on Ollama**: the guide claimed Qwen3.6 was
+    text-only there. Ollama rebuilt every `qwen3.6` tag in late August
+    2026 and now lists image input on all of them; the guide says so,
+    hedged as "reported working, smoke-test before a batch run" since we
+    have not re-verified it on our own hardware.
+  - **Gemma 4 accelerator tags**: the "`-mlx-bf16` / `-mxfp8` / `-nvfp4`
+    silently drop image input" gotcha is now a version note — Ollama
+    v0.33.3 wired up images (and audio) for Gemma 4 on the MLX engine.
+    Same fix in the Apple Silicon / MLX paragraph. `gemma4:12b` added to
+    the standard-tag list.
+  - **Qwen3.8** is still 27B-only (a dozen quantization tags, all with
+    image input); `qwen3.8-flash-next` (125 B MoE, 6 B active, vision,
+    105–120 GB) mentioned as a Qwen4 architecture preview that is out of
+    reach for ordinary workstations.
+  - **"Qwen-Image is not a VLM"** note: Alibaba's Qwen-Image 2.1
+    (September 2026) is a text-to-image / image-editing diffusion model
+    under a research-only license — it cannot describe images and does
+    not work with `maki describe`.
+  - Subjective-quality list no longer claims Qwen3.5 9B "needs llama.cpp
+    or vLLM" (it runs on current Ollama, as the rest of the guide says).
+  - Ollama version guidance: keep it current (v0.34.x at the time of
+    writing); most "vision silently missing" reports trace back to an
+    old Ollama rather than the model.
+- **Cloud API example model id** replaced everywhere (VLM guide,
+  configuration reference, ingest guide): `gpt-5.1-chat-latest` is no
+  longer on OpenAI's model list; examples now use `gpt-6-astra` (with
+  `gpt-6-sol` as the cheaper tier) and warn that cloud identifiers
+  churn.
+- **Lockfile refresh** (`cargo update`): ~35 transitive bumps within
+  semver, including the yanked `chacha20 0.10.1` → 0.10.2 that
+  `cargo deny` had started warning about, plus lofty 0.25.4, printpdf
+  0.12.8, tokenizers 0.23.2, uuid 1.26.1, tower-http 0.7.1. All 39
+  direct dependencies were already at their latest crates.io release;
+  `cargo audit` reports zero vulnerabilities (same two allowed
+  unmaintained warnings as in August). SigLIP 2 remains the current
+  embedding line and all bundled-model download URLs were verified
+  live; OpenCV's `face_detection_yunet_2026may.onnx` has identical
+  weights to the 2023mar file we ship (only dynamic input dims), so no
+  model change.
+
 ## v4.10.2 (2026-09-05)
 
 `person:` filter semantics unified between CLI and web UI. No schema migration.

@@ -124,31 +124,43 @@ is the still-solid previous generation.
 | **Qwen3.5 35B** `qwen3.5:35b` | **24 GB** | Largest widely-available variant. |
 
 **Qwen3.6** — on Ollama only the larger sizes are published
-(`qwen3.6:27b` ~17 GB, `qwen3.6:35b` ~24 GB), so it's a "best local
-quality" option rather than an everyday one.
+(`qwen3.6:27b` ~18 GB, `qwen3.6:35b` ~23 GB, plus `-mlx` variants for
+Apple Silicon), so it's a "best local quality" option rather than an
+everyday one.
 
 **Qwen3.8** — the newest generation (open weights August 2026); on
 Ollama as **27B only** (`qwen3.8:27b`, ~18 GB at Q4; `qwen3.8:27b-mlx`
-for Apple Silicon), 256K context. Early benchmarks show the strongest
-image understanding of any local Qwen yet (document and real-world
-image tasks clearly ahead of Qwen3.6-27B), but there's no smaller size,
-so it needs ~24 GB RAM/VRAM. Worth trying if your hardware fits — with
-two caveats: run **Ollama v0.32.14 or newer** (release-day builds
+for Apple Silicon; a dozen quantization tags in total, all with image
+input), 256K context. Early benchmarks show the strongest image
+understanding of any local Qwen yet (document and real-world image
+tasks clearly ahead of Qwen3.6-27B), but there's no smaller size, so it
+needs ~24 GB RAM/VRAM. Worth trying if your hardware fits — with two
+caveats: run **Ollama v0.32.14 or newer** (release-day builds
 mis-parsed image input via the wrong parser; fixed within days), and
-treat it as a week-old model — A/B it against your current model on
-your own photos before switching the default.
+A/B it against your current model on your own photos before switching
+the default. The related `qwen3.8-flash-next` (a 125 B MoE with 6 B
+active, vision-capable, 105–120 GB on disk) is a preview of the Qwen4
+architecture and out of reach for ordinary workstations.
 
-**Vision on Ollama — 3.5 yes, 3.8 yes (with current Ollama), 3.6 no
-(as of August 2026):** current Ollama releases handle the **Qwen3.5**
-vision path correctly (only quite old versions silently dropped image
-input), and **Qwen3.8** runs on the native engine with vision wired up
-(on v0.32.14+, see above). **Qwen3.6** image input is *not* wired up in
-Ollama — the library page shows an "image input" badge and text
-generation works, but the separate vision projector isn't loaded, so
-`maki describe` gets text-only behavior; for Qwen3.6 vision use
-llama.cpp or LM Studio. Quick test for any new model: describe an
-obviously distinctive image (e.g. a sunset over water) — a generic
-answer that could fit any photo means vision isn't wired up.
+**Not a VLM: Qwen-Image.** Alibaba's *Qwen-Image* line (2.1 as of
+September 2026) is a diffusion model for generating and editing images,
+not for describing them — it cannot be used with `maki describe`, and
+it isn't on Ollama. The naming invites confusion; for descriptions you
+want Qwen3.5 / Qwen3-VL / Qwen3.8.
+
+**Vision on Ollama — 3.5 yes, 3.8 yes, 3.6 reportedly yes since late
+August 2026:** current Ollama releases handle the **Qwen3.5** vision
+path correctly (only quite old versions silently dropped image input),
+and **Qwen3.8** runs on the native engine with vision wired up (on
+v0.32.14+, see above). **Qwen3.6** image input was *not* wired up in
+Ollama through mid-2026 (text generation worked, the vision projector
+wasn't loaded); the library rebuilt every `qwen3.6` tag in late August
+2026 and now lists image input on all of them. We haven't re-verified
+it ourselves, so treat it as "works on current Ollama, confirm before
+a batch run" — or use llama.cpp / LM Studio, where Qwen3.6 vision has
+worked all along. Quick test for any new model: describe an obviously
+distinctive image (e.g. a sunset over water) — a generic answer that
+could fit any photo means vision isn't wired up.
 
 ### Gemma 4 (Native Multimodal)
 
@@ -162,7 +174,7 @@ Google's Gemma 4 is natively multimodal — vision (and audio on the smaller var
 | 26B MoE | `gemma4:26b` | 25.2 B total / 3.8 B active | text + image | MoE — only ~3.8 B weights active per token, large total. Good quality / active-weight ratio. |
 | 31B Dense | `gemma4:31b` | 30.7 B | text + image | Largest dense variant; best local Gemma 4 quality. |
 
-**Vision-only requires the standard quant tags.** Variants tagged `-mlx-bf16`, `-mxfp8`, or `-nvfp4` are text-only optimisations for specific accelerators and silently drop image input. Stick with the default tags (`gemma4:e2b`, `gemma4:e4b`, `gemma4:26b`, `gemma4:31b`) — or the explicit `-it-q4_K_M` / `-it-q8_0` quants — for `maki describe`. A quick smoke test matches the Qwen3.5 case: describe a distinctive image and check whether the answer is plausibly visual.
+**Accelerator-specific tags: check your Ollama version.** Until Ollama v0.33.3 (late August 2026) the variants tagged `-mlx`, `-mlx-bf16`, `-mxfp8`, or `-nvfp4` were text-only optimisations that silently dropped image input. v0.33.3 wired up images (and audio) for Gemma 4 on the MLX engine, and the library now lists image input on those tags too. On older Ollama, stick with the default tags (`gemma4:e2b`, `gemma4:e4b`, `gemma4:12b`, `gemma4:26b`, `gemma4:31b`) — or the explicit `-it-q4_K_M` / `-it-q8_0` quants — for `maki describe`. Either way, run the smoke test from the Qwen section once: describe a distinctive image and check whether the answer is plausibly visual.
 
 Audio support on E2B / E4B is interesting but `maki describe` only sends images — the audio modality is unused.
 
@@ -191,11 +203,11 @@ endpoint = "http://localhost:11434"
 model = "qwen2.5vl:3b"
 ```
 
-**Supported models:** All models with Ollama vision support — Qwen2.5-VL, Qwen3-VL, Qwen3.5 (current Ollama releases), Gemma 3, Gemma 4 (text+image variants, see caveat above), LLaVA, Moondream. Qwen3.6 vision is not wired up in Ollama yet (text-only there; see above).
+**Supported models:** All models with Ollama vision support — Qwen2.5-VL, Qwen3-VL, Qwen3.5, Qwen3.8, Gemma 3, Gemma 4, LLaVA, Moondream — and, on Ollama releases from late August 2026 onwards, Qwen3.6 (see the vision note above). Keep Ollama current (v0.34.x at the time of writing); most "vision silently missing" reports trace back to an old Ollama rather than the model.
 
 **Concurrency:** Ollama handles one request at a time by default. For `concurrency > 1`, set `OLLAMA_NUM_PARALLEL` environment variable or increase `num_parallel` in Ollama's config.
 
-**Apple Silicon — MLX backend.** Recent Ollama releases (early 2026 onwards) bundle Apple's MLX framework as the default inference path on Apple Silicon, with measurable wins on per-token latency and energy use vs the GGUF/llama.cpp backend. Most models pick this up automatically when the relevant `*-mlx-*` quants are available; some have MLX-only text-mode tags (notably the Gemma 4 `-mlx-bf16` series) that silently drop image input — use the standard tags for `maki describe`. No MAKI config changes needed; the speedup is transparent on the HTTP API.
+**Apple Silicon — MLX backend.** Recent Ollama releases (early 2026 onwards) bundle Apple's MLX framework as the default inference path on Apple Silicon, with measurable wins on per-token latency and energy use vs the GGUF/llama.cpp backend. Most models pick this up automatically when the relevant `*-mlx-*` quants are available. Before Ollama v0.33.3 the MLX-only tags (notably the Gemma 4 `-mlx-bf16` series) were text-only and silently dropped image input; that is fixed on current releases, but if you're on an older Ollama use the standard tags for `maki describe`. No MAKI config changes needed; the speedup is transparent on the HTTP API.
 
 ### llama.cpp
 
@@ -277,11 +289,12 @@ Any OpenAI-compatible cloud API works. Note that cloud APIs charge per request a
 # maki.toml — example with a self-hosted proxy that adds auth
 [vlm]
 endpoint = "https://api.openai.com"
-model = "gpt-5.1-chat-latest"
+model = "gpt-6-astra"        # or gpt-6-sol for a cheaper tier
 ```
 
-(Older examples used `gpt-4o`; OpenAI retired that model in 2026 —
-use a current GPT-5.x identifier.)
+Cloud model identifiers churn quickly (`gpt-4o` and the GPT-5.x line
+were both retired during 2026) — check your provider's current model
+list rather than copying an identifier from documentation.
 
 ---
 
@@ -329,7 +342,7 @@ use a current GPT-5.x identifier.)
 | **Ollama vision** | Yes | Yes | Yes (current releases) |
 | **llama.cpp vision** | Yes | Yes | Yes (with mmproj) |
 
-For most users, **Qwen3.5 via Ollama** (`qwen3.5:4b` or `:9b`) is the practical sweet spot now that Ollama wires up its vision path; **Qwen3-VL** remains a well-tested fallback. Qwen3.6 vision is not available via Ollama (see above); the new **Qwen3.8** works on current Ollama but exists only as a 27B — a high-end option, not an everyday one.
+For most users, **Qwen3.5 via Ollama** (`qwen3.5:4b` or `:9b`) is the practical sweet spot now that Ollama wires up its vision path; **Qwen3-VL** remains a well-tested fallback. Qwen3.6 vision on Ollama arrived with the late-August 2026 tag rebuild (see above); the newer **Qwen3.8** works on current Ollama but exists only as a 27B — both are high-end options, not everyday ones.
 
 ### Description Quality (Subjective)
 
@@ -341,7 +354,7 @@ Based on describing the same set of 50 photographs (landscapes, portraits, archi
 - **Gemma 3 4B**: Strong on materials, textures, and spatial relationships. Slightly less natural prose.
 - **Qwen3-VL 8B**: Rich, natural descriptions. Good at lighting, mood, composition. Rarely generic.
 - **Qwen2.5-VL 7B**: Similar quality to Qwen3-VL 8B but slower.
-- **Qwen3.5 9B**: Best visual reasoning. Catches subtle details (reflections, depth of field, lens characteristics). Needs llama.cpp or vLLM.
+- **Qwen3.5 9B**: Best visual reasoning. Catches subtle details (reflections, depth of field, lens characteristics). Runs on current Ollama; llama.cpp or vLLM also work.
 
 ---
 

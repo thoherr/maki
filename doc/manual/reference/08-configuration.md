@@ -597,11 +597,11 @@ Base URL of the VLM server. Any server implementing the OpenAI-compatible `/v1/c
 - [llama.cpp server](https://github.com/ggerganov/llama.cpp) -- `http://localhost:8080`
 
 **Cloud APIs** (OpenAI-compatible, require API key in environment):
-- OpenAI -- `https://api.openai.com` (model: `gpt-5.1-chat-latest`)
+- OpenAI -- `https://api.openai.com` (model: `gpt-6-astra`)
 - Groq -- `https://api.groq.com/openai`
 - Together AI -- `https://api.together.xyz`
 
-Cloud model rosters rotate quickly (OpenAI retired `gpt-4o` in 2026, and
+Cloud model rosters rotate quickly (OpenAI retired `gpt-4o` and the GPT-5.x line in 2026, and
 the Llama vision previews formerly listed here are gone) -- check the
 provider's current vision-model list for the exact identifier.
 
@@ -612,7 +612,7 @@ provider's current vision-model list for the exact identifier.
 - **Type:** string
 - **Default:** `"qwen2.5vl:3b"`
 
-Model name passed to the VLM server. For Ollama, this is the model tag (e.g., `moondream`, `qwen2.5vl:3b`, `qwen3.5:4b`). For cloud APIs, this is the model identifier (e.g., `gpt-5.1-chat-latest`).
+Model name passed to the VLM server. For Ollama, this is the model tag (e.g., `moondream`, `qwen2.5vl:3b`, `qwen3.5:4b`). For cloud APIs, this is the model identifier (e.g., `gpt-6-astra`).
 
 **Recommended models for photography** (tested with Ollama on Apple Silicon):
 

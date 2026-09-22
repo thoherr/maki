@@ -616,7 +616,7 @@ Cloud vision APIs that implement the OpenAI chat completions format can also be 
 ```toml
 [vlm]
 endpoint = "https://api.openai.com"
-model = "gpt-5.1-chat-latest"
+model = "gpt-6-astra"
 ```
 
 Requires `OPENAI_API_KEY` in your environment. Charged per image; see OpenAI's current pricing.
@@ -641,7 +641,7 @@ model = "<current Together vision model>"   # check docs.together.ai
 
 Requires `TOGETHER_API_KEY`.
 
-Cloud model rosters rotate quickly (OpenAI's `gpt-4o` and the Llama 3.2
+Cloud model rosters rotate quickly (OpenAI's `gpt-4o`, its GPT-5.x line, and the Llama 3.2
 vision previews once listed here have all been retired) -- always take
 the exact identifier from the provider's current model list.
 
