@@ -1052,7 +1052,7 @@ Asset IDs support unique prefix matching. Batch mode reports per-asset progress 
 : Delete source files after successful copy and SHA-256 verification.
 
 **--create-sidecars**
-: After copying, create `.xmp` sidecar files at the destination for variants that have metadata (ratings, tags, labels, descriptions) but no existing XMP recipe on the target volume. The generated XMP files include `dc:subject` (tags), `lr:hierarchicalSubject` (hierarchical tags), `xmp:Rating`, `xmp:Label`, and `dc:description`. Each sidecar is registered as a recipe in the catalog and YAML sidecar. This enables CaptureOne, Lightroom, and other XMP-aware tools to pick up MAKI metadata immediately.
+: After copying, create `.xmp` sidecar files at the destination for variants that have metadata (ratings, tags, labels, descriptions) but no existing XMP recipe on the target volume. The generated XMP files include `dc:subject` (tags), `lr:hierarchicalSubject` (hierarchical tags), `xmp:Rating`, `xmp:Label`, and `dc:description`. Each sidecar is registered as a recipe in the catalog and YAML sidecar. This enables CaptureOne, Lightroom, and other XMP-aware tools to pick up MAKI metadata immediately. File naming follows `[writeback] sidecar_naming` (default `DSC_1234.xmp`; see [create-sidecars](#maki-create-sidecars) for the rules, including the existing-file guard).
 
 **--dry-run**
 : Show what would happen without making any changes.
@@ -1552,7 +1552,11 @@ maki-create-sidecars -- create XMP sidecar files for assets with metadata but no
 
 Scans assets for variants that have metadata (ratings, tags, labels, descriptions) but no XMP sidecar recipe, and creates `.xmp` files alongside the variant files on disk. Each generated sidecar includes `dc:subject` (flat tags), `lr:hierarchicalSubject` (hierarchical tags), `xmp:Rating`, `xmp:Label`, and `dc:description`.
 
-This enables CaptureOne, Lightroom, and other XMP-aware tools to pick up MAKI metadata for files that were imported without XMP sidecars. Unlike `maki writeback` (which updates *existing* XMP files), this command *creates new* XMP files where none exist.
+This enables CaptureOne, Lightroom, and other XMP-aware tools to pick up MAKI metadata for files that were imported without XMP sidecars. Unlike `maki writeback` (which updates *existing* XMP files), this command *creates new* XMP files where none exist. Importing never creates sidecars; run this once before the first Capture One or Lightroom session on a freshly imported shoot, or set `[writeback] create_sidecars = true` to have the first edit create them automatically.
+
+**File naming** follows `[writeback] sidecar_naming`: the default `stem` writes `DSC_1234.xmp` next to `DSC_1234.NEF` (the Capture One / Lightroom convention); `full` writes `DSC_1234.NEF.xmp` (darktable). Under `stem`, a RAW+JPEG pair in one asset gets a single shared sidecar.
+
+**Skipped locations.** A variant that already has an `.xmp` recipe on that volume is skipped, as is a sidecar path already registered for the asset. A file that exists at the sidecar path but is not in the catalog (typically written by Capture One after the import) is never overwritten; it is counted separately and reported with a hint to run `maki import`. Only online volumes are considered.
 
 Without `--apply`, runs in report-only mode showing what would be created.
 
@@ -1569,6 +1573,12 @@ Without `--apply`, runs in report-only mode showing what would be created.
 
 **--apply**
 : Create XMP files on disk and register them as recipes. Without this flag, only reports what would be created.
+
+### OUTPUT
+
+    Create-sidecars: 120 checked, 118 created, 340 skipped (no metadata), 2 existing on disk but not imported (run `maki import`)
+
+`--log` prints one line per sidecar (`created`, `would create`, or `exists on disk but is not imported`). `--json` emits `dry_run`, `checked`, `created`, `exists_unregistered`, `skipped_no_metadata`, and the effective `sidecar_naming`.
 
 ### EXAMPLES
 

@@ -54,6 +54,8 @@
                                                         parts.push(evt.locations_added + ' locations');
         if (typeof evt.recipes_attached === 'number' && evt.recipes_attached > 0)
                                                         parts.push(evt.recipes_attached + ' recipes');
+        if (typeof evt.sidecars_created === 'number' && evt.sidecars_created > 0)
+                                                        parts.push(evt.sidecars_created + ' sidecars created');
         if (typeof evt.described === 'number' && evt.described > 0 && typeof evt.descriptions_set !== 'number')
                                                         parts.push(evt.described + ' described');
         if (typeof evt.succeeded === 'number')          parts.push(evt.succeeded + ' processed');

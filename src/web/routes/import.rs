@@ -228,6 +228,7 @@ fn run_import_with_progress(
         "recipes_attached": r.import.recipes_attached,
         "recipes_updated": r.import.recipes_updated,
         "previews_generated": r.import.previews_generated,
+        "sidecars_created": r.import.sidecars_created,
         "new_asset_ids": r.import.new_asset_ids,
     });
     #[cfg(feature = "ai")]

@@ -210,6 +210,9 @@ pub struct ImportResult {
     pub recipes_updated: usize,
     pub previews_generated: usize,
     pub smart_previews_generated: usize,
+    /// `.xmp` sidecars created by `[writeback] create_sidecars` for imported
+    /// assets that carry metadata (e.g. `--add-tag`) but have no recipe.
+    pub sidecars_created: usize,
     /// Asset IDs created during this import (for post-import auto-grouping).
     #[serde(skip)]
     pub new_asset_ids: Vec<String>,
@@ -827,6 +830,8 @@ mod audio;
 mod video;
 mod watch;
 mod workflow;
+mod sidecars;
+pub use sidecars::{asset_has_sidecar_metadata, create_missing_sidecars, SidecarCreation, SidecarStatus};
 pub use audio::{AudioAnalyzeResult, AudioAnalyzeStatus};
 #[cfg(feature = "ai")]
 pub use auto_stack::{auto_stack_catalog, AutoStackCluster, AutoStackMember, AutoStackResult};
@@ -1084,19 +1089,41 @@ fn determine_recipe_software(ext: &str) -> &'static str {
     }
 }
 
+/// True if `ext` is a media (non-recipe) extension of any file-type group,
+/// regardless of which groups an import filter has enabled.
+fn is_media_extension(ext: &str) -> bool {
+    let lower = ext.to_lowercase();
+    GROUPS
+        .iter()
+        .filter(|(name, _, _)| !RECIPE_GROUPS.contains(name))
+        .any(|(_, extensions, _)| extensions.contains(&lower.as_str()))
+}
+
+/// Strip a trailing media extension from a recipe file's stem so that
+/// `DSC_001.NEF.xmp` (darktable / `[writeback] sidecar_naming = "full"`)
+/// resolves to the same parent as `DSC_001.xmp` (Capture One, Lightroom).
+/// Stems without such a suffix are returned unchanged.
+pub fn strip_media_extension(stem: &str) -> &str {
+    match stem.rsplit_once('.') {
+        Some((base, inner)) if !base.is_empty() && is_media_extension(inner) => base,
+        _ => stem,
+    }
+}
+
 /// Group resolved files by (parent_directory, file_stem).
 /// Media files are sorted with RAW extensions first, then alphabetically by extension.
 /// Files with extensions not importable by the filter are skipped entirely.
+/// Recipe files named with a double extension (`DSC_001.NEF.xmp`) join the
+/// group of their media file like a plain `DSC_001.xmp` does.
 fn group_by_stem(files: &[PathBuf], filter: &FileTypeFilter) -> Vec<StemGroup> {
     let mut map: BTreeMap<(PathBuf, String), StemGroup> = BTreeMap::new();
 
     for file in files {
         let dir = file.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
-        let stem = file
+        let raw_stem = file
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
+            .unwrap_or("");
         let ext = file
             .extension()
             .and_then(|e| e.to_str())
@@ -1105,6 +1132,11 @@ fn group_by_stem(files: &[PathBuf], filter: &FileTypeFilter) -> Vec<StemGroup> {
         if !filter.is_importable(ext) {
             continue;
         }
+        let stem = if filter.is_recipe(ext) {
+            strip_media_extension(raw_stem).to_string()
+        } else {
+            raw_stem.to_string()
+        };
 
         let key = (dir.clone(), stem.clone());
         let group = map.entry(key).or_insert_with(|| StemGroup {
@@ -1425,6 +1457,30 @@ mod tests {
         reapply_xmp_data(&xmp, &mut asset, "sha256:xmp_source_test");
         assert_eq!(asset.tag_source("new_tag"), TagSource::XmpImport);
         assert_eq!(asset.tag_source("existing_tag"), TagSource::User);
+    }
+
+    #[test]
+    fn strip_media_extension_only_strips_known_media_suffixes() {
+        assert_eq!(strip_media_extension("DSC_001.NEF"), "DSC_001");
+        assert_eq!(strip_media_extension("DSC_001.jpg"), "DSC_001");
+        assert_eq!(strip_media_extension("clip.MP4"), "clip");
+        assert_eq!(strip_media_extension("DSC_001"), "DSC_001");
+        assert_eq!(strip_media_extension("photo.2024"), "photo.2024");
+        assert_eq!(strip_media_extension(".nef"), ".nef");
+    }
+
+    #[test]
+    fn group_by_stem_joins_double_extension_sidecar_with_media() {
+        let filter = FileTypeFilter::new();
+        let files = vec![
+            PathBuf::from("/photos/DSC_002.NEF"),
+            PathBuf::from("/photos/DSC_002.NEF.xmp"),
+        ];
+        let groups = group_by_stem(&files, &filter);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].stem, "DSC_002");
+        assert_eq!(groups[0].media_files.len(), 1);
+        assert_eq!(groups[0].recipe_files.len(), 1);
     }
 
     #[test]

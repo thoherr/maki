@@ -766,6 +766,30 @@ pub struct WritebackConfig {
     /// one-off destructive cleanup pass instead.
     #[serde(default)]
     pub mirror_tags: bool,
+    /// Naming scheme for `.xmp` sidecar files that MAKI *creates*
+    /// (`maki create-sidecars`, `maki relocate --create-sidecars`, and
+    /// the `create_sidecars` auto-create path below). Existing sidecars
+    /// are always found under either name on import.
+    ///
+    /// - `stem` (default): `DSC_1234.xmp` next to `DSC_1234.NEF` — the
+    ///   convention Capture One, Lightroom, and Bridge read and write.
+    /// - `full`: `DSC_1234.NEF.xmp` — the darktable convention (and what
+    ///   MAKI wrote before v4.11).
+    #[serde(default)]
+    pub sidecar_naming: SidecarNaming,
+    /// Create a sidecar on the fly when automatic writeback (`enabled =
+    /// true`) hits an asset whose variant has no `.xmp` recipe yet. The
+    /// new file carries the asset's full current metadata (rating, label,
+    /// description, tags) and is registered as a recipe, so later edits
+    /// flow into it like into any imported sidecar. Only variants on
+    /// online volumes are covered; a sidecar that already exists on disk
+    /// but is not yet imported is left alone.
+    ///
+    /// Has no effect while `enabled = false`: without auto-writeback
+    /// there is nothing to write into the new file. Default `false` —
+    /// run `maki create-sidecars` for an explicit one-off pass.
+    #[serde(default)]
+    pub create_sidecars: bool,
 }
 
 impl Default for WritebackConfig {
@@ -773,6 +797,41 @@ impl Default for WritebackConfig {
         Self {
             enabled: false,
             mirror_tags: false,
+            sidecar_naming: SidecarNaming::default(),
+            create_sidecars: false,
+        }
+    }
+}
+
+/// How MAKI names the `.xmp` sidecar files it creates next to a variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SidecarNaming {
+    /// `DSC_1234.xmp` — the media extension is replaced (Capture One,
+    /// Lightroom, Bridge).
+    #[default]
+    Stem,
+    /// `DSC_1234.NEF.xmp` — the media extension is kept (darktable).
+    Full,
+}
+
+impl SidecarNaming {
+    /// Sidecar path for a variant file path, under this naming scheme.
+    /// The result lives in the same directory as `variant_path`.
+    pub fn sidecar_path(self, variant_path: &std::path::Path) -> std::path::PathBuf {
+        match self {
+            SidecarNaming::Stem => variant_path.with_extension("xmp"),
+            SidecarNaming::Full => {
+                let ext = variant_path
+                    .extension()
+                    .map(|e| e.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if ext.is_empty() {
+                    variant_path.with_extension("xmp")
+                } else {
+                    variant_path.with_extension(format!("{ext}.xmp"))
+                }
+            }
         }
     }
 }
@@ -1563,5 +1622,35 @@ skip = ["audio"]
     fn resolve_unknown_profile_returns_none() {
         let config = ImportConfig::default();
         assert!(config.resolve_profile("nonexistent").is_none());
+    }
+
+    #[test]
+    fn writeback_sidecar_naming_defaults_to_stem() {
+        let cfg: CatalogConfig = toml::from_str("[writeback]\nenabled = true\n").unwrap();
+        assert_eq!(cfg.writeback.sidecar_naming, SidecarNaming::Stem);
+        assert!(!cfg.writeback.create_sidecars);
+
+        let cfg: CatalogConfig =
+            toml::from_str("[writeback]\nsidecar_naming = \"full\"\ncreate_sidecars = true\n")
+                .unwrap();
+        assert_eq!(cfg.writeback.sidecar_naming, SidecarNaming::Full);
+        assert!(cfg.writeback.create_sidecars);
+
+        // Round-trips through serialisation as a lowercase string.
+        let s = toml::to_string(&cfg).unwrap();
+        assert!(s.contains("sidecar_naming = \"full\""), "{s}");
+        assert!(s.contains("create_sidecars = true"), "{s}");
+    }
+
+    #[test]
+    fn sidecar_naming_builds_paths() {
+        use std::path::Path;
+        let p = Path::new("2026/Trip/DSC_1234.NEF");
+        assert_eq!(SidecarNaming::Stem.sidecar_path(p), Path::new("2026/Trip/DSC_1234.xmp"));
+        assert_eq!(SidecarNaming::Full.sidecar_path(p), Path::new("2026/Trip/DSC_1234.NEF.xmp"));
+        // No extension at all: both schemes just append .xmp
+        let bare = Path::new("scan");
+        assert_eq!(SidecarNaming::Stem.sidecar_path(bare), Path::new("scan.xmp"));
+        assert_eq!(SidecarNaming::Full.sidecar_path(bare), Path::new("scan.xmp"));
     }
 }

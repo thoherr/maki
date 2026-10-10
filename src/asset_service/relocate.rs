@@ -224,70 +224,37 @@ impl AssetService {
 
         // Phase 2.5: Create XMP sidecars for variants without recipes (if requested)
         if create_sidecars {
-            let has_metadata = !asset.tags.is_empty()
-                || asset.rating.is_some()
-                || asset.color_label.is_some()
-                || asset.description.is_some();
-
-            if has_metadata {
-                for variant in &asset.variants {
-                    // Skip if variant already has an XMP recipe on the target volume
-                    let has_xmp_on_target = asset.recipes.iter().any(|r| {
-                        r.variant_hash == variant.content_hash
-                            && r.location.volume_id == target_volume.id
-                            && r.recipe_type == crate::models::recipe::RecipeType::Sidecar
-                    });
-                    if has_xmp_on_target {
-                        continue;
+            let naming = crate::config::CatalogConfig::load(&self.catalog_root)
+                .map(|c| c.writeback.sidecar_naming)
+                .unwrap_or_default();
+            let online: HashMap<Uuid, PathBuf> =
+                [(target_volume.id, target_volume.mount_point.clone())].into_iter().collect();
+            let mut created_here = Vec::new();
+            create_missing_sidecars(
+                &mut asset,
+                &catalog,
+                &content_store,
+                &online,
+                Some(target_volume.id),
+                naming,
+                true,
+                |path, status| {
+                    let rel = path
+                        .strip_prefix(&target_volume.mount_point)
+                        .unwrap_or(path)
+                        .display()
+                        .to_string();
+                    match status {
+                        SidecarStatus::Created => created_here.push(format!("Created sidecar {rel}")),
+                        SidecarStatus::ExistsUnregistered => created_here.push(format!(
+                            "Skipped sidecar {rel} (file exists on disk, not imported)"
+                        )),
+                        SidecarStatus::WouldCreate => {}
                     }
-
-                    // Check if variant has a location on the target volume
-                    let target_loc = match variant.locations.iter().find(|l| l.volume_id == target_volume.id) {
-                        Some(loc) => loc,
-                        None => continue,
-                    };
-
-                    // Build XMP sidecar path: variant filename + .xmp extension
-                    let variant_relative = &target_loc.relative_path;
-                    let xmp_relative = variant_relative.with_extension(
-                        format!("{}.xmp", variant_relative.extension().unwrap_or_default().to_string_lossy())
-                    );
-                    let xmp_path = target_volume.mount_point.join(&xmp_relative);
-
-                    if let Some(parent) = xmp_path.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-
-                    let xmp_content = crate::xmp_reader::create_xmp(
-                        &asset.tags,
-                        asset.rating,
-                        asset.color_label.as_deref(),
-                        asset.description.as_deref(),
-                    );
-
-                    std::fs::write(&xmp_path, &xmp_content)?;
-                    let xmp_hash = content_store.hash_file(&xmp_path)?;
-
-                    let recipe = crate::models::recipe::Recipe {
-                        id: Uuid::new_v4(),
-                        variant_hash: variant.content_hash.clone(),
-                        software: "MAKI".to_string(),
-                        recipe_type: crate::models::recipe::RecipeType::Sidecar,
-                        content_hash: xmp_hash,
-                        location: crate::models::FileLocation {
-                            volume_id: target_volume.id,
-                            relative_path: xmp_relative.clone(),
-                            verified_at: None,
-                        },
-                        pending_writeback: false,
-                    };
-                    catalog.insert_recipe(&recipe)?;
-                    asset.recipes.push(recipe);
-
-                    actions.push(format!("Created sidecar {}", xmp_relative.display()));
-                    copied += 1;
-                }
-            }
+                },
+            )?;
+            copied += created_here.iter().filter(|a| a.starts_with("Created")).count();
+            actions.extend(created_here);
         }
 
         metadata_store.save(&asset)?;

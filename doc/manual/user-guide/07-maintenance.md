@@ -498,6 +498,21 @@ Most photo editors do **not** write XMP sidecar files by default. You need to en
 
 Without this setting, your ratings, keywords, and labels stay locked inside the tool's proprietary database and are invisible to MAKI.
 
+### Prerequisite on the MAKI side: sidecars must exist before the first session
+
+Importing never creates `.xmp` files. Tags and ratings you assign right after a RAW import live in the catalog only, and writeback (automatic or `maki writeback`) can only update sidecars that already exist. If you open such a shoot in Capture One now, it creates its own empty sidecars and never sees your MAKI metadata; a later `maki refresh` then merges Capture One's values *over* yours for rating, label, and description.
+
+So, before the first Capture One or Lightroom session on a freshly imported shoot:
+
+```bash
+maki create-sidecars "volume:Work SSD"          # report only
+maki create-sidecars "volume:Work SSD" --apply  # write DSC_1234.xmp files
+```
+
+Each sidecar carries the asset's rating, label, description, and tags and is registered as a recipe, so from then on both directions work: `maki refresh` reads the tool's edits, `maki writeback` (or `[writeback] enabled = true`) pushes yours. To skip the manual step entirely, set `[writeback] enabled = true` together with `create_sidecars = true`: an import that assigns tags (`--add-tag`, the web import dialog's tag field, `[import] auto_tags`) creates the sidecars in the same run, and the first edit of any other sidecar-less asset creates the file on the spot.
+
+Sidecars are named `DSC_1234.xmp` (the Capture One / Lightroom convention). darktable users set `[writeback] sidecar_naming = "full"` for `DSC_1234.NEF.xmp`; MAKI imports either form.
+
 ### "I rated and tagged in CaptureOne/Lightroom — how do I get those changes into MAKI?"
 
 External tools write ratings, keywords, descriptions, and color labels to `.xmp` sidecar files. Use `refresh` to read those changes:
@@ -725,7 +740,9 @@ When copying files to a working drive where you'll open them in CaptureOne or Li
 maki relocate --query "rating:3+" --target "Work SSD" --create-sidecars --log
 ```
 
-This creates an XMP sidecar alongside each variant that doesn't already have one on the target volume. The external tool picks up your ratings and tags immediately on import.
+This creates an XMP sidecar alongside each variant that doesn't already have one on the target volume. The external tool picks up your ratings and tags immediately on import. The file is named `DSC_1234.xmp` by default (`[writeback] sidecar_naming = "full"` switches to darktable's `DSC_1234.NEF.xmp`); a sidecar that already exists on disk but was never imported is left alone.
+
+For files that stay where they are, `maki create-sidecars --apply` does the same thing in place (see below).
 
 
 ## Updating File Locations

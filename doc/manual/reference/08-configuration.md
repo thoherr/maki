@@ -964,6 +964,47 @@ mirror_tags = true   # every writeback strips stale XMP keywords
 
 The CLI `--mirror-tags` flag and this config flag are OR'd. A user with `mirror_tags = true` doesn't need the CLI flag; a user with the config off can still trigger a one-off destructive cleanup via `maki writeback --all --mirror-tags`.
 
+### sidecar_naming
+
+- **Type:** string (`"stem"` or `"full"`)
+- **Default:** `"stem"`
+
+How MAKI names the `.xmp` files it *creates* -- `maki create-sidecars`, `maki relocate --create-sidecars`, and the `create_sidecars` auto-create path below. It does not rename anything that already exists, and import accepts both forms regardless of this setting.
+
+| `sidecar_naming` | File next to `DSC_1234.NEF` | Read by |
+|------------------|-----------------------------|---------|
+| `"stem"` *(default)* | `DSC_1234.xmp` | Capture One, Lightroom, Bridge, Photo Mechanic |
+| `"full"` | `DSC_1234.NEF.xmp` | darktable (and MAKI before v4.11) |
+
+With `"stem"`, a RAW+JPEG pair in one asset shares a single `DSC_1234.xmp`, which is also how Capture One and Lightroom treat the pair. Choose `"full"` only when darktable is the tool that will read the sidecars.
+
+```toml
+[writeback]
+sidecar_naming = "full"   # darktable-style DSC_1234.NEF.xmp
+```
+
+### create_sidecars
+
+- **Type:** boolean
+- **Default:** `false`
+
+When `true` **and** `enabled = true`, MAKI creates the `.xmp` sidecar itself whenever an asset ends up with metadata but no XMP recipe:
+
+- **At import** (`maki import`, `maki watch`, the web import dialog): an asset that leaves the import with metadata — tags from `--add-tag`, the dialog's tag field, or `[import] auto_tags`; keywords or a rating from embedded XMP — gets its sidecar in the same run. The import summary reports `N sidecar(s) created`. An `.xmp` imported alongside the file in the same run counts as the recipe, so nothing is created for it.
+- **On edit** (rating, label, description, tags, from CLI, shell or web): the first edit of a sidecar-less asset creates the file on the spot.
+
+The new file carries the asset's complete current metadata and is registered as a recipe. From then on it behaves like any imported sidecar: later edits flow into it, `maki refresh` reads changes made by other tools.
+
+This closes the gap where auto-writeback silently had nothing to write to: RAW files imported without sidecars gained tags and ratings in the catalog only. Only variant locations on online volumes are covered. A sidecar that already exists on disk but has not been imported (typically one Capture One wrote after the MAKI import) is left untouched -- run `maki import` on it first.
+
+Has no effect while `enabled = false`: there would be nothing to write into the new file. For a one-off pass over the existing catalog use `maki create-sidecars --apply`.
+
+```toml
+[writeback]
+enabled = true
+create_sidecars = true   # new sidecar on first edit of a sidecar-less asset
+```
+
 ---
 
 ## [cli] Section
@@ -1144,6 +1185,12 @@ enabled = false
 # Reconcile XMP keyword lists against the catalog on every writeback
 # (removes stale keywords; default is additive only).
 mirror_tags = false
+# Name for sidecars MAKI creates: "stem" = DSC_1234.xmp (Capture One,
+# Lightroom), "full" = DSC_1234.NEF.xmp (darktable).
+sidecar_naming = "stem"
+# With enabled = true: create the sidecar on first edit of an asset
+# that has none yet (otherwise run `maki create-sidecars --apply`).
+create_sidecars = false
 
 # VLM image description settings (Pro).
 [vlm]

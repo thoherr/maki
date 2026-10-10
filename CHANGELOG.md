@@ -2,6 +2,41 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## Unreleased
+
+### Added
+
+- **`[writeback] sidecar_naming`** — how MAKI names the `.xmp` files it
+  creates (`maki create-sidecars`, `maki relocate --create-sidecars`,
+  auto-create). Default **`stem`** writes `DSC_1234.xmp`, the convention
+  Capture One, Lightroom and Bridge read; `full` keeps the old
+  `DSC_1234.NEF.xmp` (darktable). Under `stem` a RAW+JPEG pair shares one
+  sidecar. **Behaviour change:** earlier releases always wrote the
+  double-extension name, which Capture One and Lightroom ignore.
+- **`[writeback] create_sidecars`** — with `enabled = true`, MAKI creates
+  the sidecar itself whenever an asset has metadata but no XMP recipe: at
+  import time for assets that pick up tags (`--add-tag`, the web import
+  dialog's tag field, `[import] auto_tags`) or embedded-XMP metadata —
+  CLI, `watch` and web alike, reported as `N sidecar(s) created` — and on
+  the first edit (rating, label, description, tags) of any other
+  sidecar-less asset. The file carries the asset's full current metadata
+  and is registered as a recipe. Closes the gap where automatic writeback
+  silently had nothing to write to after a RAW import. Inert while
+  `enabled = false`.
+- **`maki create-sidecars`** reports sidecar paths that already hold a
+  file the catalog does not know (e.g. written by Capture One after the
+  import) instead of overwriting them: new `exists_unregistered` counter,
+  `--log` line and `--json` field, plus the effective `sidecar_naming`.
+- **Import resolves both sidecar names.** `DSC_1234.NEF.xmp` now groups
+  with and attaches to `DSC_1234.NEF` just like `DSC_1234.xmp` — both in a
+  directory import and as a standalone recipe import later.
+
+### Changed
+
+- The three sidecar-creating paths share one helper
+  (`asset_service::create_missing_sidecars`), so naming, the
+  already-has-a-sidecar checks and recipe registration exist once.
+
 ## v4.10.4 (2026-09-22)
 
 Fix release from the September 2026 documentation audit: every command,

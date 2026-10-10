@@ -44,6 +44,18 @@ impl AssetService {
         let files = resolve_files(paths, exclude_patterns);
         let groups = group_by_stem(&files, filter);
 
+        // `[writeback] enabled` + `create_sidecars`: assets that leave this
+        // import with metadata (auto_tags, embedded XMP) but no `.xmp`
+        // recipe get a sidecar right away, so the tags assigned at import
+        // time reach Capture One / Lightroom without a separate
+        // `maki create-sidecars` pass.
+        let wb_cfg = crate::config::CatalogConfig::load(&self.catalog_root)
+            .map(|c| c.writeback)
+            .unwrap_or_default();
+        let auto_create_sidecars = wb_cfg.enabled && wb_cfg.create_sidecars && !dry_run;
+        let online_here: HashMap<Uuid, PathBuf> =
+            [(volume.id, volume.mount_point.clone())].into_iter().collect();
+
         if self.verbosity.verbose {
             eprintln!("  Import: {} file(s) resolved, {} group(s)", files.len(), groups.len());
         }
@@ -56,6 +68,7 @@ impl AssetService {
         let mut recipes_updated = 0;
         let mut previews_generated = 0;
         let mut smart_previews_generated = 0;
+        let mut sidecars_created = 0;
         let mut new_asset_ids = Vec::new();
         let mut imported_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -428,14 +441,24 @@ impl AssetService {
                         .unwrap_or_else(|| Path::new(""))
                         .to_string_lossy();
 
-                    if let Some((parent_variant_hash, parent_asset_id)) =
-                        catalog.find_variant_hash_by_stem_and_directory(
-                            stem,
+                    let mut parent = catalog.find_variant_hash_by_stem_and_directory(
+                        stem,
+                        &dir_prefix,
+                        &volume.id.to_string(),
+                        None,
+                    )?;
+                    // `DSC_001.NEF.xmp` → look up `DSC_001` as well
+                    let stripped_stem = strip_media_extension(stem);
+                    if parent.is_none() && stripped_stem != stem {
+                        parent = catalog.find_variant_hash_by_stem_and_directory(
+                            stripped_stem,
                             &dir_prefix,
                             &volume.id.to_string(),
                             None,
-                        )?
-                    {
+                        )?;
+                    }
+
+                    if let Some((parent_variant_hash, parent_asset_id)) = parent {
                         // Found parent variant — attach recipe to it
                         let asset_uuid: Uuid = parent_asset_id.parse()?;
                         let mut asset = metadata_store.load(asset_uuid)?;
@@ -674,6 +697,34 @@ impl AssetService {
                     on_file(file_path, FileStatus::RecipeAttached, file_start.elapsed());
                 }
             }
+
+            // Pass 3: auto-create a sidecar for the group's asset (see above).
+            // Idempotent: a recipe attached in Pass 2, or an unregistered
+            // `.xmp` already on disk, makes the helper skip the location.
+            if auto_create_sidecars {
+                if let Some(asset) = group_asset.as_mut() {
+                    match create_missing_sidecars(
+                        asset,
+                        &catalog,
+                        &content_store,
+                        &online_here,
+                        Some(volume.id),
+                        wb_cfg.sidecar_naming,
+                        true,
+                        |_, _| {},
+                    ) {
+                        Ok(outcome) if outcome.created > 0 => {
+                            metadata_store.save(asset)?;
+                            sidecars_created += outcome.created;
+                        }
+                        Ok(_) => {}
+                        Err(e) => eprintln!(
+                            "Warning: could not create XMP sidecar for {}: {e}",
+                            group.stem
+                        ),
+                    }
+                }
+            }
         }
 
         Ok(ImportResult {
@@ -686,6 +737,7 @@ impl AssetService {
             recipes_updated,
             previews_generated,
             smart_previews_generated,
+            sidecars_created,
             new_asset_ids,
             imported_directories: imported_dirs.into_iter().collect(),
         })

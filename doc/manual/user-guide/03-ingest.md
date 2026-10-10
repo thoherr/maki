@@ -107,7 +107,7 @@ A typical CaptureOne session directory might contain:
 
 ```
 Z91_8561.ARW          # RAW original
-Z91_8561.ARW.xmp      # XMP sidecar from CaptureOne
+Z91_8561.xmp          # XMP sidecar from CaptureOne
 Z91_8561.ARW.cos      # CaptureOne settings
 Z91_8561.jpg          # JPEG export
 ```
@@ -122,7 +122,7 @@ maki show <asset-id>
 Asset: Z91_8561
   Variant 1 (Original): Z91_8561.ARW [abc123...]
   Variant 2 (Alternate): Z91_8561.jpg [def456...]
-  Recipe 1: Z91_8561.ARW.xmp
+  Recipe 1: Z91_8561.xmp
   Recipe 2: Z91_8561.ARW.cos
 ```
 
@@ -205,7 +205,9 @@ maki import /Volumes/PhotosDrive/Shoot/
 maki import /Volumes/PhotosDrive/Shoot/*.xmp
 ```
 
-MAKI finds the parent variant by matching the filename stem and directory, then attaches the recipe to it.
+MAKI finds the parent variant by matching the filename stem and directory, then attaches the recipe to it. Both sidecar naming conventions resolve to the same parent: `DSC_1234.xmp` (Capture One, Lightroom) and `DSC_1234.NEF.xmp` (darktable).
+
+Importing never *creates* sidecars. If you tag and rate freshly imported RAW files in MAKI and want those values visible in Capture One or Lightroom, run `maki create-sidecars --apply` before the first session there, or set `[writeback] enabled = true` and `create_sidecars = true`, after which an import that assigns tags writes the sidecars in the same run (see [Working with External Tools](07-maintenance.md#working-with-external-tools)).
 
 ### Enabling Non-Default Recipe Groups
 

@@ -71,8 +71,32 @@ impl QueryEngine {
         field_label: &str,
         apply: impl Fn(&Path) -> Result<bool>,
     ) {
-        let writeback_active = self.is_writeback_enabled();
+        let wb_cfg = self.writeback_config();
+        let writeback_active = wb_cfg.enabled;
         let mut sidecar_dirty = false;
+
+        // `[writeback] create_sidecars`: materialise a sidecar for variants
+        // that have none yet, so the edit below has a file to land in. The
+        // new file already carries the asset's full current metadata; the
+        // field loop then sees it as one more recipe (usually a no-op).
+        if writeback_active && wb_cfg.create_sidecars {
+            match crate::asset_service::create_missing_sidecars(
+                asset,
+                catalog,
+                content_store,
+                online,
+                None,
+                wb_cfg.sidecar_naming,
+                true,
+                |_, _| {},
+            ) {
+                Ok(outcome) if outcome.created > 0 => sidecar_dirty = true,
+                Ok(_) => {}
+                Err(e) => eprintln!(
+                    "Warning: could not create XMP sidecar for {field_label} write-back: {e}"
+                ),
+            }
+        }
 
         for recipe in &mut asset.recipes {
             let ext = recipe
@@ -156,7 +180,7 @@ impl QueryEngine {
     /// only have catalog + store at hand (the `edit` path): load online
     /// volumes, build the content store, delegate to the shared loop.
     ///
-    /// Note: no `if !is_writeback_enabled() return` short-circuit here.
+    /// Note: no `if !writeback_config().enabled return` short-circuit here.
     /// Tracking is always on; the inner loop skips the actual XMP file
     /// write when disabled and marks the recipe pending for later flush
     /// via `maki writeback`. This lets users keep auto-write off as a
@@ -468,7 +492,7 @@ impl QueryEngine {
         log: bool,
         callback: Option<&dyn Fn(&str, &str)>,
     ) -> Result<WritebackResult> {
-        // No `is_writeback_enabled()` gate: explicit manual flush always
+        // No `writeback_config().enabled` gate: explicit manual flush always
         // runs (see comment on `writeback`).
         let mut result = WritebackResult::default();
         result.dry_run = dry_run;

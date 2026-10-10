@@ -174,6 +174,7 @@ pub fn run_import_command(
         if result.recipes_updated > 0   { parts.push(format!("{} recipe(s) updated", result.recipes_updated)); }
         if result.previews_generated > 0       { parts.push(format!("{} preview(s) generated", result.previews_generated)); }
         if result.smart_previews_generated > 0 { parts.push(format!("{} smart preview(s) generated", result.smart_previews_generated)); }
+        if result.sidecars_created > 0  { parts.push(format!("{} sidecar(s) created", result.sidecars_created)); }
         #[cfg(feature = "ai")]
         if let Some(er) = embed_result {
             if er.embedded > 0 { parts.push(format!("{} embedding(s) generated", er.embedded)); }
@@ -248,6 +249,7 @@ struct WatchTickSummary {
     recipes_attached: usize,
     recipes_updated: usize,
     recipes_refreshed: usize,
+    sidecars_created: usize,
     skipped: usize,
     errors: Vec<String>,
 }
@@ -261,6 +263,7 @@ impl WatchTickSummary {
         if self.recipes_attached > 0 { parts.push(format!("{} recipe(s) attached", self.recipes_attached)); }
         if self.recipes_updated > 0 { parts.push(format!("{} recipe(s) updated", self.recipes_updated)); }
         if self.recipes_refreshed > 0 { parts.push(format!("{} recipe(s) refreshed", self.recipes_refreshed)); }
+        if self.sidecars_created > 0 { parts.push(format!("{} sidecar(s) created", self.sidecars_created)); }
         if self.skipped > 0 { parts.push(format!("{} skipped", self.skipped)); }
         parts
     }
@@ -346,6 +349,7 @@ fn watch_act(
                 summary.locations_added += r.import.locations_added;
                 summary.recipes_attached += r.import.recipes_attached;
                 summary.recipes_updated += r.import.recipes_updated;
+                summary.sidecars_created += r.import.sidecars_created;
                 summary.skipped += r.import.skipped;
             }
             Err(e) => summary.errors.push(format!("import on \"{}\": {e:#}", vol.label)),
@@ -692,7 +696,17 @@ pub fn run_create_sidecars_command(
         None => summaries.iter().map(|s| s.id).collect(),
     };
 
+    let naming = maki::config::CatalogConfig::load(&catalog_root)
+        .map(|c| c.writeback.sidecar_naming)
+        .unwrap_or_default();
+    let online: std::collections::HashMap<uuid::Uuid, std::path::PathBuf> = volumes
+        .iter()
+        .filter(|v| v.is_online)
+        .map(|v| (v.id, v.mount_point.clone()))
+        .collect();
+
     let mut created = 0usize;
+    let mut exists_unregistered = 0usize;
     let mut skipped = 0usize;
     let mut checked = 0usize;
 
@@ -702,99 +716,37 @@ pub fn run_create_sidecars_command(
             Err(_) => continue,
         };
 
-        let has_metadata = !asset.tags.is_empty()
-            || asset.rating.is_some()
-            || asset.color_label.is_some()
-            || asset.description.is_some();
-
-        if !has_metadata {
+        if !maki::asset_service::asset_has_sidecar_metadata(&asset) {
             skipped += 1;
             continue;
         }
 
         checked += 1;
-        let mut asset_changed = false;
-
-        for variant in &asset.variants {
-            for loc in &variant.locations {
-                // Filter by volume if specified
-                if let Some(ref vf) = volume_filter {
-                    if loc.volume_id != vf.id {
-                        continue;
-                    }
-                }
-
-                // Check if volume is online
-                let vol = match volumes.iter().find(|v| v.id == loc.volume_id) {
-                    Some(v) if v.mount_point.exists() => v,
-                    _ => continue,
-                };
-
-                // Check if this variant already has an XMP recipe on this volume
-                let has_xmp = asset.recipes.iter().any(|r| {
-                    r.variant_hash == variant.content_hash
-                        && r.location.volume_id == loc.volume_id
-                        && r.recipe_type == maki::models::recipe::RecipeType::Sidecar
-                });
-                if has_xmp {
-                    continue;
-                }
-
-                // Build XMP sidecar path
-                let xmp_relative = loc.relative_path.with_extension(
-                    format!("{}.xmp", loc.relative_path.extension().unwrap_or_default().to_string_lossy())
-                );
-                let xmp_path = vol.mount_point.join(&xmp_relative);
-
+        let outcome = maki::asset_service::create_missing_sidecars(
+            &mut asset,
+            &catalog,
+            &content_store,
+            &online,
+            volume_filter.as_ref().map(|v| v.id),
+            naming,
+            apply,
+            |path, status| {
                 if cli.log {
-                    let name = xmp_relative.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("?");
-                    if apply {
-                        eprintln!("  {} — created", name);
-                    } else {
-                        eprintln!("  {} — would create", name);
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+                    match status {
+                        maki::asset_service::SidecarStatus::Created => eprintln!("  {name} — created"),
+                        maki::asset_service::SidecarStatus::WouldCreate => eprintln!("  {name} — would create"),
+                        maki::asset_service::SidecarStatus::ExistsUnregistered => eprintln!(
+                            "  {name} — exists on disk but is not imported (run `maki import`)"
+                        ),
                     }
                 }
+            },
+        )?;
+        created += outcome.created;
+        exists_unregistered += outcome.exists_unregistered;
 
-                if apply {
-                    if let Some(parent) = xmp_path.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-
-                    let xmp_content = maki::xmp_reader::create_xmp(
-                        &asset.tags,
-                        asset.rating,
-                        asset.color_label.as_deref(),
-                        asset.description.as_deref(),
-                    );
-
-                    std::fs::write(&xmp_path, &xmp_content)?;
-                    let xmp_hash = content_store.hash_file(&xmp_path)?;
-
-                    let recipe = maki::models::recipe::Recipe {
-                        id: uuid::Uuid::new_v4(),
-                        variant_hash: variant.content_hash.clone(),
-                        software: "MAKI".to_string(),
-                        recipe_type: maki::models::recipe::RecipeType::Sidecar,
-                        content_hash: xmp_hash,
-                        location: maki::models::FileLocation {
-                            volume_id: loc.volume_id,
-                            relative_path: xmp_relative,
-                            verified_at: None,
-                        },
-                        pending_writeback: false,
-                    };
-                    catalog.insert_recipe(&recipe)?;
-                    asset.recipes.push(recipe);
-                    asset_changed = true;
-                }
-
-                created += 1;
-            }
-        }
-
-        if asset_changed {
+        if apply && outcome.created > 0 {
             metadata_store.save(&asset)?;
         }
     }
@@ -804,14 +756,24 @@ pub fn run_create_sidecars_command(
             "dry_run": !apply,
             "checked": checked,
             "created": created,
+            "exists_unregistered": exists_unregistered,
             "skipped_no_metadata": skipped,
+            "sidecar_naming": naming,
         });
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         if !apply && created > 0 {
             eprint!("Dry run — ");
         }
-        println!("Create-sidecars: {} checked, {} created, {} skipped (no metadata)", checked, created, skipped);
+        let mut line = format!(
+            "Create-sidecars: {checked} checked, {created} created, {skipped} skipped (no metadata)"
+        );
+        if exists_unregistered > 0 {
+            line.push_str(&format!(
+                ", {exists_unregistered} existing on disk but not imported (run `maki import`)"
+            ));
+        }
+        println!("{line}");
         if !apply && created > 0 {
             println!("  Run with --apply to create XMP files.");
         }

@@ -439,22 +439,12 @@ impl QueryEngine {
         }
     }
 
-    /// Whether *automatic* XMP writeback is enabled (`[writeback] enabled`
-    /// in maki.toml). When true, every metadata edit (rating, label,
-    /// description, tags) writes through to the asset's `.xmp` recipe
-    /// files immediately. When false, the edit still lands in the SQLite
-    /// catalog and YAML sidecar — and the recipe is marked
-    /// `pending_writeback = true` — but the `.xmp` files on disk stay
-    /// unchanged until `maki writeback` is run.
-    ///
-    /// Default is `false`: a safety net against accidentally touching
-    /// `.xmp` files on offline media or recipes shared with other DAMs.
-    /// `maki writeback` is the explicit manual flush; it ignores this
-    /// flag (see `writeback` / `writeback_process`).
-    fn is_writeback_enabled(&self) -> bool {
+    /// The `[writeback]` section of maki.toml (defaults when the file is
+    /// missing or unreadable).
+    fn writeback_config(&self) -> crate::config::WritebackConfig {
         crate::config::CatalogConfig::load(&self.catalog_root)
-            .map(|c| c.writeback.enabled)
-            .unwrap_or(false)
+            .map(|c| c.writeback)
+            .unwrap_or_default()
     }
 
     /// Create a QueryEngine with a default filter from config.

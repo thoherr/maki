@@ -481,7 +481,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 - `[vlm]`: `endpoint`, `model`, `models`, `mode`, `max_tokens`, `temperature`, `timeout`, `prompt`, `concurrency`, `max_image_edge`, `num_ctx`, `top_p`, `top_k`, `repeat_penalty`, `[vlm.model_config."name"]` overrides of `max_tokens`, `temperature`, `timeout`, `max_image_edge`, `num_ctx`, `top_p`, `top_k`, `repeat_penalty`, `prompt`
 - `[contact_sheet]`: `layout`, `paper`, `fields`, `label_style`, `copyright`, `margin`, `quality`
 - `[browse]`: `default_filter`, `slideshow_seconds`, `slideshow_loop`, `remember_latest_filter`
-- `[writeback]`: `enabled`, `mirror_tags`
+- `[writeback]`: `enabled`, `mirror_tags`, `sidecar_naming` (`stem`|`full`), `create_sidecars`
 - `[trash]`: `enabled`, `retention_days`
 - `[history]`: `enabled`, `max_operations`
 - `[cli]`: `log`, `time`, `verbose`
