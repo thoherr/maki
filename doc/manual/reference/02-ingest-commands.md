@@ -94,7 +94,7 @@ The volume is auto-detected from the first path by matching against registered v
 **--auto-group**
 : After importing, automatically group newly imported assets with nearby catalog assets by filename stem. "Nearby" means assets on the same volume whose files are under sibling directories of the imported files (one level up from each import directory). This handles the common CaptureOne/Lightroom pattern where RAW originals live in `Capture/` and exports in `Output/` under a shared session folder. Uses the same fuzzy prefix matching as `maki auto-group`. When combined with `--dry-run`, the auto-group phase also runs in dry-run mode.
 
-`--json` outputs an `ImportResult` object with `imported`, `skipped`, `locations_added`, `recipes_attached`, `recipes_updated` counters and a `dry_run` boolean. When `--auto-group` produces matches, an `auto_group` key is added with the full `AutoGroupResult`. When `--embed` generates embeddings, `embeddings_generated` and `embeddings_skipped` keys are added. When `--describe` generates descriptions, `descriptions_generated` and `descriptions_skipped` keys are added.
+`--json` outputs an `ImportResult` object with `imported`, `skipped`, `locations_added`, `recipes_attached`, `recipes_updated`, `sidecars_created` (sidecars written by `[writeback] create_sidecars`) counters and a `dry_run` boolean. When `--auto-group` produces matches, an `auto_group` key is added with the full `AutoGroupResult`. When `--embed` generates embeddings, `embeddings_generated` and `embeddings_skipped` keys are added. When `--describe` generates descriptions, `descriptions_generated` and `descriptions_skipped` keys are added.
 
 ### EXAMPLES
 

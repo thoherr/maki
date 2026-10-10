@@ -11,7 +11,7 @@ A command-line digital asset manager built in Rust, designed for large collectio
 - **Variant grouping** — automatically groups related files (RAW + JPEG + XMP) into a single asset by filename stem
 - **Recipe management** — tracks processing sidecars from CaptureOne, Lightroom/XMP, RawTherapee, DxO, and ON1
 - **EXIF/XMP extraction** — camera metadata, keywords, ratings, color labels, and descriptions extracted at import
-- **Bidirectional XMP sync** — rating, tag, description, and label changes written back to `.xmp` recipe files
+- **Bidirectional XMP sync** — rating, tag, description, and label changes written back to `.xmp` recipe files; sidecars that don't exist yet are created on demand (`maki create-sidecars`) or automatically at import and first edit (`[writeback] create_sidecars`), named the way Capture One and Lightroom expect
 - **Preview generation** — thumbnails for images, RAW files (via dcraw/LibRaw), videos (via ffmpeg), waveform strips for audio (via ffmpeg), and info cards for documents
 - **Audio indexing** — duration, sample rate, channels, bitrate and embedded tags extracted at import; optional key/BPM detection via external analyzers (`maki audio analyze`); `key:` / `bpm:` / `duration:` filters and an in-browser player
 - **Watch mode** — `maki watch` polls directories and imports new files once they stop changing

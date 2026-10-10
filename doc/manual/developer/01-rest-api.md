@@ -1606,6 +1606,7 @@ All fields except `volume_id` are optional. `subfolder` is volume-relative (no l
   "recipes_attached": 142,
   "recipes_updated": 0,
   "previews_generated": 0,
+  "sidecars_created": 0,
   "new_asset_ids": ["uuid", "..."]
 }
 ```

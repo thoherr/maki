@@ -2,7 +2,12 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## Unreleased
+## v4.11.0 (2026-10-10)
+
+Sidecars for Capture One and Lightroom. MAKI-created `.xmp` files now use
+the name those tools actually read, and MAKI can create them itself when
+an import or edit leaves an asset with metadata but no sidecar. No schema
+migration.
 
 ### Added
 
