@@ -2412,6 +2412,81 @@ mod tests {
         catalog
     }
 
+    // ── facet_counts (materialised matched set) ─────────
+
+    #[test]
+    fn facet_counts_match_direct_counts_and_survive_reuse() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        // (hash, rating, label, format, created_at, tags, lat)
+        let rows: Vec<(&str, Option<u8>, Option<&str>, &str, &str, Vec<&str>, Option<f64>)> = vec![
+            ("fc1", Some(5), Some("Red"), "nef", "2024-05-01T10:00:00Z", vec!["event|jazz", "pick"], Some(48.1)),
+            ("fc2", Some(3), None, "jpg", "2024-06-01T10:00:00Z", vec!["event|jazz"], None),
+            ("fc3", None, Some("Red"), "jpg", "2025-01-01T10:00:00Z", vec!["event|rock", "pick"], Some(47.0)),
+            ("fc4", Some(3), Some("Blue"), "nef", "2025-02-01T10:00:00Z", vec!["other"], None),
+        ];
+        for (h, rating, label, fmt, created, tags, lat) in &rows {
+            let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, &format!("sha256:{h}"));
+            asset.rating = *rating;
+            asset.color_label = label.map(|l| l.to_string());
+            asset.created_at = chrono::DateTime::parse_from_rfc3339(created).unwrap().with_timezone(&chrono::Utc);
+            asset.tags = tags.iter().map(|t| t.to_string()).collect();
+            let mut meta = std::collections::BTreeMap::new();
+            if let Some(lat) = lat {
+                meta.insert("gps_latitude_decimal".to_string(), lat.to_string());
+                meta.insert("gps_longitude_decimal".to_string(), "11.5".to_string());
+            }
+            let variant = crate::models::Variant {
+                content_hash: format!("sha256:{h}"),
+                asset_id: asset.id.clone(),
+                role: crate::models::VariantRole::Original,
+                format: fmt.to_string(),
+                file_size: 1,
+                original_filename: format!("{h}.{fmt}"),
+                source_metadata: meta,
+                locations: vec![],
+            };
+            asset.variants.push(variant.clone());
+            catalog.insert_asset(&asset).unwrap();
+            catalog.insert_variant(&variant).unwrap();
+        }
+
+        // Unfiltered.
+        let f = catalog.facet_counts(&SearchOptions::default()).unwrap();
+        assert_eq!(f.total, 4);
+        assert_eq!(f.ratings, vec![(None, 1), (Some(3), 2), (Some(5), 1)]);
+        assert_eq!(f.labels, vec![(None, 1), (Some("Blue".to_string()), 1), (Some("Red".to_string()), 2)]);
+        let fmts: std::collections::HashMap<_, _> = f.formats.iter().cloned().collect();
+        assert_eq!(fmts["jpg"], 2);
+        assert_eq!(fmts["nef"], 2);
+        let tags: std::collections::HashMap<_, _> = f.tags.iter().cloned().collect();
+        assert_eq!(tags["event|jazz"], 2);
+        assert_eq!(tags["pick"], 2);
+        assert_eq!(tags["other"], 1);
+        assert_eq!(f.years, vec![("2025".to_string(), 2), ("2024".to_string(), 2)]);
+        assert_eq!(f.geotagged, 2);
+        assert!(f.volumes.is_empty(), "no file locations registered");
+
+        // Filtered by tag, on the same connection (temp table reused).
+        let tags_filter = vec!["event".to_string()];
+        let opts = SearchOptions { tags: &tags_filter, ..Default::default() };
+        let f = catalog.facet_counts(&opts).unwrap();
+        assert_eq!(f.total, 3);
+        assert_eq!(f.ratings, vec![(None, 1), (Some(3), 1), (Some(5), 1)]);
+        let tags: std::collections::HashMap<_, _> = f.tags.iter().cloned().collect();
+        assert_eq!(tags.get("other"), None);
+        assert_eq!(tags["event|jazz"], 2);
+        assert_eq!(f.geotagged, 2);
+        assert_eq!(f.years, vec![("2025".to_string(), 1), ("2024".to_string(), 2)]);
+
+        // And a third call must not see leftovers from the previous set.
+        let tags_filter = vec!["other".to_string()];
+        let opts = SearchOptions { tags: &tags_filter, ..Default::default() };
+        let f = catalog.facet_counts(&opts).unwrap();
+        assert_eq!(f.total, 1);
+        assert_eq!(f.geotagged, 0);
+    }
+
     // ── assets_tags_fts (schema v12) ────────────────────
 
     #[test]

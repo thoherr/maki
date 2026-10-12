@@ -877,6 +877,30 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
     // here by the time the user reaches the boundary.
     var PREFETCH_MARGIN = 5;
 
+    // Each detail view is a full page load, so a prefetch started on one
+    // view dies with it when the user moves on before it returns. Without
+    // a marker every view inside the margin would fire the same request
+    // again. The marker (side + page + time) suppresses the *prefetch*
+    // from later views for a few seconds; the boundary view itself always
+    // fetches, because it is the one that needs the IDs.
+    var PREFETCH_MARKER_KEY = 'maki-browse-prefetch';
+    var PREFETCH_MARKER_TTL = 5000;
+    function prefetchInFlight(side, page) {
+        try {
+            var m = JSON.parse(sessionStorage.getItem(PREFETCH_MARKER_KEY) || 'null');
+            return !!m && m.side === side && m.page === page && (Date.now() - m.t) < PREFETCH_MARKER_TTL;
+        } catch(e) { return false; }
+    }
+    function markPrefetch(side, page) {
+        try { sessionStorage.setItem(PREFETCH_MARKER_KEY, JSON.stringify({side: side, page: page, t: Date.now()})); } catch(e) {}
+    }
+    function clearPrefetchMark(side, page) {
+        try {
+            var m = JSON.parse(sessionStorage.getItem(PREFETCH_MARKER_KEY) || 'null');
+            if (m && m.side === side && m.page === page) sessionStorage.removeItem(PREFETCH_MARKER_KEY);
+        } catch(e) {}
+    }
+
     // While a boundary fetch is in flight the Prev/Next link is hidden.
     // An arrow key (or lightbox swipe) pressed during that window is
     // remembered here and replayed when the IDs arrive, instead of being
@@ -910,12 +934,15 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
     // PREV side: prepend the previous page and shift pageMin down. Both
     // counters are persisted so a later boundary visit does not fetch
     // the same page again (duplicate IDs in the list).
-    if (idx >= 0 && idx < PREFETCH_MARGIN && browsePageMin > 1) {
+    if (idx >= 0 && idx < PREFETCH_MARGIN && browsePageMin > 1
+        && (idx === 0 || !prefetchInFlight('prev', browsePageMin - 1))) {
         pendingPrev = true;
+        markPrefetch('prev', browsePageMin - 1);
         if (idx === 0) prevSpinner.classList.add('active');
         fetchPageIds(browsePageMin - 1, function(data) {
             pendingPrev = false;
             prevSpinner.classList.remove('active');
+            clearPrefetchMark('prev', browsePageMin - 1);
             if (data.ids && data.ids.length > 0) {
                 browseIds = data.ids.concat(browseIds);
                 idx = idx + data.ids.length;
@@ -933,12 +960,15 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
     // NEXT side: append the next page and bump pageMax. pageMax is kept
     // independently of pageMin so the two sides never tug on the same
     // counter (that used to append a page twice).
-    if (idx >= 0 && browseIds.length - 1 - idx < PREFETCH_MARGIN && browsePageMax < browseTotalPages) {
+    if (idx >= 0 && browseIds.length - 1 - idx < PREFETCH_MARGIN && browsePageMax < browseTotalPages
+        && (idx === browseIds.length - 1 || !prefetchInFlight('next', browsePageMax + 1))) {
         pendingNext = true;
+        markPrefetch('next', browsePageMax + 1);
         if (idx === browseIds.length - 1) nextSpinner.classList.add('active');
         fetchPageIds(browsePageMax + 1, function(data) {
             pendingNext = false;
             nextSpinner.classList.remove('active');
+            clearPrefetchMark('next', browsePageMax + 1);
             if (data.ids && data.ids.length > 0) {
                 browseIds = browseIds.concat(data.ids);
                 browsePageMax = browsePageMax + 1;

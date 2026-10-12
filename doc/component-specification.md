@@ -461,7 +461,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 - `SearchOptions` / `SearchSort` / `SearchPage` — paginated search with dynamic filters and sort; `build_search_where()` joins `variants` / `file_locations` only when a filter needs them
 - `search_paginated()` / `search_paginated_with_count()` — paginated search queries
 - `calendar_counts(year, opts)` / `calendar_years()` — heatmap data respecting all search filters
-- `facet_counts(opts)` — sidebar `FacetCounts` under the current filters
+- `facet_counts(opts)` — sidebar `FacetCounts` under the current filters; materialises the matching ids plus rating / label / format / year / geo flag into the per-connection TEMP table `facet_match` once, then aggregates from it (tags join `assets` for the JSON column, volumes join locations)
 - `list_all_tags()`, `list_all_formats()`, `list_volumes()` — dropdown data
 
 ### 11. Config Module
