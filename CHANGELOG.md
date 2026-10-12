@@ -2,7 +2,28 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## Unreleased
+## v4.12.0 (2026-10-12)
+
+Browse performance on large catalogs. Tag filters are served from a new
+trigram index (schema v12, run `maki migrate`), and the detail page no
+longer loses arrow keys at a page boundary. Minor bump because of the
+schema migration.
+
+### Changed
+
+- **Tag filters are index-served (schema v12).** The hierarchy-aware
+  `tag:` patterns used to be LIKE/GLOB scans over the JSON `tags` column
+  of every asset, which on a cold cache of a multi-GB catalog cost
+  seconds per browse page. A new FTS5 trigram table, `assets_tags_fts`,
+  mirrors the column (three triggers keep it current, `maki migrate`
+  backfills it once — about 8 s and +5 % file size for 270k assets), and
+  FTS5 evaluates the unchanged patterns from its index. A bounded probe
+  per tag entry (memoised per connection) keeps very broad tags, 10k+
+  matches, on the previous inline scan, which was already cheap for them.
+  Semantics are identical; a selective tag now resolves in tens of
+  milliseconds instead of seconds. The page-ids endpoint also no longer
+  runs a hidden second count inside its page query. Run `maki migrate`
+  after upgrading.
 
 ### Fixed
 
