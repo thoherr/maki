@@ -2,6 +2,30 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.12.1 (2026-10-12)
+
+Browse sidebar performance and a detail-page request fix. No schema
+migration.
+
+### Changed
+
+- **Facets sidebar resolves the filter once.** `GET /api/facets` used to
+  re-run the full search WHERE for each of its eight aggregates, so a
+  broad filter scanned the catalog eight times (about 7 s for a tag with
+  77k hits on a 270k-asset catalog). The matching assets are now
+  materialised once into a per-connection TEMP table with the columns the
+  facets group by, and the aggregates run against that. Counts are
+  unchanged.
+
+### Fixed
+
+- **Detail page no longer repeats the boundary prefetch on fast
+  navigation.** The adjacent page's IDs are prefetched a few assets before
+  a page boundary; when the next asset was opened before that request
+  returned, each following view inside the margin fired the same request
+  again. A short-lived marker in session storage now suppresses the
+  repeat; the boundary view itself still fetches.
+
 ## v4.12.0 (2026-10-12)
 
 Browse performance on large catalogs. Tag filters are served from a new
