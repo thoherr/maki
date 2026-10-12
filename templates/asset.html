@@ -775,6 +775,8 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
         if (nav && !nav.classList.contains('invisible')) {
             sessionStorage.setItem('maki-lightbox-open', '1');
             nav.click();
+        } else if (window.makiQueueNav && window.makiQueueNav(delta < 0 ? 'prev' : 'next', true)) {
+            // Boundary page IDs still loading: replayed when they arrive.
         } else {
             damLightbox.hideLoading();
         }
@@ -850,7 +852,10 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
 
     setNavLinks();
 
-    // Cross-page: fetch adjacent page IDs at boundaries
+    // Cross-page: fetch adjacent page IDs near the boundaries.
+    // `nocount=1` skips the server-side result count (the browse grid
+    // already told us the total page count), which halves the cost of
+    // the request on large filtered sets.
     function fetchPageIds(targetPage, callback) {
         var base = sessionStorage.getItem('maki-browse-url') || '/';
         var url;
@@ -858,55 +863,90 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
             var u = new URL(base, window.location.origin);
             u.pathname = '/api/page-ids';
             u.searchParams.set('page', targetPage);
+            u.searchParams.set('nocount', '1');
             url = u.pathname + u.search;
-        } catch(e) { return; }
-        fetch(url).then(function(r) { return r.json(); }).then(callback).catch(function(){});
+        } catch(e) { callback({}); return; }
+        fetch(url).then(function(r) { return r.json(); }).then(callback).catch(function(){ callback({}); });
     }
 
     var prevSpinner = document.getElementById('nav-prev-loading');
     var nextSpinner = document.getElementById('nav-next-loading');
 
-    // PREV boundary: extend browseIds with the previous page and shift
-    // pageMin down. Without this update the next prev-fetch (after another
-    // boundary navigation) would re-fetch the same page and prepend its IDs
-    // again — duplicates on the prev side of the list.
-    if (idx === 0 && browsePageMin > 1) {
-        prevSpinner.classList.add('active');
+    // Prefetch the adjacent page once we are within this many assets of
+    // the end of the materialized list, so the IDs are normally already
+    // here by the time the user reaches the boundary.
+    var PREFETCH_MARGIN = 5;
+
+    // While a boundary fetch is in flight the Prev/Next link is hidden.
+    // An arrow key (or lightbox swipe) pressed during that window is
+    // remembered here and replayed when the IDs arrive, instead of being
+    // silently dropped.
+    var pendingPrev = false, pendingNext = false;
+    var queuedNav = null, queuedLightbox = false;
+
+    function replayQueued(dir, nav) {
+        if (queuedNav !== dir) return;
+        queuedNav = null;
+        if (nav.classList.contains('invisible')) {
+            if (queuedLightbox && window.damLightbox) damLightbox.hideLoading();
+            queuedLightbox = false;
+            return;
+        }
+        if (queuedLightbox) sessionStorage.setItem('maki-lightbox-open', '1');
+        queuedLightbox = false;
+        nav.click();
+    }
+
+    // Shared with the lightbox's onNavigateBeyond. Returns true when the
+    // navigation was queued behind a pending fetch.
+    window.makiQueueNav = function(dir, fromLightbox) {
+        var pending = dir === 'prev' ? pendingPrev : pendingNext;
+        if (!pending) return false;
+        queuedNav = dir;
+        queuedLightbox = !!fromLightbox;
+        return true;
+    };
+
+    // PREV side: prepend the previous page and shift pageMin down. Both
+    // counters are persisted so a later boundary visit does not fetch
+    // the same page again (duplicate IDs in the list).
+    if (idx >= 0 && idx < PREFETCH_MARGIN && browsePageMin > 1) {
+        pendingPrev = true;
+        if (idx === 0) prevSpinner.classList.add('active');
         fetchPageIds(browsePageMin - 1, function(data) {
+            pendingPrev = false;
             prevSpinner.classList.remove('active');
             if (data.ids && data.ids.length > 0) {
                 browseIds = data.ids.concat(browseIds);
-                idx = data.ids.length;
+                idx = idx + data.ids.length;
                 browsePageMin = browsePageMin - 1;
                 sessionStorage.setItem('maki-browse-ids', JSON.stringify(browseIds));
                 sessionStorage.setItem('maki-browse-page-min', String(browsePageMin));
                 // Keep legacy key in sync (prev fed it with min historically).
                 sessionStorage.setItem('maki-browse-page', String(browsePageMin));
-                prevNav.href = '/asset/' + browseIds[idx - 1];
-                prevNav.classList.remove('invisible');
+                setNavLinks();
             }
+            replayQueued('prev', prevNav);
         });
     }
 
-    // NEXT boundary: same shape, mirrored on pageMax. Pre-fix this branch
-    // never updated any page counter, so once a user reached the end of
-    // the concatenated browseIds the boundary fired again with the same
-    // (browsePage + 1) target and the next page's IDs got appended a
-    // second time — visible to the user as repeated images while paging
-    // through asset details. Fix: maintain pageMax independently of
-    // pageMin so the two boundaries don't tug on the same variable.
-    if (idx >= 0 && idx === browseIds.length - 1 && browsePageMax < browseTotalPages) {
-        nextSpinner.classList.add('active');
+    // NEXT side: append the next page and bump pageMax. pageMax is kept
+    // independently of pageMin so the two sides never tug on the same
+    // counter (that used to append a page twice).
+    if (idx >= 0 && browseIds.length - 1 - idx < PREFETCH_MARGIN && browsePageMax < browseTotalPages) {
+        pendingNext = true;
+        if (idx === browseIds.length - 1) nextSpinner.classList.add('active');
         fetchPageIds(browsePageMax + 1, function(data) {
+            pendingNext = false;
             nextSpinner.classList.remove('active');
             if (data.ids && data.ids.length > 0) {
                 browseIds = browseIds.concat(data.ids);
                 browsePageMax = browsePageMax + 1;
                 sessionStorage.setItem('maki-browse-ids', JSON.stringify(browseIds));
                 sessionStorage.setItem('maki-browse-page-max', String(browsePageMax));
-                nextNav.href = '/asset/' + browseIds[idx + 1];
-                nextNav.classList.remove('invisible');
+                setNavLinks();
             }
+            replayQueued('next', nextNav);
         });
     }
 
@@ -1126,10 +1166,12 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
         // Arrow left/right: prev/next navigation
         if (e.key === 'ArrowLeft') {
             if (!prevNav.classList.contains('invisible')) { e.preventDefault(); prevNav.click(); }
+            else if (window.makiQueueNav('prev', false)) { e.preventDefault(); }
             return;
         }
         if (e.key === 'ArrowRight') {
             if (!nextNav.classList.contains('invisible')) { e.preventDefault(); nextNav.click(); }
+            else if (window.makiQueueNav('next', false)) { e.preventDefault(); }
             return;
         }
 

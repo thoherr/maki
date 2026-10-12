@@ -250,7 +250,7 @@ When results span multiple pages, pagination controls appear both above and belo
 
 Page numbers with ellipsis keep the controls compact for large result sets. The number of results per page defaults to 60 and is configured via `[serve] per_page` in `maki.toml` (there is no CLI flag for it).
 
-Use **Shift+Left/Right arrow** keys to quickly turn pages from the keyboard. The results grid fades during loading to provide visual feedback while the new page loads. In the lightbox, regular arrow keys at page boundaries automatically navigate to the next/previous page with a loading spinner overlay.
+Use **Shift+Left/Right arrow** keys to quickly turn pages from the keyboard. The results grid fades during loading to provide visual feedback while the new page loads. In the lightbox, regular arrow keys at page boundaries automatically navigate to the next/previous page with a loading spinner overlay. On the detail page the IDs of the neighbouring page are fetched ahead of time, a few assets before you reach the boundary; if you press the arrow while that fetch is still running, the keypress is remembered and carried out as soon as the IDs arrive.
 
 ### Similarity browse
 

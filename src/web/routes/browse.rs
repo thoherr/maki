@@ -544,12 +544,31 @@ pub async fn all_ids_api(
     Ok(Json(json).into_response())
 }
 
+/// Extra options for `/api/page-ids` beyond the shared browse params.
+#[derive(serde::Deserialize)]
+pub struct PageIdsOpts {
+    /// `nocount=1`: skip the result-count query. The detail page's
+    /// boundary prefetch already knows the total page count from the
+    /// browse grid and only needs the IDs, so it saves one full scan of
+    /// the filtered set. `total_pages` is `null` in the response and the
+    /// page is not clamped to the last one.
+    pub nocount: Option<String>,
+}
+
+impl PageIdsOpts {
+    fn skip_count(&self) -> bool {
+        matches!(self.nocount.as_deref(), Some("1") | Some("true"))
+    }
+}
+
 /// GET /api/page-ids — returns asset IDs for a given page.
 pub async fn page_ids_api(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SearchParams>,
+    Query(page_opts): Query<PageIdsOpts>,
 ) -> Result<Response, Response> {
     let state = state.clone();
+    let skip_count = page_opts.skip_count();
     let json = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
 
@@ -580,15 +599,20 @@ pub async fn page_ids_api(
         opts.per_page = if has_similarity { u32::MAX } else { per_page };
         opts.collapse_stacks = collapse_stacks;
 
-        let total = catalog.search_count(&opts)?;
-        let total_pages = if has_similarity {
-            1
+        let total_pages: Option<u32> = if has_similarity {
+            Some(1)
+        } else if skip_count {
+            None
         } else {
-            ((total as f64) / per_page as f64).ceil() as u32
+            let total = catalog.search_count(&opts)?;
+            Some(((total as f64) / per_page as f64).ceil() as u32)
         };
         // Clamp page to the last available so callers (lightbox / browse-imported
         // links / external bookmarks) don't get an empty page after deletions.
-        let page = if total_pages > 0 && page > total_pages { total_pages } else { page };
+        let page = match total_pages {
+            Some(tp) if tp > 0 && page > tp => tp,
+            _ => page,
+        };
         opts.page = if has_similarity { 1 } else { page };
         #[cfg_attr(not(feature = "ai"), allow(unused_mut))]
         let mut rows = catalog.search_paginated(&opts)?;

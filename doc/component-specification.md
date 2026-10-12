@@ -346,7 +346,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 *Browse support (all take the browse filter params `q, type, tag, format, volume, rating, label, collection, path, person, sort, page, stacks, nodefault`)*
 - `GET /api/search` — results fragment (htmx target) with pagination; similarity queries render as one score-sorted page
 - `GET /api/all-ids` — ordered asset IDs of the whole result set (select-all, remembered-filter restore)
-- `GET /api/page-ids` — IDs of one page (lightbox / keyboard navigation)
+- `GET /api/page-ids` — IDs of one page (lightbox / keyboard navigation); `nocount=1` skips the result-count query (`total_pages` is `null`, no last-page clamping) — used by the detail page's boundary prefetch, which already knows the page count
 - `GET /api/facets` — `FacetCounts` for the sidebar (total, ratings, labels, formats, volumes, tags, years, geotagged)
 - `GET /api/paths?q&volume&limit` — directory / file completions for the path filter
 - `GET /api/calendar?year…` — per-day counts for the heatmap (`{year, counts, years}`)

@@ -2,6 +2,22 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## Unreleased
+
+### Fixed
+
+- **Detail page: arrow key at a page boundary no longer gets lost.** When
+  the browse result spans several pages, the detail page loads the next
+  page's IDs only once you reach the last asset of the current page, and
+  until that request returns the Next/Prev link is hidden. On a large
+  filtered set the request took seconds, so an arrow press in that window
+  did nothing and only the second press navigated. Three changes: the
+  adjacent page is now prefetched five assets before the boundary; a
+  keypress (or lightbox swipe) during a pending fetch is queued and
+  replayed when the IDs arrive; and the fetch passes `nocount=1` so
+  `/api/page-ids` skips the result-count scan it did not need (the browse
+  grid already supplied the page count).
+
 ## v4.11.1 (2026-10-12)
 
 Fix release: `import --auto-group` now scopes its candidates by the same
