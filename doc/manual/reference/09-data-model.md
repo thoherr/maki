@@ -274,7 +274,7 @@ catalog/
 
 A single `catalog.db` file providing fast indexed queries. Contains denormalized columns for efficient browse-grid rendering. The catalog is always rebuildable from the YAML sidecars via `maki rebuild-catalog` -- it is a performance optimization, not a source of truth.
 
-**Tables**: `assets`, `variants`, `file_locations`, `volumes`, `recipes`, `collections`, `collection_assets`, `stacks`, `embeddings` (created in every build; only filled by Pro), `schema_version` (single row, see [Schema Migrations](#schema-migrations)), `assets_fts` (FTS5 trigram index over name, filename, description and source metadata, kept current by six triggers on `assets` and `variants` -- schema v9), and `faces`, `people` (*(Pro)* builds only)
+**Tables**: `assets`, `variants`, `file_locations`, `volumes`, `recipes`, `collections`, `collection_assets`, `stacks`, `embeddings` (created in every build; only filled by Pro), `schema_version` (single row, see [Schema Migrations](#schema-migrations)), `assets_fts` (FTS5 trigram index over name, filename, description and source metadata, kept current by six triggers on `assets` and `variants` -- schema v9), `assets_tags_fts` (FTS5 trigram copy of the `tags` column that serves the `tag:` filter's LIKE/GLOB patterns from its index, three triggers on `assets` -- schema v12), and `faces`, `people` (*(Pro)* builds only)
 
 **Performance indexes** (created automatically via schema migrations):
 

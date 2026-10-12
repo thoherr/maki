@@ -49,6 +49,9 @@ YAML sidecars are the source of truth; SQLite catalog is a derived cache rebuilt
 ### SQLite Connection Pool (Web Server)
 `CatalogPool` holds pre-opened connections (RAII `PooledCatalog` returned on drop), opened with `Catalog::open_fast()` — an alias of `open()`: pragmas only, no migrations. Nothing migrates at serve startup: the CLI entry point only checks the stored schema version and exits if outdated; migrations run in `init`, `migrate`, and `rebuild-catalog`.
 
+### Tag Filter Index
+`tag:` LIKE/GLOB patterns run against `assets_tags_fts` (FTS5 trigram copy of `assets.tags`, schema v12, three triggers on `assets`) via `a.id IN (SELECT asset_id FROM assets_tags_fts WHERE …)` when a bounded probe (`plan_tag_index`, `TAG_INDEX_MAX_MATCHES` = 10k, memoised per connection) shows the entry is selective; broader entries keep the inline `a.tags LIKE` scan. Same semantics either way; `tag_like_parts` takes the column name. Its triggers (like the v9 `assets_fts` ones) fire per row on any `UPDATE assets`, so migration backfills must keep their WHERE guards.
+
 ### Conditional JOINs in Search
 `build_search_where()` returns `(where, params, needs_fl_join, needs_v_join)` — variant/location tables only joined when filters need them.
 

@@ -404,6 +404,49 @@ impl Catalog {
             );
         }
 
+        // ── v11 → v12: trigram index over the tags column ──
+        if current < 12 {
+            // Tag filters are hierarchy-aware LIKE/GLOB patterns over the
+            // JSON `assets.tags` text (`%"a|b"%`, `%|b|%`, …). Against the
+            // base table those are a full scan plus a row probe per asset,
+            // which on a cold cache of a multi-GB catalog took seconds per
+            // page. FTS5 with the trigram tokenizer evaluates ordinary LIKE
+            // and GLOB through its index, so the search builder runs the
+            // unchanged patterns against this copy of the column and feeds
+            // the matching ids back with `a.id IN (…)`. Semantics are
+            // identical to the old scan; only the access path changes.
+            // Patterns shorter than three literal characters fall back to a
+            // scan of this table, still no worse than before.
+            //
+            // Kept separate from `assets_fts` (v9) so this backfill only
+            // tokenizes ~200 bytes per asset instead of rebuilding the
+            // source-metadata index. Three triggers keep it current; like
+            // the v9 triggers they fire per row on any UPDATE of `assets`,
+            // so backfills must stay guarded (see the v11 comment).
+            let _ = self.conn.execute_batch(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS assets_tags_fts USING fts5( \
+                   asset_id UNINDEXED, tags, tokenize='trigram' \
+                 );
+                 CREATE TRIGGER IF NOT EXISTS assets_tags_fts_insert AFTER INSERT ON assets BEGIN \
+                   DELETE FROM assets_tags_fts WHERE asset_id = new.id; \
+                   INSERT INTO assets_tags_fts(asset_id, tags) VALUES (new.id, IFNULL(new.tags,'')); \
+                 END;
+                 CREATE TRIGGER IF NOT EXISTS assets_tags_fts_update AFTER UPDATE OF id, tags ON assets BEGIN \
+                   DELETE FROM assets_tags_fts WHERE asset_id = old.id; \
+                   INSERT INTO assets_tags_fts(asset_id, tags) VALUES (new.id, IFNULL(new.tags,'')); \
+                 END;
+                 CREATE TRIGGER IF NOT EXISTS assets_tags_fts_delete AFTER DELETE ON assets BEGIN \
+                   DELETE FROM assets_tags_fts WHERE asset_id = old.id; \
+                 END;",
+            );
+            // Backfill (idempotent: clear first, then rebuild from the base table).
+            let _ = self.conn.execute_batch(
+                "DELETE FROM assets_tags_fts;
+                 INSERT INTO assets_tags_fts(asset_id, tags) \
+                 SELECT id, IFNULL(tags,'') FROM assets;",
+            );
+        }
+
         // Stamp the new schema version
         let _ = self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);

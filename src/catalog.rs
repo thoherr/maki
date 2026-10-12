@@ -708,7 +708,9 @@ fn next_date_bound(s: &str) -> String {
 }
 
 /// Current schema version. Bump this whenever `run_migrations()` changes.
-pub const SCHEMA_VERSION: u32 = 11;
+pub const SCHEMA_VERSION: u32 = 12;
+
+pub use search_builder::TAG_INDEX_MAX_MATCHES;
 
 // ═══ CATALOG STRUCT & CONNECTION ═══
 
@@ -716,6 +718,15 @@ pub const SCHEMA_VERSION: u32 = 11;
 /// not the source of truth (sidecar files are).
 pub struct Catalog {
     conn: Connection,
+    /// Per-connection memo of `tag:` entries → "serve from the trigram
+    /// index" decisions (see `search_builder::TagIndexPlan`). Keeps the
+    /// selectivity probe to one run per tag per connection, so the
+    /// count, page and facet queries of a browse request share it.
+    tag_index_memo: std::cell::RefCell<std::collections::HashMap<String, bool>>,
+    /// Probe limit: a tag entry matching fewer than this many assets is
+    /// served from the index, otherwise by the original scan. Tests lower
+    /// it to force the scan path.
+    tag_index_limit: std::cell::Cell<u32>,
 }
 
 impl Catalog {
@@ -820,7 +831,11 @@ impl Catalog {
             }
         })?;
 
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            tag_index_memo: Default::default(),
+            tag_index_limit: std::cell::Cell::new(search_builder::TAG_INDEX_MAX_MATCHES),
+        })
     }
 
     /// Open and run schema migrations. Call once at program startup.
@@ -931,6 +946,7 @@ mod tests {
                 "SELECT name FROM sqlite_master \
                  WHERE type='table' AND name NOT LIKE 'sqlite_%' \
                  AND name NOT LIKE 'assets_fts%' \
+                 AND name NOT LIKE 'assets_tags_fts%' \
                  ORDER BY name",
             )
             .unwrap()
@@ -958,6 +974,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(fts_exists, 1, "assets_fts virtual table must exist");
+        let tags_fts_exists: i64 = catalog
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assets_tags_fts'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tags_fts_exists, 1, "assets_tags_fts virtual table must exist (v12)");
     }
 
     #[test]
@@ -968,11 +993,11 @@ mod tests {
     }
 
     #[test]
-    fn initialize_stamps_schema_version_11_with_audio_columns() {
+    fn initialize_stamps_schema_version_12_with_audio_columns() {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
         assert_eq!(catalog.schema_version(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 11);
+        assert_eq!(SCHEMA_VERSION, 12);
         // v11: shared duration column (renamed from video_duration) and
         // typed audio columns exist.
         let cols: Vec<String> = {
@@ -2385,6 +2410,136 @@ mod tests {
         catalog.insert_asset(&asset).unwrap();
         catalog.insert_variant(&variant).unwrap();
         catalog
+    }
+
+    // ── assets_tags_fts (schema v12) ────────────────────
+
+    #[test]
+    fn tags_fts_follows_inserts_updates_and_deletes() {
+        let catalog = catalog_with_tags(vec!["alpha".to_string()], "tagsfts1");
+        let id = catalog.conn.query_row("SELECT id FROM assets", [], |r| r.get::<_, String>(0)).unwrap();
+        let fts_tags = |cat: &Catalog| -> Option<String> {
+            cat.conn.query_row("SELECT tags FROM assets_tags_fts WHERE asset_id = ?1", [&id], |r| r.get(0)).ok()
+        };
+        assert_eq!(fts_tags(&catalog).as_deref(), Some("[\"alpha\"]"));
+        assert_eq!(catalog.search_assets(None, None, Some("alpha"), None, None, None).unwrap().len(), 1);
+
+        // Upsert through insert_asset (the only tag write path) → update trigger.
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:tagsfts1");
+        asset.tags = vec!["beta".to_string()];
+        asset.variants.push(crate::models::Variant {
+            content_hash: "sha256:tagsfts1".to_string(),
+            asset_id: asset.id.clone(),
+            role: crate::models::VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 1000,
+            original_filename: "tagsfts1.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        });
+        catalog.insert_asset(&asset).unwrap();
+        assert_eq!(fts_tags(&catalog).as_deref(), Some("[\"beta\"]"));
+        assert_eq!(catalog.search_assets(None, None, Some("alpha"), None, None, None).unwrap().len(), 0);
+        assert_eq!(catalog.search_assets(None, None, Some("beta"), None, None, None).unwrap().len(), 1);
+
+        // Delete → delete trigger (variants reference the asset, so they go first).
+        catalog.conn.execute("DELETE FROM variants WHERE asset_id = ?1", [&id]).unwrap();
+        catalog.delete_asset(&id).unwrap();
+        assert_eq!(fts_tags(&catalog), None);
+        let n: i64 = catalog.conn.query_row("SELECT COUNT(*) FROM assets_tags_fts", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn migration_v12_backfills_tags_fts() {
+        let catalog = catalog_with_tags(vec!["event|festival".to_string()], "tagsfts2");
+        // Simulate a v11 catalog: index empty, version 11.
+        catalog.conn.execute_batch(
+            "DELETE FROM assets_tags_fts; DELETE FROM schema_version; INSERT INTO schema_version VALUES (11);",
+        ).unwrap();
+        catalog.run_migrations();
+        assert_eq!(catalog.schema_version(), SCHEMA_VERSION);
+        let n: i64 = catalog.conn.query_row("SELECT COUNT(*) FROM assets_tags_fts", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        let tags: String = catalog.conn.query_row("SELECT tags FROM assets_tags_fts", [], |r| r.get(0)).unwrap();
+        assert_eq!(tags, "[\"event|festival\"]");
+    }
+
+    #[test]
+    fn tag_index_and_scan_paths_agree() {
+        // A few assets with hierarchical tags; every tag mode must return
+        // the same ids whether the entry is served from the trigram index
+        // (small catalog → always below the probe limit) or by the scan
+        // (limit forced to 0 → never indexed).
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        let sets: Vec<(&str, Vec<&str>)> = vec![
+            ("tp1", vec!["event|festival|jazz", "year|2026"]),
+            ("tp2", vec!["event|festival", "Jazz"]),
+            ("tp3", vec!["festival", "location|Denmark|Legoland"]),
+            ("tp4", vec!["Legoland", "event"]),
+            ("tp5", vec!["\"Sir\" Oliver Mally", "fest"]),
+        ];
+        for (suffix, tags) in &sets {
+            let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, &format!("sha256:{suffix}"));
+            asset.tags = tags.iter().map(|t| t.to_string()).collect();
+            let variant = crate::models::Variant {
+                content_hash: format!("sha256:{suffix}"),
+                asset_id: asset.id.clone(),
+                role: crate::models::VariantRole::Original,
+                format: "jpg".to_string(),
+                file_size: 1,
+                original_filename: format!("{suffix}.jpg"),
+                source_metadata: Default::default(),
+                locations: vec![],
+            };
+            asset.variants.push(variant.clone());
+            catalog.insert_asset(&asset).unwrap();
+            catalog.insert_variant(&variant).unwrap();
+        }
+        let queries: Vec<(Vec<&str>, Vec<&str>)> = vec![
+            (vec!["festival"], vec![]),
+            (vec!["jazz"], vec![]),
+            (vec!["^Jazz"], vec![]),
+            (vec!["/festival"], vec![]),
+            (vec!["=Legoland"], vec![]),
+            (vec!["=/festival"], vec![]),
+            (vec!["|fest"], vec![]),
+            (vec!["event", "festival"], vec![]),
+            (vec!["festival,Legoland"], vec![]),
+            (vec!["\"Sir\" Oliver Mally"], vec![]),
+            (vec![], vec!["event"]),
+            (vec!["festival"], vec!["jazz"]),
+            (vec![], vec!["Legoland,fest"]),
+        ];
+        for (tags, excl) in &queries {
+            let tags: Vec<String> = tags.iter().map(|s| s.to_string()).collect();
+            let excl: Vec<String> = excl.iter().map(|s| s.to_string()).collect();
+            let opts = SearchOptions { tags: &tags, tags_exclude: &excl, per_page: 100, ..Default::default() };
+            let run = |limit: u32| -> Vec<String> {
+                catalog.tag_index_memo.borrow_mut().clear();
+                catalog.tag_index_limit.set(limit);
+                let mut ids: Vec<String> = catalog.search_paginated(&opts).unwrap().into_iter().map(|r| r.asset_id).collect();
+                ids.sort();
+                ids
+            };
+            let scanned = run(0);
+            let indexed = run(TAG_INDEX_MAX_MATCHES);
+            assert_eq!(scanned, indexed, "tag:{tags:?} -tag:{excl:?} differ between scan and index paths");
+            // Plan sanity: limit 0 never indexes, the default always does here.
+            catalog.tag_index_memo.borrow_mut().clear();
+            catalog.tag_index_limit.set(0);
+            let plan = catalog.plan_tag_index(&opts);
+            assert!(tags.iter().chain(excl.iter()).all(|e| !plan.is_indexed(e)));
+            catalog.tag_index_memo.borrow_mut().clear();
+            catalog.tag_index_limit.set(TAG_INDEX_MAX_MATCHES);
+            let plan = catalog.plan_tag_index(&opts);
+            assert!(tags.iter().chain(excl.iter()).all(|e| plan.is_indexed(e)));
+            // The queries above are expected to hit something, except the ones
+            // that are deliberately empty.
+            assert!(!scanned.is_empty() || tags.is_empty() || tags == ["=/festival"], "query {tags:?} returned nothing");
+        }
+        catalog.tag_index_limit.set(TAG_INDEX_MAX_MATCHES);
     }
 
     #[test]

@@ -6,6 +6,29 @@
 
 use super::*;
 
+/// Below this many matching assets a `tag:` entry is served from the
+/// `assets_tags_fts` trigram index; at or above it the original
+/// `a.tags LIKE` scan is kept. Measured on a 270k-asset catalog: the index
+/// path costs ~5 µs per matching asset (its id list is materialised), the
+/// scan ~0.2 s warm regardless of selectivity but lets `ORDER BY … LIMIT`
+/// stop early. 10k keeps the index for every tag where it is a clear win
+/// and leaves broad tags on the path that was already fast for them.
+pub const TAG_INDEX_MAX_MATCHES: u32 = 10_000;
+
+/// Per-query decisions of `Catalog::plan_tag_index`: which `tag:` entries
+/// (positive and negative, keyed by their raw entry text) go through the
+/// trigram index. An entry absent from the map is scanned.
+#[derive(Debug, Default, Clone)]
+pub struct TagIndexPlan {
+    decisions: std::collections::HashMap<String, bool>,
+}
+
+impl TagIndexPlan {
+    pub(super) fn is_indexed(&self, entry: &str) -> bool {
+        self.decisions.get(entry).copied().unwrap_or(false)
+    }
+}
+
 impl Catalog {
     // ═══ SEARCH BUILDER ═══
 
@@ -128,7 +151,61 @@ impl Catalog {
         }
     }
 
-    pub(super) fn build_search_where(opts: &SearchOptions) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>, bool, bool) {
+    /// Build the WHERE clause for `opts`, deciding per `tag:` entry whether
+    /// to use the trigram index (bounded selectivity probe, memoised on
+    /// this connection) — see [`TagIndexPlan`].
+    pub(super) fn build_search_where(&self, opts: &SearchOptions) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>, bool, bool) {
+        let plan = self.plan_tag_index(opts);
+        Self::build_search_where_with_plan(opts, &plan)
+    }
+
+    /// Decide, for every positive and negative `tag:` entry in `opts`,
+    /// whether the trigram index pays off. One bounded query per entry:
+    /// `SELECT COUNT(*) FROM (SELECT rowid FROM assets_tags_fts WHERE
+    /// <patterns> LIMIT N)` with N = `TAG_INDEX_MAX_MATCHES`. It stops as
+    /// soon as N candidates are seen, so a broad tag costs a few
+    /// milliseconds to classify. A probe error (table missing on an
+    /// unmigrated catalog) means "scan", which is always correct.
+    pub(super) fn plan_tag_index(&self, opts: &SearchOptions) -> TagIndexPlan {
+        let mut plan = TagIndexPlan::default();
+        let limit = self.tag_index_limit.get();
+        for entry in opts.tags.iter().chain(opts.tags_exclude.iter()) {
+            if plan.decisions.contains_key(entry.as_str()) {
+                continue;
+            }
+            if let Some(&cached) = self.tag_index_memo.borrow().get(entry.as_str()) {
+                plan.decisions.insert(entry.clone(), cached);
+                continue;
+            }
+            let indexed = self.probe_tag_entry(entry, limit);
+            self.tag_index_memo.borrow_mut().insert(entry.clone(), indexed);
+            plan.decisions.insert(entry.clone(), indexed);
+        }
+        plan
+    }
+
+    fn probe_tag_entry(&self, entry: &str, limit: u32) -> bool {
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut parts = Vec::new();
+        for v in entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            parts.extend(Self::tag_like_parts(&mut params, v, "tags"));
+        }
+        if parts.is_empty() {
+            return false;
+        }
+        let sql = format!(
+            "SELECT COUNT(*) FROM (SELECT rowid FROM assets_tags_fts WHERE {} LIMIT ?)",
+            parts.join(" OR ")
+        );
+        params.push(Box::new(limit as i64));
+        let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        match self.conn.query_row(&sql, refs.as_slice(), |r| r.get::<_, i64>(0)) {
+            Ok(n) => (n as u64) < limit as u64,
+            Err(_) => false,
+        }
+    }
+
+    pub(super) fn build_search_where_with_plan(opts: &SearchOptions, plan: &TagIndexPlan) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>, bool, bool) {
         let mut clauses = Vec::new();
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let mut needs_fl_join = opts.volume.is_some() || !opts.volume_ids.is_empty() || !opts.volume_ids_exclude.is_empty();
@@ -154,28 +231,33 @@ impl Catalog {
         Self::add_equality_filter(&mut clauses, &mut params, opts.asset_types, opts.asset_types_exclude, "a.asset_type", &mut false, false);
 
         // --- Tags (hierarchy-aware LIKE) ---
+        // Each entry is served either from the trigram index or by the
+        // original scan, as decided by `plan` (see `TagIndexPlan`).
         // Positive: each entry is ANDed; commas within an entry are ORed
         for tag_entry in opts.tags {
+            let indexed = plan.is_indexed(tag_entry);
+            let col = if indexed { "tags" } else { "a.tags" };
             let values: Vec<&str> = tag_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
-            if values.len() == 1 {
-                Self::add_tag_clause(&mut clauses, &mut params, values[0], false);
-            } else {
-                // Multiple comma values — OR group
-                let mut or_parts = Vec::new();
-                for v in &values {
-                    or_parts.extend(Self::tag_like_parts(&mut params, v));
-                }
-                clauses.push(format!("({})", or_parts.join(" OR ")));
+            let mut or_parts = Vec::new();
+            for v in &values {
+                or_parts.extend(Self::tag_like_parts(&mut params, v, col));
+            }
+            if !or_parts.is_empty() {
+                clauses.push(Self::tag_clause(&or_parts, false, indexed));
             }
         }
         // Negative: each entry is ANDed as NOT; commas within an entry are ORed
         for tag_entry in opts.tags_exclude {
+            let indexed = plan.is_indexed(tag_entry);
+            let col = if indexed { "tags" } else { "a.tags" };
             let values: Vec<&str> = tag_entry.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
             let mut or_parts = Vec::new();
             for v in &values {
-                or_parts.extend(Self::tag_like_parts(&mut params, v));
+                or_parts.extend(Self::tag_like_parts(&mut params, v, col));
             }
-            clauses.push(format!("NOT ({})", or_parts.join(" OR ")));
+            if !or_parts.is_empty() {
+                clauses.push(Self::tag_clause(&or_parts, true, indexed));
+            }
         }
 
         Self::add_format_filter(&mut clauses, &mut params, opts.formats, opts.formats_exclude, &mut needs_v_join);
@@ -382,7 +464,7 @@ impl Catalog {
     /// leaf-only-at-any-level and `/` meant whole-path. The swap was made
     /// because `=` reads as "equals", which most users expect to mean exact
     /// value equality.
-    fn tag_like_parts(params: &mut Vec<Box<dyn rusqlite::types::ToSql>>, tag: &str) -> Vec<String> {
+    fn tag_like_parts(params: &mut Vec<Box<dyn rusqlite::types::ToSql>>, tag: &str, col: &str) -> Vec<String> {
         // Strip the `=`, `/`, `^`, and `|` prefix markers in any order.
         // `=` → path_exact (whole-path equality). `/` → exact_only (leaf-only at any level).
         let mut rest = tag;
@@ -428,9 +510,9 @@ impl Catalog {
             // component starts either right after a `"` (root) or right after
             // a `|` (descendant level). Two patterns cover both cases.
             params.push(Box::new(pat(&format!("\"{stored}"))));
-            exprs.push(format!("a.tags {op} ?"));
+            exprs.push(format!("{col} {op} ?"));
             params.push(Box::new(pat(&format!("|{stored}"))));
-            exprs.push(format!("a.tags {op} ?"));
+            exprs.push(format!("{col} {op} ?"));
             // Don't bother with the legacy "input form differs from stored"
             // path: prefix-anchor mode is a power-user shortcut, the user
             // should use the storage form (`|`) directly.
@@ -455,18 +537,18 @@ impl Catalog {
             //   - `|stored|…`  (the path is mid-tree and has children)
             let positives_start = exprs.len();
             params.push(Box::new(pat(&format!("\"{stored}\""))));
-            exprs.push(format!("a.tags {op} ?"));
+            exprs.push(format!("{col} {op} ?"));
             // Input-form fallback (e.g. user typed `>` for hierarchy and the
             // stored form has `|`).
             if tag_value != stored {
                 params.push(Box::new(pat(&format!("\"{tag_value}\""))));
-                exprs.push(format!("a.tags {op} ?"));
+                exprs.push(format!("{col} {op} ?"));
             }
             // JSON-escape variant for tags containing `"`.
             if tag_value.contains('"') {
                 let json_escaped = tag_value.replace('"', "\\\"");
                 params.push(Box::new(pat(&format!("\"{json_escaped}\""))));
-                exprs.push(format!("a.tags {op} ?"));
+                exprs.push(format!("{col} {op} ?"));
             }
             if exact_only {
                 // Wrap the OR'd positives and append AND-NOT descendant guards.
@@ -475,7 +557,7 @@ impl Catalog {
                 params.push(Box::new(desc_pat(&stored)));
                 params.push(Box::new(format!("{wild}|{stored}|{wild}")));
                 exprs.push(format!(
-                    "(({or_block}) AND a.tags NOT {op} ? AND a.tags NOT {op} ?)"
+                    "(({or_block}) AND {col} NOT {op} ? AND {col} NOT {op} ?)"
                 ));
             }
             return exprs;
@@ -496,7 +578,7 @@ impl Catalog {
             params.push(Box::new(desc_pat(&stored)));
             let mid_desc_pat = format!("{wild}|{stored}|{wild}");
             params.push(Box::new(mid_desc_pat));
-            exprs.push(format!("((a.tags {op} ? OR a.tags {op} ?) AND a.tags NOT {op} ? AND a.tags NOT {op} ?)"));
+            exprs.push(format!("(({col} {op} ? OR {col} {op} ?) AND {col} NOT {op} ? AND {col} NOT {op} ?)"));
         } else {
             // Default: match the tag at any level in the hierarchy, with or
             // without descendants.
@@ -505,40 +587,49 @@ impl Catalog {
             //   3. |stored"  — leaf child (end of a hierarchy path)
             //   4. |stored|  — mid-path component (has descendants, is a child)
             params.push(Box::new(pat(&format!("\"{stored}\""))));
-            exprs.push(format!("a.tags {op} ?"));
+            exprs.push(format!("{col} {op} ?"));
             params.push(Box::new(desc_pat(&stored)));
-            exprs.push(format!("a.tags {op} ?"));
+            exprs.push(format!("{col} {op} ?"));
             params.push(Box::new(pat(&format!("|{stored}\""))));
-            exprs.push(format!("a.tags {op} ?"));
+            exprs.push(format!("{col} {op} ?"));
             let mid_child_pat = format!("{wild}|{stored}|{wild}");
             params.push(Box::new(mid_child_pat));
-            exprs.push(format!("a.tags {op} ?"));
+            exprs.push(format!("{col} {op} ?"));
         }
 
         // If stored form differs from input, also match input form
         if tag_value != stored {
             params.push(Box::new(pat(&format!("\"{tag_value}\""))));
-            exprs.push(format!("a.tags {op} ?"));
+            exprs.push(format!("{col} {op} ?"));
         }
 
         // If tag contains ", also match JSON-escaped form (\" in stored JSON)
         if tag_value.contains('"') {
             let json_escaped = tag_value.replace('"', "\\\"");
             params.push(Box::new(pat(&format!("\"{json_escaped}\""))));
-            exprs.push(format!("a.tags {op} ?"));
+            exprs.push(format!("{col} {op} ?"));
         }
 
         exprs
     }
 
-    /// Helper: add a single positive tag clause (AND).
-    fn add_tag_clause(clauses: &mut Vec<String>, params: &mut Vec<Box<dyn rusqlite::types::ToSql>>, tag: &str, negate: bool) {
-        let parts = Self::tag_like_parts(params, tag);
+    /// Turn the OR'd pattern parts of one `tag:` entry into a WHERE clause.
+    ///
+    /// `indexed`: the parts were built against column `tags` and run inside
+    /// `assets_tags_fts` (schema v12), where FTS5's trigram tokenizer
+    /// serves LIKE/GLOB from its index; the main query gets a membership
+    /// test on the resulting ids. Otherwise the parts were built against
+    /// `a.tags` and stay an inline predicate — a scan, but one the planner
+    /// can stop early for a broad tag with `ORDER BY … LIMIT`.
+    fn tag_clause(parts: &[String], negate: bool, indexed: bool) -> String {
         let inner = parts.join(" OR ");
-        if negate {
-            clauses.push(format!("NOT ({inner})"));
+        if indexed {
+            let op = if negate { "NOT IN" } else { "IN" };
+            format!("a.id {op} (SELECT asset_id FROM assets_tags_fts WHERE {inner})")
+        } else if negate {
+            format!("NOT ({inner})")
         } else {
-            clauses.push(format!("({inner})"));
+            format!("({inner})")
         }
     }
 

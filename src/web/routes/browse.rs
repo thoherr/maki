@@ -614,8 +614,9 @@ pub async fn page_ids_api(
             _ => page,
         };
         opts.page = if has_similarity { 1 } else { page };
+        // The count (when wanted) already ran above; fetch the page alone.
         #[cfg_attr(not(feature = "ai"), allow(unused_mut))]
-        let mut rows = catalog.search_paginated(&opts)?;
+        let mut rows = catalog.search_page(&opts)?;
 
         // In-memory similarity ordering, same as browse_page's card sort.
         #[cfg(feature = "ai")]

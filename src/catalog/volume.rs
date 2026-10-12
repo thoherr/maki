@@ -209,7 +209,11 @@ impl Catalog {
     #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            tag_index_memo: Default::default(),
+            tag_index_limit: std::cell::Cell::new(crate::catalog::TAG_INDEX_MAX_MATCHES),
+        })
     }
 
 }

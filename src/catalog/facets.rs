@@ -14,7 +14,7 @@ impl Catalog {
     /// Returns a map of `"YYYY-MM-DD"` → count. Reuses `build_search_where()`
     /// for filter consistency, then adds a year constraint and groups by day.
     pub fn calendar_counts(&self, year: i32, opts: &SearchOptions) -> Result<HashMap<String, u64>> {
-        let (where_clause, mut params, needs_fl_join, needs_v_join) = Self::build_search_where(opts);
+        let (where_clause, mut params, needs_fl_join, needs_v_join) = self.build_search_where(opts);
 
         let mut sql = String::from(
             "SELECT substr(a.created_at, 1, 10) as day, COUNT(DISTINCT a.id) \
@@ -74,7 +74,7 @@ impl Catalog {
     /// Runs 8 aggregate queries sharing the same WHERE clause from `build_search_where()`.
     /// Returns counts grouped by rating, label, format, volume, tag, year, and geo.
     pub fn facet_counts(&self, opts: &SearchOptions) -> Result<FacetCounts> {
-        let (where_clause, params, needs_fl_join, needs_v_join) = Self::build_search_where(opts);
+        let (where_clause, params, needs_fl_join, needs_v_join) = self.build_search_where(opts);
 
         // Helper: build the FROM/JOIN prefix used by most queries
         let mut base_from = String::from(
@@ -319,7 +319,7 @@ impl Catalog {
 
     /// Get map markers (geotagged assets) matching search filters.
     pub fn map_markers(&self, opts: &SearchOptions, limit: u32) -> Result<(Vec<MapMarker>, u64)> {
-        let (where_clause, mut params, needs_fl_join, needs_v_join) = Self::build_search_where(opts);
+        let (where_clause, mut params, needs_fl_join, needs_v_join) = self.build_search_where(opts);
 
         // Count total geotagged assets matching filters
         let mut count_sql = String::from(

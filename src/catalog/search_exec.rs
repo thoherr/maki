@@ -55,7 +55,7 @@ impl Catalog {
     /// Uses a separate COUNT query + paginated data query (faster than COUNT(*) OVER()
     /// which forces SQLite to materialize the entire result set).
     pub fn search_paginated_with_count(&self, opts: &SearchOptions) -> Result<(Vec<SearchRow>, u64)> {
-        let (where_clause, params, needs_fl_join, needs_v_join) = Self::build_search_where(opts);
+        let (where_clause, params, needs_fl_join, needs_v_join) = self.build_search_where(opts);
 
         // --- Step 1: Count total matches ---
         let total_count = {
@@ -97,7 +97,15 @@ impl Catalog {
             return Ok((Vec::new(), 0));
         }
 
-        // --- Step 2: Fetch one page of results ---
+        let (rows, _) = self.search_page_inner(opts)?;
+        Ok((rows, total_count))
+    }
+
+    /// Step 2 of `search_paginated_with_count`: the data query alone.
+    fn search_page_inner(&self, opts: &SearchOptions) -> Result<(Vec<SearchRow>, ())> {
+        let (where_clause, params, needs_fl_join, needs_v_join) = self.build_search_where(opts);
+
+        // --- Fetch one page of results ---
         let (data_params, data_sql) = {
             let mut p = params;
             let page = opts.page.max(1);
@@ -152,13 +160,21 @@ impl Catalog {
         for row in rows {
             results.push(row?);
         }
-        Ok((results, total_count))
+        Ok((results, ()))
     }
 
     /// Paginated search with dynamic filters and sorting.
     pub fn search_paginated(&self, opts: &SearchOptions) -> Result<Vec<SearchRow>> {
         let (rows, _total) = self.search_paginated_with_count(opts)?;
         Ok(rows)
+    }
+
+    /// One page of results without the preceding COUNT query. For callers
+    /// that already know the total (or do not need it): the count is a
+    /// second full pass over the filtered set, which for a broad tag costs
+    /// as much as the page itself.
+    pub fn search_page(&self, opts: &SearchOptions) -> Result<Vec<SearchRow>> {
+        self.search_page_inner(opts).map(|(rows, _)| rows)
     }
 
     /// Fetch a single asset as a SearchRow by asset ID.
@@ -182,7 +198,7 @@ impl Catalog {
 
     /// Count total results matching the same filters as search_paginated (without LIMIT/OFFSET).
     pub fn search_count(&self, opts: &SearchOptions) -> Result<u64> {
-        let (where_clause, params, needs_fl_join, needs_v_join) = Self::build_search_where(opts);
+        let (where_clause, params, needs_fl_join, needs_v_join) = self.build_search_where(opts);
 
         let count_expr = if needs_v_join { "COUNT(DISTINCT a.id)" } else { "COUNT(*)" };
         let mut sql = format!(

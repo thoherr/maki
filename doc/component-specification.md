@@ -2,7 +2,7 @@
 
 > **As of v4.10.3 (September 2026).** Reviewed against the code at that
 > version: the data model below matches `src/models/*.rs` and the SQLite
-> schema in `src/catalog/schema.rs` (schema v11), the routes list is
+> schema in `src/catalog/schema.rs` (schema v12), the routes list is
 > generated from `build_router` in `src/web/mod.rs`, and the config
 > section mirrors `CatalogConfig` in `src/config.rs`. Per-release
 > narrative lives in `CHANGELOG.md` and `doc/specification.md`; the user
@@ -52,7 +52,7 @@ The central entity. Represents a logical asset (e.g. "photo of sunset at beach, 
 | tag_sources | v10 | JSON mirror of the sidecar map (checked by `maki doctor`) |
 | audio_sample_rate, audio_channels, audio_bitrate, audio_key, audio_bpm | v11 | Typed audio properties from variant `source_metadata` `audio_*` keys (lofty at import; key/BPM from `maki audio analyze`); `key:` / `bpm:` filters |
 
-The `assets` table additionally carries the `assets_fts` FTS5 trigram index (schema v9) over name, filename, description and source metadata, maintained by triggers; free-text terms of three or more characters go through it.
+The `assets` table additionally carries the `assets_fts` FTS5 trigram index (schema v9) over name, filename, description and source metadata, maintained by triggers; free-text terms of three or more characters go through it. A second trigram table, `assets_tags_fts` (schema v12), mirrors the `tags` column so the hierarchy-aware `tag:` LIKE/GLOB patterns can be served from an index (`a.id IN (SELECT asset_id FROM assets_tags_fts WHERE …)`) instead of a scan over every asset row; `Catalog::plan_tag_index` runs a bounded probe per entry (memoised per connection) and keeps the inline scan for entries matching 10,000 assets or more, where materialising the id list would cost more than the scan.
 
 An asset groups one or more **variants**.
 
@@ -211,7 +211,7 @@ recipes:
 
 **Responsibility**: fast queryable index over all metadata. Rebuilt from sidecar files.
 
-**Tables** mirror the data model: `assets` (+ the `assets_fts` FTS5 virtual table and its triggers), `variants`, `file_locations`, `volumes`, `recipes`, `stacks`, `collections`, `collection_assets`, `embeddings` (created unconditionally — the `embed:` filter works in every build), `faces` and `people` (with `--features ai`), and `schema_version`. `SCHEMA_VERSION` is 11; `run_migrations()` applies version-guarded `if current < N` blocks and is executed by `maki init`, `maki migrate` and `maki rebuild-catalog` only — every other command (and the web server) just verifies the stored version at startup and exits if it is behind.
+**Tables** mirror the data model: `assets` (+ the `assets_fts` and `assets_tags_fts` FTS5 virtual tables and their triggers), `variants`, `file_locations`, `volumes`, `recipes`, `stacks`, `collections`, `collection_assets`, `embeddings` (created unconditionally — the `embed:` filter works in every build), `faces` and `people` (with `--features ai`), and `schema_version`. `SCHEMA_VERSION` is 12; `run_migrations()` applies version-guarded `if current < N` blocks and is executed by `maki init`, `maki migrate` and `maki rebuild-catalog` only — every other command (and the web server) just verifies the stored version at startup and exits if it is behind.
 
 This is a **derived cache**, not the source of truth. Running `maki rebuild-catalog` regenerates it from sidecar files, `collections.yaml`, `stacks.yaml`, `faces.yaml`, `people.yaml`, and embedding binary files. This means:
 - No data loss if the SQLite file is deleted.
