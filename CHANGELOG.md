@@ -2,6 +2,30 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.11.1 (2026-10-12)
+
+Fix release: `import --auto-group` now scopes its candidates by the same
+session root that auto-group partitions on, with the imported directory as
+the boundary when no `[group] session_root_pattern` component matches. No
+schema migration.
+
+### Fixed
+
+- **`import --auto-group` scopes by session root.** The candidate
+  neighbourhood used to be one directory above each imported directory,
+  regardless of `[group] session_root_pattern`, so importing a nested
+  export folder (`2026-02-22/Output/Final/Web/`) never reached the RAWs in
+  `2026-02-22/Capture/`. The session root of each imported directory is
+  now the deepest component matching the pattern, wherever it sits. When
+  nothing matches, the directory given to `import` is the session (import
+  a whole client folder and its nested exports group with its RAWs); when
+  that directory holds the files itself, the scope is still one level up,
+  so `import --auto-group …/Output` keeps finding the sibling `Capture/`.
+  The grouping step partitions the candidates by the same rule, so the
+  two phases can no longer disagree. Note for undated archives: importing
+  a tree of several undated shoots at once now makes the tree one
+  session; set a pattern or import per shoot.
+
 ## v4.11.0 (2026-10-10)
 
 Sidecars for Capture One and Lightroom. MAKI-created `.xmp` files now use
