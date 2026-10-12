@@ -4698,6 +4698,107 @@ fn import_auto_group_no_false_positives() {
 }
 
 #[test]
+fn import_auto_group_deep_export_dir_in_dated_session() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Dated session: RAW in Capture/, export two levels down in Output/Web/.
+    let capture = root.join("2024-03-03-shoot/Capture");
+    let web = root.join("2024-03-03-shoot/Output/Web");
+    std::fs::create_dir_all(&capture).unwrap();
+    std::fs::create_dir_all(&web).unwrap();
+    std::fs::write(capture.join("DSC_300.ARW"), b"raw-deep-export").unwrap();
+    maki()
+        .current_dir(&root)
+        .args(["import", capture.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Importing only the deep export directory must still reach the RAW:
+    // the session root is the dated folder, not one level above Web/.
+    std::fs::write(web.join("DSC_300.JPG"), b"jpeg-deep-export").unwrap();
+    maki()
+        .current_dir(&root)
+        .args(["import", "--auto-group", web.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Auto-group"));
+
+    maki()
+        .current_dir(&root)
+        .args(["search", ""])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 result(s)"));
+}
+
+#[test]
+fn import_auto_group_undated_tree_uses_import_dir_as_session() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // No date anywhere. Importing the whole client folder makes it the
+    // session, so the nested export groups with the RAW in Capture/.
+    let session = root.join("Clients/Wedding-Smith");
+    let capture = session.join("Capture");
+    let web = session.join("Output/Final/Web");
+    std::fs::create_dir_all(&capture).unwrap();
+    std::fs::create_dir_all(&web).unwrap();
+    std::fs::write(capture.join("DSC_400.ARW"), b"raw-undated-tree").unwrap();
+    std::fs::write(web.join("DSC_400.JPG"), b"jpeg-undated-tree").unwrap();
+
+    maki()
+        .current_dir(&root)
+        .args(["import", "--auto-group", session.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 imported"))
+        .stdout(predicate::str::contains("merged"));
+
+    maki()
+        .current_dir(&root)
+        .args(["search", ""])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 result(s)"));
+}
+
+#[test]
+fn import_auto_group_undated_deep_dir_alone_stays_local() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+
+    // Same layout, but only the deep export directory is imported. Without
+    // a dated component the scope is one level up (Output/), which does not
+    // reach Capture/ — import the session folder for that.
+    let session = root.join("Clients/Wedding-Jones");
+    let capture = session.join("Capture");
+    let web = session.join("Output/Web");
+    std::fs::create_dir_all(&capture).unwrap();
+    std::fs::create_dir_all(&web).unwrap();
+    std::fs::write(capture.join("DSC_500.ARW"), b"raw-undated-deep").unwrap();
+    maki()
+        .current_dir(&root)
+        .args(["import", capture.to_str().unwrap()])
+        .assert()
+        .success();
+
+    std::fs::write(web.join("DSC_500.JPG"), b"jpeg-undated-deep").unwrap();
+    maki()
+        .current_dir(&root)
+        .args(["import", "--auto-group", web.to_str().unwrap()])
+        .assert()
+        .success();
+
+    maki()
+        .current_dir(&root)
+        .args(["search", ""])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 result(s)"));
+}
+
+#[test]
 fn import_auto_group_json() {
     let dir = tempdir().unwrap();
     let root = init_catalog(dir.path());

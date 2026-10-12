@@ -268,7 +268,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 - `tag(asset_id, tags, remove)` — add or remove tags, with XMP write-back
 - `edit(asset_id, fields)` — set/clear name, description, rating, color label, and date via `EditFields` (triple-option pattern: `None` = no change, `Some(None)` = clear, `Some(Some(x))` = set). Rating, description, and label changes trigger XMP write-back.
 - `set_rating(asset_id, rating)` / `set_color_label(asset_id, label)` — individual field setters used by web UI and batch operations
-- `auto_group(asset_ids, apply)` — group assets by filename stem using fuzzy prefix matching
+- `auto_group(asset_ids, apply)` — group assets by filename stem using fuzzy prefix matching; `auto_group_scoped(asset_ids, apply, import_roots)` is the `import --auto-group` variant whose session-root fallback is the imported directory
 
 ### 7. Preview Generator
 

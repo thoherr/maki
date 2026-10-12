@@ -152,7 +152,7 @@ Import complete: 3 imported, 1 recipe(s) attached, 3 preview(s) generated
 Auto-group: 1 stem group(s), 2 donor(s) merged, 2 variant(s) moved
 ```
 
-**How the neighborhood is determined**: For each imported file's directory (e.g., `2026-02-22/Capture/`), MAKI goes up one level to find the "session root" (`2026-02-22/`). It then searches the catalog for all assets under those session roots on the same volume. Only those assets participate in grouping.
+**How the neighborhood is determined**: For each imported file's directory (e.g., `2026-02-22/Capture/`), MAKI finds the "session root": the deepest folder in the path whose name matches `[group] session_root_pattern` -- by default a folder starting with a date, so `2026-02-22/`. It works however deep the exports are nested: importing `2026-02-22/Output/Final/Web/` still resolves to `2026-02-22/`. If no folder matches the pattern, the directory you handed to `maki import` is the session (import a whole client folder and everything below it may group), and if that directory holds the files itself, MAKI goes one level up so `Output/` sees its sibling `Capture/`. It then searches the catalog for all assets under those session roots on the same volume. Only those assets participate in grouping, and the grouping step partitions them by the same rule.
 
 This scoping prevents false positives from restarting camera counters -- `DSC_0001` from a January shoot won't be grouped with `DSC_0001` from a June shoot because they live under different session roots.
 

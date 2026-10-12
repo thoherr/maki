@@ -72,6 +72,20 @@ impl AssetService {
         let mut new_asset_ids = Vec::new();
         let mut imported_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+        // Volume-relative import roots for `--auto-group` session scoping:
+        // a directory argument is a root as given, a file argument
+        // contributes its parent directory.
+        let import_roots: Vec<String> = {
+            let mut roots: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for p in paths {
+                let dir = if p.is_dir() { p.as_path() } else { p.parent().unwrap_or(p.as_path()) };
+                if let Ok(rel) = dir.strip_prefix(&volume.mount_point) {
+                    roots.insert(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+            roots.into_iter().collect()
+        };
+
         for group in &groups {
             // Track the asset created/found for this group's primary variant
             let mut group_asset: Option<Asset> = None;
@@ -84,7 +98,7 @@ impl AssetService {
                 // Track volume-relative directory for auto-group neighborhood
                 if let Ok(rel) = file_path.strip_prefix(&volume.mount_point) {
                     if let Some(parent) = rel.parent() {
-                        imported_dirs.insert(parent.to_string_lossy().to_string());
+                        imported_dirs.insert(parent.to_string_lossy().replace('\\', "/"));
                     }
                 }
 
@@ -740,6 +754,7 @@ impl AssetService {
             sidecars_created,
             new_asset_ids,
             imported_directories: imported_dirs.into_iter().collect(),
+            import_roots,
         })
     }
 

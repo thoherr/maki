@@ -264,12 +264,16 @@ impl AssetService {
     }
 }
 
-/// Auto-group: scan the on-volume neighborhood of just-imported directories,
-/// merge those existing asset IDs with the newly-imported ones, and run
-/// `engine.auto_group`. On non-dry-run, also regenerate previews for any
-/// grouped asset whose best-variant changed (a higher-priority RAW or
-/// processed copy joined the group). Returns `Some(AutoGroupResult)` only
-/// when at least one group was formed.
+/// Auto-group: scan the on-volume session neighborhood of just-imported
+/// directories, merge those existing asset IDs with the newly-imported ones,
+/// and run `engine.auto_group_scoped`. The session root of each imported
+/// directory comes from `[group] session_root_pattern`; without a match the
+/// import directory (or its parent, when the files sit directly in it) is
+/// the boundary — see `query::find_session_root`. The same rule partitions
+/// the candidates inside auto-group, so the two steps agree. On non-dry-run,
+/// also regenerate previews for any grouped asset whose best-variant changed
+/// (a higher-priority RAW or processed copy joined the group). Returns
+/// `Some(AutoGroupResult)` only when at least one group was formed.
 fn run_auto_group(
     service: &AssetService,
     volume: &crate::models::volume::Volume,
@@ -279,21 +283,17 @@ fn run_auto_group(
     config: &crate::config::CatalogConfig,
 ) -> Result<Option<crate::query::AutoGroupResult>> {
     use std::collections::HashSet;
-    use std::path::Path;
 
     let catalog = crate::catalog::Catalog::open(&service.catalog_root)?;
     let volume_id = volume.id.to_string();
 
-    // Compute session roots: parent directory of each imported file's directory.
+    // Session root of each imported file's directory.
+    let pattern = &config.group.session_root_pattern;
+    let import_roots = &import_result.import_roots;
     let session_roots: HashSet<String> = import_result
         .imported_directories
         .iter()
-        .map(|dir| {
-            Path::new(dir)
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default()
-        })
+        .map(|dir| crate::query::find_session_root(dir, pattern, import_roots))
         .collect();
     let prefixes: Vec<String> = session_roots.into_iter().collect();
 
@@ -315,7 +315,7 @@ fn run_auto_group(
     }
 
     let engine = crate::query::QueryEngine::new(&service.catalog_root);
-    let ag_result = engine.auto_group(&all_ids, dry_run)?;
+    let ag_result = engine.auto_group_scoped(&all_ids, dry_run, import_roots)?;
     if ag_result.groups.is_empty() {
         return Ok(None);
     }

@@ -82,16 +82,27 @@ fn stem_prefix_matches(short: &str, long: &str) -> bool {
 /// Find the session/shoot root directory from a file's directory path.
 ///
 /// Walks up from the file's directory looking for the deepest component that
-/// starts with a date pattern (YYYY-MM-DD or YYYY-MM). Everything below that
-/// level (Capture/, Selects/, Output/ and their subdirectories) belongs to
-/// the same session.
+/// matches `session_root_pattern` (default: starts with YYYY-MM). Everything
+/// below that level (Capture/, Selects/, Output/ and their subdirectories)
+/// belongs to the same session.
 ///
-/// Examples:
+/// When no component matches, the fallback depends on `import_roots` — the
+/// volume-relative directories handed to `maki import` (empty for the
+/// standalone `maki auto-group` command):
+///
+/// - `dir` lies strictly below one of the import roots → that import root.
+///   Importing a whole session folder makes the folder the session, however
+///   deep its exports are nested (`Output/Final/Web`).
+/// - otherwise (no import roots, or `dir` *is* the import root) → the parent
+///   directory, one level up, so importing just `Capture/` or `Output/`
+///   still sees its sibling folders.
+///
+/// Examples (default pattern, no import roots):
 /// - `Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Capture` → `Pictures/Masters/2024/2024-10/2024-10-05-jazz-band`
 /// - `Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Output/Web` → `Pictures/Masters/2024/2024-10/2024-10-05-jazz-band`
 /// - `Photos/2024-10-05/RAW` → `Photos/2024-10-05`
-/// - `Unsorted/photos` → `Unsorted/photos` (no date found, falls back to full path)
-fn find_session_root(dir: &str, session_root_pattern: &str) -> String {
+/// - `Unsorted/photos/batch1` → `Unsorted/photos` (no date found, one level up)
+pub(crate) fn find_session_root(dir: &str, session_root_pattern: &str, import_roots: &[String]) -> String {
     let parts: Vec<&str> = dir.split('/').collect();
     let re = if session_root_pattern.is_empty() {
         None
@@ -109,17 +120,29 @@ fn find_session_root(dir: &str, session_root_pattern: &str) -> String {
         }
     }
 
-    match session_idx {
-        Some(idx) => parts[..=idx].join("/"),
-        None => {
-            // No date pattern found — fall back to parent directory
-            // (one level up from the file's directory)
-            std::path::Path::new(dir)
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| dir.to_string())
-        }
+    if let Some(idx) = session_idx {
+        return parts[..=idx].join("/");
     }
+
+    // No pattern match — the deepest import root that strictly contains
+    // `dir` is the session (the user imported that tree as one unit).
+    let containing_root = import_roots
+        .iter()
+        .filter(|root| {
+            root.is_empty() && !dir.is_empty()
+                || dir.len() > root.len() && dir.starts_with(root.as_str()) && dir.as_bytes()[root.len()] == b'/'
+        })
+        .max_by_key(|root| root.len());
+    if let Some(root) = containing_root {
+        return root.clone();
+    }
+
+    // Otherwise fall back to the parent directory (one level up from the
+    // file's directory), so sibling Capture/ and Output/ folders meet.
+    std::path::Path::new(dir)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| dir.to_string())
 }
 
 // ═══ RESULT TYPES ═══
@@ -1273,22 +1296,30 @@ impl QueryEngine {
     ///
     /// Picks the best target per group (RAW preferred, then oldest) and merges.
     pub fn auto_group(&self, asset_ids: &[String], dry_run: bool) -> Result<AutoGroupResult> {
-        self.auto_group_inner(asset_ids, dry_run, false, |_, _| {})
+        self.auto_group_inner(asset_ids, dry_run, false, &[], |_, _| {})
     }
 
     /// Auto-group with progress callback.
     pub fn auto_group_with_log(&self, asset_ids: &[String], dry_run: bool, on_group: impl FnMut(&str, usize)) -> Result<AutoGroupResult> {
-        self.auto_group_inner(asset_ids, dry_run, false, on_group)
+        self.auto_group_inner(asset_ids, dry_run, false, &[], on_group)
+    }
+
+    /// Auto-group for `import --auto-group`: `import_roots` are the
+    /// volume-relative directories handed to `maki import`. They serve as the
+    /// session boundary for assets whose path has no component matching
+    /// `[group] session_root_pattern` (see [`find_session_root`]).
+    pub fn auto_group_scoped(&self, asset_ids: &[String], dry_run: bool, import_roots: &[String]) -> Result<AutoGroupResult> {
+        self.auto_group_inner(asset_ids, dry_run, false, import_roots, |_, _| {})
     }
 
     /// Auto-group with explicit global scope (no directory partitioning).
     /// DANGEROUS: groups by stem across all directories. Use only with a
     /// carefully scoped asset_ids list.
     pub fn auto_group_global(&self, asset_ids: &[String], dry_run: bool) -> Result<AutoGroupResult> {
-        self.auto_group_inner(asset_ids, dry_run, true, |_, _| {})
+        self.auto_group_inner(asset_ids, dry_run, true, &[], |_, _| {})
     }
 
-    fn auto_group_inner(&self, asset_ids: &[String], dry_run: bool, global_scope: bool, mut on_group: impl FnMut(&str, usize)) -> Result<AutoGroupResult> {
+    fn auto_group_inner(&self, asset_ids: &[String], dry_run: bool, global_scope: bool, import_roots: &[String], mut on_group: impl FnMut(&str, usize)) -> Result<AutoGroupResult> {
         let catalog = Catalog::open(&self.catalog_root)?;
 
         // Deduplicate input IDs
@@ -1341,9 +1372,11 @@ impl QueryEngine {
         // being grouped with DSC_0001 from a 2024 shoot.
         //
         // The session root is detected by finding the deepest directory component
-        // that looks like a date (YYYY-MM-DD or YYYY-MM) or a shoot name starting
-        // with a date. Everything below that level (Capture/, Selects/, Output/
-        // and their subdirectories) belongs to the same session.
+        // matching `[group] session_root_pattern` (by default a date, YYYY-MM).
+        // Everything below that level (Capture/, Selects/, Output/ and their
+        // subdirectories) belongs to the same session. Without a match the
+        // import directory (if any) or the parent directory is the boundary —
+        // the same rule `import --auto-group` uses to pick its candidates.
         let neighborhoods: Vec<Vec<StemEntry>> = if global_scope {
             vec![entries]
         } else {
@@ -1351,7 +1384,7 @@ impl QueryEngine {
             let pattern = &config.group.session_root_pattern;
             let mut dir_groups: HashMap<String, Vec<StemEntry>> = HashMap::new();
             for entry in entries {
-                let session_root = find_session_root(&entry.dir, pattern);
+                let session_root = find_session_root(&entry.dir, pattern, import_roots);
                 dir_groups.entry(session_root).or_default().push(entry);
             }
             dir_groups.into_values().collect()
@@ -5760,7 +5793,7 @@ mod tests {
     #[test]
     fn session_root_date_dir() {
         assert_eq!(
-            find_session_root("Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Capture", DEFAULT_SESSION_PATTERN),
+            find_session_root("Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Capture", DEFAULT_SESSION_PATTERN, &[]),
             "Pictures/Masters/2024/2024-10/2024-10-05-jazz-band"
         );
     }
@@ -5768,7 +5801,7 @@ mod tests {
     #[test]
     fn session_root_deep_output() {
         assert_eq!(
-            find_session_root("Pictures/Masters/2025/2025-05/2025-05-09-wedding/Output/Final/Web", DEFAULT_SESSION_PATTERN),
+            find_session_root("Pictures/Masters/2025/2025-05/2025-05-09-wedding/Output/Final/Web", DEFAULT_SESSION_PATTERN, &[]),
             "Pictures/Masters/2025/2025-05/2025-05-09-wedding"
         );
     }
@@ -5776,7 +5809,7 @@ mod tests {
     #[test]
     fn session_root_selects_subdir() {
         assert_eq!(
-            find_session_root("Pictures/Masters/2025/2025-05/2025-05-09-wedding/Selects/Goettweig", DEFAULT_SESSION_PATTERN),
+            find_session_root("Pictures/Masters/2025/2025-05/2025-05-09-wedding/Selects/Goettweig", DEFAULT_SESSION_PATTERN, &[]),
             "Pictures/Masters/2025/2025-05/2025-05-09-wedding"
         );
     }
@@ -5785,7 +5818,7 @@ mod tests {
     fn session_root_no_date() {
         // Falls back to parent directory
         assert_eq!(
-            find_session_root("Unsorted/photos/batch1", DEFAULT_SESSION_PATTERN),
+            find_session_root("Unsorted/photos/batch1", DEFAULT_SESSION_PATTERN, &[]),
             "Unsorted/photos"
         );
     }
@@ -5793,8 +5826,8 @@ mod tests {
     #[test]
     fn session_root_different_shoots_same_camera() {
         // Different dates produce different session roots
-        let root_2023 = find_session_root("Pictures/Masters/2023/2023-10/2023-10-26-red-bird/Capture", DEFAULT_SESSION_PATTERN);
-        let root_2024 = find_session_root("Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Capture", DEFAULT_SESSION_PATTERN);
+        let root_2023 = find_session_root("Pictures/Masters/2023/2023-10/2023-10-26-red-bird/Capture", DEFAULT_SESSION_PATTERN, &[]);
+        let root_2024 = find_session_root("Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Capture", DEFAULT_SESSION_PATTERN, &[]);
         assert_ne!(root_2023, root_2024);
     }
 
@@ -5802,7 +5835,7 @@ mod tests {
     fn session_root_custom_pattern() {
         // Custom pattern matching "shoot-" prefix
         assert_eq!(
-            find_session_root("archive/shoot-001/RAW", r"^shoot-"),
+            find_session_root("archive/shoot-001/RAW", r"^shoot-", &[]),
             "archive/shoot-001"
         );
     }
@@ -5811,8 +5844,81 @@ mod tests {
     fn session_root_empty_pattern_falls_back() {
         // Empty pattern = no session root detection, falls back to parent dir
         assert_eq!(
-            find_session_root("Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Capture", ""),
+            find_session_root("Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Capture", "", &[]),
             "Pictures/Masters/2024/2024-10/2024-10-05-jazz-band"
+        );
+    }
+
+    #[test]
+    fn session_root_import_root_bounds_undated_tree() {
+        // No date anywhere; the imported tree is the session, however deep
+        // the file sits below it.
+        let roots = vec!["Clients/Wedding-Smith".to_string()];
+        assert_eq!(
+            find_session_root("Clients/Wedding-Smith/Output/Final/Web", DEFAULT_SESSION_PATTERN, &roots),
+            "Clients/Wedding-Smith"
+        );
+        assert_eq!(
+            find_session_root("Clients/Wedding-Smith/Capture", DEFAULT_SESSION_PATTERN, &roots),
+            "Clients/Wedding-Smith"
+        );
+    }
+
+    #[test]
+    fn session_root_import_root_itself_goes_one_level_up() {
+        // Importing Output/ alone: the import root is the file's own
+        // directory, so the parent is used to reach the sibling Capture/.
+        let roots = vec!["Clients/Wedding-Smith/Output".to_string()];
+        assert_eq!(
+            find_session_root("Clients/Wedding-Smith/Output", DEFAULT_SESSION_PATTERN, &roots),
+            "Clients/Wedding-Smith"
+        );
+    }
+
+    #[test]
+    fn session_root_pattern_wins_over_import_root() {
+        // A dated component overrides the import root in both directions:
+        // deeper than the import root …
+        let roots = vec!["Archive".to_string()];
+        assert_eq!(
+            find_session_root("Archive/2024-10-05-jazz/Output/Web", DEFAULT_SESSION_PATTERN, &roots),
+            "Archive/2024-10-05-jazz"
+        );
+        // … and above it.
+        let roots = vec!["2024-10-05-jazz/Output/Web".to_string()];
+        assert_eq!(
+            find_session_root("2024-10-05-jazz/Output/Web", DEFAULT_SESSION_PATTERN, &roots),
+            "2024-10-05-jazz"
+        );
+    }
+
+    #[test]
+    fn session_root_import_root_prefix_must_be_component() {
+        // "Clients/Wedding" must not capture "Clients/Wedding-Smith/…".
+        let roots = vec!["Clients/Wedding".to_string()];
+        assert_eq!(
+            find_session_root("Clients/Wedding-Smith/Output/Web", DEFAULT_SESSION_PATTERN, &roots),
+            "Clients/Wedding-Smith/Output"
+        );
+    }
+
+    #[test]
+    fn session_root_deepest_import_root_wins() {
+        let roots = vec!["Clients".to_string(), "Clients/Wedding-Smith".to_string()];
+        assert_eq!(
+            find_session_root("Clients/Wedding-Smith/Output/Web", DEFAULT_SESSION_PATTERN, &roots),
+            "Clients/Wedding-Smith"
+        );
+    }
+
+    #[test]
+    fn session_root_volume_root_import_contains_everything() {
+        // Importing the volume root ("" after stripping the mount point)
+        // makes the whole volume one undated session.
+        let roots = vec![String::new()];
+        assert_eq!(
+            find_session_root("Unsorted/photos/batch1", DEFAULT_SESSION_PATTERN, &roots),
+            ""
         );
     }
 

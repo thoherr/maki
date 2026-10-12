@@ -441,7 +441,7 @@ A regular expression matched against each directory component in a variant's pat
 
 The default pattern matches directory names starting with `YYYY-MM` (e.g., `2024-10`, `2024-10-05-wedding`, `2025-05-09-event`), which works for the common `year/year-month/year-month-day-event/` hierarchy.
 
-Set to an empty string to disable session root detection entirely; auto-group then falls back to parent-directory grouping (each immediate parent directory is its own group scope).
+Set to an empty string to disable session root detection entirely; auto-group then falls back to parent-directory grouping (each immediate parent directory is its own group scope). `maki import --auto-group` uses the directory handed to `import` as the session instead, falling back to the parent only when the files sit directly in that directory -- see [`--auto-group`](02-ingest-commands.md#maki-import).
 
 ```toml
 [group]

@@ -219,6 +219,12 @@ pub struct ImportResult {
     /// Volume-relative directory paths of imported files (for neighborhood scoping).
     #[serde(skip)]
     pub imported_directories: Vec<String>,
+    /// Volume-relative directories handed to the import (a file argument
+    /// contributes its parent). `--auto-group` treats each as the session
+    /// boundary for files below it when no `[group] session_root_pattern`
+    /// component matches.
+    #[serde(skip)]
+    pub import_roots: Vec<String>,
 }
 
 /// Result of a relocate operation.
