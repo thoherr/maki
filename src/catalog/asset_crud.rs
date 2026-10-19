@@ -6,6 +6,42 @@
 
 use super::*;
 
+/// The media columns on `assets` that are derived purely from the variant
+/// list (`source_metadata`). Computed by [`derive_media_columns`] and
+/// written by both `insert_asset` and `update_denormalized_variant_columns`
+/// so the two write paths cannot drift.
+///
+/// `audio_key` / `audio_bpm` belong here too: `maki audio analyze` stores
+/// its results in the variant's `source_metadata` (sidecar = source of
+/// truth) and re-saves the asset, so the columns are always a projection of
+/// the variant metadata, never analyzer-only state.
+struct DerivedMediaColumns {
+    duration_seconds: Option<f64>,
+    video_codec: Option<String>,
+    audio_sample_rate: Option<i64>,
+    audio_channels: Option<i64>,
+    audio_bitrate: Option<i64>,
+    audio_key: Option<String>,
+    audio_bpm: Option<f64>,
+}
+
+fn derive_media_columns(variants: &[Variant]) -> DerivedMediaColumns {
+    let first_str = |key: &str| variants.iter().find_map(|v| v.source_metadata.get(key).cloned());
+    let first_f64 = |key: &str| variants.iter().find_map(|v| v.source_metadata.get(key)?.parse::<f64>().ok());
+    let first_i64 = |key: &str| variants.iter().find_map(|v| v.source_metadata.get(key)?.parse::<i64>().ok());
+    DerivedMediaColumns {
+        // Duration is shared across media types: video variants carry
+        // `video_duration`, audio variants `audio_duration` (both seconds).
+        duration_seconds: first_f64("video_duration").or_else(|| first_f64("audio_duration")),
+        video_codec: first_str("video_codec"),
+        audio_sample_rate: first_i64("audio_sample_rate"),
+        audio_channels: first_i64("audio_channels"),
+        audio_bitrate: first_i64("audio_bitrate"),
+        audio_key: first_str("audio_key"),
+        audio_bpm: first_f64("audio_bpm"),
+    }
+}
+
 impl Catalog {
     // ═══ ASSET CRUD ═══
 
@@ -29,24 +65,15 @@ impl Catalog {
         let primary_format = crate::models::variant::compute_primary_format(&asset.variants);
         let variant_count = asset.variants.len() as i64;
         let (latitude, longitude) = crate::models::variant::compute_gps_from_variants(&asset.variants);
-        // Duration is shared across media types: video variants carry
-        // `video_duration`, audio variants `audio_duration` (both seconds).
-        let duration_seconds: Option<f64> = asset.variants.iter()
-            .find_map(|v| v.source_metadata.get("video_duration")?.parse::<f64>().ok())
-            .or_else(|| asset.variants.iter()
-                .find_map(|v| v.source_metadata.get("audio_duration")?.parse::<f64>().ok()));
-        let video_codec: Option<String> = asset.variants.iter()
-            .find_map(|v| v.source_metadata.get("video_codec").cloned());
-        let audio_sample_rate: Option<i64> = asset.variants.iter()
-            .find_map(|v| v.source_metadata.get("audio_sample_rate")?.parse::<i64>().ok());
-        let audio_channels: Option<i64> = asset.variants.iter()
-            .find_map(|v| v.source_metadata.get("audio_channels")?.parse::<i64>().ok());
-        let audio_bitrate: Option<i64> = asset.variants.iter()
-            .find_map(|v| v.source_metadata.get("audio_bitrate")?.parse::<i64>().ok());
-        let audio_key: Option<String> = asset.variants.iter()
-            .find_map(|v| v.source_metadata.get("audio_key").cloned());
-        let audio_bpm: Option<f64> = asset.variants.iter()
-            .find_map(|v| v.source_metadata.get("audio_bpm")?.parse::<f64>().ok());
+        let DerivedMediaColumns {
+            duration_seconds,
+            video_codec,
+            audio_sample_rate,
+            audio_channels,
+            audio_bitrate,
+            audio_key,
+            audio_bpm,
+        } = derive_media_columns(&asset.variants);
         // Leaf tag count — denormalised for the `tagcount:` search filter.
         // Computed from the current tags list, so any call that saves the
         // asset (tag add/remove/rename/split/clear/reimport) picks up the
@@ -266,7 +293,10 @@ impl Catalog {
         Ok(())
     }
 
-    /// Update all denormalized variant columns from an asset's variants.
+    /// Update all denormalized variant columns from an asset's variants:
+    /// `best_variant_hash`, `primary_variant_format`, `variant_count`,
+    /// `latitude`/`longitude`, and the media columns (`duration_seconds`,
+    /// `video_codec`, `audio_*`) — the same derivation as `insert_asset`.
     pub fn update_denormalized_variant_columns(&self, asset: &Asset) -> Result<()> {
         let best_hash = crate::models::variant::compute_best_variant_hash_with_override(
             &asset.variants,
@@ -275,11 +305,113 @@ impl Catalog {
         let primary_format = crate::models::variant::compute_primary_format(&asset.variants);
         let variant_count = asset.variants.len() as i64;
         let (latitude, longitude) = crate::models::variant::compute_gps_from_variants(&asset.variants);
+        let media = derive_media_columns(&asset.variants);
         self.conn.execute(
-            "UPDATE assets SET best_variant_hash = ?1, primary_variant_format = ?2, variant_count = ?3, latitude = ?4, longitude = ?5 WHERE id = ?6",
-            rusqlite::params![best_hash, primary_format, variant_count, latitude, longitude, asset.id.to_string()],
+            "UPDATE assets SET best_variant_hash = ?1, primary_variant_format = ?2, variant_count = ?3, \
+             latitude = ?4, longitude = ?5, duration_seconds = ?6, video_codec = ?7, \
+             audio_sample_rate = ?8, audio_channels = ?9, audio_bitrate = ?10, audio_key = ?11, audio_bpm = ?12 \
+             WHERE id = ?13",
+            rusqlite::params![
+                best_hash,
+                primary_format,
+                variant_count,
+                latitude,
+                longitude,
+                media.duration_seconds,
+                media.video_codec,
+                media.audio_sample_rate,
+                media.audio_channels,
+                media.audio_bitrate,
+                media.audio_key,
+                media.audio_bpm,
+                asset.id.to_string(),
+            ],
         )?;
         Ok(())
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{AssetType, VariantRole};
+
+    fn variant(hash: &str, asset_id: uuid::Uuid, meta: &[(&str, &str)]) -> Variant {
+        Variant {
+            content_hash: hash.to_string(),
+            asset_id,
+            role: VariantRole::Original,
+            format: "mp4".to_string(),
+            file_size: 100,
+            original_filename: "clip.mp4".to_string(),
+            source_metadata: meta.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            locations: vec![],
+        }
+    }
+
+    type MediaRow = (Option<f64>, Option<String>, Option<i64>, Option<i64>, Option<i64>, Option<String>, Option<f64>);
+
+    fn media_row(catalog: &Catalog, id: &str) -> MediaRow {
+        catalog.conn.query_row(
+            "SELECT duration_seconds, video_codec, audio_sample_rate, audio_channels, audio_bitrate, audio_key, audio_bpm \
+             FROM assets WHERE id = ?1",
+            rusqlite::params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+        ).unwrap()
+    }
+
+    /// Regression: the helper refreshed only hash/format/count/GPS, leaving
+    /// the media columns stale after a variant's metadata changed.
+    #[test]
+    fn update_denormalized_variant_columns_refreshes_media_columns() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let mut asset = Asset::new(AssetType::Video, "sha256:media1");
+        asset.variants.push(variant("sha256:media1", asset.id, &[
+            ("video_duration", "12.5"),
+            ("video_codec", "h264"),
+            ("audio_sample_rate", "44100"),
+            ("audio_channels", "2"),
+            ("audio_bitrate", "128"),
+            ("audio_key", "Am"),
+            ("audio_bpm", "120.0"),
+        ]));
+        catalog.insert_asset(&asset).unwrap();
+        for v in &asset.variants {
+            catalog.insert_variant(v).unwrap();
+        }
+        let id = asset.id.to_string();
+        assert_eq!(
+            media_row(&catalog, &id),
+            (Some(12.5), Some("h264".into()), Some(44100), Some(2), Some(128), Some("Am".into()), Some(120.0))
+        );
+
+        // Change every media value on the variant and refresh.
+        asset.variants[0].source_metadata = [
+            ("video_duration", "30.0"),
+            ("video_codec", "hevc"),
+            ("audio_sample_rate", "48000"),
+            ("audio_channels", "6"),
+            ("audio_bitrate", "320"),
+            ("audio_key", "C"),
+            ("audio_bpm", "90.5"),
+        ].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        catalog.update_denormalized_variant_columns(&asset).unwrap();
+        assert_eq!(
+            media_row(&catalog, &id),
+            (Some(30.0), Some("hevc".into()), Some(48000), Some(6), Some(320), Some("C".into()), Some(90.5))
+        );
+
+        // Metadata removed entirely → columns cleared, exactly like a fresh insert_asset.
+        asset.variants[0].source_metadata.clear();
+        catalog.update_denormalized_variant_columns(&asset).unwrap();
+        assert_eq!(media_row(&catalog, &id), (None, None, None, None, None, None, None));
+
+        // Audio-only variant: duration comes from `audio_duration`.
+        asset.variants[0].source_metadata.insert("audio_duration".into(), "200".into());
+        catalog.update_denormalized_variant_columns(&asset).unwrap();
+        assert_eq!(media_row(&catalog, &id).0, Some(200.0));
+    }
 }

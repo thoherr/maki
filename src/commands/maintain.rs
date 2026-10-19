@@ -1363,7 +1363,17 @@ pub fn run_relocate_command(
                 let result = service.relocate(&single_id, &vol, remove_source, create_sidecars, dry_run)?;
 
                 if cli.json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    // Same shape as the `--target` batch form below (one
+                    // documented JSON shape for `relocate`): a successful
+                    // single-asset relocate is a batch of one with no errors.
+                    println!("{}", serde_json::json!({
+                        "assets": 1,
+                        "copied": result.copied,
+                        "skipped": result.skipped,
+                        "removed": result.removed,
+                        "errors": Vec::<String>::new(),
+                        "dry_run": dry_run,
+                    }));
                 } else {
                     if dry_run {
                         println!("Dry run — no changes made:");

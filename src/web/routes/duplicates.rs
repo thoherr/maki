@@ -246,7 +246,7 @@ pub async fn dedup_remove_location_api(
         Ok(Ok(json)) => Json(json).into_response(),
         Ok(Err(e)) => {
             let msg = format!("{e:#}");
-            let status = if msg.contains("Cannot remove") || msg.contains("offline") {
+            let status = if msg.contains("cannot remove") || msg.contains("offline") {
                 StatusCode::BAD_REQUEST
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR

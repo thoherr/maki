@@ -1579,6 +1579,7 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
                 { keys: '\u2190 \u2192', desc: 'Previous / next asset' },
                 { keys: 'Click image', desc: 'Open lightbox' },
                 { keys: 'l', desc: 'Open lightbox' },
+                {% if ai_enabled %}{ keys: 's', desc: 'Stroll from this image' },{% endif %}
                 { keys: 'Escape', desc: 'Go back' },
                 { keys: 'Shift+B', desc: 'Back to browse' }
             ]},

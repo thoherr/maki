@@ -205,7 +205,11 @@ impl ParsedSearch {
         self.scattered = NumericFilter::or(&self.scattered, &other.scattered);
         self.face_count = NumericFilter::or(&self.face_count, &other.face_count);
         self.tag_count = NumericFilter::or(&self.tag_count, &other.tag_count);
+        self.duration = NumericFilter::or(&self.duration, &other.duration);
+        self.audio_bpm = NumericFilter::or(&self.audio_bpm, &other.audio_bpm);
         self.stale_days = NumericFilter::or(&self.stale_days, &other.stale_days);
+        if self.codec.is_none() { self.codec = other.codec.clone(); }
+        if self.audio_key.is_none() { self.audio_key = other.audio_key.clone(); }
         if self.date_prefix.is_none() { self.date_prefix = other.date_prefix.clone(); }
         if self.date_from.is_none() { self.date_from = other.date_from.clone(); }
         if self.date_until.is_none() { self.date_until = other.date_until.clone(); }

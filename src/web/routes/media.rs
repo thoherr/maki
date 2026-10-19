@@ -985,11 +985,12 @@ pub async fn export_zip(
             let bf = super::build_parsed_search(&params, &state2);
             let mut resolved = super::ResolvedSearch::resolve(
                 &catalog,
+                &state2,
                 &bf.parsed,
                 bf.volume,
                 bf.path_volume_id,
                 crate::query::EmptyFilterPolicy::MatchNothing,
-            );
+            )?;
             resolved.resolve_ai_filters(&catalog, &state2, &bf.parsed)?;
 
             let mut opts = bf.parsed.to_search_options();

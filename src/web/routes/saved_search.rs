@@ -78,7 +78,7 @@ pub async fn delete_saved_search(
     match result {
         Ok(Ok(json)) => Json(json).into_response(),
         Ok(Err(e)) => {
-            if format!("{e:#}").contains("No saved search") {
+            if format!("{e:#}").contains("no saved search") {
                 (StatusCode::NOT_FOUND, format!("{e:#}")).into_response()
             } else {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
@@ -144,7 +144,7 @@ pub async fn toggle_saved_search_favorite(
         Ok(Ok(json)) => Json(json).into_response(),
         Ok(Err(e)) => {
             let msg = format!("{e:#}");
-            if msg.contains("No saved search") {
+            if msg.contains("no saved search") {
                 (StatusCode::NOT_FOUND, msg).into_response()
             } else {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
@@ -190,7 +190,7 @@ pub async fn rename_saved_search(
         Ok(Ok(json)) => Json(json).into_response(),
         Ok(Err(e)) => {
             let msg = format!("{e:#}");
-            if msg.contains("No saved search") {
+            if msg.contains("no saved search") {
                 (StatusCode::NOT_FOUND, msg).into_response()
             } else if msg.contains("already exists") {
                 (StatusCode::CONFLICT, msg).into_response()

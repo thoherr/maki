@@ -558,38 +558,17 @@ impl QueryEngine {
 
         let catalog = Catalog::open(&self.catalog_root)?;
 
-        // Pre-compute missing asset IDs if needed (requires disk I/O)
-        let missing_ids;
-        if parsed.missing {
-            let registry = DeviceRegistry::new(&self.catalog_root);
-            let volumes = registry.list()?;
-            let online: HashMap<String, std::path::PathBuf> = volumes
-                .iter()
-                .filter(|v| v.is_online)
-                .map(|v| (v.id.to_string(), v.mount_point.clone()))
-                .collect();
-            let all_locs = catalog.list_all_locations_with_assets()?;
-            let mut ids = HashSet::new();
-            for (asset_id, volume_id, relative_path) in &all_locs {
-                if let Some(mount) = online.get(volume_id) {
-                    if !mount.join(relative_path).exists() {
-                        ids.insert(asset_id.clone());
-                    }
-                }
-            }
-            missing_ids = ids.into_iter().collect::<Vec<_>>();
-            opts.missing_asset_ids = Some(&missing_ids);
-        }
-
-        // Resolve collection include/exclude and person include/exclude
-        // filters via the shared resolver (see `crate::query::resolve`).
+        // Resolve collection include/exclude, person include/exclude and
+        // `missing:true` (disk probe, only when set) via the shared resolver
+        // (see `crate::query::resolve`) — the same step the web routes run.
         // The CLI installs resolved lists whenever the filter is present in
         // the query — an unmatched filter matches nothing (MatchNothing).
         let resolved_filters = ResolvedFilterIds::resolve(
             &catalog,
+            &self.catalog_root,
             &parsed,
             EmptyFilterPolicy::MatchNothing,
-        );
+        )?;
         resolved_filters.apply(&mut opts);
 
         // Pre-compute similar asset IDs from embedding similarity search —
@@ -5115,6 +5094,29 @@ mod tests {
         base.merge_from(&default);
         assert_eq!(base.tags_exclude, vec!["rest".to_string()]);
         assert_eq!(base.asset_types, vec!["image".to_string()]);
+    }
+
+    /// Regression: `duration:`, `codec:`, `key:` and `bpm:` were missing
+    /// from `merge_from`, so a `[browse] default_filter` using them was
+    /// silently ignored.
+    #[test]
+    fn merge_from_carries_media_filters() {
+        let mut base = ParsedSearch::default();
+        let default = parse_search_query("duration:60+ codec:h264 key:Am bpm:100-140");
+        assert_eq!(default.duration, Some(NumericFilter::Min(60.0)));
+        base.merge_from(&default);
+        assert_eq!(base.duration, Some(NumericFilter::Min(60.0)));
+        assert_eq!(base.codec.as_deref(), Some("h264"));
+        assert_eq!(base.audio_key.as_deref(), Some("Am"));
+        assert_eq!(base.audio_bpm, Some(NumericFilter::Range(100.0, 140.0)));
+
+        // Self wins over the default for every one of them.
+        let mut base = parse_search_query("duration:10 codec:hevc key:C bpm:90");
+        base.merge_from(&default);
+        assert_eq!(base.duration, Some(NumericFilter::Exact(10.0)));
+        assert_eq!(base.codec.as_deref(), Some("hevc"));
+        assert_eq!(base.audio_key.as_deref(), Some("C"));
+        assert_eq!(base.audio_bpm, Some(NumericFilter::Exact(90.0)));
     }
 
     // ── tag rename tests ───────────────────────────────────

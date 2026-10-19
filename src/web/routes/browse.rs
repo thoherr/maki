@@ -157,8 +157,8 @@ pub async fn browse_page(
         let nodefault = bf.nodefault;
 
         let mut resolved = ResolvedSearch::resolve(
-            &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
-        );
+            &catalog, &state, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
+        )?;
         resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
 
         let mut opts = parsed.to_search_options();
@@ -377,8 +377,8 @@ pub async fn search_api(
         let path_str = bf.path;
 
         let mut resolved = ResolvedSearch::resolve(
-            &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
-        );
+            &catalog, &state, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
+        )?;
         resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
 
         let mut opts = parsed.to_search_options();
@@ -503,8 +503,8 @@ pub async fn all_ids_api(
         // endpoint skipped resolve_ai_filters, so select-all on a text
         // search seeded the batch toolbar with the UNFILTERED result set.
         let mut resolved = ResolvedSearch::resolve(
-            &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
-        );
+            &catalog, &state, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
+        )?;
         resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
 
         let mut opts = parsed.to_search_options();
@@ -582,8 +582,8 @@ pub async fn page_ids_api(
         // lightbox and keyboard navigation, which must walk the set the
         // grid actually shows.
         let mut resolved = ResolvedSearch::resolve(
-            &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
-        );
+            &catalog, &state, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
+        )?;
         resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
         let has_similarity = resolved.has_similarity();
 
@@ -838,8 +838,8 @@ pub async fn facets_api(
         // text-query / similar: filters must be included — otherwise the
         // dropdown counts contradict the visible results on a text search.
         let mut resolved = ResolvedSearch::resolve(
-            &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
-        );
+            &catalog, &state, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
+        )?;
         resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
 
         let mut opts = parsed.to_search_options();
@@ -863,7 +863,7 @@ pub struct PathsParams {
     pub q: Option<String>,
     /// Optional volume ID to scope completions (string UUID).
     pub volume: Option<String>,
-    /// Max number of completions to return (default 20, max 100).
+    /// Max number of completions to return (default 100, max 100).
     pub limit: Option<u32>,
 }
 

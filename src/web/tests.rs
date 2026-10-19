@@ -56,6 +56,9 @@ impl TestServer {
         {
             let catalog = Catalog::open(&root).unwrap();
             catalog.initialize().unwrap();
+            // `maki init` also creates the (empty) volume registry; the
+            // stats/volumes/backup pages and path completion read it.
+            crate::device_registry::DeviceRegistry::init(&root).unwrap();
 
             let mut asset = Asset::new(AssetType::Image, "sha256:webtest1");
             asset.name = Some("sunset photo".to_string());
@@ -186,8 +189,8 @@ impl TestServer {
         self.request(method, uri, Some("application/json"), body).await
     }
 
-    /// Raw-body request with arbitrary headers (query-image upload).
-    #[cfg(feature = "ai")]
+    /// Raw-body request with arbitrary headers (htmx fragments,
+    /// query-image upload).
     async fn raw(
         &self,
         method: Method,
@@ -208,9 +211,9 @@ impl TestServer {
         (status, headers, String::from_utf8_lossy(&bytes).into_owned())
     }
 
-    /// Seed a second image asset whose only variant has exactly `hash`,
-    /// so a query-image upload with those bytes is a content-hash hit.
-    #[cfg(feature = "ai")]
+    /// Seed a second image asset whose only variant has exactly `hash`
+    /// (so a query-image upload with those bytes is a content-hash hit,
+    /// and so stack/batch tests have a second member).
     fn seed_asset_with_hash(&self, hash: &str) -> String {
         let catalog = Catalog::open_fast(&self.root).unwrap();
         let mut asset = Asset::new(AssetType::Image, hash);
@@ -229,6 +232,28 @@ impl TestServer {
         catalog.insert_asset(&asset).unwrap();
         catalog.insert_variant(&asset.variants[0]).unwrap();
         asset.id.to_string()
+    }
+
+    /// Register an online volume at the catalog root and attach a file
+    /// location for `hash` under it. Returns the volume ID.
+    fn seed_volume_and_location(&self, label: &str, hash: &str, relative_path: &str) -> String {
+        let registry = crate::device_registry::DeviceRegistry::new(&self.root);
+        let volume = registry
+            .register(label, &self.root, crate::models::VolumeType::Local, None)
+            .unwrap();
+        let catalog = Catalog::open_fast(&self.root).unwrap();
+        catalog.ensure_volume(&volume).unwrap();
+        catalog
+            .insert_file_location(
+                hash,
+                &crate::models::FileLocation {
+                    volume_id: volume.id,
+                    relative_path: std::path::PathBuf::from(relative_path),
+                    verified_at: None,
+                },
+            )
+            .unwrap();
+        volume.id.to_string()
     }
 
     /// Load the asset fresh from BOTH stores for dual-store assertions.
@@ -817,4 +842,620 @@ async fn query_image_upload_is_allowed_in_read_only_mode() {
         .form(Method::POST, &format!("/api/asset/{}/rating", srv.asset_id), "rating=5")
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+// ─── Route smoke coverage: JSON APIs, HTML pages, batch/tag endpoints ─
+
+#[tokio::test]
+async fn page_ids_counts_pages_unless_nocount() {
+    let srv = TestServer::new();
+
+    let (status, _, body) = srv.get("/api/page-ids").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["page"], 1);
+    assert_eq!(json["total_pages"], 1, "one seeded asset fits one page: {json}");
+    let ids: Vec<&str> = json["ids"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(ids, vec![srv.asset_id.as_str()]);
+
+    // nocount=1 skips the count query: total_pages is null, IDs unchanged.
+    let (status, _, body) = srv.get("/api/page-ids?nocount=1").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(json["total_pages"].is_null(), "nocount must suppress the count: {json}");
+    assert_eq!(json["ids"].as_array().unwrap().len(), 1);
+
+    // Filters apply: a type nobody matches yields an empty page.
+    let (status, _, body) = srv.get("/api/page-ids?type=video").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["ids"].as_array().unwrap().len(), 0, "{json}");
+    assert_eq!(json["total_pages"], 0, "{json}");
+}
+
+#[tokio::test]
+async fn facets_api_reports_counts_for_the_result_set() {
+    let srv = TestServer::new();
+    let (status, _, body) = srv.get("/api/facets").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+    assert_eq!(json["total"], 1, "{json}");
+    for key in ["ratings", "labels", "formats", "volumes", "tags", "years"] {
+        assert!(json[key].is_array(), "{key} must be an array: {json}");
+    }
+    assert_eq!(json["geotagged"], 0, "{json}");
+
+    // Seeded asset: rating 2, format jpg, tags landscape + festival.
+    let ratings = json["ratings"].as_array().unwrap();
+    assert!(ratings.iter().any(|r| r[0] == 2 && r[1] == 1), "ratings: {ratings:?}");
+    let formats = json["formats"].as_array().unwrap();
+    assert!(formats.iter().any(|f| f[0] == "jpg" && f[1] == 1), "formats: {formats:?}");
+    let tags = json["tags"].as_array().unwrap();
+    assert!(tags.iter().any(|t| t[0] == "landscape" && t[1] == 1), "tags: {tags:?}");
+    assert!(tags.iter().any(|t| t[0] == "festival"), "tags: {tags:?}");
+
+    // Facets follow the filter: nothing is a video.
+    let (_, _, body) = srv.get("/api/facets?type=video").await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total"], 0, "{json}");
+}
+
+#[tokio::test]
+async fn search_api_redirects_without_htmx_and_renders_fragment_with_it() {
+    let srv = TestServer::new();
+
+    // Plain GET (bookmark / direct navigation) is sent to the browse page
+    // with the query string preserved.
+    let (status, headers, _) = srv.get("/api/search?q=sunset&type=image").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        headers.get("location").map(|v| v.to_str().unwrap()),
+        Some("/?q=sunset&type=image")
+    );
+    let (status, headers, _) = srv.get("/api/search").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(headers.get("location").map(|v| v.to_str().unwrap()), Some("/"));
+
+    // htmx request: results fragment with the seeded card, no full page.
+    let (status, _, body) = srv
+        .raw(Method::GET, "/api/search?q=sunset", &[("HX-Request", "true")], Vec::new())
+        .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.contains("asset-card"), "fragment must render result cards: {body}");
+    assert!(body.contains(&srv.asset_id), "fragment must contain the seeded asset: {body}");
+    assert!(!body.contains("<html"), "htmx fragment must not be a full document");
+
+    let (status, _, body) = srv
+        .raw(Method::GET, "/api/search?type=video", &[("HX-Request", "true")], Vec::new())
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body.contains(&srv.asset_id), "filtered-out asset must not render: {body}");
+}
+
+#[tokio::test]
+async fn stats_api_reports_overview_counts() {
+    let srv = TestServer::new();
+    let (status, _, body) = srv.get("/api/stats").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["assets"], 1, "{json}");
+    assert_eq!(json["variants"], 1, "{json}");
+    assert_eq!(json["recipes"], 0, "{json}");
+    assert_eq!(json["total_size"], 5000, "{json}");
+}
+
+#[tokio::test]
+async fn jobs_list_starts_empty() {
+    let srv = TestServer::new();
+    let (status, _, body) = srv.get("/api/jobs").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["running"], 0, "{json}");
+    assert_eq!(json["jobs"].as_array().unwrap().len(), 0, "{json}");
+
+    let (status, _, _) = srv.get("/api/jobs/no-such-job").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn config_api_and_schema() {
+    let srv = TestServer::new_with(false, "[serve]\nper_page = 42\n");
+
+    let (status, _, body) = srv.get("/api/config").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["config"]["serve"]["per_page"], 42, "{json}");
+    assert!(json["raw_toml"].as_str().unwrap().contains("per_page = 42"));
+    assert!(json["path"].as_str().unwrap().ends_with("maki.toml"));
+
+    let (status, _, body) = srv.get("/api/config/schema").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let schema: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(schema["properties"]["serve"].is_object(), "schema must describe [serve]: {schema}");
+    assert!(schema["properties"]["preview"].is_object(), "schema must describe [preview]: {schema}");
+}
+
+#[tokio::test]
+async fn collections_create_list_and_batch_membership() {
+    let srv = TestServer::new();
+
+    let (status, _, body) = srv.get("/api/collections").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json.as_array().unwrap().len(), 0);
+
+    let (status, _, body) = srv
+        .json(Method::POST, "/api/collections", r#"{"name": "Best of", "description": "  keepers  "}"#)
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "body: {body}");
+    let created: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(created["name"], "Best of");
+    assert_eq!(created["description"], "keepers", "description is trimmed: {created}");
+    assert!(uuid::Uuid::parse_str(created["id"].as_str().unwrap()).is_ok());
+
+    // Duplicate name → 409; empty name → error.
+    let (status, _, _) = srv
+        .json(Method::POST, "/api/collections", r#"{"name": "Best of"}"#)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _, _) = srv
+        .json(Method::POST, "/api/collections", r#"{"name": "   "}"#)
+        .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    // Add the seeded asset, list shows membership, remove again.
+    let body = format!(r#"{{"asset_ids": ["{}"], "collection": "Best of"}}"#, srv.asset_id);
+    let (status, _, resp) = srv.json(Method::POST, "/api/batch/collection", &body).await;
+    assert_eq!(status, StatusCode::OK, "body: {resp}");
+    let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(json["added"], 1, "{json}");
+
+    let (_, _, body_list) = srv.get("/api/collections").await;
+    let json: serde_json::Value = serde_json::from_str(&body_list).unwrap();
+    let list = json.as_array().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["name"], "Best of");
+    assert_eq!(list[0]["asset_count"], 1, "{json}");
+
+    // The YAML export (source of truth) must carry the collection too.
+    let yaml = std::fs::read_to_string(srv.root.join("collections.yaml")).unwrap();
+    assert!(yaml.contains("Best of") && yaml.contains(&srv.asset_id), "{yaml}");
+
+    let (status, _, resp) = srv.json(Method::DELETE, "/api/batch/collection", &body).await;
+    assert_eq!(status, StatusCode::OK, "body: {resp}");
+    let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(json["removed"], 1, "{json}");
+    let (_, _, body_list) = srv.get("/api/collections").await;
+    let json: serde_json::Value = serde_json::from_str(&body_list).unwrap();
+    assert_eq!(json[0]["asset_count"], 0, "{json}");
+}
+
+#[tokio::test]
+async fn saved_searches_create_list_delete() {
+    let srv = TestServer::new();
+
+    let (status, _, body) = srv.get("/api/saved-searches").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap().as_array().unwrap().len(), 0);
+
+    let (status, _, body) = srv
+        .json(
+            Method::POST,
+            "/api/saved-searches",
+            r#"{"name": "five stars", "query": "rating:5", "sort": "date_asc", "favorite": true}"#,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["status"], "saved");
+    assert_eq!(json["name"], "five stars");
+
+    // Same name updates in place rather than duplicating.
+    let (status, _, _) = srv
+        .json(
+            Method::POST,
+            "/api/saved-searches",
+            r#"{"name": "five stars", "query": "rating:4+"}"#,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, _, body) = srv.get("/api/saved-searches").await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let list = json.as_array().unwrap();
+    assert_eq!(list.len(), 1, "{json}");
+    assert_eq!(list[0]["name"], "five stars");
+    assert_eq!(list[0]["query"], "rating:4+", "update must replace the query: {json}");
+    assert_ne!(list[0]["favorite"], true, "update replaces the whole entry: {json}");
+
+    let (status, _, body) = srv.get("/saved-searches").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("five stars"), "page must list the saved search: {body}");
+
+    let (status, _, body) = srv
+        .request(Method::DELETE, "/api/saved-searches/five%20stars", None, "")
+        .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["status"], "deleted");
+
+    let (status, _, _) = srv
+        .request(Method::DELETE, "/api/saved-searches/five%20stars", None, "")
+        .await;
+    assert_ne!(status, StatusCode::OK, "deleting twice must fail");
+
+    let (_, _, body) = srv.get("/api/saved-searches").await;
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap().as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn tag_rename_split_delete_apis_update_both_stores() {
+    let srv = TestServer::new();
+
+    // rename: dry run first, then apply.
+    let (status, _, body) = srv
+        .json(Method::POST, "/api/tag/rename", r#"{"old_tag": "landscape", "new_tag": "scenery"}"#)
+        .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["dry_run"], true, "{json}");
+    assert_eq!(json["matched"], 1, "{json}");
+    let (sidecar, _) = srv.asset_from_both_stores();
+    assert!(sidecar.tags.contains(&"landscape".to_string()), "dry run must not rename");
+
+    let (status, _, body) = srv
+        .json(
+            Method::POST,
+            "/api/tag/rename",
+            r#"{"old_tag": "landscape", "new_tag": "scenery", "apply": true}"#,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["renamed"], 1, "{json}");
+    let (sidecar, row) = srv.asset_from_both_stores();
+    assert!(sidecar.tags.contains(&"scenery".to_string()) && !sidecar.tags.contains(&"landscape".to_string()), "{:?}", sidecar.tags);
+    assert!(row.tags.contains(&"scenery".to_string()) && !row.tags.contains(&"landscape".to_string()), "{:?}", row.tags);
+
+    // Empty target is a 400.
+    let (status, _, _) = srv
+        .json(Method::POST, "/api/tag/rename", r#"{"old_tag": "scenery", "new_tag": "", "apply": true}"#)
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // split: one tag into two.
+    let (status, _, body) = srv
+        .json(
+            Method::POST,
+            "/api/tag/split",
+            r#"{"old_tag": "scenery", "new_tags": ["nature", "outdoors"], "apply": true}"#,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["matched"], 1, "{json}");
+    assert_eq!(json["split"], 1, "{json}");
+    assert_eq!(json["dry_run"], false, "{json}");
+    let (sidecar, row) = srv.asset_from_both_stores();
+    for t in ["nature", "outdoors"] {
+        assert!(sidecar.tags.contains(&t.to_string()), "sidecar missing {t}: {:?}", sidecar.tags);
+        assert!(row.tags.contains(&t.to_string()), "catalog missing {t}: {:?}", row.tags);
+    }
+    assert!(!sidecar.tags.contains(&"scenery".to_string()));
+
+    let (status, _, _) = srv
+        .json(Method::POST, "/api/tag/split", r#"{"old_tag": "nature", "new_tags": [""], "apply": true}"#)
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // delete: removes from every asset.
+    let (status, _, body) = srv
+        .json(Method::POST, "/api/tag/delete", r#"{"tag": "outdoors", "apply": true}"#)
+        .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["matched"], 1, "{json}");
+    assert_eq!(json["removed"], 1, "{json}");
+    let (sidecar, row) = srv.asset_from_both_stores();
+    assert!(!sidecar.tags.contains(&"outdoors".to_string()), "{:?}", sidecar.tags);
+    assert!(!row.tags.contains(&"outdoors".to_string()), "{:?}", row.tags);
+
+    let (status, _, _) = srv
+        .json(Method::POST, "/api/tag/delete", r#"{"tag": "=", "apply": true}"#)
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn batch_label_and_batch_tags_report_per_asset_results() {
+    let srv = TestServer::new();
+    let bogus = "00000000-0000-0000-0000-000000000000";
+
+    let body = format!(r#"{{"asset_ids": ["{}", "{bogus}"], "label": "red"}}"#, srv.asset_id);
+    let (status, _, resp) = srv.json(Method::PUT, "/api/batch/label", &body).await;
+    assert_eq!(status, StatusCode::OK, "body: {resp}");
+    let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(json["succeeded"], 1, "{json}");
+    assert_eq!(json["failed"], 1, "{json}");
+    assert_eq!(json["errors"][0]["asset_id"], bogus, "{json}");
+    let (sidecar, row) = srv.asset_from_both_stores();
+    assert_eq!(sidecar.color_label.as_deref(), Some("Red"), "label is canonicalised");
+    assert_eq!(row.color_label.as_deref(), Some("Red"));
+
+    // Invalid colour is rejected before anything is written.
+    let body = format!(r#"{{"asset_ids": ["{}"], "label": "magenta"}}"#, srv.asset_id);
+    let (status, _, _) = srv.json(Method::PUT, "/api/batch/label", &body).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let (sidecar, _) = srv.asset_from_both_stores();
+    assert_eq!(sidecar.color_label.as_deref(), Some("Red"));
+
+    // Empty label clears.
+    let body = format!(r#"{{"asset_ids": ["{}"], "label": ""}}"#, srv.asset_id);
+    let (status, _, _) = srv.json(Method::PUT, "/api/batch/label", &body).await;
+    assert_eq!(status, StatusCode::OK);
+    let (sidecar, row) = srv.asset_from_both_stores();
+    assert_eq!(sidecar.color_label, None);
+    assert_eq!(row.color_label, None);
+
+    // batch tags: add, then remove.
+    let body = format!(
+        r#"{{"asset_ids": ["{}", "{bogus}"], "tags": ["trip|italy"], "remove": false}}"#,
+        srv.asset_id
+    );
+    let (status, _, resp) = srv.json(Method::POST, "/api/batch/tags", &body).await;
+    assert_eq!(status, StatusCode::OK, "body: {resp}");
+    let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(json["succeeded"], 1, "{json}");
+    assert_eq!(json["failed"], 1, "{json}");
+    let (sidecar, row) = srv.asset_from_both_stores();
+    for t in ["trip", "trip|italy"] {
+        assert!(sidecar.tags.contains(&t.to_string()), "sidecar missing {t}: {:?}", sidecar.tags);
+        assert!(row.tags.contains(&t.to_string()), "catalog missing {t}: {:?}", row.tags);
+    }
+
+    let body = format!(
+        r#"{{"asset_ids": ["{}"], "tags": ["trip|italy"], "remove": true}}"#,
+        srv.asset_id
+    );
+    let (status, _, resp) = srv.json(Method::POST, "/api/batch/tags", &body).await;
+    assert_eq!(status, StatusCode::OK, "body: {resp}");
+    let (sidecar, row) = srv.asset_from_both_stores();
+    assert!(!sidecar.tags.contains(&"trip|italy".to_string()), "{:?}", sidecar.tags);
+    assert!(!row.tags.contains(&"trip|italy".to_string()), "{:?}", row.tags);
+}
+
+#[tokio::test]
+async fn paths_api_completes_next_segment() {
+    let srv = TestServer::new();
+    let hash = "sha256:webtest1";
+    let volume_id = srv.seed_volume_and_location("main", hash, "trips/2026/beach.jpg");
+    {
+        let catalog = Catalog::open_fast(&srv.root).unwrap();
+        catalog
+            .insert_file_location(
+                hash,
+                &crate::models::FileLocation {
+                    volume_id: volume_id.parse().unwrap(),
+                    relative_path: std::path::PathBuf::from("trips/2025/snow.jpg"),
+                    verified_at: None,
+                },
+            )
+            .unwrap();
+    }
+
+    let (status, _, body) = srv.get("/api/paths").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json, serde_json::json!(["trips/"]), "top level is the directory: {json}");
+
+    let (_, _, body) = srv.get("/api/paths?q=trips/").await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json, serde_json::json!(["trips/2025/", "trips/2026/"]), "{json}");
+
+    let (_, _, body) = srv.get(&format!("/api/paths?q=trips/2026/&volume={volume_id}")).await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json, serde_json::json!(["trips/2026/beach.jpg"]), "file leaf has no slash: {json}");
+
+    // Wildcards and unknown volumes short-circuit to an empty list.
+    let (_, _, body) = srv.get("/api/paths?q=trips/*").await;
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap(), serde_json::json!([]));
+    let (_, _, body) = srv.get("/api/paths?q=trips/&volume=00000000-0000-0000-0000-000000000000").await;
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap(), serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn calendar_api_reports_year_counts() {
+    let srv = TestServer::new();
+    let (sidecar, _) = srv.asset_from_both_stores();
+    let year = sidecar.created_at.format("%Y").to_string();
+    let day = sidecar.created_at.format("%Y-%m-%d").to_string();
+
+    let (status, _, body) = srv.get("/api/calendar").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["year"].to_string(), year, "defaults to the current year: {json}");
+    assert_eq!(json["counts"][&day], 1, "seeded asset counts on its day: {json}");
+    let years: Vec<i64> = json["years"].as_array().unwrap().iter().map(|y| y.as_i64().unwrap()).collect();
+    assert_eq!(years, vec![year.parse::<i64>().unwrap()], "{json}");
+
+    // Explicit year without assets: empty counts, same year list.
+    let (status, _, body) = srv.get("/api/calendar?year=1999").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["year"], 1999);
+    assert_eq!(json["counts"].as_object().unwrap().len(), 0, "{json}");
+}
+
+#[tokio::test]
+async fn map_api_reports_geotagged_markers() {
+    let srv = TestServer::new();
+
+    let (status, _, body) = srv.get("/api/map").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["markers"].as_array().unwrap().len(), 0, "seeded asset has no GPS: {json}");
+    assert_eq!(json["total"], 0, "{json}");
+    assert_eq!(json["truncated"], false, "{json}");
+
+    // Geotag the asset through the catalog and it shows up as a marker.
+    {
+        let catalog = Catalog::open_fast(&srv.root).unwrap();
+        catalog
+            .conn()
+            .execute(
+                "UPDATE assets SET latitude = 48.1371, longitude = 11.5754 WHERE id = ?1",
+                rusqlite::params![srv.asset_id],
+            )
+            .unwrap();
+    }
+    let (status, _, body) = srv.get("/api/map?limit=10").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let markers = json["markers"].as_array().unwrap();
+    assert_eq!(markers.len(), 1, "{json}");
+    assert_eq!(markers[0]["id"], srv.asset_id, "{json}");
+    assert!((markers[0]["lat"].as_f64().unwrap() - 48.1371).abs() < 1e-6, "{json}");
+    assert!((markers[0]["lng"].as_f64().unwrap() - 11.5754).abs() < 1e-6, "{json}");
+    assert_eq!(markers[0]["name"], "sunset photo", "{json}");
+    assert_eq!(markers[0]["rating"], 2, "{json}");
+    assert_eq!(json["total"], 1, "{json}");
+}
+
+#[tokio::test]
+async fn volumes_api_lists_registered_volumes() {
+    let srv = TestServer::new();
+
+    let (status, _, body) = srv.get("/api/volumes").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&body).unwrap(), serde_json::json!([]));
+
+    let volume_id = srv.seed_volume_and_location("main", "sha256:webtest1", "sunset_beach.jpg");
+
+    let (status, _, body) = srv.get("/api/volumes").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let list = json.as_array().unwrap();
+    assert_eq!(list.len(), 1, "{json}");
+    assert_eq!(list[0]["id"], volume_id, "{json}");
+    assert_eq!(list[0]["label"], "main", "{json}");
+    assert_eq!(list[0]["volume_type"], "local", "{json}");
+    assert!(list[0]["purpose"].is_null(), "{json}");
+    assert_eq!(list[0]["is_online"], true, "mount point is the temp dir, so online: {json}");
+
+    let (status, _, body) = srv.get("/volumes").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Volumes - MAKI") && body.contains("main"), "{body}");
+}
+
+#[tokio::test]
+async fn stack_members_after_batch_stack() {
+    let srv = TestServer::new();
+    let second = srv.seed_asset_with_hash("sha256:webtest2");
+
+    // A stack needs two members.
+    let (status, _, body) = srv
+        .json(Method::POST, "/api/batch/stack", &format!(r#"{{"asset_ids": ["{}"]}}"#, srv.asset_id))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+
+    let body = format!(r#"{{"asset_ids": ["{}", "{second}"]}}"#, srv.asset_id);
+    let (status, _, resp) = srv.json(Method::POST, "/api/batch/stack", &body).await;
+    assert_eq!(status, StatusCode::OK, "body: {resp}");
+    let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(json["member_count"], 2, "{json}");
+    let stack_id = json["stack_id"].as_str().unwrap().to_string();
+    assert!(uuid::Uuid::parse_str(&stack_id).is_ok());
+
+    let (status, _, members_body) = srv.get(&format!("/api/stack/{stack_id}/members")).await;
+    assert_eq!(status, StatusCode::OK, "body: {members_body}");
+    let members: serde_json::Value = serde_json::from_str(&members_body).unwrap();
+    let members = members.as_array().unwrap();
+    assert_eq!(members.len(), 2, "{members:?}");
+    assert_eq!(members[0]["asset_id"], srv.asset_id, "first selected asset leads: {members:?}");
+    assert_eq!(members[0]["name"], "sunset photo");
+    assert_eq!(members[0]["stack_id"], stack_id, "{members:?}");
+    assert_eq!(members[0]["stack_count"], 2, "{members:?}");
+    assert_eq!(members[1]["asset_id"], second, "{members:?}");
+
+    // stacks.yaml (source of truth) and the denormalised row agree.
+    let yaml = std::fs::read_to_string(srv.root.join("stacks.yaml")).unwrap();
+    assert!(yaml.contains(&stack_id), "{yaml}");
+    let (_, row) = srv.asset_from_both_stores();
+    assert_eq!(row.stack_id.as_deref(), Some(stack_id.as_str()));
+
+    // Stacking an already-stacked asset again is refused.
+    let (status, _, resp) = srv.json(Method::POST, "/api/batch/stack", &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {resp}");
+
+    // Unstack both: the stack disappears.
+    let (status, _, resp) = srv.json(Method::DELETE, "/api/batch/stack", &body).await;
+    assert_eq!(status, StatusCode::OK, "body: {resp}");
+    let (_, row) = srv.asset_from_both_stores();
+    assert_eq!(row.stack_id, None);
+}
+
+#[tokio::test]
+async fn html_pages_render_with_title_markers() {
+    let srv = TestServer::new();
+    let second = srv.seed_asset_with_hash("sha256:webtest2");
+    let compare = format!("/compare?ids={},{second}", srv.asset_id);
+
+    for (uri, marker) in [
+        ("/stats", "Stats - MAKI"),
+        ("/tags", "Tags — MAKI"),
+        ("/collections", "Collections - MAKI"),
+        ("/saved-searches", "Saved Searches - MAKI"),
+        ("/volumes", "Volumes - MAKI"),
+        ("/duplicates", "Duplicates - MAKI"),
+        (compare.as_str(), "Compare — MAKI"),
+        ("/analytics", "Analytics - MAKI"),
+        ("/backup", "Backup Status - MAKI"),
+    ] {
+        let (status, headers, body) = srv.get(uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        assert!(
+            headers.get("content-type").map(|v| v.to_str().unwrap().starts_with("text/html")).unwrap_or(false),
+            "{uri} must be HTML"
+        );
+        assert!(body.contains(marker), "{uri} must carry its title marker '{marker}'");
+    }
+
+    // Page content sanity beyond the title.
+    let (_, _, body) = srv.get("/tags").await;
+    assert!(body.contains("landscape"), "tags page lists the seeded tag: {body}");
+    let (_, _, body) = srv.get("/compare").await;
+    assert!(body.contains("Select 2"), "compare without ids explains itself: {body}");
+    let (status, _, _) = srv.get("/compare").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, _, body) = srv.get(&compare).await;
+    assert!(body.contains("sunset photo") && body.contains("the original"), "{body}");
+}
+
+#[tokio::test]
+async fn read_only_blocks_tag_rename_and_collection_create() {
+    let srv = TestServer::new_with(true, "");
+
+    let (status, _, _) = srv
+        .json(
+            Method::POST,
+            "/api/tag/rename",
+            r#"{"old_tag": "landscape", "new_tag": "scenery", "apply": true}"#,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (sidecar, row) = srv.asset_from_both_stores();
+    assert!(sidecar.tags.contains(&"landscape".to_string()), "sidecar untouched");
+    assert!(row.tags.contains(&"landscape".to_string()), "catalog untouched");
+
+    let (status, _, _) = srv
+        .json(Method::POST, "/api/collections", r#"{"name": "nope"}"#)
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // The matching reads still work.
+    let (status, _, _) = srv.get("/api/collections").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = srv.get("/tags").await;
+    assert_eq!(status, StatusCode::OK);
 }

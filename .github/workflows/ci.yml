@@ -28,8 +28,9 @@ jobs:
       - uses: actions/checkout@v4
 
       # Default ubuntu-latest runners ship with ~14 GB free, which a
-      # full Rust build of MAKI (default features + `--features ai`,
-      # plus cache restore landing a fat `target/`) can exhaust —
+      # full Rust build of MAKI (default features + `--features ai` +
+      # `--features pro`, plus cache restore landing a fat `target/`)
+      # can exhaust —
       # observed as `IOException: No space left on device` during the
       # cache restore step on Linux. Purge pre-installed tooling we
       # don't need to free ~25 GB. Conservative defaults: keep the
@@ -70,6 +71,12 @@ jobs:
       - name: Run integration tests
         run: cargo test --test cli
 
+      - name: Run XMP property tests
+        run: cargo test --test xmp_proptest
+
+      - name: Run doc tests
+        run: cargo test --doc
+
       - name: Build with AI features
         run: cargo build --features ai
 
@@ -78,6 +85,17 @@ jobs:
 
       - name: Run integration tests with AI features
         run: cargo test --test cli --features ai
+
+      # Pro = ai + writeback / sync-metadata / VLM describe and the "Pro"
+      # branding; it has its own cfg-gated code paths and tests.
+      - name: Build with Pro features
+        run: cargo build --features pro
+
+      - name: Run unit tests with Pro features
+        run: cargo test --lib --features pro
+
+      - name: Run integration tests with Pro features
+        run: cargo test --test cli --features pro
 
   # Validate dependency licenses and check for security advisories.
   # Runs only on Linux since the dep tree is platform-independent.

@@ -12273,3 +12273,892 @@ fn import_with_add_tag_creates_no_sidecar_by_default() {
         .stdout(predicate::str::contains("sidecar").not());
     assert!(!root.join("photos/IB_001.xmp").exists());
 }
+
+// ===========================================================================
+// Smoke tests for previously uncovered commands: preview, doc, licenses,
+// doctor, fix-dates, tag scan/fix-unicode/expand-ancestors/delete/
+// export-vocabulary, volume split/rename, faces status/detect, describe.
+// All run without external tools or AI models.
+// ===========================================================================
+
+/// `--json show <id>` parsed into a JSON value.
+fn show_json(root: &Path, id: &str) -> serde_json::Value {
+    let out = maki()
+        .current_dir(root)
+        .args(["--json", "show", id])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "show --json failed: {}", String::from_utf8_lossy(&out.stderr));
+    serde_json::from_slice(&out.stdout).expect("show --json is valid JSON")
+}
+
+/// Path of the YAML sidecar for a full asset UUID.
+fn sidecar_path(root: &Path, id: &str) -> PathBuf {
+    root.join("metadata").join(&id[..2]).join(format!("{id}.yaml"))
+}
+
+/// Append a raw `tags:` block to an asset's sidecar, bypassing every
+/// normalisation the CLI applies at write time. Only valid for assets
+/// imported without tags (the serializer omits an empty `tags:` key).
+fn append_raw_tags_to_sidecar(root: &Path, id: &str, raw_tags: &[&str]) {
+    let path = sidecar_path(root, id);
+    let mut yaml = std::fs::read_to_string(&path).unwrap();
+    assert!(!yaml.contains("\ntags:"), "sidecar already has a tags block:\n{yaml}");
+    if !yaml.ends_with('\n') {
+        yaml.push('\n');
+    }
+    yaml.push_str("tags:\n");
+    for t in raw_tags {
+        // JSON string escaping is valid YAML double-quoted scalar syntax.
+        yaml.push_str(&format!("  - {}\n", serde_json::to_string(t).unwrap()));
+    }
+    std::fs::write(&path, yaml).unwrap();
+}
+
+// ── preview ───────────────────────────────────────────────────────
+
+#[test]
+fn preview_json_reports_null_when_no_preview_file() {
+    // The fixture bytes are not a decodable image, so import produces
+    // no preview file and `preview` has nothing to open — the one
+    // branch that is safe to exercise without spawning a viewer.
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["no_preview.jpg"]);
+
+    let out = maki()
+        .current_dir(&root)
+        .args(["--json", "preview", &ids[0]])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
+    assert_eq!(parsed["id"].as_str(), Some(ids[0].as_str()));
+    assert!(parsed["preview"].is_null(), "no preview file exists: {parsed}");
+    assert_eq!(count_preview_files(&root.join("previews")), 0);
+
+    // Human-readable variant reports on stderr and still exits 0.
+    maki()
+        .current_dir(&root)
+        .args(["preview", &ids[0]])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("No preview available"));
+}
+
+#[test]
+fn preview_unknown_asset_fails() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    maki()
+        .current_dir(&root)
+        .args(["preview", "ffffffff"])
+        .assert()
+        .failure();
+}
+
+// ── doc ───────────────────────────────────────────────────────────
+
+#[test]
+fn doc_json_prints_download_url() {
+    // `--json` prints the URL instead of launching a browser, so it is
+    // the only form safe to run in a test.
+    let out = maki()
+        .args(["--json", "doc"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
+    assert!(
+        parsed["url"].as_str().unwrap().ends_with("maki-manual.pdf"),
+        "default document is the manual: {parsed}"
+    );
+
+    for (arg, suffix) in [
+        ("cheatsheet", "cheat-sheet.pdf"),
+        ("filters", "search-filters.pdf"),
+        ("tagging", "tagging.pdf"),
+        ("MAN", "maki-manual.pdf"),
+    ] {
+        let out = maki()
+            .args(["--json", "doc", arg])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let parsed: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert!(parsed["url"].as_str().unwrap().ends_with(suffix), "{arg}: {parsed}");
+    }
+}
+
+#[test]
+fn doc_unknown_document_errors() {
+    maki()
+        .args(["--json", "doc", "nonsense"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown document"));
+}
+
+// ── licenses ──────────────────────────────────────────────────────
+
+#[test]
+fn licenses_prints_license_overview() {
+    maki()
+        .arg("licenses")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("MAKI")
+                .and(predicate::str::contains("Apache-2.0"))
+                .and(predicate::str::contains("THIRD_PARTY_LICENSES.md"))
+                .and(predicate::str::contains("maki licenses --summary")),
+        );
+
+    maki()
+        .args(["licenses", "--summary"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Apache-2.0")
+                .and(predicate::str::contains("maki licenses --summary").not()),
+        );
+}
+
+#[test]
+fn licenses_json_output() {
+    let out = maki()
+        .args(["--json", "licenses"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
+    assert_eq!(parsed["maki_license"].as_str(), Some("Apache-2.0"));
+    assert!(parsed["third_party_licenses_url"].as_str().unwrap().ends_with("THIRD_PARTY_LICENSES.md"));
+    assert!(parsed["ai_models"]["license"].is_string());
+}
+
+// ── doctor ────────────────────────────────────────────────────────
+
+#[test]
+fn doctor_clean_catalog_passes() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    import_and_get_ids(&root, &["clean_a.jpg", "clean_b.jpg"]);
+
+    maki()
+        .current_dir(&root)
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Doctor: no issues found — 2 assets checked."));
+}
+
+#[test]
+fn doctor_json_output() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    import_and_get_ids(&root, &["doc_json.jpg"]);
+
+    let out = maki()
+        .current_dir(&root)
+        .args(["--json", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
+    assert_eq!(parsed["sidecars_total"], 1);
+    assert_eq!(parsed["catalog_assets_total"], 1);
+    assert_eq!(parsed["assets_checked"], 1);
+    assert_eq!(parsed["missing_in_catalog"].as_array().unwrap().len(), 0);
+    assert_eq!(parsed["missing_sidecar"].as_array().unwrap().len(), 0);
+    assert_eq!(parsed["mismatched"].as_array().unwrap().len(), 0);
+    assert_eq!(parsed["sampled"], false);
+}
+
+#[test]
+fn doctor_detects_phantom_row_and_repairs_it() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["phantom.jpg", "healthy.jpg"]);
+
+    // Remove one sidecar behind the catalog's back: the SQLite row is
+    // now a phantom.
+    std::fs::remove_file(sidecar_path(&root, &ids[0])).unwrap();
+
+    maki()
+        .current_dir(&root)
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Doctor: 1 issue(s) found")
+                .and(predicate::str::contains("1 catalog row(s) without a sidecar"))
+                .and(predicate::str::contains("maki doctor --repair")),
+        );
+
+    let out = maki()
+        .current_dir(&root)
+        .args(["--json", "doctor"])
+        .output()
+        .unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(parsed["missing_sidecar"].as_array().unwrap().len(), 1);
+    assert_eq!(parsed["missing_sidecar"][0].as_str(), Some(ids[0].as_str()));
+
+    maki()
+        .current_dir(&root)
+        .args(["doctor", "--repair"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Repaired"));
+
+    maki()
+        .current_dir(&root)
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Doctor: no issues found — 1 assets checked."));
+}
+
+// ── fix-dates ─────────────────────────────────────────────────────
+
+#[test]
+fn fix_dates_dry_run_then_apply_restores_oldest_date() {
+    // The fixture has no EXIF, so import sets created_at from the file
+    // mtime. Pushing created_at into the future via `edit --date` makes
+    // the mtime the oldest candidate and fix-dates must pull it back.
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["dated.jpg"]);
+
+    maki()
+        .current_dir(&root)
+        .args(["edit", &ids[0], "--date", "2099-06-15"])
+        .assert()
+        .success();
+    assert!(show_json(&root, &ids[0])["created_at"].as_str().unwrap().starts_with("2099"));
+
+    maki()
+        .current_dir(&root)
+        .args(["--log", "fix-dates"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Fix-dates: 1 checked, 1 fixed, 0 already correct")
+                .and(predicate::str::contains("Run with --apply")),
+        )
+        .stderr(predicate::str::contains("would fix: 2099-06-15"));
+
+    // Dry run must not touch the asset.
+    assert!(show_json(&root, &ids[0])["created_at"].as_str().unwrap().starts_with("2099"));
+
+    maki()
+        .current_dir(&root)
+        .args(["fix-dates", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fix-dates: 1 checked, 1 fixed, 0 already correct"));
+
+    let created = show_json(&root, &ids[0])["created_at"].as_str().unwrap().to_string();
+    assert!(!created.starts_with("2099"), "created_at must be reset to the file mtime: {created}");
+
+    // Idempotent: a second pass finds nothing to do.
+    maki()
+        .current_dir(&root)
+        .arg("fix-dates")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fix-dates: 1 checked, 0 fixed, 1 already correct"));
+}
+
+#[test]
+fn fix_dates_json_output() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["dated_json.jpg", "untouched.jpg"]);
+
+    maki()
+        .current_dir(&root)
+        .args(["edit", &ids[0], "--date", "2099-01-01"])
+        .assert()
+        .success();
+
+    let out = maki()
+        .current_dir(&root)
+        .args(["--json", "fix-dates", "--asset", &ids[0]])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
+    assert_eq!(parsed["dry_run"], true);
+    assert_eq!(parsed["checked"], 1);
+    assert_eq!(parsed["fixed"], 1);
+    assert_eq!(parsed["already_correct"], 0);
+    assert_eq!(parsed["errors"].as_array().unwrap().len(), 0);
+
+    let out = maki()
+        .current_dir(&root)
+        .args(["--json", "fix-dates", "--apply"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(parsed["dry_run"], false);
+    assert_eq!(parsed["checked"], 2);
+    assert_eq!(parsed["fixed"], 1);
+    assert_eq!(parsed["already_correct"], 1);
+}
+
+// ── tag scan / fix-unicode / expand-ancestors / delete / export ───
+
+#[test]
+fn tag_scan_reports_malformed_tags() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["scan_clean.jpg", "scan_bad.jpg"]);
+
+    maki()
+        .current_dir(&root)
+        .args(["tag", &ids[0], "fine|tag"])
+        .assert()
+        .success();
+
+    maki()
+        .current_dir(&root)
+        .args(["tag", "scan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Tag scan: 2 asset(s) scanned, no malformed tags."));
+
+    // Inject a tag the normaliser would rewrite (leading space + stray
+    // separator) straight into the sidecar.
+    append_raw_tags_to_sidecar(&root, &ids[1], &[" |bad"]);
+
+    maki()
+        .current_dir(&root)
+        .args(["tag", "scan"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Tag scan: 2 scanned, 1 with malformed tag(s).")
+                .and(predicate::str::contains(&ids[1]))
+                .and(predicate::str::contains("raw:")),
+        );
+
+    let out = maki()
+        .current_dir(&root)
+        .args(["tag", "scan", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
+    assert_eq!(parsed["scanned"], 2);
+    assert_eq!(parsed["malformed"], 1);
+    let assets = parsed["assets"].as_array().unwrap();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0]["asset_id"].as_str(), Some(ids[1].as_str()));
+    assert_eq!(assets[0]["tags"][0]["raw"].as_str(), Some(" |bad"));
+    assert_eq!(assets[0]["tags"][0]["normalised"][0].as_str(), Some("bad"));
+    assert!(assets[0]["tags"][0]["raw_bytes_hex"].as_str().unwrap().starts_with("20"));
+}
+
+#[test]
+fn tag_fix_unicode_normalises_nfd_tags() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["nfd.jpg", "nfc.jpg"]);
+
+    const NFD: &str = "Mu\u{0308}nchen"; // u + combining diaeresis
+    const NFC: &str = "M\u{00fc}nchen";
+    append_raw_tags_to_sidecar(&root, &ids[0], &[NFD]);
+
+    let out = maki()
+        .current_dir(&root)
+        .args(["--json", "tag", "fix-unicode"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
+    assert_eq!(parsed["dry_run"], true);
+    assert_eq!(parsed["scanned"], 2);
+    assert_eq!(parsed["fixed"], 1);
+    assert_eq!(parsed["tags_normalized"], 1);
+    assert_eq!(parsed["merged"], 0);
+
+    // Dry run leaves the NFD bytes in the sidecar.
+    assert!(std::fs::read_to_string(sidecar_path(&root, &ids[0])).unwrap().contains(NFD));
+
+    maki()
+        .current_dir(&root)
+        .args(["tag", "fix-unicode", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Tag fix-unicode: 2 scanned, 1 fixed, 1 tag value(s) normalised"));
+
+    let yaml = std::fs::read_to_string(sidecar_path(&root, &ids[0])).unwrap();
+    assert!(yaml.contains(NFC) && !yaml.contains(NFD), "sidecar must be NFC:\n{yaml}");
+    let tags = show_json(&root, &ids[0])["tags"].clone();
+    assert_eq!(tags.as_array().unwrap().len(), 1, "{tags}");
+    assert_eq!(tags[0].as_str(), Some(NFC), "catalog must carry the NFC form");
+
+    maki()
+        .current_dir(&root)
+        .args(["tag", "fix-unicode"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Tag fix-unicode: 2 asset(s) scanned, all already NFC."));
+}
+
+#[test]
+fn tag_expand_ancestors_adds_missing_paths() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["leaf_only.jpg", "complete.jpg"]);
+
+    // The CLI add path already stores ancestors, so write a leaf-only
+    // hierarchy into the sidecar directly (what an external tool or an
+    // older catalog would leave behind).
+    append_raw_tags_to_sidecar(&root, &ids[0], &["place|europe|berlin"]);
+    maki()
+        .current_dir(&root)
+        .args(["tag", &ids[1], "animal|cat"])
+        .assert()
+        .success();
+
+    maki()
+        .current_dir(&root)
+        .args(["tag", "expand-ancestors"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Expand ancestors: 2 checked, 1 assets with missing ancestors, 2 tags would add")
+                .and(predicate::str::contains("Run with --apply")),
+        );
+
+    let out = maki()
+        .current_dir(&root)
+        .args(["--json", "tag", "expand-ancestors", "--asset", &ids[0]])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
+    assert_eq!(parsed["dry_run"], true);
+    assert_eq!(parsed["checked"], 1);
+    assert_eq!(parsed["expanded"], 1);
+    assert_eq!(parsed["tags_added"], 2);
+
+    maki()
+        .current_dir(&root)
+        .args(["tag", "expand-ancestors", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Expand ancestors: 2 checked, 1 assets with missing ancestors, 2 tags added"));
+
+    let tags: Vec<String> = show_json(&root, &ids[0])["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t.as_str().unwrap().to_string())
+        .collect();
+    for expected in ["place", "place|europe", "place|europe|berlin"] {
+        assert!(tags.contains(&expected.to_string()), "missing {expected} in {tags:?}");
+    }
+
+    maki()
+        .current_dir(&root)
+        .args(["tag", "expand-ancestors"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Expand ancestors: 2 checked, 0 assets with missing ancestors, 0 tags would add"));
+}
+
+#[test]
+fn tag_delete_cascades_to_descendants() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["del_a.jpg", "del_b.jpg", "del_c.jpg"]);
+
+    maki().current_dir(&root).args(["tag", &ids[0], "event|concert|2024"]).assert().success();
+    maki().current_dir(&root).args(["tag", &ids[1], "event|party"]).assert().success();
+    maki().current_dir(&root).args(["tag", &ids[2], "landscape"]).assert().success();
+
+    // Unknown tag: nothing matched, still a clean exit.
+    maki()
+        .current_dir(&root)
+        .args(["tag", "delete", "nosuchtag"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No assets found with tag \"nosuchtag\"."));
+
+    maki()
+        .current_dir(&root)
+        .args(["--log", "tag", "delete", "event"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Tag delete \"event\": 2 matched, 2 would remove")
+                .and(predicate::str::contains("Run with --apply")),
+        )
+        .stderr(predicate::str::contains("would remove"));
+
+    // Dry run leaves tags in place.
+    assert!(show_json(&root, &ids[0])["tags"].as_array().unwrap().iter().any(|t| t == "event|concert|2024"));
+
+    let out = maki()
+        .current_dir(&root)
+        .args(["--json", "tag", "delete", "event", "--apply"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
+    assert_eq!(parsed["dry_run"], false);
+    assert_eq!(parsed["matched"], 2);
+    assert_eq!(parsed["removed"], 2);
+    assert_eq!(parsed["skipped"], 0);
+
+    for id in &ids[..2] {
+        let tags = show_json(&root, id)["tags"].clone();
+        assert!(
+            !tags.as_array().unwrap().iter().any(|t| t.as_str().unwrap().starts_with("event")),
+            "event hierarchy must be gone from {id}: {tags}"
+        );
+    }
+    assert!(show_json(&root, &ids[2])["tags"].as_array().unwrap().iter().any(|t| t == "landscape"));
+}
+
+#[test]
+fn tag_export_vocabulary_yaml_json_and_text_formats() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["vocab_a.jpg", "vocab_b.jpg"]);
+    maki().current_dir(&root).args(["tag", &ids[0], "nature|birds"]).assert().success();
+    maki().current_dir(&root).args(["tag", &ids[1], "nature|birds", "travel"]).assert().success();
+
+    // Default: YAML into the catalog root.
+    maki()
+        .current_dir(&root)
+        .args(["tag", "export-vocabulary"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(3 used, ").and(predicate::str::contains("vocabulary.yaml")));
+    // Without --prune the built-in default vocabulary is merged in as
+    // "planned" entries; the three catalog tags must be among them.
+    let yaml = std::fs::read_to_string(root.join("vocabulary.yaml")).unwrap();
+    assert!(yaml.contains("nature") && yaml.contains("birds") && yaml.contains("travel"), "{yaml}");
+
+    // YAML with counts: trailing comments, still parseable YAML.
+    let counted = root.join("vocab_counts.yaml");
+    maki()
+        .current_dir(&root)
+        .args(["tag", "export-vocabulary", "--counts", "--prune", "--output", counted.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Exported 3 tags to").and(predicate::str::contains("pruned")));
+    // MAKI's vocabulary format is a hand-editable mix of nested maps
+    // (branches) and lists (leaves); assert the shape textually.
+    let yaml = std::fs::read_to_string(&counted).unwrap();
+    assert!(yaml.contains("nature:  # 2 assets"), "branch with count:\n{yaml}");
+    assert!(yaml.contains("  - birds  # 2 assets"), "nested leaf with count:\n{yaml}");
+    assert!(yaml.contains("- travel  # 1 asset\n"), "top-level leaf with count:\n{yaml}");
+
+    // JSON: nested object with counts.
+    let json_path = root.join("vocab.json");
+    maki()
+        .current_dir(&root)
+        .args(["tag", "export-vocabulary", "--format", "json", "--prune", "--output", json_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Exported 3 tags to"));
+    let parsed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).expect("valid JSON file");
+    assert!(parsed.get("nature").is_some(), "{parsed}");
+    assert!(parsed.get("travel").is_some(), "{parsed}");
+    assert_eq!(parsed["travel"]["count"], 1, "{parsed}");
+
+    // Text: tab-indented keyword list, no comments.
+    let txt_path = root.join("vocab.txt");
+    maki()
+        .current_dir(&root)
+        .args(["tag", "export-vocabulary", "--format", "text", "--counts", "--prune", "--output", txt_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("--counts is ignored for text format"));
+    let txt = std::fs::read_to_string(&txt_path).unwrap();
+    assert!(txt.contains("nature\n\tbirds"), "hierarchy must be tab-indented:\n{txt}");
+    assert!(!txt.contains('#'));
+
+    maki()
+        .current_dir(&root)
+        .args(["tag", "export-vocabulary", "--format", "xml"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown --format"));
+}
+
+// ── volume split / rename ─────────────────────────────────────────
+
+#[test]
+fn volume_split_report_then_apply_moves_locations() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["sub/inner.jpg", "top.jpg"]);
+
+    maki()
+        .current_dir(&root)
+        .args(["volume", "split", "test-vol", "subvol", "--path", "sub"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Would split 'test-vol': new volume 'subvol' with 1 locations, 0 recipes (1 assets, prefix 'sub/')")
+                .and(predicate::str::contains("Run with --apply")),
+        );
+    maki()
+        .current_dir(&root)
+        .args(["volume", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("subvol").not());
+
+    let out = maki()
+        .current_dir(&root)
+        .args(["--json", "volume", "split", "test-vol", "subvol", "--path", "sub", "--purpose", "archive", "--apply"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
+    assert_eq!(parsed["apply"], true);
+    assert_eq!(parsed["source_label"].as_str(), Some("test-vol"));
+    assert_eq!(parsed["new_label"].as_str(), Some("subvol"));
+    assert_eq!(parsed["path_prefix"].as_str(), Some("sub/"));
+    assert_eq!(parsed["locations_moved"], 1);
+    assert_eq!(parsed["assets_affected"], 1);
+    assert!(!parsed["new_id"].as_str().unwrap().is_empty());
+
+    maki()
+        .current_dir(&root)
+        .args(["volume", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("subvol").and(predicate::str::contains("test-vol")));
+
+    // The moved asset now lives on the new volume with the prefix stripped.
+    let loc = show_json(&root, &ids[0])["variants"][0]["locations"][0].clone();
+    assert_eq!(loc["volume_label"].as_str(), Some("subvol"), "{loc}");
+    assert_eq!(loc["relative_path"].as_str(), Some("inner.jpg"), "{loc}");
+    assert_eq!(loc["volume_purpose"].as_str(), Some("archive"), "{loc}");
+
+    // The untouched asset stays on the source volume.
+    let loc = show_json(&root, &ids[1])["variants"][0]["locations"][0].clone();
+    assert_eq!(loc["volume_label"].as_str(), Some("test-vol"), "{loc}");
+    assert_eq!(loc["relative_path"].as_str(), Some("top.jpg"), "{loc}");
+
+    // Files are still verifiable through the new mount point.
+    maki()
+        .current_dir(&root)
+        .args(["verify", "--volume", "subvol"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn volume_split_unknown_source_fails() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    maki()
+        .current_dir(&root)
+        .args(["volume", "split", "ghost", "newvol", "--path", "sub"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn volume_rename_updates_registry_and_catalog() {
+    let dir = tempdir().unwrap();
+    let root = init_catalog(dir.path());
+    let ids = import_and_get_ids(&root, &["renamed_vol.jpg"]);
+
+    maki()
+        .current_dir(&root)
+        .args(["volume", "rename", "test-vol", "photos-2026"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Volume 'test-vol' renamed to 'photos-2026'"));
+
+    maki()
+        .current_dir(&root)
+        .args(["volume", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("photos-2026").and(predicate::str::contains("test-vol").not()));
+
+    // Locations resolve the new label (catalog side) and the old label
+    // is gone from the registry.
+    let loc = show_json(&root, &ids[0])["variants"][0]["locations"][0].clone();
+    assert_eq!(loc["volume_label"].as_str(), Some("photos-2026"), "{loc}");
+    maki()
+        .current_dir(&root)
+        .args(["volume", "rename", "test-vol", "whatever"])
+        .assert()
+        .failure();
+
+    // JSON form, renaming back.
+    let out = maki()
+        .current_dir(&root)
+        .args(["--json", "volume", "rename", "photos-2026", "test-vol"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
+    assert_eq!(parsed["old_label"].as_str(), Some("photos-2026"));
+    assert_eq!(parsed["new_label"].as_str(), Some("test-vol"));
+    assert!(uuid::Uuid::parse_str(parsed["volume_id"].as_str().unwrap()).is_ok());
+}
+
+// ── faces (AI) — status and graceful failure without models ───────
+
+#[cfg(feature = "ai")]
+mod faces_without_models {
+    use super::*;
+
+    /// Catalog whose `[ai] model_dir` points at an empty temp path so
+    /// the test never sees models a developer may have downloaded.
+    fn init_catalog_without_models(dir: &Path) -> PathBuf {
+        let root = init_catalog(dir);
+        let model_dir = root.join("no-models").to_string_lossy().replace('\\', "/");
+        std::fs::write(root.join("maki.toml"), format!("[ai]\nmodel_dir = \"{model_dir}\"\n")).unwrap();
+        root
+    }
+
+    #[test]
+    fn faces_status_reports_models_not_downloaded() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog_without_models(tmp.path());
+
+        maki()
+            .current_dir(&root)
+            .args(["faces", "status"])
+            .assert()
+            .success()
+            .stdout(
+                predicate::str::contains("Models downloaded: no")
+                    .and(predicate::str::contains("Total faces detected: 0"))
+                    .and(predicate::str::contains("Total people: 0")),
+            );
+
+        let out = maki()
+            .current_dir(&root)
+            .args(["--json", "faces", "status"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let stdout = String::from_utf8(out).unwrap();
+        // The JSON document is the last thing on stdout (after the
+        // human-readable lines).
+        let json_start = stdout.find('{').expect("JSON object on stdout");
+        let parsed: serde_json::Value = serde_json::from_str(&stdout[json_start..]).expect("valid JSON");
+        assert_eq!(parsed["models_downloaded"], false);
+        assert!(parsed["model_dir"].as_str().unwrap().ends_with("faces"));
+        assert!(!parsed["current_recognition_model"].as_str().unwrap().is_empty());
+        assert_eq!(parsed["total_faces"], 0);
+        assert_eq!(parsed["total_people"], 0);
+        assert_eq!(parsed["faces_by_model"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn faces_detect_without_models_fails_gracefully() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog_without_models(tmp.path());
+        let ids = import_and_get_ids(&root, &["face.jpg"]);
+
+        maki()
+            .current_dir(&root)
+            .args(["faces", "detect", "--asset", &ids[0]])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("Face models not downloaded"));
+
+        // Nothing was written: the asset is untouched and still clean.
+        maki()
+            .current_dir(&root)
+            .arg("doctor")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("no issues found"));
+    }
+}
+
+// ── describe (Pro) — no VLM endpoint ──────────────────────────────
+
+#[cfg(feature = "pro")]
+mod describe_without_vlm {
+    use super::*;
+
+    #[test]
+    fn describe_check_unreachable_endpoint_fails_gracefully() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+
+        let out = maki()
+            .current_dir(&root)
+            .args(["--json", "describe", "--check", "--endpoint", "http://127.0.0.1:1", "--timeout", "2"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("vLM endpoint check failed"))
+            .get_output()
+            .stdout
+            .clone();
+        let parsed: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON on stdout");
+        assert_eq!(parsed["status"].as_str(), Some("error"));
+        assert_eq!(parsed["endpoint"].as_str(), Some("http://127.0.0.1:1"));
+        assert!(parsed["model"].is_string());
+        assert!(!parsed["message"].as_str().unwrap().is_empty());
+
+        // Human-readable form: message on stderr, non-zero exit, no panic.
+        maki()
+            .current_dir(&root)
+            .args(["describe", "--check", "--endpoint", "http://127.0.0.1:1", "--timeout", "2"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("panicked").not());
+    }
+
+    #[test]
+    fn describe_without_scope_errors_before_contacting_vlm() {
+        let tmp = tempdir().unwrap();
+        let root = init_catalog(tmp.path());
+        maki()
+            .current_dir(&root)
+            .args(["describe", "--endpoint", "http://127.0.0.1:1"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("No scope specified"));
+    }
+}

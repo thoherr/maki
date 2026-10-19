@@ -731,9 +731,13 @@ pub struct Catalog {
 
 impl Catalog {
     /// Open the catalog at `<catalog_root>/catalog.db`, applying connection
-    /// pragmas and running pending schema migrations. Use `open_fast` instead
-    /// when migrations should be skipped (per-request connections in the
-    /// web server pool).
+    /// pragmas and registering the SQL helper functions — nothing else.
+    ///
+    /// No schema work happens here: tables and migrations are applied by
+    /// [`Self::initialize`] (`init`, `rebuild-catalog`) and
+    /// [`Self::open_and_migrate`] (`maki migrate`); every other command only
+    /// checks the stored schema version at startup and exits if it is
+    /// outdated. [`Self::open_fast`] is an alias of this function.
     pub fn open(catalog_root: &Path) -> Result<Self> {
         let db_path = catalog_root.join("catalog.db");
         let conn = Connection::open(&db_path)?;
@@ -898,7 +902,8 @@ impl Catalog {
         self.schema_version() >= SCHEMA_VERSION
     }
 
-    /// Alias for `open` — kept for clarity but identical.
+    /// Alias for [`Self::open`] — kept for clarity at the web-server pool
+    /// call sites, but identical (neither runs migrations).
     pub fn open_fast(catalog_root: &Path) -> Result<Self> {
         Self::open(catalog_root)
     }

@@ -315,7 +315,7 @@ pub(super) use crate::query::EmptyFilterPolicy;
 ///
 /// 1. [`ResolvedSearch::resolve`] runs the shared resolution
 ///    (volume/path-volume fallback, collection include/exclude IDs,
-///    person-name intersection).
+///    person-name intersection, `missing:true` disk probe).
 /// 2. [`ResolvedSearch::resolve_ai_filters`] optionally runs the AI
 ///    text-query (SigLIP) and `similar:` resolution. Called by every
 ///    endpoint that must mirror the grid's visible result set:
@@ -354,21 +354,30 @@ pub(super) struct ResolvedSearch {
 
 impl ResolvedSearch {
     /// Run the shared resolution steps (collections, collection excludes,
-    /// person names) and capture the volume / path-volume fallback inputs.
+    /// person names, `missing:true`) and capture the volume / path-volume
+    /// fallback inputs.
+    ///
+    /// `state` supplies the catalog root: `missing:true` needs the device
+    /// registry and a stat per file location on every online volume, which
+    /// the shared resolver performs only when the filter is set. (Until
+    /// v4.12.2 the web layer skipped that step entirely, so `missing:true`
+    /// was silently ignored in the browser.)
     pub(super) fn resolve(
         catalog: &crate::catalog::Catalog,
+        state: &AppState,
         parsed: &ParsedSearch,
         volume: String,
         path_volume_id: Option<String>,
         empty_filter_policy: EmptyFilterPolicy,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let filters = crate::query::ResolvedFilterIds::resolve(
             catalog,
+            &state.catalog_root,
             parsed,
             empty_filter_policy,
-        );
+        )?;
 
-        Self {
+        Ok(Self {
             volume,
             path_volume_id,
             filters,
@@ -382,7 +391,7 @@ impl ResolvedSearch {
             similar_requested: false,
             #[cfg(feature = "ai")]
             similar_resolved: false,
-        }
+        })
     }
 
     /// Resolve the AI text-query (SigLIP lazy-load + embedding-index
@@ -499,6 +508,8 @@ impl ResolvedSearch {
         // `-person:` honored since v4.7.1 — see the drift matrix in
         // `crate::query::resolve` for the history of this gap.
         self.filters.apply_person_excludes(opts);
+        // `missing:true` honored since v4.12.2 (previously CLI-only).
+        self.filters.apply_missing(opts);
         #[cfg(feature = "ai")]
         {
             if let Some(ref ids) = self.text_query_ids {

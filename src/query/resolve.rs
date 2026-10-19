@@ -1,10 +1,16 @@
-//! Shared "ParsedSearch → SearchOptions" ID resolution for collection and
-//! person filters.
+//! Shared "ParsedSearch → SearchOptions" ID resolution for collection,
+//! person and `missing:` filters.
 //!
 //! `collection:` / `-collection:` and `person:` / `-person:` filters can't be
 //! evaluated inside the main search SQL directly — they resolve names to
 //! asset-ID lists first (collections via `collection_assets`, persons via the
-//! `faces`/`people` tables). Historically the CLI (`QueryEngine::search`), the
+//! `faces`/`people` tables). `missing:true` likewise resolves to an ID list
+//! up front: it probes the filesystem for every location on an online volume
+//! (see [`resolve_missing_asset_ids`]), so it runs only when the filter is
+//! set. Until v4.12.2 only the CLI performed that step — the web routes
+//! built their options straight from `ParsedSearch::to_search_options()`,
+//! which never carries `missing`, so `missing:true` was silently ignored in
+//! the browser. Historically the CLI (`QueryEngine::search`), the
 //! web handlers (`web::routes::ResolvedSearch`), and the web export-zip
 //! handler each carried their own copy of this resolution block, and the
 //! copies drifted. This module is the single implementation; every behavioral
@@ -38,7 +44,13 @@
 //! `-person:` and the export-zip handler additionally ignored
 //! `-collection:`. Every consumer now honors all four filter kinds.
 
+use std::collections::{HashSet};
+use std::path::Path;
+
+use anyhow::Result;
+
 use crate::catalog::{Catalog, SearchOptions};
+use crate::device_registry::DeviceRegistry;
 
 use super::ParsedSearch;
 
@@ -67,13 +79,14 @@ pub enum EmptyFilterPolicy {
     MatchNothing,
 }
 
-/// Owned holder for the resolved collection/person asset-ID lists.
+/// Owned holder for the resolved collection/person/missing asset-ID lists.
 ///
 /// `SearchOptions<'a>` borrows `&[String]` slices, so the resolved Vecs must
 /// outlive the options struct; this type owns them. Usage:
-/// 1. [`ResolvedFilterIds::resolve`] resolves all four filters
-///    (collection/person, include/exclude) from a [`ParsedSearch`].
-/// 2. [`ResolvedFilterIds::apply`] installs all four into a `SearchOptions`
+/// 1. [`ResolvedFilterIds::resolve`] resolves all four name filters
+///    (collection/person, include/exclude) plus `missing:true` from a
+///    [`ParsedSearch`].
+/// 2. [`ResolvedFilterIds::apply`] installs them into a `SearchOptions`
 ///    per the [`EmptyFilterPolicy`]; consumers that historically did not
 ///    support some of the filters (see the module-level drift matrix) call
 ///    the granular `apply_*` methods instead.
@@ -82,6 +95,12 @@ pub struct ResolvedFilterIds {
     pub collection_exclude_ids: Vec<String>,
     pub person_ids: Vec<String>,
     pub person_exclude_ids: Vec<String>,
+    /// `Some` only when the query had `missing:true` — the IDs of assets
+    /// with at least one file location on an online volume whose file is
+    /// absent on disk. Installed unconditionally (even when empty: no
+    /// missing files means the filter matches nothing) regardless of the
+    /// [`EmptyFilterPolicy`], mirroring the CLI's historical behavior.
+    pub missing_ids: Option<Vec<String>>,
     /// Whether the parsed query contained a `collection:` filter at all —
     /// drives the `MatchNothing` install of an empty resolved list.
     has_collections: bool,
@@ -105,11 +124,24 @@ impl ResolvedFilterIds {
     /// query — so under [`EmptyFilterPolicy::MatchNothing`] a `person:` filter
     /// matches nothing, and under [`EmptyFilterPolicy::Ignore`] it is silently
     /// ignored. Both match the consumers' historical non-`ai` behavior.
+    ///
+    /// `catalog_root` is only touched when `parsed.missing` is set: the
+    /// `missing:true` filter needs the device registry (`volumes.yaml`) and
+    /// a stat per file location on every online volume — see
+    /// [`resolve_missing_asset_ids`]. That is also the only step that can
+    /// fail; the name resolutions are infallible.
     pub fn resolve(
         catalog: &Catalog,
+        catalog_root: &Path,
         parsed: &ParsedSearch,
         policy: EmptyFilterPolicy,
-    ) -> Self {
+    ) -> Result<Self> {
+        let missing_ids = if parsed.missing {
+            Some(resolve_missing_asset_ids(catalog, catalog_root)?)
+        } else {
+            None
+        };
+
         let collection_ids = resolve_collection_ids(&parsed.collections, catalog.conn());
         let collection_exclude_ids =
             resolve_collection_ids(&parsed.collections_exclude, catalog.conn());
@@ -122,36 +154,48 @@ impl ResolvedFilterIds {
         #[cfg(not(feature = "ai"))]
         let (person_ids, person_exclude_ids) = (Vec::<String>::new(), Vec::<String>::new());
 
-        Self {
+        Ok(Self {
             collection_ids,
             collection_exclude_ids,
             person_ids,
             person_exclude_ids,
+            missing_ids,
             has_collections: !parsed.collections.is_empty(),
             has_collection_excludes: !parsed.collections_exclude.is_empty(),
             has_persons: !parsed.persons.is_empty(),
             has_person_excludes: !parsed.persons_exclude.is_empty(),
             policy,
-        }
+        })
     }
 
     fn install_empty(&self) -> bool {
         self.policy == EmptyFilterPolicy::MatchNothing
     }
 
-    /// Install all four resolved ID lists into `opts` per the policy
-    /// captured at [`Self::resolve`] time.
+    /// Install all resolved ID lists into `opts` per the policy captured at
+    /// [`Self::resolve`] time.
     ///
-    /// A list is installed when it is non-empty, or when the filter was
-    /// present in the query and the policy is
+    /// A name-filter list is installed when it is non-empty, or when the
+    /// filter was present in the query and the policy is
     /// [`EmptyFilterPolicy::MatchNothing`] (reproducing the CLI's historical
-    /// unconditional install). Consumers that don't support all four filters
-    /// (see the module-level drift matrix) call the granular methods.
+    /// unconditional install). The `missing:` list is installed whenever it
+    /// was resolved. Consumers that don't support all filters (see the
+    /// module-level drift matrix) call the granular methods.
     pub fn apply<'a>(&'a self, opts: &mut SearchOptions<'a>) {
         self.apply_collections(opts);
         self.apply_collection_excludes(opts);
         self.apply_persons(opts);
         self.apply_person_excludes(opts);
+        self.apply_missing(opts);
+    }
+
+    /// Install the `missing:true` ID list when the query asked for it.
+    /// Policy-independent: an empty list means "no file is missing", which
+    /// must match nothing rather than fall back to the unfiltered set.
+    pub fn apply_missing<'a>(&'a self, opts: &mut SearchOptions<'a>) {
+        if let Some(ref ids) = self.missing_ids {
+            opts.missing_asset_ids = Some(ids);
+        }
     }
 
     /// Install `collection:` include IDs per policy.
@@ -187,6 +231,30 @@ impl ResolvedFilterIds {
             opts.person_exclude_ids = Some(&self.person_exclude_ids);
         }
     }
+}
+
+/// Resolve `missing:true` to the IDs of assets that have at least one file
+/// location on an *online* volume whose file does not exist on disk.
+///
+/// Locations on offline volumes are not probed (their files are unknowable,
+/// not missing). Requires filesystem access — one `exists()` per location on
+/// an online volume plus a read of `volumes.yaml` — so callers must invoke
+/// it only when the filter is actually set. Shared by the CLI search path
+/// and every web route (via `ResolvedFilterIds::resolve`).
+pub fn resolve_missing_asset_ids(catalog: &Catalog, catalog_root: &Path) -> Result<Vec<String>> {
+    let registry = DeviceRegistry::new(catalog_root);
+    let volumes = registry.list()?;
+    let online = crate::models::Volume::online_map(&volumes);
+    let all_locs = catalog.list_all_locations_with_assets()?;
+    let mut ids = HashSet::new();
+    for (asset_id, volume_id, relative_path) in all_locs {
+        if let Some(vol) = online.get(volume_id.as_str()) {
+            if !vol.mount_point.join(&relative_path).exists() {
+                ids.insert(asset_id);
+            }
+        }
+    }
+    Ok(ids.into_iter().collect())
 }
 
 /// Resolve a list of comma-OR'd collection name entries to asset IDs.
@@ -342,13 +410,92 @@ mod tests {
         v
     }
 
+    /// Catalog root for tests that don't set `missing:` — the resolver must
+    /// not touch the filesystem then, so a nonexistent root is fine.
+    fn no_root() -> &'static Path {
+        Path::new("")
+    }
+
+    #[test]
+    fn no_filters_leaves_missing_unset() {
+        let (catalog, _ids) = setup_catalog();
+        let parsed = ParsedSearch::default();
+        let resolved = ResolvedFilterIds::resolve(
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::Ignore,
+        ).unwrap();
+        assert!(resolved.missing_ids.is_none());
+        let mut opts = SearchOptions::default();
+        resolved.apply(&mut opts);
+        assert!(opts.missing_asset_ids.is_none());
+    }
+
+    /// `missing:true` must survive into the resolved options on every
+    /// consumer (the web routes dropped it until v4.12.2): one asset whose
+    /// file exists on an online volume, one whose file is gone, one on an
+    /// offline volume (unknowable, not missing).
+    #[test]
+    fn missing_resolves_to_absent_files_on_online_volumes() {
+        let (catalog, ids) = setup_catalog();
+        let root = tempfile::tempdir().unwrap();
+        let mount = tempfile::tempdir().unwrap();
+        DeviceRegistry::init(root.path()).unwrap();
+        let registry = DeviceRegistry::new(root.path());
+        let online = registry
+            .register("online", mount.path(), crate::models::VolumeType::External, None)
+            .unwrap();
+        let offline = registry
+            .register(
+                "offline",
+                &root.path().join("not-mounted"),
+                crate::models::VolumeType::External,
+                None,
+            )
+            .unwrap();
+        catalog.ensure_volume(&online).unwrap();
+        catalog.ensure_volume(&offline).unwrap();
+
+        std::fs::write(mount.path().join("present.jpg"), b"x").unwrap();
+        let loc = |volume_id, path: &str| crate::models::FileLocation {
+            volume_id,
+            relative_path: std::path::PathBuf::from(path),
+            verified_at: None,
+        };
+        catalog.insert_file_location("sha256:resolve1", &loc(online.id, "present.jpg")).unwrap();
+        catalog.insert_file_location("sha256:resolve2", &loc(online.id, "gone.jpg")).unwrap();
+        catalog.insert_file_location("sha256:resolve3", &loc(offline.id, "gone.jpg")).unwrap();
+
+        let parsed = ParsedSearch { missing: true, ..Default::default() };
+        for policy in [EmptyFilterPolicy::Ignore, EmptyFilterPolicy::MatchNothing] {
+            let resolved = ResolvedFilterIds::resolve(
+                &catalog, root.path(), &parsed, policy,
+            ).unwrap();
+            let mut opts = SearchOptions::default();
+            resolved.apply(&mut opts);
+            assert_eq!(
+                sorted(opts.missing_asset_ids.unwrap().to_vec()),
+                vec![ids[1].clone()],
+                "only the online-but-absent file counts as missing ({policy:?})"
+            );
+        }
+
+        // Nothing missing at all: the (empty) list is still installed so the
+        // filter matches nothing instead of silently returning everything.
+        std::fs::write(mount.path().join("gone.jpg"), b"x").unwrap();
+        let resolved = ResolvedFilterIds::resolve(
+            &catalog, root.path(), &parsed, EmptyFilterPolicy::Ignore,
+        ).unwrap();
+        let mut opts = SearchOptions::default();
+        resolved.apply(&mut opts);
+        assert_eq!(opts.missing_asset_ids, Some(&[][..]));
+    }
+
     #[test]
     fn no_filters_installs_nothing() {
         let (catalog, _ids) = setup_catalog();
         let parsed = ParsedSearch::default();
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::MatchNothing,
+        ).unwrap();
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
         assert!(opts.collection_asset_ids.is_none());
@@ -363,8 +510,8 @@ mod tests {
         let mut parsed = ParsedSearch::default();
         parsed.collections.push("Favs".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::Ignore,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::Ignore,
+        ).unwrap();
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
         assert_eq!(opts.collection_asset_ids.unwrap(), &[ids[0].clone()]);
@@ -376,8 +523,8 @@ mod tests {
         let mut parsed = ParsedSearch::default();
         parsed.collections.push("Favs, Picks".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::Ignore,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::Ignore,
+        ).unwrap();
         assert_eq!(
             sorted(resolved.collection_ids.clone()),
             sorted(vec![ids[0].clone(), ids[1].clone()])
@@ -392,8 +539,8 @@ mod tests {
         parsed.collections.push("Favs".to_string());
         parsed.collections.push("Picks".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::Ignore,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::Ignore,
+        ).unwrap();
         assert_eq!(
             sorted(resolved.collection_ids.clone()),
             sorted(vec![ids[0].clone(), ids[1].clone()])
@@ -406,8 +553,8 @@ mod tests {
         let mut parsed = ParsedSearch::default();
         parsed.collections.push("NoSuchCollection".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::Ignore,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::Ignore,
+        ).unwrap();
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
         assert!(opts.collection_asset_ids.is_none(), "Ignore policy must skip empty list");
@@ -419,8 +566,8 @@ mod tests {
         let mut parsed = ParsedSearch::default();
         parsed.collections.push("NoSuchCollection".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::MatchNothing,
+        ).unwrap();
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
         assert_eq!(
@@ -436,8 +583,8 @@ mod tests {
         let mut parsed = ParsedSearch::default();
         parsed.collections_exclude.push("Picks".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::MatchNothing,
+        ).unwrap();
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
         assert_eq!(opts.collection_exclude_ids.unwrap(), &[ids[1].clone()]);
@@ -454,15 +601,15 @@ mod tests {
         parsed.persons.push("NoSuchPerson".to_string());
 
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::Ignore,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::Ignore,
+        ).unwrap();
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
         assert!(opts.person_asset_ids.is_none());
 
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::MatchNothing,
+        ).unwrap();
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
         assert_eq!(opts.person_asset_ids.unwrap().len(), 0);
@@ -477,8 +624,8 @@ mod tests {
         parsed.persons_exclude.push("Alice".to_string());
         parsed.persons_exclude.push("Bob".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::MatchNothing,
+        ).unwrap();
         assert_eq!(sorted(resolved.person_exclude_ids.clone()), sorted(ids.clone()));
     }
 
@@ -491,8 +638,8 @@ mod tests {
         parsed.persons.push("Alice".to_string());
         parsed.persons.push("Bob".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::MatchNothing,
+        ).unwrap();
         assert_eq!(resolved.person_ids, vec![ids[1].clone()]);
     }
 
@@ -504,8 +651,8 @@ mod tests {
         parsed.persons.push("Alice".to_string());
         parsed.persons.push("Bob".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::Ignore,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::Ignore,
+        ).unwrap();
         assert_eq!(resolved.person_ids, vec![ids[1].clone()]);
     }
 
@@ -516,8 +663,8 @@ mod tests {
         let mut parsed = ParsedSearch::default();
         parsed.persons.push("Alice,Bob".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::Ignore,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::Ignore,
+        ).unwrap();
         assert_eq!(sorted(resolved.person_ids.clone()), sorted(ids.clone()));
     }
 
@@ -528,8 +675,8 @@ mod tests {
         let mut parsed = ParsedSearch::default();
         parsed.persons_exclude.push("Alice".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::MatchNothing,
+        ).unwrap();
         let mut opts = SearchOptions::default();
         resolved.apply(&mut opts);
         assert_eq!(
@@ -548,8 +695,8 @@ mod tests {
         parsed.collections_exclude.push("Picks".to_string());
         parsed.persons_exclude.push("Alice".to_string());
         let resolved = ResolvedFilterIds::resolve(
-            &catalog, &parsed, EmptyFilterPolicy::MatchNothing,
-        );
+            &catalog, no_root(), &parsed, EmptyFilterPolicy::MatchNothing,
+        ).unwrap();
         let mut opts = SearchOptions::default();
         resolved.apply_collections(&mut opts);
         resolved.apply_persons(&mut opts);

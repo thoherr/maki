@@ -46,7 +46,15 @@ pub fn run(
 // ---------------------------------------------------------------------------
 
 /// Subcommand names for completion (sorted).
+///
+/// Every top-level `maki` command except the ones that make no sense inside
+/// a running shell (`init`, `migrate`, `serve`, `shell`) and the two that
+/// the shell shadows with built-ins of the same name (`export`, `preview` —
+/// see `BUILTINS`). `shell::tests::subcommands_cover_cli_commands` keeps
+/// this list in step with the clap command set.
 const SUBCOMMANDS: &[&str] = &[
+    "ai",
+    "audio",
     "auto-group",
     "auto-stack",
     "auto-tag",
@@ -54,9 +62,12 @@ const SUBCOMMANDS: &[&str] = &[
     "cleanup",
     "collection",
     "contact-sheet",
+    "create-sidecars",
     "dedup",
     "delete",
     "describe",
+    "doc",
+    "doctor",
     "duplicates",
     "edit",
     "embed",
@@ -66,7 +77,9 @@ const SUBCOMMANDS: &[&str] = &[
     "fix-roles",
     "generate-previews",
     "group",
+    "history",
     "import",
+    "licenses",
     "rebuild-catalog",
     "refresh",
     "relocate",
@@ -76,12 +89,16 @@ const SUBCOMMANDS: &[&str] = &[
     "split",
     "stack",
     "stats",
+    "status",
     "sync",
     "sync-metadata",
     "tag",
+    "trash",
+    "undo",
     "update-location",
     "verify",
     "volume",
+    "watch",
     "writeback",
 ];
 
@@ -1243,6 +1260,49 @@ mod tests {
 
     fn noop_executor(_args: Vec<String>) -> Result<Vec<String>> {
         Ok(vec![])
+    }
+
+    /// The clap `Cli` lives in the binary crate, so the lib test can't
+    /// derive the command set from it; this static mirror of
+    /// `enum Commands` in `src/main.rs` (kebab-case) is the next best
+    /// guard. Update both when a top-level command is added or removed.
+    const CLI_TOP_LEVEL_COMMANDS: &[&str] = &[
+        "init", "volume", "import", "watch", "delete", "tag", "edit", "group", "split",
+        "auto-group", "auto-tag", "auto-stack", "embed", "faces", "ai", "describe",
+        "collection", "saved-search", "stack", "search", "show", "preview", "duplicates",
+        "contact-sheet", "export", "stats", "status", "backup-status", "serve", "undo",
+        "history", "doctor", "verify", "sync", "refresh", "sync-metadata", "writeback",
+        "cleanup", "dedup", "trash", "audio", "relocate", "update-location",
+        "generate-previews", "fix-roles", "fix-dates", "fix-recipes", "create-sidecars",
+        "rebuild-catalog", "migrate", "doc", "licenses", "shell",
+    ];
+
+    /// Commands deliberately absent from completion: pointless inside a
+    /// shell session, or shadowed by a shell built-in of the same name.
+    const NOT_COMPLETED: &[&str] = &["init", "migrate", "serve", "shell", "export", "preview"];
+
+    #[test]
+    fn subcommands_cover_cli_commands() {
+        let mut sorted = SUBCOMMANDS.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(SUBCOMMANDS, sorted.as_slice(), "SUBCOMMANDS must stay sorted");
+
+        let mut expected: Vec<&str> = CLI_TOP_LEVEL_COMMANDS
+            .iter()
+            .copied()
+            .filter(|c| !NOT_COMPLETED.contains(c))
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(
+            SUBCOMMANDS, expected.as_slice(),
+            "shell completion list drifted from the CLI command set"
+        );
+        for b in NOT_COMPLETED {
+            assert!(!SUBCOMMANDS.contains(b), "{b} is intentionally not completed");
+        }
+        for b in ["export", "preview"] {
+            assert!(BUILTINS.contains(&b), "{b} is shadowed by a shell built-in");
+        }
     }
 
     #[test]

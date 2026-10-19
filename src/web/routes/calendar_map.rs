@@ -61,8 +61,8 @@ pub async fn calendar_api(
         let collapse_stacks = bf.collapse_stacks;
 
         let resolved = ResolvedSearch::resolve(
-            &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::MatchNothing,
-        );
+            &catalog, &state, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::MatchNothing,
+        )?;
 
         let mut opts = parsed.to_search_options();
         resolved.apply(&mut opts);
@@ -131,8 +131,8 @@ pub async fn map_api(
         let collapse_stacks = bf.collapse_stacks;
 
         let resolved = ResolvedSearch::resolve(
-            &catalog, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::MatchNothing,
-        );
+            &catalog, &state, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::MatchNothing,
+        )?;
 
         let mut opts = parsed.to_search_options();
         resolved.apply(&mut opts);
