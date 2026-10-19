@@ -19,7 +19,21 @@ pub async fn list_saved_searches(State(state): State<Arc<AppState>>) -> Result<R
         Ok::<_, anyhow::Error>(file.searches)
     })
     .await?;
-    Ok(Json(searches).into_response())
+    // The YAML model skips `favorite` when false (keeps saved-searches.yaml
+    // minimal); the API always emits it so clients never have to treat
+    // "absent" as "false".
+    let items: Vec<serde_json::Value> = searches
+        .iter()
+        .map(|ss| {
+            serde_json::json!({
+                "name": ss.name,
+                "query": ss.query,
+                "sort": ss.sort,
+                "favorite": ss.favorite,
+            })
+        })
+        .collect();
+    Ok(Json(items).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]

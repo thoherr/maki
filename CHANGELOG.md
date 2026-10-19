@@ -34,8 +34,21 @@ reconciled with the code. No schema migration.
   the duplicates page returns 400; both matched the error text with the
   wrong capitalisation and fell through to 500.
 
+### Security
+
+- **`zip` 8.6 → 9.0.5** (RUSTSEC-2026-0367/0368/0369). The advisories
+  concern archive *extraction*, which MAKI never does (it only writes
+  export archives), but the dependency check rejected the old version.
+
 ### Changed
 
+- **`tag export-vocabulary` writes strict YAML.** A level that mixed
+  branch keys with leaf list items (`nature:` followed by `- travel`) was
+  not valid YAML, and the vocabulary loader, which uses a strict parser,
+  then dropped the whole file for autocomplete. Leaves on a mixed level
+  are now empty keys (`travel:`); pure-leaf levels stay lists.
+- **`GET /api/saved-searches` always emits `favorite`**, including
+  `false`; the YAML file still omits it when false.
 - **CI runs the Pro feature set** (lib and CLI tests) on all three
   platforms, plus the XMP property tests and the doc tests on the default
   pass. Previously only the default and `ai` builds were tested, so the

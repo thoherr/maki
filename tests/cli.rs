@@ -12881,7 +12881,9 @@ fn tag_export_vocabulary_yaml_json_and_text_formats() {
     let yaml = std::fs::read_to_string(&counted).unwrap();
     assert!(yaml.contains("nature:  # 2 assets"), "branch with count:\n{yaml}");
     assert!(yaml.contains("  - birds  # 2 assets"), "nested leaf with count:\n{yaml}");
-    assert!(yaml.contains("- travel  # 1 asset\n"), "top-level leaf with count:\n{yaml}");
+    // `travel` shares the top level with the `nature` branch, so it is
+    // emitted as an empty key (strict YAML), not a list item.
+    assert!(yaml.contains("travel:  # 1 asset\n"), "top-level leaf with count:\n{yaml}");
 
     // JSON: nested object with counts.
     let json_path = root.join("vocab.json");

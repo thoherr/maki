@@ -1067,7 +1067,7 @@ async fn saved_searches_create_list_delete() {
     assert_eq!(list.len(), 1, "{json}");
     assert_eq!(list[0]["name"], "five stars");
     assert_eq!(list[0]["query"], "rating:4+", "update must replace the query: {json}");
-    assert_ne!(list[0]["favorite"], true, "update replaces the whole entry: {json}");
+    assert_eq!(list[0]["favorite"], false, "update replaces the whole entry: {json}");
 
     let (status, _, body) = srv.get("/saved-searches").await;
     assert_eq!(status, StatusCode::OK);

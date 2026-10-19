@@ -336,9 +336,20 @@ fn tags_to_vocabulary_yaml_inner(tags: &[(String, u64)], with_counts: bool) -> S
             write_node(child, indent + 1, with_counts, output);
         }
 
-        // Leaves as a YAML list.
+        // Leaves. A level that holds only leaves is a YAML list (the style
+        // of the default vocabulary). A level that mixes branches and
+        // leaves must stay a mapping — a `- item` after `key:` entries at
+        // the same indentation is not valid YAML and made `parse_vocabulary`
+        // (strict serde parser) drop the whole file — so there each leaf
+        // becomes an empty key (`travel:`), which the loader reads as a
+        // leaf node.
+        let mixed = !branches.is_empty();
         for (name, child) in &leaves {
-            output.push_str(&format!("{prefix}- {name}"));
+            if mixed {
+                output.push_str(&format!("{prefix}{name}:"));
+            } else {
+                output.push_str(&format!("{prefix}- {name}"));
+            }
             if with_counts {
                 output.push_str(&count_comment(child.count));
             }
@@ -764,8 +775,10 @@ a_first:
         assert!(yaml.contains("nature:  # 3 assets"), "got:\n{yaml}");
         // Leaf list item.
         assert!(yaml.contains("- landscape  # 2 assets"), "got:\n{yaml}");
-        // Singular form for count == 1.
-        assert!(yaml.contains("- legoland  # 1 asset"), "got:\n{yaml}");
+        // Singular form for count == 1. `legoland` shares the top level with
+        // the `subject` branch, so it is an empty key (strict YAML), not a
+        // list item.
+        assert!(yaml.contains("legoland:  # 1 asset"), "got:\n{yaml}");
         // Without trailing comment marker (sanity: the without-counts variant)
         let plain = tags_to_vocabulary_yaml(&tags);
         assert!(!plain.contains("# 5 assets"));
@@ -810,4 +823,26 @@ a_first:
         assert_eq!(parsed["a"]["children"]["b"]["count"], 0);
         assert_eq!(parsed["a"]["children"]["b"]["children"]["c"]["count"], 7);
     }
+    #[test]
+    fn export_yaml_is_strict_yaml_when_branches_and_leaves_mix() {
+        // Top level mixes a branch (`nature`) with a leaf (`travel`); the
+        // `nature` level mixes a branch (`trees`) with a leaf (`birds`).
+        let tags: Vec<(String, u64)> = [
+            ("nature", 3), ("nature|birds", 2), ("nature|trees", 1), ("nature|trees|oak", 1), ("travel", 1),
+        ]
+        .iter()
+        .map(|(t, c)| (t.to_string(), *c))
+        .collect();
+        for yaml in [tags_to_vocabulary_yaml(&tags), tags_to_vocabulary_yaml_with_counts(&tags)] {
+            // Strict parse must succeed (parse_vocabulary returns an empty
+            // list on any YAML error) and round-trip every path.
+            let parsed = parse_vocabulary(&yaml);
+            let mut expected: Vec<String> = tags.iter().map(|(t, _)| t.clone()).collect();
+            expected.sort();
+            assert_eq!(parsed, expected, "round trip failed for:\n{yaml}");
+            assert!(yaml.contains("travel:"), "mixed level leaf must be a key:\n{yaml}");
+            assert!(yaml.contains("    - oak"), "pure-leaf level stays a list:\n{yaml}");
+        }
+    }
+
 }
