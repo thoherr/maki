@@ -38,7 +38,7 @@ YAML sidecars are the source of truth; SQLite catalog is a derived cache rebuilt
 ### Schema Migrations
 - **Version-guarded**: `run_migrations()` reads the stored version once and only executes blocks where `current < N`. On an up-to-date catalog, startup is a single SELECT query.
 - Idempotent: `let _ = conn.execute_batch("ALTER TABLE ... ADD COLUMN ...")` — silently ignores if column exists
-- Backfill with `WHERE column IS NULL` guard
+- Backfill only rows that will actually change: `WHERE column IS NULL` at minimum, narrower when possible (v11: `asset_type='audio' AND EXISTS(... instr(...))`) — every row an `UPDATE assets` touches re-tokenises its FTS rows through the v9 and v12 triggers, even when the value does not change
 - `schema_version` table with `SCHEMA_VERSION` constant in `catalog.rs`. All commands (except `init`/`migrate`) check version at startup; exit with error if outdated
 - `initialize()` creates base tables then delegates to `run_migrations()` for all columns, indexes, backfills, and version stamping
 - Bump `SCHEMA_VERSION` whenever `run_migrations()` changes; add a new `if current < N` block

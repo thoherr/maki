@@ -66,7 +66,7 @@ maki search "label:Red,Orange"            # Red or Orange labeled
 maki search "tag:landscape tag:sunset"    # BOTH landscape AND sunset tags
 ```
 
-This AND-on-repeat rule holds for `tag:` and `meta:` only. Repeating any other filter ORs the values, exactly like a comma list (`type:image type:video` = `type:image,video`).
+This AND-on-repeat rule holds for `tag:`, `meta:`, and `person:`. Repeating an equality filter (`type:`, `format:`, `label:`, `volume:`, `camera:`, `lens:`, `description:`, `path:`, `collection:`) ORs the values, exactly like a comma list (`type:image type:video` = `type:image,video`). Numeric, date, and string filters (`rating:`, `iso:`, `date:`, ...) are single-valued: when repeated, only the last one counts.
 
 ---
 
@@ -111,9 +111,9 @@ All filters can be combined in a single query. Remaining tokens become free-text
 | GPS (bounding box) | `geo:<south>,<west>,<north>,<east>` | `geo:47.5,11.0,48.5,13.0` |
 | GPS (radius) | `geo:<lat>,<lng>,<km>` | `geo:52.52,13.405,5` |
 | GPS (any/none) | `geo:any`, `geo:none` | `geo:none` |
-| Orphan assets | `orphan:true` | `orphan:true` |
+| Orphan assets | `orphan:true` or `orphan:false` | `orphan:true` |
 | Missing files | `missing:true` | `missing:true` |
-| Stale verification | `stale:<days>` | `stale:30` |
+| Stale verification | `stale:<days>`, `stale:<days>+`, `stale:never` | `stale:30`, `stale:never` |
 | Stacked | `stacked:true` or `stacked:false` | `stacked:true` |
 | Face count | `faces:any`, `faces:none`, `faces:N`, `faces:N+` | `faces:2+` |
 | Person *(Pro)* | `person:<name>` | `person:Alice`, `person:"John Smith"`, `person:Alice,Bob` (either), `person:Alice person:Bob` (both) |

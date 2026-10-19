@@ -13,8 +13,7 @@ The top-level entity. An Asset represents a single logical media item -- "photo 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | UUID | Primary key. Deterministic UUID v5 derived from the content hash of the first variant. Same content always produces the same asset ID. |
-| `name` | Option\<String\> | User-assigned display name. When absent, the UI shows `original_filename` as a fallback. |
-| `original_filename` | String | Filename of the primary variant at import time (e.g. `DSC_4521.NEF`). Used as display fallback and for stem-based grouping. |
+| `name` | Option\<String\> | User-assigned display name. When absent, the display name falls back to the best variant's `original_filename` (a [Variant](#variant) field; the asset itself stores no filename). |
 | `asset_type` | AssetType | One of: `image`, `video`, `audio`, `document`, `other`. Inferred from file extension at import. |
 | `description` | Option\<String\> | Free-text description. Extracted from XMP `dc:description` during import, or set manually. |
 | `tags` | Vec\<String\> | Keyword list. Merged from XMP `dc:subject`, embedded XMP, and manual tagging. Deduplicated. |
@@ -39,7 +38,7 @@ The top-level entity. An Asset represents a single logical media item -- "photo 
 | `stack_id` | Option\<UUID\> | Foreign key to the Stack this asset belongs to. `None` if unstacked. |
 | `stack_position` | Option\<Integer\> | Position within the stack (0 = pick). `None` if unstacked. |
 | `latitude`, `longitude` | Option\<Real\> | GPS position lifted from variant metadata (map view, `geo:` filter). |
-| `preview_rotation` | Option\<Integer\> | Mirror of the sidecar field (schema v3). |
+| `preview_rotation` | Option\<Integer\> | Mirror of the sidecar field (schema v1). |
 | `preview_variant` | Option\<String\> | Mirror of the sidecar field (schema v3). |
 | `duration_seconds` | Option\<Real\> | Media duration for audio and video (`duration:` filter, duration badges). Added as `video_duration` in schema v4, renamed in v11 when audio started filling it. |
 | `video_codec` | Option\<String\> | Video codec name (`codec:` filter, schema v5). |
@@ -64,7 +63,7 @@ A concrete file belonging to an Asset. A RAW file, its JPEG conversion, and a hi
 | `format` | String | Lowercase file extension without dot (e.g. `nef`, `jpg`, `tif`, `mp4`). |
 | `file_size` | u64 | File size in bytes. |
 | `original_filename` | String | Filename at import time (e.g. `DSC_4521.NEF`). |
-| `source_metadata` | HashMap\<String, String\> | Key-value pairs from EXIF and XMP extraction (camera model, lens, GPS coordinates, creator, rights, etc.). |
+| `source_metadata` | BTreeMap\<String, String\> | Key-value pairs from EXIF and XMP extraction (camera model, lens, GPS coordinates, creator, rights, etc.). |
 | `locations` | Vec\<FileLocation\> | Where this file physically exists on disk (in YAML sidecar; stored in a separate `file_locations` table in SQLite). |
 
 **Indexed metadata columns** (SQLite only, extracted from `source_metadata` for fast filtering):
@@ -104,9 +103,7 @@ When importing, if a recipe's content hash is already known for the asset (from 
 | `software` | String | Processing tool identifier: `XMP`, `CaptureOne`, `RawTherapee`, `DxO`, `ON1`. |
 | `recipe_type` | RecipeType | Either `sidecar` (external file) or `embedded_export`. |
 | `content_hash` | String | SHA-256 hash of the recipe file. Updated when the file changes on disk. |
-| `volume_id` | UUID | Foreign key to the Volume where the recipe file resides. |
-| `relative_path` | String | Path relative to the volume's mount point. |
-| `verified_at` | Option\<DateTime\<Utc\>\> | Last verification timestamp. |
+| `location` | FileLocation | Where the recipe file resides: `volume_id` (foreign key to the Volume), `relative_path` (relative to the volume's mount point), and `verified_at` (last verification timestamp). Nested under `location:` in the YAML sidecar; SQLite flattens it into `volume_id`, `relative_path`, and `verified_at` columns on `recipes`. |
 | `pending_writeback` | bool | `true` when metadata was edited in MAKI but the `.xmp` file could not be updated yet (volume offline, or `[writeback] enabled = false`). Cleared by a successful `maki writeback`. In SQLite since schema v2. |
 
 **Supported recipe file extensions**:
@@ -291,7 +288,7 @@ A single `catalog.db` file providing fast indexed queries. Contains denormalized
 
 ### Schema Migrations
 
-The `schema_version` table stores the catalog's schema version (`SCHEMA_VERSION` in `src/catalog.rs`, currently 11). Every command except `init` and `migrate` checks it at startup with one query and exits with an error if the catalog is older than the binary expects; migrations themselves run only in `maki init`, `maki migrate`, and `maki rebuild-catalog`. Migrations are idempotent `ALTER TABLE ... ADD COLUMN` / `CREATE INDEX IF NOT EXISTS` blocks with guarded backfills, executed only for versions above the stored one.
+The `schema_version` table stores the catalog's schema version (`SCHEMA_VERSION` in `src/catalog.rs`, currently 12). Every command except `init` and `migrate` checks it at startup with one query and exits with an error if the catalog is older than the binary expects; migrations themselves run only in `maki init`, `maki migrate`, and `maki rebuild-catalog`. Migrations are idempotent `ALTER TABLE ... ADD COLUMN` / `CREATE INDEX IF NOT EXISTS` blocks with guarded backfills, executed only for versions above the stored one.
 
 ### Other Files
 

@@ -96,7 +96,7 @@ The volume is auto-detected from the first path by matching against registered v
 
 : Undated archives: importing a tree of several undated shoots with `--auto-group` makes the whole tree one session, so a camera counter that restarted between shoots can produce false groups. Set a `session_root_pattern` that matches your shoot folders, or import one shoot at a time; `--dry-run` previews the groups.
 
-`--json` outputs an `ImportResult` object with `imported`, `skipped`, `locations_added`, `recipes_attached`, `recipes_updated`, `sidecars_created` (sidecars written by `[writeback] create_sidecars`) counters and a `dry_run` boolean. When `--auto-group` produces matches, an `auto_group` key is added with the full `AutoGroupResult`. When `--embed` generates embeddings, `embeddings_generated` and `embeddings_skipped` keys are added. When `--describe` generates descriptions, `descriptions_generated` and `descriptions_skipped` keys are added.
+`--json` outputs an `ImportResult` object with `imported`, `skipped`, `locations_added`, `recipes_attached`, `recipes_location_added`, `recipes_updated`, `previews_generated`, `smart_previews_generated`, `sidecars_created` (sidecars written by `[writeback] create_sidecars`) counters and a `dry_run` boolean. When `--auto-group` produces matches, an `auto_group` key is added with the full `AutoGroupResult`. When `--embed` generates embeddings, `embeddings_generated` and `embeddings_skipped` keys are added. When `--describe` generates descriptions, `descriptions_generated` and `descriptions_skipped` keys are added, plus `describe_tags_applied` when the VLM tag mode applied at least one tag.
 
 ### EXAMPLES
 
@@ -317,7 +317,7 @@ maki search -q "orphan:true" | maki delete --apply
 **--no-trash**
 : With `--remove-files`, delete permanently instead of moving files to the catalog trash.
 
-`--json` outputs a `DeleteResult` with `deleted`, `not_found`, `files_removed`, `previews_removed`, `dry_run`, and `errors`.
+`--json` outputs a `DeleteResult` with `deleted`, `not_found`, `files_removed`, `files_trashed` (how many of `files_removed` went to the catalog trash), `previews_removed`, `dry_run`, and `errors`.
 
 `--log` prints per-asset status to stderr.
 
@@ -408,7 +408,7 @@ Asset IDs support unique prefix matching (see [CLI Conventions](00-cli-conventio
 **--remove**
 : Remove the specified tags instead of adding them.
 
-`--json` outputs a `TagResult` with `asset_id`, `tags_added` or `tags_removed`, and the full `tags` list after the operation.
+`--json` outputs `{"changed": [...], "tags": [...]}`: the tags actually added or removed, and the full tag list after the operation (`maki tag clear --json` uses the same shape).
 
 ### EXAMPLES
 
@@ -1110,7 +1110,7 @@ Asset IDs support unique prefix matching (see [CLI Conventions](00-cli-conventio
 **--variant \<HASH\>**
 : The content hash of the variant whose role should be changed. Must be used with `--role`. Use `maki show <id>` to find variant hashes.
 
-`--json` outputs an `EditResult` with the fields that were changed and their new values.
+`--json` outputs an `EditResult` with the asset's state after the edit: always all of `asset_id`, `name`, `description`, `rating`, `color_label` (unset fields are `null`), and `created_at`, not only the fields that were changed.
 
 ### EXAMPLES
 

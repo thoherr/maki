@@ -14,10 +14,10 @@ maki serve
 Output (on stderr):
 
 ```
-MAKI 4.10.0 web UI: http://127.0.0.1:8080
+MAKI <version> web UI: http://127.0.0.1:8080
 ```
 
-Open that URL in your browser to start browsing. The server runs in the foreground; press Ctrl+C to stop it. Two more lines may follow the address: `Read-only mode: metadata edits and jobs are disabled.` when started with `--read-only` (or `[serve] read_only = true`), and `Basic authentication: enabled.` when `[serve] username`/`password` are set. Binding to a non-loopback address without either protection prints a three-line `WARNING:` block instead — see [Read-only mode and authentication](#read-only-mode-and-authentication) below.
+(`<version>` is the installed MAKI version.) Open that URL in your browser to start browsing. The server runs in the foreground; press Ctrl+C to stop it. Two more lines may follow the address: `Read-only mode: metadata edits and jobs are disabled.` when started with `--read-only` (or `[serve] read_only = true`), and `Basic authentication: enabled.` when `[serve] username`/`password` are set. Binding to a non-loopback address without either protection prints a three-line `WARNING:` block instead — see [Read-only mode and authentication](#read-only-mode-and-authentication) below.
 
 ### Custom port and bind address
 
@@ -334,7 +334,7 @@ flowchart LR
 | Compare | Escape / Back | Previous page (`history.back()`) |
 | Any page | Shift+B | Jump directly to browse grid |
 
-### Back navigation
+### Back navigation {#back-navigation}
 
 There are two distinct "go back" actions:
 
@@ -450,7 +450,9 @@ Keyboard navigation:
 | Right arrow | Next asset |
 | Click image | Open in lightbox |
 | l | Open in lightbox |
-| Escape | Return to browse page |
+| s | Open the stroll page with this asset as the center *(Pro)* |
+| Escape | Return to the previous page |
+| Shift+B | Jump straight back to the browse grid (see [Back navigation](#back-navigation)) |
 
 Rating, label, and zoom keyboard shortcuts also work on the detail page:
 
@@ -1032,7 +1034,7 @@ Fields bound at server startup show a small **restart required** pill next to th
 
 The pill and the amber toast cover every setting that `maki serve` reads once at startup: `[serve]` port/bind/per_page/stroll_*/read_only/username/password, all of `[preview]`, all of `[ai]` (model, thresholds, vocabulary path, prompt, text_limit -- the labels *file* itself is re-read on every request, so editing its contents needs no restart), all of `[browse]` (default filter and the slideshow fields), `[import]` smart_previews/embeddings/descriptions, `[dedup] prefer`, and the whole `[vlm]` section including per-model overrides. Settings the server re-reads from `maki.toml` per request -- such as the import dialog's `[import]` exclude/profiles and the whole `[writeback]` section (`enabled`, `mirror_tags`, `sidecar_naming`, `create_sidecars`) -- take effect immediately.
 
-Before each save the previous file is copied to `maki.toml.bak`, so a bad edit is recoverable. Validation runs server-side by deserialising the submitted JSON back into the typed config struct — type errors and unknown keys are rejected before the file is written.
+Before each save the previous file is copied to `maki.toml.bak`, so a bad edit is recoverable. Validation runs server-side by deserialising the submitted JSON back into the typed config struct -- type errors and invalid values are rejected before the file is written. Keys the struct does not know are silently dropped rather than rejected (the config structs do not use `deny_unknown_fields`), so a misspelled key entered by hand in `maki.toml` simply disappears from the form.
 
 **Adding or renaming hashmap keys stays manual**: the schema can't express which keys are legal (e.g. VLM model names must match what's loaded on Ollama, profile names are referenced from `import --profile <name>` invocations), and a free-form name field would be too easy to get out of sync. The form shows a hint to that effect at the bottom of each hashmap section — open `maki.toml` in a text editor for those edits.
 

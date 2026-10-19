@@ -273,7 +273,7 @@ Offline volumes are silently skipped.
 **--skip \<GROUP\>**
 : Skip file type groups. Can be specified multiple times.
 
-`--json` outputs a `VerifyResult` with `verified`, `failed`, `modified`, `skipped`, `skipped_recent`, `missing` counters and detail arrays.
+`--json` outputs a `VerifyResult` with `verified`, `failed`, `modified`, `skipped`, and `skipped_recent` counters plus an `errors` array of messages. There is no separate `missing` counter: a file that cannot be read is counted as `skipped` with its path in `errors` (and shown as `missing` by `--log`).
 
 `--log` prints per-file verification status and timing to stderr.
 
@@ -674,7 +674,7 @@ One pass per volume sweeps every recipe's tag blocks fresh from catalog state.
 **--dry-run**
 : Report what would be written without modifying any files.
 
-`--json` outputs a result object with counts for written, skipped, failed, and cleared recipes.
+`--json` outputs a `WritebackResult` with `written`, `already_in_sync`, `skipped`, `failed`, `errors`, `dry_run`, and `skipped_offline_volumes` (present only when an offline volume held a skipped recipe). With `--embed` the result is an `EmbedWritebackResult` with the same fields plus `trashed_originals`.
 
 `--log` prints per-recipe status to stderr.
 
@@ -905,7 +905,7 @@ None.
 **--no-trash**
 : Delete files permanently instead of moving them to the catalog trash.
 
-`--json` outputs a `DedupResult` with `duplicates_found`, `locations_to_remove`, `locations_removed`, `files_deleted`, `recipes_removed`, `bytes_freed`, `dry_run`, and `errors`.
+`--json` outputs a `DedupResult` with `duplicates_found`, `locations_to_remove`, `locations_removed`, `files_deleted`, `files_trashed` (how many removed files went to the catalog trash), `recipes_removed`, `bytes_freed`, `dry_run`, and `errors`.
 
 `--log` prints per-location status to stderr (keep, remove, skipped).
 
@@ -1057,7 +1057,7 @@ Asset IDs support unique prefix matching. Batch mode reports per-asset progress 
 **--dry-run**
 : Show what would happen without making any changes.
 
-`--json` outputs a JSON result with `assets`, `copied`, `skipped`, `removed`, `errors`, and `dry_run` fields.
+`--json` outputs the same result object for the single-asset and the batch form: `assets`, `copied`, `skipped`, `removed`, `errors`, and `dry_run`.
 
 ### EXAMPLES
 

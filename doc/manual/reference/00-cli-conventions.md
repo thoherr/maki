@@ -141,7 +141,7 @@ This separation means you can safely pipe or redirect stdout without capturing s
 
 ```bash
 maki search -q "tag:landscape" > asset-ids.txt
-maki stats --json | jq '.total_size'
+maki stats --json | jq '.overview.total_size'
 ```
 
 ### Search result count
@@ -163,8 +163,8 @@ maki search -q "tag:landscape"
 
 ```bash
 maki search "rating:5" --json | jq '.[].id'
-maki show abc123 --json | jq '.variants[].filename'
-maki stats --json | jq '{assets: .assets, size: .total_size}'
+maki show abc123 --json | jq '.variants[].original_filename'
+maki stats --json | jq '{assets: .overview.assets, size: .overview.total_size}'
 ```
 
 ### Pipe search results into a collection

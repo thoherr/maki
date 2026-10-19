@@ -1,1712 +1,569 @@
 # REST API Reference
 
-The `maki serve` command starts an Axum-based web server (default `127.0.0.1:8080`) that exposes both HTML page routes and JSON/HTML-partial API endpoints. All endpoints use `spawn_blocking` for SQLite access and open a fresh catalog connection per request via `Catalog::open_fast()`.
+The `maki serve` command starts an Axum-based web server (default `127.0.0.1:8080`) that exposes HTML page routes, htmx fragment endpoints, and JSON APIs. This chapter documents every route registered in `build_router` (`src/web/mod.rs`); the handlers live in `src/web/routes/`.
 
-Base URL: `http://127.0.0.1:8080` (configurable via `--bind` and `--port`)
+*Last reconciled with the router: v4.12.2 (2026-10-19).*
+
+Base URL: `http://127.0.0.1:8080` (configurable via `--bind` and `--port`, or `[serve]` in `maki.toml`).
+
+## Conventions
+
+- **Connections**: SQLite access runs in `spawn_blocking`; each handler checks a connection out of the pre-opened `CatalogPool` (`state.catalog()`, an RAII `PooledCatalog` returned on drop). Nothing migrates at serve time -- the CLI verifies the schema version before the server starts.
+- **Request bodies**: single-asset edit endpoints take `application/x-www-form-urlencoded` (they are htmx targets) and return HTML fragments; everything else takes and returns `application/json` unless stated otherwise.
+- **Asset IDs**: path parameters accept a full UUID or a unique prefix.
+- **Errors**: handlers that fail return a plain-text body `Error: <message>` with status 500; validation errors return 400 where the handler checks input explicitly (noted per endpoint). A few AI endpoints return `{"error": "..."}` JSON instead.
+- **Read-only mode** (`--read-only` or `[serve] read_only`): every request whose method is not `GET`/`HEAD` is rejected with 403 -- except `POST /api/query-image`, which writes nothing.
+- **Basic auth** (`[serve] username`/`password`, or `MAKI_SERVE_PASSWORD`): applies to every route including previews and SSE streams; a missing or wrong credential yields 401 with `WWW-Authenticate: Basic realm="MAKI"`.
+- **Feature gates**: routes marked *(ai)* exist only in builds with `--features ai` (which `--features pro` includes). `POST /api/asset/{id}/writeback`, `vlm-describe`, `/api/batch/describe`, `/api/maintain/writeback` and `/api/maintain/sync-metadata` are registered in every build; the web UI surfaces them only in Pro builds (the `pro` flag in `/api/build-info`).
+- **`HX-Trigger: pending-changed`**: the tag, rating, description, name and label fragment responses carry this header so the detail page can refresh its recipes block (pending-writeback markers).
+
+### Shared browse filter parameters {#browse-params}
+
+The browse page and every endpoint that mirrors its result set (`/api/search`, `/api/all-ids`, `/api/page-ids`, `/api/facets`, `/api/calendar`, `/api/map`, and `filters` in `/api/batch/export`) accept the same query parameters (`SearchParams` in `src/web/routes/mod.rs`):
+
+| Parameter    | Default     | Description |
+|--------------|-------------|-------------|
+| `q`          | `""`        | Free text and filter tokens, same syntax as `maki search` (see the [Search Filter Reference](../reference/06-search-filters.md)) |
+| `type`       | `""`        | Asset type (`image`, `video`, `audio`, ...) |
+| `tag`        | `""`        | Comma-separated chip list, ANDed; a leading `-` on an entry excludes it; `=`/`/`/`^` markers as in the `tag:` filter |
+| `format`     | `""`        | File format; comma-separated for OR (`nef,cr3`) |
+| `volume`     | `""`        | Volume ID |
+| `rating`     | `""`        | Numeric filter (`5`, `3+`) |
+| `label`      | `""`        | Color label name; `none` selects unlabeled assets |
+| `collection` | `""`        | Collection name |
+| `path`       | `""`        | Path prefix; an absolute path under a volume mount point is normalized and pins that volume |
+| `person`     | `""`        | Comma-separated person names *(ai)* |
+| `sort`       | `date_desc` | `date_desc`, `date_asc`, `name_asc`, `name_desc`, `size_asc`, `size_desc`, `similarity_desc`, `similarity_asc` |
+| `page`       | `1`         | Page number (`[serve] per_page` results per page, default 60) |
+| `stacks`     | `1`         | `1` collapses stacks to their pick; `0` shows every member |
+| `nodefault`  | --          | `1` disables the `[browse] default_filter` from `maki.toml` |
+
+A `similar:<id>` or `similar:@<token>` query renders as one score-sorted page; with no explicit `sort` the effective sort becomes `similarity_desc`. `/api/calendar` and `/api/map` do not apply the AI text-query and `similar:` filters.
 
 ---
 
-## Page Routes
+## Pages
 
-These routes return full HTML pages (for direct browser requests) or HTML partials (for htmx requests).
+All page routes return `text/html`. Pages that carry filters accept the [shared browse parameters](#browse-params).
 
-### `GET /` -- Browse Page
-
-Returns the asset browse grid with search, filtering, sorting, and pagination.
-
-| Parameter    | Type   | Default     | Description                                      |
-|--------------|--------|-------------|--------------------------------------------------|
-| `q`          | string | `""`        | Free-text search query (supports filter syntax)  |
-| `type`       | string | `""`        | Asset type filter (e.g. `image`, `video`)        |
-| `tag`        | string | `""`        | Tag filter                                       |
-| `format`     | string | `""`        | File format filter, comma-separated for OR (e.g. `nef,cr3`) |
-| `volume`     | string | `""`        | Volume label filter                              |
-| `rating`     | string | `""`        | Rating filter (`5` exact, `3+` minimum)          |
-| `label`      | string | `""`        | Color label filter (e.g. `Red`, `Green`)         |
-| `collection` | string | `""`        | Collection name filter                           |
-| `path`       | string | `""`        | Path prefix filter                               |
-| `sort`       | string | `date_desc` | Sort order (see below)                           |
-| `page`       | u32    | `1`         | Page number (configurable results per page, default 60) |
-
-**Sort values**: `date_desc`, `date_asc`, `name_desc`, `name_asc`, `size_desc`, `size_asc`
-
-**Behavior**: Detects `HX-Request` header. htmx requests receive a `ResultsPartial` (just the results grid). Direct browser requests receive the full `BrowsePage` with layout, CSS, filter controls, saved search chips, and all dropdown options.
+| Route | Description |
+|-------|-------------|
+| `GET /` | Browse page. With an `HX-Request` header only the results grid fragment is returned. Response carries `Cache-Control: no-store`. |
+| `GET /asset/{id}` | Asset detail page. Optional `prev` / `next` query parameters carry the neighbouring asset IDs from the grid. 404 with an HTML body if the asset does not exist. |
+| `GET /compare?ids=a,b[,c,d]` | Side-by-side comparison of 2 to 4 assets; 400 for any other count, 404 if an ID is unknown. |
+| `GET /tags` | Hierarchical tag tree with own and leaf counts. |
+| `GET /stats` | Catalog statistics. |
+| `GET /analytics` | Analytics dashboard. |
+| `GET /backup` | Backup coverage (non-media volumes). |
+| `GET /volumes` | Volume management. |
+| `GET /collections` | Collections. |
+| `GET /saved-searches` | Saved searches management. |
+| `GET /duplicates?mode=all\|same\|cross&volume&format&path` | Duplicate file groups; `mode` defaults to `all`. |
+| `GET /people` *(ai)* | People gallery. |
+| `GET /stroll?id&q&n&mode&skip&cross_session` *(ai)* | Visual exploration page; without `id` a random embedded asset is the centre. Parameters as for `/api/stroll/neighbors`. 404 when no embeddings exist. |
 
 ```bash
-# Full page (browser)
-curl http://localhost:8080/
-
-# With filters
-curl "http://localhost:8080/?q=sunset&rating=4%2B&sort=date_desc&page=1"
-
-# htmx partial
-curl -H "HX-Request: true" "http://localhost:8080/?tag=landscape&page=2"
-```
-
-### `GET /asset/{id}` -- Asset Detail Page
-
-Returns the detail page for a single asset, including preview image, metadata, editable tags, rating, label, name, description, variants, recipes, and collection memberships.
-
-| Parameter | Type   | Description             |
-|-----------|--------|-------------------------|
-| `id`      | string | Asset UUID (path param) |
-
-```bash
-curl http://localhost:8080/asset/550e8400-e29b-41d4-a716-446655440000
-```
-
-**Errors**: Returns 404 with `<h1>Not Found</h1>` if the asset does not exist.
-
-### `GET /tags` -- Tags Page
-
-Returns an HTML page listing all tags with counts. Supports sortable columns and live text filtering.
-
-```bash
-curl http://localhost:8080/tags
-```
-
-### `GET /stats` -- Stats Page
-
-Returns an HTML page showing catalog statistics: overview, type/format breakdown, per-volume details, tag frequencies, and verification health.
-
-```bash
-curl http://localhost:8080/stats
-```
-
-### `GET /collections` -- Collections Page
-
-Returns an HTML page listing all collections with a "New Collection" button.
-
-```bash
-curl http://localhost:8080/collections
-```
-
-### `GET /people` -- People Page
-
-*(Pro)*
-
-Returns an HTML page showing all detected people with face crop thumbnails, names, face counts, and management controls (rename, merge, delete). Includes a "Cluster" button to run auto-clustering from the UI.
-
-```bash
-curl http://localhost:8080/people
-```
-
-### `GET /backup` -- Backup Status Page
-
-Returns an HTML page showing backup health: summary cards (total assets, at-risk count, min copies), volume distribution bar chart, coverage by purpose table, and volume gaps table.
-
-```bash
-curl http://localhost:8080/backup
-```
-
-### `GET /stroll` -- Stroll Page
-
-*(Pro)*
-
-Returns an interactive visual similarity exploration page. Centers on a randomly selected asset (or a specific asset via query parameter) and displays its nearest neighbors by SigLIP embedding distance. Clicking a neighbor re-centers the view on that asset.
-
-| Parameter | Type   | Default  | Description                              |
-|-----------|--------|----------|------------------------------------------|
-| `id`      | string | (random) | Asset UUID to center on (optional)       |
-
-```bash
-# Random starting point
-curl http://localhost:8080/stroll
-
-# Start from a specific asset
-curl "http://localhost:8080/stroll?id=550e8400-e29b-41d4-a716-446655440000"
+curl "http://localhost:8080/?q=sunset&rating=4%2B&sort=date_desc&page=2"
+curl -H "HX-Request: true" "http://localhost:8080/?tag=landscape"      # grid fragment only
 ```
 
 ---
 
-## Search API
+## Browse and search
 
 ### `GET /api/search`
 
-Same query parameters as `GET /`. Intended for htmx consumption.
+Same parameters as `GET /`. With an `HX-Request` header it returns the results fragment (`text/html`); without one it redirects (303) to `/?<same query string>` so a bookmarked API URL lands on the page.
 
-**Behavior**: Non-htmx requests (missing `HX-Request` header) are redirected to `/?{params}` so that direct browser loads, back-button navigations, and bookmarks render the full page. htmx requests receive a `ResultsPartial`.
+### `GET /api/all-ids`
 
-```bash
-# htmx request (returns HTML partial)
-curl -H "HX-Request: true" "http://localhost:8080/api/search?q=sunset&page=1"
+Ordered asset IDs of the whole result set (select-all across pages, remembered-filter restore). Honours the AI text-query and `similar:` filters.
 
-# Browser request (redirects to /?q=sunset&page=1)
-curl -v "http://localhost:8080/api/search?q=sunset&page=1"
-# < HTTP/1.1 303 See Other
-# < location: /?q=sunset&page=1
+```json
+{"ids": ["550e8400-...", "..."], "total": 487, "total_pages": 9, "per_page": 60}
+```
+
+### `GET /api/page-ids`
+
+IDs of one page, in grid order (lightbox and detail-page navigation). Extra parameter `nocount=1` (or `true`) skips the count query: `total_pages` is then `null` and `page` is not clamped to the last page.
+
+```json
+{"ids": ["..."], "page": 2, "total_pages": 9}
+```
+
+### `GET /api/facets`
+
+Facet counts for the sidebar under the current filters (`FacetCounts`). Tuples serialize as arrays.
+
+```json
+{"total": 487,
+ "ratings": [[5, 12], [null, 300]],
+ "labels": [["Red", 4], [null, 480]],
+ "formats": [["nef", 200], ["jpg", 287]],
+ "volumes": [["<volume-id>", "Photos2024", 487]],
+ "tags": [["landscape", 120]],
+ "years": [["2024", 487]],
+ "geotagged": 42}
+```
+
+### `GET /api/paths?q&volume&limit`
+
+Path completions for the filter bar: the distinct next segments under prefix `q` in `file_locations.relative_path`. Directory completions end in `/`. `limit` defaults to 100 (maximum 100). An absolute path that matches a volume mount point is normalized and scoped to that volume; a `q` containing `*` returns `[]`.
+
+```json
+["2024/", "2024-backup/", "notes.txt"]
+```
+
+### `GET /api/calendar?year=2026`
+
+Per-day counts for the heatmap. `year` defaults to the current year; the other [browse parameters](#browse-params) apply (except `sort`/`page`).
+
+```json
+{"year": 2026, "counts": {"2026-03-01": 12, "2026-03-02": 3}, "years": [2019, 2024, 2026]}
+```
+
+### `GET /api/map?limit=10000`
+
+Markers for geotagged assets matching the filters (default `limit` 10000).
+
+```json
+{"markers": [{"id": "...", "lat": 47.9, "lng": 11.5, "preview": "/preview/ab/ab12....jpg",
+              "name": "DSC_0001.NEF", "rating": 4, "label": null}],
+ "total": 42, "truncated": false}
+```
+
+### `GET /api/tags`
+
+All tags with counts as `[name, count]` pairs, merged with the planned entries of `vocabulary.yaml` at count 0 (autocomplete source).
+
+```json
+[["event|festival", 12], ["landscape", 120], ["planned|unused", 0]]
+```
+
+### `GET /api/stats`
+
+```json
+{"assets": 1234, "variants": 2100, "recipes": 900, "total_size": 123456789}
+```
+
+### `GET /api/build-info`
+
+Compile-time features and serve-time defaults the JavaScript layer needs.
+
+```json
+{"ai": true, "pro": false, "slideshow_seconds": 5, "slideshow_loop": true,
+ "remember_latest_filter": false, "import_smart_previews": false,
+ "import_embeddings": false, "import_descriptions": false, "read_only": false}
 ```
 
 ---
 
-## Asset Editing
+## Asset
 
-### `POST /api/asset/{id}/tags` -- Add Tags
+Path parameter `{id}` is the asset UUID or a unique prefix.
 
-Adds one or more tags to an asset. Triggers XMP write-back.
+### Metadata edits (form-encoded, HTML fragment responses)
 
-| Field | Type   | Description                          |
-|-------|--------|--------------------------------------|
-| `tags` | string | Comma-separated tag names (form-encoded) |
+| Method and path | Form field | Notes |
+|-----------------|------------|-------|
+| `POST /api/asset/{id}/tags` | `tags` (comma-separated; `>` is converted to the `\|` hierarchy separator) | Returns the tags fragment with provenance badges |
+| `DELETE /api/asset/{id}/tags?tag=<tag>` | query parameter `tag` | Removes one tag |
+| `POST /api/asset/{id}/tags/clear` | -- | Removes every tag |
+| `PUT /api/asset/{id}/rating` | `rating` (1-5; `0` or absent clears) | |
+| `PUT /api/asset/{id}/description` | `description` (empty clears) | |
+| `PUT /api/asset/{id}/name` | `name` (empty clears; fragment falls back to the original filename) | |
+| `PUT /api/asset/{id}/label` | `label` (`Red`, `Orange`, `Yellow`, `Green`, `Blue`, `Pink`, `Purple`, case-insensitive; empty clears) | Unknown names are rejected (500) |
+| `PUT /api/asset/{id}/date` | `date` (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or RFC 3339) | No `HX-Trigger` header; invalid input is a 500 |
 
-**Content-Type**: `application/x-www-form-urlencoded`
-
-**Response**: HTML partial -- updated tag list fragment.
-
-```bash
-curl -X POST http://localhost:8080/api/asset/{id}/tags \
-  -d "tags=landscape,nature,sunset"
-```
-
-### `DELETE /api/asset/{id}/tags/{tag}` -- Remove Tag
-
-Removes a single tag from an asset. Triggers XMP write-back.
-
-| Parameter | Type   | Description              |
-|-----------|--------|--------------------------|
-| `id`      | string | Asset UUID (path param)  |
-| `tag`     | string | Tag to remove (path param, URL-encoded) |
-
-**Response**: HTML partial -- updated tag list fragment.
+All of these except `date` add `HX-Trigger: pending-changed`.
 
 ```bash
-curl -X DELETE http://localhost:8080/api/asset/{id}/tags/landscape
+curl -X POST -d "tags=landscape,sunset" http://localhost:8080/api/asset/550e8400/tags
+curl -X DELETE "http://localhost:8080/api/asset/550e8400/tags?tag=sunset"
+curl -X PUT -d "rating=5" http://localhost:8080/api/asset/550e8400/rating
 ```
 
-### `PUT /api/asset/{id}/rating` -- Set Rating
+### Preview and variants
 
-Sets or clears the asset's star rating. A value of `0` or `null` clears the rating. Triggers XMP write-back.
+| Method and path | Body | Response |
+|-----------------|------|----------|
+| `POST /api/asset/{id}/preview` | -- | Preview fragment (HTML); regenerates preview and smart preview from an online source. Offline sources and tool failures are reported inside the fragment, not as 500 |
+| `POST /api/asset/{id}/rotate` | -- | Preview fragment; cycles rotation 0, 90, 180, 270 degrees and regenerates |
+| `POST /api/asset/{id}/preview-variant` | JSON `{"content_hash": "sha256:..."}` (omit or `null` to clear) | `{"ok": true}` |
+| `POST /api/asset/{id}/variant-role` | JSON `{"content_hash", "role"}` | `{"ok": true, "role": "alternate"}` |
+| `POST /api/asset/{id}/reimport-metadata` | -- | Tags fragment (HTML) after clearing and re-extracting metadata from the variant files |
+| `GET /api/asset/{id}/recipes-fragment` | -- | Recipes block (HTML) with current pending-writeback markers |
+| `POST /api/asset/{id}/split` | JSON `{"variant_hashes": ["sha256:..."]}` | `{"source_id": "...", "new_assets": ["..."]}` |
 
-| Field    | Type       | Description                   |
-|----------|------------|-------------------------------|
-| `rating` | u8 or null | Rating value 1-5, or 0/null to clear |
+### Writeback and VLM
 
-**Content-Type**: `application/x-www-form-urlencoded`
+| Method and path | Body | Response |
+|-----------------|------|----------|
+| `POST /api/asset/{id}/writeback` | -- | `{"written": 1, "skipped": 0, "failed": 0}` -- flushes this asset's pending XMP changes |
+| `POST /api/asset/{id}/vlm-describe` | JSON `{"mode": "describe\|tags\|both", "model": "..."}` (both optional, defaults from `[vlm]`) | `{"description": "...", "tags": ["..."]}` |
 
-**Response**: HTML partial -- updated rating fragment.
+### Stacks (per asset)
 
-```bash
-# Set rating to 5 stars
-curl -X PUT http://localhost:8080/api/asset/{id}/rating \
-  -d "rating=5"
+| Method and path | Body | Response |
+|-----------------|------|----------|
+| `PUT /api/asset/{id}/stack-pick` | -- | `{"pick": "<id>"}` |
+| `DELETE /api/asset/{id}/stack` | -- | `{"status": "dissolved"}` |
+| `POST /api/asset/{id}/stack-add` | JSON `{"asset_ids": [...]}` | `{"added": 2}` -- adds the listed assets to the stack of `{id}` |
 
-# Clear rating
-curl -X PUT http://localhost:8080/api/asset/{id}/rating \
-  -d "rating=0"
-```
+Stack errors (asset not in a stack, fewer than two members) return 400.
 
-### `PUT /api/asset/{id}/description` -- Set Description
+### AI per asset *(ai)*
 
-Sets or clears the asset's description. An empty string clears the description. Triggers XMP write-back.
+| Method and path | Body | Response |
+|-----------------|------|----------|
+| `POST /api/asset/{id}/suggest-tags` | -- | `[{"tag": "subject\|vehicle\|car", "confidence": 0.42, "existing": false, "source_label": "car"}]` (`source_label` only for non-identity vocabulary mappings) |
+| `POST /api/asset/{id}/similar` | -- | 20 nearest neighbours: `[{"asset_id", "similarity", "preview_url", "name"}]`; computes and stores the embedding first if missing |
+| `POST /api/asset/{id}/stack-similar` | JSON `{"threshold": 85, "limit": 40}` (both optional, percent) | `{"stack_id", "member_count", "threshold"}`; 400 `{"error": "..."}` if already stacked or nothing above the threshold |
+| `POST /api/asset/{id}/embed` | -- | `{"embedded": 1, "skipped": 0, "errors": []}` (synchronous); 500 if the model is not downloaded |
+| `GET /api/asset/{id}/faces` | -- | `[{"face_id", "confidence", "bbox": [x, y, w, h], "person_id", "person_name", "crop_url"}]` |
+| `POST /api/asset/{id}/detect-faces` | -- | `{"succeeded": 1, "faces_detected": 2, "errors": []}` (synchronous); 500 `{"error"}` if face models are missing |
 
-| Field         | Type          | Description                    |
-|---------------|---------------|--------------------------------|
-| `description` | string or null | Description text, or empty to clear |
+---
 
-**Content-Type**: `application/x-www-form-urlencoded`
+## Batch
 
-**Response**: HTML partial -- updated description fragment.
+All batch endpoints take JSON with `asset_ids` and return JSON. Edit-style endpoints respond with
 
-```bash
-# Set description
-curl -X PUT http://localhost:8080/api/asset/{id}/description \
-  -d "description=A%20beautiful%20sunset%20over%20the%20mountains"
-
-# Clear description
-curl -X PUT http://localhost:8080/api/asset/{id}/description \
-  -d "description="
-```
-
-### `PUT /api/asset/{id}/name` -- Set Name
-
-Sets or clears the asset's display name. An empty string clears the name (reverts to filename fallback).
-
-| Field  | Type          | Description                  |
-|--------|---------------|------------------------------|
-| `name` | string or null | Display name, or empty to clear |
-
-**Content-Type**: `application/x-www-form-urlencoded`
-
-**Response**: HTML partial -- updated name fragment (includes fallback filename display when name is cleared).
-
-```bash
-# Set name
-curl -X PUT http://localhost:8080/api/asset/{id}/name \
-  -d "name=Mountain%20Sunset"
-
-# Clear name
-curl -X PUT http://localhost:8080/api/asset/{id}/name \
-  -d "name="
-```
-
-### `PUT /api/asset/{id}/label` -- Set Color Label
-
-Sets or clears the asset's color label. Accepts case-insensitive color names from the 7-color set: Red, Orange, Yellow, Green, Blue, Pink, Purple. An empty string clears the label. Triggers XMP write-back.
-
-| Field   | Type   | Description                          |
-|---------|--------|--------------------------------------|
-| `label` | string | Color name (case-insensitive), or empty to clear |
-
-**Content-Type**: `application/x-www-form-urlencoded`
-
-**Response**: HTML partial -- updated label fragment.
-
-```bash
-# Set label
-curl -X PUT http://localhost:8080/api/asset/{id}/label \
-  -d "label=Red"
-
-# Clear label
-curl -X PUT http://localhost:8080/api/asset/{id}/label \
-  -d "label="
-```
-
-### `PUT /api/asset/{id}/date` -- Set Date
-
-Sets or clears the asset's creation date. Accepts an ISO date or datetime string. An empty string clears the date.
-
-| Field  | Type          | Description                  |
-|--------|---------------|------------------------------|
-| `date` | string or null | ISO date string (e.g. `2024-12-25`), or empty to clear |
-
-**Content-Type**: `application/x-www-form-urlencoded`
-
-**Response**: HTML partial -- updated date fragment.
-
-```bash
-# Set date
-curl -X PUT http://localhost:8080/api/asset/{id}/date \
-  -d "date=2024-12-25"
-
-# Clear date
-curl -X PUT http://localhost:8080/api/asset/{id}/date \
-  -d "date="
-```
-
-### `POST /api/open-location` -- Reveal in File Manager
-
-Opens the system file manager with the specified file selected. macOS uses `open -R` (Finder); Windows uses `explorer /select,` (Explorer); Linux uses `xdg-open` on the parent directory.
-
-| Field           | Type   | Description                     |
-|-----------------|--------|---------------------------------|
-| `volume_id`     | string | Volume UUID                     |
-| `relative_path` | string | File path relative to the volume mount point |
-
-**Content-Type**: `application/json`
-
-**Response**: `{"ok": true}` on success, or error message.
-
-```bash
-curl -X POST http://localhost:8080/api/open-location \
-  -H "Content-Type: application/json" \
-  -d '{"volume_id":"abc-123","relative_path":"Photos/DSC_001.nef"}'
-```
-
-### `POST /api/open-terminal` -- Open Terminal
-
-Opens a terminal window in the file's parent directory. macOS uses Terminal.app; Windows uses cmd; Linux tries common terminal emulators.
-
-| Field           | Type   | Description                     |
-|-----------------|--------|---------------------------------|
-| `volume_id`     | string | Volume UUID                     |
-| `relative_path` | string | File path relative to the volume mount point |
-
-**Content-Type**: `application/json`
-
-**Response**: `{"ok": true}` on success, or error message.
-
-```bash
-curl -X POST http://localhost:8080/api/open-terminal \
-  -H "Content-Type: application/json" \
-  -d '{"volume_id":"abc-123","relative_path":"Photos/DSC_001.nef"}'
-```
-
-### `POST /api/asset/{id}/preview` -- Regenerate Previews
-
-Regenerates both the regular preview thumbnail and the smart preview for the asset's best variant. Requires the source file to be on an online volume. Returns cache-busted URLs so the browser displays the newly generated images without requiring a page reload.
-
-**Content-Type**: None (no body required)
-
-**Response**: HTML partial -- updated preview fragment with cache-busted URLs.
-
-```bash
-curl -X POST http://localhost:8080/api/asset/{id}/preview
-```
-
-### `POST /api/asset/{id}/rotate` -- Rotate Preview
-
-Cycles the preview rotation 90° clockwise (0° → 90° → 180° → 270° → 0°). Regenerates both regular and smart previews with EXIF auto-orientation applied. The rotation is persisted per asset.
-
-**Content-Type**: None (no body required)
-
-**Response**: HTML partial -- updated preview fragment with cache-busted URLs.
-
-```bash
-curl -X POST http://localhost:8080/api/asset/{id}/rotate
-```
-
-### `POST /api/asset/{id}/reimport-metadata` -- Re-import Metadata
-
-Clears the asset's tags, description, rating, and color label, then re-extracts metadata from all variant source files (XMP recipe sidecars and embedded XMP in JPEG/TIFF media files). Offline volumes are silently skipped.
-
-**Content-Type**: None (no body required)
-
-**Response**: HTML partial -- updated tags fragment.
-
-```bash
-curl -X POST http://localhost:8080/api/asset/{id}/reimport-metadata
-```
-
-### `PUT /api/asset/{id}/stack-pick` -- Set Stack Pick
-
-Sets this asset as the pick (position 0) of its stack. The previous pick swaps to this asset's former position. Persists to both SQLite and `stacks.yaml`.
-
-| Parameter | Type   | Description             |
-|-----------|--------|-------------------------|
-| `id`      | string | Asset UUID (path param) |
-
-**Response**:
 ```json
-{
-  "status": "ok"
-}
+{"succeeded": 10, "failed": 1, "errors": [{"asset_id": "...", "error": "..."}]}
 ```
 
-**Errors**: Returns 500 if the asset is not in a stack.
+Job-style endpoints respond immediately with `{"job_id": "<uuid>", "status": "started"}`; progress and the summary arrive through the [jobs API](#jobs).
+
+| Method and path | Body (besides `asset_ids`) | Response |
+|-----------------|----------------------------|----------|
+| `PUT /api/batch/rating` | `rating` (1-5, `0`/`null` clears) | batch result |
+| `POST /api/batch/tags` | `tags` (array), `remove` (bool, required) | batch result |
+| `PUT /api/batch/label` | `label` (name or `null`) | batch result |
+| `POST /api/batch/collection` | `collection` (name) | `{"added": 3, "collection": "..."}` |
+| `DELETE /api/batch/collection` | `collection` | `{"removed": 3, "collection": "..."}` |
+| `POST /api/batch/auto-group` | -- | `{"groups_merged", "donors_removed", "variants_moved"}` |
+| `POST /api/batch/group` | `target_id` (optional) | `{"target_id", "variants_moved", "donors_removed"}` |
+| `POST /api/batch/stack` | -- | `{"stack_id", "member_count"}`; 400 on error |
+| `DELETE /api/batch/stack` | -- | `{"removed": 2}` |
+| `POST /api/batch/delete` | `remove_files` (bool, default false) | `{"deleted", "files_removed", "files_trashed", "previews_removed", "not_found", "errors"}`; files go through the trash unless `[trash]` is disabled |
+| `POST /api/batch/describe` | `mode`, `model` (optional) | job; terminal event `{"phase": "describe", "succeeded", "failed", "descriptions_set", "tags_applied", "errors", "done": true}` |
+| `POST /api/batch/auto-tag` *(ai)* | -- | job; terminal event `{"phase": "auto_tag", "succeeded", "failed", "tags_applied", "errors", "done": true}` |
+| `POST /api/batch/embed` *(ai)* | -- | job; terminal event `{"phase": "embed", "embedded", "skipped", "errors", "done": true}`; 500 before starting if the model is not downloaded |
+| `POST /api/batch/detect-faces` *(ai)* | -- | job; progress events carry `faces` per asset; terminal event `{"phase": "detect_faces", "succeeded", "faces_detected", "errors", "done": true}` |
+
+The batch jobs do not have a one-per-kind conflict gate; progress events look like `{"phase", "done": false, "processed", "total", "asset", "status"}`.
 
 ```bash
-curl -X PUT http://localhost:8080/api/asset/{id}/stack-pick
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"asset_ids":["550e8400","6ba7b810"],"tags":["event|festival"],"remove":false}' \
+  http://localhost:8080/api/batch/tags
 ```
 
-### `DELETE /api/asset/{id}/stack` -- Dissolve Stack
+### `POST /api/batch/export` -- ZIP download
 
-Dissolves the entire stack that this asset belongs to. All members are unstacked. Persists to both SQLite and `stacks.yaml`.
-
-| Parameter | Type   | Description             |
-|-----------|--------|-------------------------|
-| `id`      | string | Asset UUID (path param) |
-
-**Response**:
 ```json
-{
-  "status": "ok"
-}
+{"asset_ids": ["..."],
+ "filters": {"q": "tag:landscape", "stacks": "1"},
+ "layout": "flat",
+ "source": "originals",
+ "all_variants": false,
+ "include_sidecars": false}
 ```
 
-**Errors**: Returns 500 if the asset is not in a stack.
+- `asset_ids` wins when non-empty; otherwise `filters` (the [browse parameters](#browse-params) as a JSON object) is resolved through the same pipeline as the grid, so "export all" matches what is shown. An unresolvable collection or person exports nothing.
+- `layout`: `flat` (default) or `mirror`; `source`: `originals` (default), `previews` or `smart`.
+- Response: `application/zip`, `Content-Disposition: attachment; filename="maki-export-<n>-assets.zip"`, plus the headers `X-Maki-Exported`, `X-Maki-Skipped` and `X-Maki-Skipped-Offline` so a partial archive can be flagged. 400 when nothing matched, 500 when no file could be exported.
 
-```bash
-curl -X DELETE http://localhost:8080/api/asset/{id}/stack
+---
+
+## Tags
+
+| Method and path | Body | Response |
+|-----------------|------|----------|
+| `POST /api/tag/rename` | `{"old_tag", "new_tag", "apply": false}` | `{"matched", "renamed", "removed", "skipped", "dry_run"}` |
+| `POST /api/tag/split` | `{"old_tag", "new_tags": [...], "keep": false, "apply": false}` | `{"matched", "split", "skipped", "dry_run"}` |
+| `POST /api/tag/delete` | `{"tag", "apply": false}` | `{"matched", "removed", "skipped", "dry_run"}` |
+
+Without `apply: true` all three are dry runs. Empty names return 400. The `=` / `/` / `^` markers of the `tag:` filter are accepted in `old_tag` and `tag`.
+
+### `GET /api/tags/export-vocabulary`
+
+Downloads the tag hierarchy as a vocabulary file (mirrors `maki tag export-vocabulary`).
+
+| Parameter | Description |
+|-----------|-------------|
+| `format`  | `yaml` (default), `text`, `json`; anything else is 400 |
+| `counts=1` | Annotate entries with asset counts (YAML comments; JSON always carries counts; ignored for text) |
+| `prune=1` | Drop planned-but-unused `vocabulary.yaml` entries |
+| `default=1` | Export the built-in default vocabulary instead of the catalog's |
+
+Response: `Content-Disposition: attachment; filename="vocabulary.<ext>"`.
+
+---
+
+## Stacks
+
+| Method and path | Response |
+|-----------------|----------|
+| `GET /api/stack/{stack_id}/members` | Ordered member cards: `[{"asset_id", "name", "asset_type", "format", "date", "preview_url", "rating", "label", "variant_count", "stack_id", "stack_count", "preview_rotation", "face_count"}]` |
+
+Creation, dissolve, pick and add live under [Asset](#asset) and [Batch](#batch).
+
+---
+
+## Collections
+
+| Method and path | Body | Response |
+|-----------------|------|----------|
+| `GET /api/collections` | -- | `[{"id", "name", "description", "asset_count", "created_at"}]` |
+| `POST /api/collections` | `{"name", "description"}` | 201 `{"id", "name", "description"}`; 409 if the name exists; 500 for an empty name |
+
+Membership changes go through `POST`/`DELETE /api/batch/collection`.
+
+---
+
+## Saved searches
+
+Saved searches live in `searches.toml`. Objects have the shape `{"name", "query", "sort", "favorite"}`; `query` is omitted when empty, `sort` when unset, `favorite` when false.
+
+| Method and path | Body | Response |
+|-----------------|------|----------|
+| `GET /api/saved-searches` | -- | array of saved-search objects |
+| `POST /api/saved-searches` | `{"name", "query", "sort", "favorite"}` (`sort`, `favorite` optional) | `{"status": "saved", "name"}` -- creates or replaces by name |
+| `DELETE /api/saved-searches/{name}` | -- | `{"status": "deleted", "name"}` |
+| `PUT /api/saved-searches/{name}/favorite` | `{"favorite": true}` | `{"status": "updated", "name", "favorite"}` |
+| `PUT /api/saved-searches/{name}/rename` | `{"new_name"}` | `{"status": "renamed", "old_name", "new_name"}`; 409 if `new_name` exists |
+
+An unknown `{name}` returns 404.
+
+---
+
+## Volumes
+
+| Method and path | Body | Response |
+|-----------------|------|----------|
+| `GET /api/volumes` | -- | `[{"id", "label", "mount_point", "volume_type", "purpose", "is_online"}]` |
+| `POST /api/volumes` | `{"path", "label", "purpose"}` (`purpose` optional: `media`, `working`, `archive`, `backup`, `cloud`) | 201 `{"id", "label"}`; 409 if already registered; 400 for a missing path, empty label or bad purpose |
+| `PUT /api/volumes/{id}/rename` | `{"label"}` | `{"ok": true}` |
+| `PUT /api/volumes/{id}/purpose` | `{"purpose"}` (`null` or empty clears) | `{"ok": true}` |
+| `DELETE /api/volumes/{id}` | -- | `{"label", "locations_removed", "recipes_removed", "assets_removed"}` |
+
+### `GET /api/volumes/{id}/browse?prefix&limit&hidden&filter`
+
+Lists filesystem entries under `<mount point>/<prefix>` for the import dialog (paths not yet in the catalog). `limit` defaults to 50 (maximum 500), `hidden=1` includes dotfiles, `filter` is `all` (default), `dirs` or `files`. Directories sort first.
+
+```json
+{"prefix": "2026", "entries": [{"name": "04", "is_dir": true, "relative_path": "2026/04"}]}
+```
+
+403 when the path escapes the mount point, 404 when it does not exist or is not a directory, 400 when the volume is offline.
+
+---
+
+## Duplicates
+
+| Method and path | Body | Response |
+|-----------------|------|----------|
+| `POST /api/dedup/resolve` | `{"min_copies", "volume", "format", "path", "prefer", "dry_run"}` (all optional; `prefer` falls back to `[dedup] prefer`) | `DedupResult`: `{"duplicates_found", "locations_to_remove", "locations_removed", "files_deleted", "files_trashed", "recipes_removed", "bytes_freed", "dry_run", "errors"}` |
+| `DELETE /api/dedup/location` | `{"content_hash", "volume_id", "relative_path"}` | `{"removed": true, "recipes_removed": 1}` -- trashes the file and co-located recipes, updates catalog and sidecar; 400 when it is the last copy or the volume is offline |
+
+---
+
+## Import
+
+### `POST /api/import`
+
+Starts an import job (409 if an import -- including a dry run -- is already running).
+
+```json
+{"volume_id": "<uuid or label>", "subfolder": "2026/04", "profile": "wedding",
+ "tags": ["event|wedding"], "auto_group": true, "smart": false,
+ "embed": false, "describe": false, "dry_run": false}
+```
+
+`embed` is honoured only on `ai` builds and `describe` only on Pro builds; both default to the `[import]` config. Response `{"job_id", "status": "started"}`. Progress events:
+
+- `{"phase": "<label>", "done": false, "status": "phase_started"}` / `"phase_skipped"` (with `message`)
+- `{"phase": "import", "done": false, "file", "status": "imported|location|skipped|recipe", "imported", "skipped", "locations_added", "recipes"}`
+- `{"phase": "embed", ...}` *(ai)* and `{"phase": "describe", ...}` *(pro)* with running counters
+
+Terminal event (also the dry-run summary):
+
+```json
+{"dry_run": false, "imported": 120, "locations_added": 3, "skipped": 10,
+ "recipes_attached": 80, "recipes_updated": 0, "previews_generated": 120,
+ "sidecars_created": 0, "new_asset_ids": ["..."],
+ "embedded": 118, "embeddings_skipped": 2, "done": true}
+```
+
+(`embedded`/`embeddings_skipped` appear on `ai` builds when embeddings ran, `described`/`descriptions_skipped` on Pro builds.)
+
+### `GET /api/import/profiles`
+
+```json
+{"profiles": ["default", "wedding"]}
 ```
 
 ---
 
-## Batch Operations
+## Jobs {#jobs}
 
-All batch endpoints accept JSON request bodies and return JSON responses. They loop over individual assets, collecting successes and failures independently.
+Every long-running operation (import, the batch jobs, all `/api/maintain/*` operations) is registered in the `JobRegistry` (`src/web/jobs.rs`). Job kinds: `import`, `embed`, `auto_tag`, `detect_faces`, `describe`, `writeback`, `sync_metadata`, `verify`, `generate_previews`, `sync`, `refresh`, `cleanup`, `suggest_tags_review`, `apply_tags`.
 
-### `POST /api/batch/tags` -- Batch Add/Remove Tags
+| Method and path | Response |
+|-----------------|----------|
+| `GET /api/jobs` | `{"running": 1, "jobs": [{"id", "kind", "kind_label", "started_at", "completed", "progress"}]}` -- newest first, running and recently completed |
+| `GET /api/jobs/{id}` | one entry of the same shape; 404 if unknown |
+| `GET /api/jobs/{id}/progress` | `text/event-stream`: replays the ring buffer of recent events, then streams live ones. The terminal event always carries `"done": true`; a failed job's terminal event is `{"error": "...", "done": true}` |
+| `GET /api/jobs/{id}/result` | structured result payload (used by `suggest-tags-review`): 200 JSON, 204 when the job set none, 425 while still running, 404 if unknown |
 
-Adds or removes tags on multiple assets. Each individual operation triggers XMP write-back.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "asset_ids": ["uuid-1", "uuid-2", "uuid-3"],
-  "tags": ["landscape", "nature"],
-  "remove": false
-}
-```
-
-| Field      | Type     | Description                              |
-|------------|----------|------------------------------------------|
-| `asset_ids` | string[] | Array of asset UUIDs                    |
-| `tags`     | string[] | Tag names to add or remove               |
-| `remove`   | bool     | `false` to add tags, `true` to remove    |
-
-**Response**:
-```json
-{
-  "succeeded": 3,
-  "failed": 0,
-  "errors": []
-}
-```
+`progress` is the most recent event. Clients close the `EventSource` on `done: true`.
 
 ```bash
-curl -X POST http://localhost:8080/api/batch/tags \
-  -H "Content-Type: application/json" \
-  -d '{"asset_ids": ["uuid-1", "uuid-2"], "tags": ["landscape"], "remove": false}'
-```
-
-### `PUT /api/batch/rating` -- Batch Set Rating
-
-Sets or clears the rating on multiple assets. Each individual operation triggers XMP write-back.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "asset_ids": ["uuid-1", "uuid-2"],
-  "rating": 5
-}
-```
-
-| Field      | Type          | Description                          |
-|------------|---------------|--------------------------------------|
-| `asset_ids` | string[]     | Array of asset UUIDs                 |
-| `rating`   | u8 or null    | Rating 1-5, or null/0 to clear      |
-
-**Response**:
-```json
-{
-  "succeeded": 2,
-  "failed": 0,
-  "errors": []
-}
-```
-
-```bash
-# Set rating
-curl -X PUT http://localhost:8080/api/batch/rating \
-  -H "Content-Type: application/json" \
-  -d '{"asset_ids": ["uuid-1", "uuid-2"], "rating": 4}'
-
-# Clear rating
-curl -X PUT http://localhost:8080/api/batch/rating \
-  -H "Content-Type: application/json" \
-  -d '{"asset_ids": ["uuid-1", "uuid-2"], "rating": null}'
-```
-
-### `PUT /api/batch/label` -- Batch Set Label
-
-Sets or clears the color label on multiple assets. The label is validated against the 7-color set before processing any assets. Each individual operation triggers XMP write-back.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "asset_ids": ["uuid-1", "uuid-2"],
-  "label": "Red"
-}
-```
-
-| Field      | Type          | Description                                  |
-|------------|---------------|----------------------------------------------|
-| `asset_ids` | string[]     | Array of asset UUIDs                         |
-| `label`    | string or null | Color name (case-insensitive), or empty/null to clear |
-
-**Response**:
-```json
-{
-  "succeeded": 2,
-  "failed": 0,
-  "errors": []
-}
-```
-
-```bash
-curl -X PUT http://localhost:8080/api/batch/label \
-  -H "Content-Type: application/json" \
-  -d '{"asset_ids": ["uuid-1", "uuid-2"], "label": "Green"}'
-```
-
-### `POST /api/batch/collection` -- Add to Collection
-
-Adds assets to a named collection. Persists to both SQLite and YAML.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "asset_ids": ["uuid-1", "uuid-2"],
-  "collection": "Best of 2025"
-}
-```
-
-| Field        | Type     | Description            |
-|--------------|----------|------------------------|
-| `asset_ids`  | string[] | Array of asset UUIDs   |
-| `collection` | string   | Collection name        |
-
-**Response**:
-```json
-{
-  "added": 2,
-  "collection": "Best of 2025"
-}
-```
-
-```bash
-curl -X POST http://localhost:8080/api/batch/collection \
-  -H "Content-Type: application/json" \
-  -d '{"asset_ids": ["uuid-1", "uuid-2"], "collection": "Best of 2025"}'
-```
-
-### `DELETE /api/batch/collection` -- Remove from Collection
-
-Removes assets from a named collection. Persists to both SQLite and YAML.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "asset_ids": ["uuid-1", "uuid-2"],
-  "collection": "Best of 2025"
-}
-```
-
-| Field        | Type     | Description            |
-|--------------|----------|------------------------|
-| `asset_ids`  | string[] | Array of asset UUIDs   |
-| `collection` | string   | Collection name        |
-
-**Response**:
-```json
-{
-  "removed": 2,
-  "collection": "Best of 2025"
-}
-```
-
-```bash
-curl -X DELETE http://localhost:8080/api/batch/collection \
-  -H "Content-Type: application/json" \
-  -d '{"asset_ids": ["uuid-1", "uuid-2"], "collection": "Best of 2025"}'
-```
-
-### `POST /api/batch/stack` -- Create Stack
-
-Creates a stack from the selected assets. The first asset becomes the pick (position 0). Assets already in a stack are rejected. Persists to both SQLite and `stacks.yaml`.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "asset_ids": ["uuid-1", "uuid-2", "uuid-3"]
-}
-```
-
-| Field      | Type     | Description                              |
-|------------|----------|------------------------------------------|
-| `asset_ids` | string[] | Array of asset UUIDs (minimum 2)        |
-
-**Response**:
-```json
-{
-  "stack_id": "550e8400-e29b-41d4-a716-446655440000",
-  "member_count": 3
-}
-```
-
-**Errors**: Returns 500 if any asset is already in a stack, or fewer than 2 assets are provided.
-
-```bash
-curl -X POST http://localhost:8080/api/batch/stack \
-  -H "Content-Type: application/json" \
-  -d '{"asset_ids": ["uuid-1", "uuid-2", "uuid-3"]}'
-```
-
-### `DELETE /api/batch/stack` -- Unstack Assets
-
-Removes assets from their stacks. If a stack is left with 1 or fewer members, it is automatically dissolved. Persists to both SQLite and `stacks.yaml`.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "asset_ids": ["uuid-1", "uuid-2"]
-}
-```
-
-| Field      | Type     | Description            |
-|------------|----------|------------------------|
-| `asset_ids` | string[] | Array of asset UUIDs  |
-
-**Response**:
-```json
-{
-  "removed": 2
-}
-```
-
-```bash
-curl -X DELETE http://localhost:8080/api/batch/stack \
-  -H "Content-Type: application/json" \
-  -d '{"asset_ids": ["uuid-1", "uuid-2"]}'
-```
-
-### `GET /api/stack/{id}/members` -- Stack Members
-
-Returns all members of a stack as a JSON array of card data, ordered by stack position. Used by the per-stack expand/collapse feature on the browse page.
-
-**Response**: `application/json`
-
-```json
-[
-  {
-    "asset_id": "uuid-1",
-    "name": "DSC_001.NEF",
-    "asset_type": "image",
-    "format": "NEF",
-    "date": "2026-01-15",
-    "preview_url": "/previews/ab/abcdef1234.jpg",
-    "rating": 4,
-    "label": "Green",
-    "variant_count": 2,
-    "preview_rotation": 0,
-    "stack_id": "stack-uuid"
-  }
-]
-```
-
-```bash
-curl http://localhost:8080/api/stack/550e8400-e29b-41d4-a716-446655440000/members
-```
-
-### `GET /analytics` -- Analytics Dashboard
-
-Returns the analytics page with shooting frequency, camera/lens usage, rating distribution, format breakdown, monthly import volume, and storage per volume charts.
-
-### `POST /api/asset/{id}/suggest-tags` -- AI Tag Suggestions
-
-*(Pro)*
-
-Analyzes the asset's preview image with SigLIP and returns suggested tags with confidence scores. Tags already on the asset are included but marked with `existing: true`. The model is lazy-loaded on first request and cached in server memory.
-
-| Parameter | Type   | Description             |
-|-----------|--------|-------------------------|
-| `id`      | string | Asset UUID (path param) |
-
-**Response**: `application/json`
-
-```json
-[
-  {"tag": "landscape", "confidence": 0.85, "existing": false},
-  {"tag": "mountain", "confidence": 0.42, "existing": false},
-  {"tag": "nature", "confidence": 0.31, "existing": true}
-]
-```
-
-| Field       | Type   | Description                         |
-|-------------|--------|-------------------------------------|
-| `tag`       | string | Suggested tag name                  |
-| `confidence`| float  | Confidence score (0.0–1.0)          |
-| `existing`  | bool   | Whether the tag is already on the asset |
-
-```bash
-curl -X POST http://localhost:8080/api/asset/550e8400-e29b-41d4-a716-446655440000/suggest-tags
-```
-
-### `POST /api/batch/auto-tag` -- Batch AI Auto-Tag
-
-*(Pro)*
-
-Auto-tags selected assets using SigLIP. For each asset, encodes the preview image, classifies against the configured label vocabulary, and applies tags above the threshold. Existing tags are not duplicated.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "asset_ids": ["uuid-1", "uuid-2", "uuid-3"]
-}
-```
-
-| Field      | Type     | Description            |
-|------------|----------|------------------------|
-| `asset_ids` | string[] | Array of asset UUIDs  |
-
-**Response**:
-```json
-{
-  "succeeded": 3,
-  "failed": 0,
-  "tags_applied": 12,
-  "errors": []
-}
-```
-
-| Field          | Type     | Description                                  |
-|----------------|----------|----------------------------------------------|
-| `succeeded`    | u32      | Assets successfully processed                |
-| `failed`       | u32      | Assets that failed                           |
-| `tags_applied` | u32      | Total new tags applied across all assets     |
-| `errors`       | string[] | Error messages for failed assets             |
-
-```bash
-curl -X POST http://localhost:8080/api/batch/auto-tag \
-  -H "Content-Type: application/json" \
-  -d '{"asset_ids": ["uuid-1", "uuid-2", "uuid-3"]}'
-```
-
-### `POST /api/batch/detect-faces` -- Batch Face Detection
-
-*(Pro)*
-
-Detects faces in the preview images of the selected assets using YuNet + ArcFace. Stores face records, embeddings, and crop thumbnails.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "asset_ids": ["uuid-1", "uuid-2", "uuid-3"]
-}
-```
-
-| Field      | Type     | Description            |
-|------------|----------|------------------------|
-| `asset_ids` | string[] | Array of asset UUIDs  |
-
-**Response**:
-```json
-{
-  "succeeded": 3,
-  "failed": 0,
-  "faces_detected": 7,
-  "errors": []
-}
-```
-
-```bash
-curl -X POST http://localhost:8080/api/batch/detect-faces \
-  -H "Content-Type: application/json" \
-  -d '{"asset_ids": ["uuid-1", "uuid-2", "uuid-3"]}'
-```
-
-### `POST /api/asset/{id}/split` -- Split Variants Out of Asset
-
-Splits one or more variants out of a multi-variant asset into new standalone assets. Each specified variant becomes a new asset with its own sidecar YAML. Recipes attached to split variants move with them.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "variant_hashes": ["sha256:abcdef1234...", "sha256:567890abcd..."]
-}
-```
-
-| Field            | Type     | Description                              |
-|------------------|----------|------------------------------------------|
-| `variant_hashes` | string[] | Content hashes of variants to split out  |
-
-**Response**:
-```json
-{
-  "source_id": "550e8400-e29b-41d4-a716-446655440000",
-  "new_assets": [
-    {
-      "asset_id": "660f9511-f30c-52e5-b827-557766551111",
-      "variant_hash": "sha256:abcdef1234...",
-      "original_filename": "DSC_001_edit.tif"
-    }
-  ]
-}
-```
-
-| Field                          | Type     | Description                          |
-|--------------------------------|----------|--------------------------------------|
-| `source_id`                    | string   | UUID of the original (source) asset  |
-| `new_assets[].asset_id`       | string   | UUID of the newly created asset      |
-| `new_assets[].variant_hash`   | string   | Content hash of the split variant    |
-| `new_assets[].original_filename` | string | Original filename of the variant   |
-
-**Errors**: Returns 404 if the asset does not exist. Returns 400 if a variant hash is not found on the asset, or if splitting would leave the source asset with zero variants.
-
-```bash
-curl -X POST http://localhost:8080/api/asset/{id}/split \
-  -H "Content-Type: application/json" \
-  -d '{"variant_hashes": ["sha256:abcdef1234..."]}'
-```
-
-### `POST /api/batch/group` -- Merge Assets
-
-Merges selected assets into a single asset. Donor variants are moved to the target asset, donor assets are removed. Tags and recipes are merged.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "asset_ids": ["uuid-1", "uuid-2", "uuid-3"],
-  "target_id": "uuid-1"
-}
-```
-
-| Field       | Type           | Description                                          |
-|-------------|----------------|------------------------------------------------------|
-| `asset_ids` | string[]       | Array of asset UUIDs to merge                        |
-| `target_id` | string or null | Optional target asset UUID (default: auto-selected)  |
-
-**Response**:
-```json
-{
-  "target_id": "uuid-1",
-  "variants_moved": 2,
-  "donors_removed": 2
-}
-```
-
-| Field            | Type   | Description                          |
-|------------------|--------|--------------------------------------|
-| `target_id`      | string | UUID of the target (surviving) asset |
-| `variants_moved` | u32    | Number of variants moved to target   |
-| `donors_removed` | u32    | Number of donor assets removed       |
-
-**Errors**: Returns 400 if fewer than 2 asset IDs are provided.
-
-```bash
-curl -X POST http://localhost:8080/api/batch/group \
-  -H "Content-Type: application/json" \
-  -d '{"asset_ids": ["uuid-1", "uuid-2", "uuid-3"], "target_id": "uuid-1"}'
-```
-
-### `POST /api/batch/auto-group` -- Auto-Group by Stem
-
-Groups selected assets by filename stem using fuzzy prefix matching. Merges donor variants into target assets (shortest stem, preferring RAW originals).
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "asset_ids": ["uuid-1", "uuid-2", "uuid-3"]
-}
-```
-
-| Field      | Type     | Description            |
-|------------|----------|------------------------|
-| `asset_ids` | string[] | Array of asset UUIDs  |
-
-**Response**:
-```json
-{
-  "groups_merged": 1,
-  "donors_removed": 2,
-  "variants_moved": 2
-}
-```
-
-```bash
-curl -X POST http://localhost:8080/api/batch/auto-group \
-  -H "Content-Type: application/json" \
-  -d '{"asset_ids": ["uuid-1", "uuid-2", "uuid-3"]}'
-```
-
-### `POST /api/batch/export` -- Export as ZIP
-
-Downloads matching assets as a ZIP archive. Provide either explicit asset IDs (for selected assets) or browse filter parameters (for "export all" results).
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "asset_ids": ["uuid-1", "uuid-2"],
-  "filters": {
-    "q": "sunset",
-    "type": "image",
-    "tag": "landscape",
-    "format": "jpg",
-    "volume": "Photos",
-    "rating": "3+",
-    "label": "Green",
-    "collection": "Best",
-    "path": "2026/March",
-    "person": "Alice"
-  },
-  "layout": "flat",
-  "all_variants": false,
-  "include_sidecars": false
-}
-```
-
-| Field              | Type     | Default   | Description                                             |
-|--------------------|----------|-----------|---------------------------------------------------------|
-| `asset_ids`        | string[] | `[]`      | Explicit asset IDs (used for selected-asset export)     |
-| `filters`          | object   | `null`    | Browse filter params (used for "export all" results)    |
-| `filters.q`        | string   | `""`      | Free-text search query                                  |
-| `filters.type`     | string   | `""`      | Asset type filter (image, video, audio)                 |
-| `filters.tag`      | string   | `""`      | Tag filter                                              |
-| `filters.format`   | string   | `""`      | Format filter                                           |
-| `filters.volume`   | string   | `""`      | Volume label filter                                     |
-| `filters.rating`   | string   | `""`      | Rating filter (e.g. "3+", "5")                          |
-| `filters.label`    | string   | `""`      | Color label filter                                      |
-| `filters.collection` | string | `""`      | Collection name filter                                  |
-| `filters.path`     | string   | `""`      | Path prefix filter                                      |
-| `filters.person`   | string   | `""`      | Person name filter                                      |
-| `layout`           | string   | `"flat"`  | `"flat"` (all files in root) or `"mirror"` (preserve dirs) |
-| `all_variants`     | bool     | `false`   | Include all variants (not just best)                    |
-| `include_sidecars` | bool     | `false`   | Include recipe/sidecar files                            |
-
-When `asset_ids` is non-empty, `filters` is ignored. When `asset_ids` is empty, the server resolves matching assets from the filters using the same search pipeline as the browse page. If both are empty/null, all catalog assets are exported.
-
-**Response**: `application/zip` with `Content-Disposition: attachment; filename="maki-export-N-assets.zip"`.
-
-The ZIP uses `Stored` compression (no deflation) since media files are already compressed.
-
-```bash
-# Export specific assets
-curl -X POST http://localhost:8080/api/batch/export \
-  -H "Content-Type: application/json" \
-  -d '{"asset_ids": ["uuid-1", "uuid-2"], "layout": "flat"}' \
-  -o export.zip
-
-# Export all results matching filters
-curl -X POST http://localhost:8080/api/batch/export \
-  -H "Content-Type: application/json" \
-  -d '{"filters": {"tag": "landscape", "rating": "4+"}, "layout": "mirror"}' \
-  -o export.zip
+curl -N http://localhost:8080/api/jobs/<job_id>/progress
 ```
 
 ---
 
-## Face & People APIs
+## Maintain
 
-*All face and people endpoints are Pro features.*
+Each endpoint launches a job and returns `{"job_id", "status": "started"}`; a second job of the same kind while one is running returns 409 (different kinds run in parallel). Progress events are `{"processed", "status", "asset"}` (generate-previews: `{"processed", "total", "asset"}`); the terminal event carries the summary below plus `"done": true`.
 
-### `GET /api/asset/{id}/faces` -- List Faces for Asset
+| Method and path | Body (JSON; booleans default to false) | Terminal event fields |
+|-----------------|----------------------------------------|-----------------------|
+| `POST /api/maintain/writeback` | `{"query", "volume", "all", "force", "mirror_tags", "dry_run"}`; 400 when `mirror_tags` without `all`; `[writeback] mirror_tags` in config ORs in | `written`, `already_in_sync`, `skipped`, `failed`, `errors`, `dry_run`, `skipped_offline_volumes` |
+| `POST /api/maintain/sync-metadata` | `{"volume", "media", "dry_run"}` | `inbound`, `outbound`, `unchanged`, `skipped`, `conflicts`, `media_refreshed`, `errors`, `dry_run` |
+| `POST /api/maintain/verify` | `{"volume", "max_age_days"}` | `verified`, `failed`, `modified`, `skipped`, `skipped_recent`, `errors` |
+| `POST /api/maintain/generate-previews` | `{"volume", "asset", "smart", "force", "upgrade"}` | `generated`, `skipped`, `failed`, `upgraded`, `errors`, `offline_blockers` |
+| `POST /api/maintain/sync` | `{"volume" (required label), "path", "apply", "remove_stale"}`; 400 when `remove_stale` without `apply`; `path` must stay inside the mount | `unchanged`, `moved`, `new_files`, `modified`, `missing`, `stale_removed`, `orphaned_cleaned`, `locationless_after`, `errors` |
+| `POST /api/maintain/refresh` | `{"volume", "media", "dry_run"}` | `unchanged`, `refreshed`, `missing`, `skipped`, `errors`, `dry_run` |
+| `POST /api/maintain/cleanup` | `{"volume", "path", "apply"}` | `checked`, `stale`, `removed`, `skipped_offline`, `locationless_variants`, `removed_variants`, `orphaned_assets`, `removed_assets`, `orphaned_previews`, `removed_previews`, `orphaned_smart_previews`, `removed_smart_previews`, `orphaned_embeddings`, `removed_embeddings`, `orphaned_face_files`, `removed_face_files`, `errors`, `skipped_global_passes`, `applied` |
+| `POST /api/maintain/suggest-tags-review` *(ai)* | `{"asset_ids", "threshold"}` (`threshold` defaults to half of `[ai] threshold`) | `{"phase": "suggest_tags_review", "processed", "total", "tag_count"}`; the aggregated payload is fetched from `/api/jobs/{id}/result` |
 
-Returns all detected faces for an asset as a JSON array.
-
-**Response**: `application/json`
-
-```json
-[
-  {
-    "id": "face-uuid-1",
-    "asset_id": "asset-uuid",
-    "person_id": "person-uuid",
-    "bbox_x": 0.25,
-    "bbox_y": 0.15,
-    "bbox_w": 0.12,
-    "bbox_h": 0.18,
-    "confidence": 0.95,
-    "created_at": "2026-03-05T10:30:00Z"
-  }
-]
-```
-
-```bash
-curl http://localhost:8080/api/asset/{id}/faces
-```
-
-### `POST /api/asset/{id}/detect-faces` -- Detect Faces in Asset
-
-Runs face detection on a single asset's preview image. Stores detected faces with embeddings and crop thumbnails.
-
-**Response**: `application/json`
+`volume` is a volume label in these endpoints. The suggest-tags-review result payload:
 
 ```json
-{
-  "faces_detected": 3
-}
-```
-
-```bash
-curl -X POST http://localhost:8080/api/asset/{id}/detect-faces
-```
-
-### `GET /api/people` -- List All People
-
-Returns all people with face counts as a JSON array.
-
-**Response**: `application/json`
-
-```json
-[
-  {
-    "id": "person-uuid",
-    "name": "Alice",
-    "face_count": 42,
-    "representative_face_id": "face-uuid"
-  }
-]
-```
-
-```bash
-curl http://localhost:8080/api/people
-```
-
-### `PUT /api/people/{id}/name` -- Name a Person
-
-Sets or updates the name of a person.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "name": "Alice"
-}
-```
-
-**Response**:
-```json
-{
-  "status": "ok"
-}
-```
-
-```bash
-curl -X PUT http://localhost:8080/api/people/{id}/name \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Alice"}'
-```
-
-### `POST /api/people/{id}/merge` -- Merge People
-
-Merges the source person into the target person. All faces from the source are reassigned to the target.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "source_id": "person-uuid-to-merge"
-}
-```
-
-**Response**:
-```json
-{
-  "status": "ok",
-  "faces_moved": 15
-}
-```
-
-```bash
-curl -X POST http://localhost:8080/api/people/{id}/merge \
-  -H "Content-Type: application/json" \
-  -d '{"source_id": "person-uuid-to-merge"}'
-```
-
-### `DELETE /api/people/{id}` -- Delete a Person
-
-Deletes a person. All faces assigned to this person become unassigned.
-
-**Response**:
-```json
-{
-  "status": "ok"
-}
-```
-
-```bash
-curl -X DELETE http://localhost:8080/api/people/{id}
-```
-
-### `PUT /api/faces/{face_id}/assign` -- Assign Face to Person
-
-Assigns a face to a person.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "person_id": "person-uuid"
-}
-```
-
-**Response**:
-```json
-{
-  "status": "ok"
-}
-```
-
-```bash
-curl -X PUT http://localhost:8080/api/faces/{face_id}/assign \
-  -H "Content-Type: application/json" \
-  -d '{"person_id": "person-uuid"}'
-```
-
-### `DELETE /api/faces/{face_id}/unassign` -- Unassign Face from Person
-
-Removes the person assignment from a face.
-
-**Response**:
-```json
-{
-  "status": "ok"
-}
-```
-
-```bash
-curl -X DELETE http://localhost:8080/api/faces/{face_id}/unassign
-```
-
-### `POST /api/faces/cluster` -- Auto-Cluster Faces
-
-Runs auto-clustering on unassigned faces, grouping similar faces into new person records.
-
-**Content-Type**: `application/json`
-
-**Request body** (optional):
-```json
-{
-  "threshold": 0.5
-}
-```
-
-| Field       | Type  | Default | Description                         |
-|-------------|-------|---------|-------------------------------------|
-| `threshold` | float | 0.5     | Similarity threshold for clustering |
-
-**Response**:
-```json
-{
-  "people_created": 12,
-  "faces_assigned": 87,
-  "singletons_skipped": 5
-}
-```
-
-```bash
-curl -X POST http://localhost:8080/api/faces/cluster \
-  -H "Content-Type: application/json" \
-  -d '{"threshold": 0.5}'
+{"asset_count": 50, "processed": 50, "skipped": 2, "errors": [], "threshold_used": 0.1,
+ "tags": [{"tag": "subject|vehicle|car", "asset_count": 7, "mean_confidence": 0.3, "max_confidence": 0.6,
+           "candidates": [{"asset_id": "...", "confidence": 0.6, "source_label": "car", "existing": false}]}],
+ "per_asset": {"<asset_id>": [{"tag", "confidence", "existing", "source_label"}]},
+ "assets": {"<asset_id>": {"preview_url": "/preview/ab/....jpg", "name": "DSC_0001.NEF"}}}
 ```
 
 ---
 
-## Data APIs
-
-### `GET /api/calendar` -- Calendar Heatmap Data
-
-Returns per-day asset counts for a given year, respecting all search filters. Used by the browse page calendar heatmap view.
-
-| Parameter    | Type   | Default        | Description                                      |
-|--------------|--------|----------------|--------------------------------------------------|
-| `year`       | i32    | current year   | Year to aggregate                                |
-| `q`          | string | `""`           | Free-text search query (supports filter syntax)  |
-| `type`       | string | `""`           | Asset type filter                                |
-| `tag`        | string | `""`           | Tag filter                                       |
-| `format`     | string | `""`           | File format filter, comma-separated for OR       |
-| `volume`     | string | `""`           | Volume ID filter                                 |
-| `rating`     | string | `""`           | Rating filter                                    |
-| `label`      | string | `""`           | Color label filter                               |
-| `collection` | string | `""`           | Collection name filter                           |
-| `path`       | string | `""`           | Path prefix filter                               |
-
-**Response**: `application/json`
-
-```json
-{
-  "year": 2026,
-  "counts": {
-    "2026-01-15": 23,
-    "2026-01-16": 8,
-    "2026-02-25": 14
-  },
-  "years": [2024, 2025, 2026]
-}
-```
-
-| Field    | Type              | Description                                    |
-|----------|-------------------|------------------------------------------------|
-| `year`   | i32               | The requested year                             |
-| `counts` | object            | Map of `"YYYY-MM-DD"` → asset count (days with 0 assets are omitted) |
-| `years`  | i32[]             | All distinct years that have assets in the catalog |
-
-```bash
-# Get 2026 calendar data
-curl http://localhost:8080/api/calendar?year=2026
-
-# With filters
-curl "http://localhost:8080/api/calendar?year=2026&tag=landscape&rating=4%2B"
-```
-
-### `GET /api/stroll/neighbors` -- Embedding Neighbors
-
-*(Pro)*
-
-Returns the nearest neighbors of an asset by SigLIP embedding similarity. Used by the Stroll page for visual exploration and by the fan-out feature, which fetches transitive neighbors when a satellite is focused (L2 neighbors-of-neighbors).
-
-| Parameter | Type   | Default | Description                              |
-|-----------|--------|---------|------------------------------------------|
-| `id`      | string | --      | Asset UUID to find neighbors for (required) |
-| `n`       | u32    | `12`    | Number of neighbors to return (range: 5–25) |
-| `q`       | string | `""`    | Optional search query to scope neighbors |
-
-**Response**: `application/json`
-
-```json
-{
-  "center": {
-    "id": "550e8400-e29b-41d4-a716-446655440000",
-    "name": "DSC_001",
-    "preview_hash": "a1b2c3d4..."
-  },
-  "neighbors": [
-    {
-      "id": "660f9511-f30c-52e5-b827-557766551111",
-      "name": "DSC_002",
-      "preview_hash": "b2c3d4e5...",
-      "similarity": 0.87
-    }
-  ]
-}
-```
-
-| Field              | Type   | Description                         |
-|--------------------|--------|-------------------------------------|
-| `center.id`        | string | Asset UUID of the center asset      |
-| `center.name`      | string | Display name or filename            |
-| `center.preview_hash` | string | Content hash for preview URL     |
-| `neighbors[].id`   | string | Neighbor asset UUID                 |
-| `neighbors[].name` | string | Display name or filename            |
-| `neighbors[].preview_hash` | string | Content hash for preview URL |
-| `neighbors[].similarity` | float | Cosine similarity score (0.0–1.0) |
-
-```bash
-# Get 12 nearest neighbors
-curl "http://localhost:8080/api/stroll/neighbors?id=550e8400-e29b-41d4-a716-446655440000"
-
-# Get 24 neighbors, scoped to landscapes
-curl "http://localhost:8080/api/stroll/neighbors?id=550e8400-e29b-41d4-a716-446655440000&n=24&q=tag:landscape"
-```
-
-### `GET /api/tags` -- List All Tags
-
-Returns all tags with their usage counts as a JSON array of `[name, count]` tuples.
-
-**Response**: `application/json`
-
-```json
-[
-  ["landscape", 42],
-  ["nature", 38],
-  ["portrait", 15]
-]
-```
-
-```bash
-curl http://localhost:8080/api/tags
-```
-
-### `GET /api/paths` -- Path Autocomplete
-
-Hierarchical path completion for the filter bar's Path input. Given a prefix `q`, returns the distinct set of next-segment completions found in `file_locations.relative_path`. Directory completions carry a trailing `/` (more to drill into), file completions don't (leaf).
-
-**Query parameters**:
-
-- `q` (optional, string): prefix the user has typed so far. Empty / missing returns top-level directory segments.
-- `volume` (optional, UUID): scope completions to a single volume. If `q` is an absolute path matching a registered volume mount, the volume is inferred automatically and the mount prefix is stripped.
-- `limit` (optional, integer): maximum completions to return. Default 20, clamped to 100.
-
-**Response**: `application/json` — array of strings, sorted lexicographically.
-
-```json
-["Capture/2024/", "Capture/2025/"]
-```
-
-```bash
-# Top-level directories across all volumes:
-curl 'http://localhost:8080/api/paths'
-
-# Next level after a typed prefix:
-curl 'http://localhost:8080/api/paths?q=Capture/2024/'
-
-# Narrow to a specific volume:
-curl 'http://localhost:8080/api/paths?q=Capture/&volume=68ddc72a-aa3e-4306-b2d2-c726dfedb1df'
-
-# Absolute path — mount prefix stripped automatically, volume inferred:
-curl 'http://localhost:8080/api/paths?q=/Volumes/NIKON%20Z9/Capture/'
-```
-
-**Behaviour notes**:
-
-- Wildcard patterns (`*` anywhere in `q`) short-circuit to an empty array. The filter already understands `*`, and offering completions for a pattern would be misleading.
-- LIKE metacharacters (`%`, `_`) in the prefix are escaped so paths containing those characters match literally.
-- An absolute path that doesn't match any registered volume mount returns an empty array rather than leaking false positives from an unanchored search.
-- Ordering is alphabetical; directories and files intermix at the same level.
-
-### `GET /api/stats` -- Catalog Stats
-
-Returns a JSON object with catalog overview statistics.
-
-**Response**: `application/json`
-
-```json
-{
-  "assets": 1250,
-  "variants": 2100,
-  "recipes": 800,
-  "total_size": 524288000000
-}
-```
-
-```bash
-curl http://localhost:8080/api/stats
-```
-
-### `GET /api/collections` -- List Collections
-
-Returns all collections as a JSON array.
-
-**Response**: `application/json`
-
-```bash
-curl http://localhost:8080/api/collections
-```
-
-### `POST /api/collections` -- Create Collection
-
-Creates a new collection. Persists to both SQLite and YAML.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "name": "Best of 2025",
-  "description": "Top picks from this year"
-}
-```
-
-| Field         | Type          | Description                       |
-|---------------|---------------|-----------------------------------|
-| `name`        | string        | Collection name (required, unique) |
-| `description` | string or null | Optional description              |
-
-**Response** (201 Created):
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "name": "Best of 2025",
-  "description": "Top picks from this year"
-}
-```
-
-**Errors**: Returns 409 Conflict if a collection with the same name already exists.
-
-```bash
-curl -X POST http://localhost:8080/api/collections \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Best of 2025", "description": "Top picks from this year"}'
-```
-
-### `GET /api/saved-searches` -- List Saved Searches
-
-Returns all saved searches as a JSON array.
-
-**Response**: `application/json`
-
-```json
-[
-  {
-    "name": "5-star landscapes",
-    "query": "tag:landscape rating:5",
-    "sort": "date_desc"
-  }
-]
-```
-
-```bash
-curl http://localhost:8080/api/saved-searches
-```
-
-### `POST /api/saved-searches` -- Create/Update Saved Search
-
-Creates a new saved search or updates an existing one with the same name. Persists to `searches.toml`.
-
-**Content-Type**: `application/json`
-
-**Request body**:
-```json
-{
-  "name": "5-star landscapes",
-  "query": "tag:landscape rating:5",
-  "sort": "date_desc"
-}
-```
-
-| Field  | Type          | Description                     |
-|--------|---------------|---------------------------------|
-| `name` | string        | Search name (required)          |
-| `query` | string       | Search query string (required)  |
-| `sort` | string or null | Sort order (optional)          |
-
-**Response**:
-```json
-{
-  "status": "saved",
-  "name": "5-star landscapes"
-}
-```
-
-```bash
-curl -X POST http://localhost:8080/api/saved-searches \
-  -H "Content-Type: application/json" \
-  -d '{"name": "5-star landscapes", "query": "tag:landscape rating:5", "sort": "date_desc"}'
-```
-
-### `DELETE /api/saved-searches/{name}` -- Delete Saved Search
-
-Deletes a saved search by name. Persists the change to `searches.toml`.
-
-| Parameter | Type   | Description                        |
-|-----------|--------|------------------------------------|
-| `name`    | string | Saved search name (path param, URL-encoded) |
-
-**Response**:
-```json
-{
-  "status": "deleted",
-  "name": "5-star landscapes"
-}
-```
-
-**Errors**: Returns 404 if no saved search with that name exists.
-
-```bash
-curl -X DELETE http://localhost:8080/api/saved-searches/5-star%20landscapes
-```
+## Config
+
+| Method and path | Body | Response |
+|-----------------|------|----------|
+| `GET /api/config` | -- | `{"config": <CatalogConfig as JSON>, "raw_toml": "<file contents>", "path": "/.../maki.toml"}` |
+| `POST /api/config` | `{"config": <CatalogConfig as JSON>}` | `{"ok": true, "restart_required": false, "backup_path": "/.../maki.toml.bak"}`; 400 when deserialization or `validate()` fails |
+| `GET /api/config/schema` | -- | JSON Schema (draft 2020-12) of `CatalogConfig`, generated with `schemars` |
+
+Saving copies the previous file to `maki.toml.bak` and writes through `toml_edit`, so comments and formatting survive; only changed keys are touched. Keys that are not part of `CatalogConfig` are silently dropped by deserialization (no `deny_unknown_fields`).
 
 ---
 
-## Volume Management
+## OS integration
 
-The `/volumes` page and the global import dialog talk to these endpoints to register, edit, and remove volumes, and to browse their filesystem for the import flow.
+| Method and path | Body | Response |
+|-----------------|------|----------|
+| `POST /api/open-location` | `{"volume_id", "relative_path"}` | `{"ok": true}` -- reveals the file in the OS file manager; 400 if the volume is offline or the file is missing |
+| `POST /api/open-terminal` | `{"volume_id", "relative_path"}` | `{"ok": true}` -- opens a terminal in the file's directory |
 
-### `GET /api/volumes` -- List Volumes
+Both act on the machine running `maki serve`.
 
-Returns the registered volumes (online and offline). Used by the global import dialog's volume picker and the volumes page table.
+---
 
-**Response**:
-```json
-[
-  {
-    "id": "f3a1b...",
-    "label": "Pictures",
-    "mount_point": "/Volumes/Pictures",
-    "volume_type": "external",
-    "purpose": "media",
-    "is_online": true
-  }
-]
+## AI *(ai)*
+
+Besides the per-asset and batch AI endpoints listed above:
+
+### Query image (search by image)
+
+| Method and path | Request | Response |
+|-----------------|---------|----------|
+| `POST /api/query-image` | raw image bytes as the body (`Content-Type: image/*`, optional `X-Maki-Filename` header, percent-encoded); own body limit of 64 MiB; allowed in read-only mode | `{"token", "filename", "exact_match_id", "embedded", "warning", "thumbnail"}` -- `thumbnail` is a `data:image/jpeg;base64,...` URL; 400 for an empty body, 422 when the file cannot be used |
+| `GET /api/query-image/{token}` | -- | same shape (`warning` null); 404 once the session (1 h TTL) has expired |
+
+The browse pipeline references the session as `similar:@<token>` in `q`.
+
+```bash
+curl -X POST -H "Content-Type: image/jpeg" -H "X-Maki-Filename: query.jpg" \
+  --data-binary @query.jpg http://localhost:8080/api/query-image
 ```
 
-### `POST /api/volumes` -- Register a Volume
+### Faces and people
 
-Registers a new volume. Equivalent to `maki volume add`.
+| Method and path | Body | Response |
+|-----------------|------|----------|
+| `PUT /api/faces/{face_id}/assign` | `{"person_id"}` | `{"ok": true}`; 400 without `person_id` |
+| `DELETE /api/faces/{face_id}/unassign` | -- | `{"ok": true}` |
+| `DELETE /api/faces/{face_id}` | -- | `{"ok": true}` -- deletes the face record, crop and embedding |
+| `POST /api/faces/cluster` | none | `{"people_created", "faces_assigned", "singletons_skipped"}` -- clusters unassigned faces with `[ai] face_cluster_threshold` / `face_min_confidence` |
+| `GET /api/people` | -- | `[{"id", "name", "face_count", "representative_face_id"}]` |
+| `POST /api/people` | `{"name"}` | `{"id", "name"}`; 400 `{"error"}` for an empty name |
+| `PUT /api/people/{id}/name` | `{"name"}` | `{"ok": true}` |
+| `POST /api/people/{id}/merge` | `{"source_id"}` or `{"source_ids": [...]}` | `{"ok": true, "faces_moved": 12, "people_merged": 2}`; 400 without sources |
+| `GET /api/people/merge-suggestions?threshold=0.4&limit=20` | -- | `{"suggestions": [{"similarity", "a": {"id", "name", "face_count", "crop_url", "named"}, "b": {...}}]}` |
+| `DELETE /api/people/{id}` | -- | `{"ok": true}` -- faces become unassigned |
 
-**Request body**:
-```json
-{
-  "path": "/Volumes/PHOTO-2026",
-  "label": "Photo 2026",
-  "purpose": "archive"
-}
-```
+Face crops are served from `/face/{prefix}/{face_id}.jpg`.
 
-`label` is required (UI auto-derives it from the path basename); `purpose` is optional (`media`, `working`, `archive`, `backup`, `cloud`). Returns 409 if a volume with the same label or path is already registered, 400 on invalid input.
+### `GET /api/stroll/neighbors`
 
-### `PUT /api/volumes/{id}/rename` -- Rename a Volume
-
-```json
-{ "label": "New label" }
-```
-
-### `PUT /api/volumes/{id}/purpose` -- Set Volume Purpose
-
-```json
-{ "purpose": "archive" }
-```
-
-`purpose` may be `null` to clear.
-
-### `DELETE /api/volumes/{id}` -- Remove a Volume
-
-Removes the volume registration and any orphaned assets/locations/recipes/derived files left behind. Equivalent to `maki volume remove --apply`.
-
-**Response**:
-```json
-{
-  "label": "Pictures",
-  "locations_removed": 1234,
-  "recipes_removed": 56,
-  "assets_removed": 789
-}
-```
-
-### `GET /api/volumes/{id}/browse` -- Browse Filesystem
-
-Lists directory entries directly from disk under the volume's mount point. Distinct from `/api/paths` (which queries indexed catalog paths) — this returns paths not yet imported, used by the import dialog's subfolder autocomplete.
-
-| Parameter | Type    | Description |
+| Parameter | Default | Description |
 |-----------|---------|-------------|
-| `prefix`  | string  | Volume-relative path prefix (forward-slash separated). Empty = mount root. |
-| `limit`   | number  | Max entries returned (default 50, capped at 500). |
-| `hidden`  | string  | Set to `"1"` to include dotfiles. Default off. |
-| `filter`  | string  | `"all"` (default), `"dirs"`, or `"files"`. |
+| `id` | required (400 if missing) | centre asset |
+| `q` | -- | search query restricting the neighbour pool (combined with `[browse] default_filter`) |
+| `n` | `[serve] stroll_neighbors` (12) | neighbour count, clamped to 5 .. `stroll_neighbors_max` (25) |
+| `mode` | `nearest` | `nearest`, `explore` (skip `skip` ranked neighbours first), `discover` (random sample from a pool of `stroll_discover_pool`) |
+| `skip` | 0 | offset for `explore` |
+| `cross_session` | false | exclude assets from the centre's own shooting session |
 
-**Response**:
 ```json
-{
-  "prefix": "2026/04",
-  "entries": [
-    { "name": "2026-04-22-paris", "is_dir": true,  "relative_path": "2026/04/2026-04-22-paris" },
-    { "name": "2026-04-25.cr3",   "is_dir": false, "relative_path": "2026/04/2026-04-25.cr3" }
-  ]
-}
+{"center": {"asset_id", "name", "preview_url", "smart_preview_url", "rating", "color_label", "format", "created_at"},
+ "neighbors": [{"asset_id", "name", "preview_url", "similarity", "rating", "color_label"}]}
 ```
 
-Sorted directories-first, alphabetical within each. Resolved paths are canonicalized and asserted to start with the canonical mount point — `..` traversal that escapes the mount, and symlinks pointing outside, return **403**. Returns **404** if the prefix doesn't exist or isn't a directory; **400** if the volume is offline.
+404 with a message when the asset or its embedding cannot be resolved.
 
 ---
 
-## Import API
+## Media and static files
 
-A single import job runs at a time on the server. Clients start it via `POST /api/import`, observe via the SSE stream and the status endpoint, and re-attach to a running job by reconnecting the SSE stream.
+| Route | Description |
+|-------|-------------|
+| `GET /preview/{prefix}/{hash}.{ext}` | Thumbnails from `<catalog>/previews/` (`tower-http` `ServeDir`); `ext` follows `[preview] format` |
+| `GET /smart-preview/{prefix}/{file}` | Smart previews from `<catalog>/smart-previews/`; generated on demand from an online source when `[preview] generate_on_demand` is set, otherwise 404 when missing. `Cache-Control: public, max-age=86400` |
+| `GET /video/{hash}` / `GET /audio/{hash}` | Streams the original file of the variant with that content hash (hex without the `sha256:` prefix) from an online volume. Supports `Range` requests (206, `Accept-Ranges: bytes`); 404 when offline, 416 for an unsatisfiable range. One handler serves both; the two paths only differ in what the URL says |
+| `GET /face/{prefix}/{face_id}.jpg` *(ai)* | Face crops from `<catalog>/faces/` |
+| `GET /favicon.ico`, `GET /static/favicon.ico`, `GET /static/maki-icon.svg`, `GET /static/htmx.min.js`, `GET /static/style.css`, `GET /static/leaflet.min.js`, `GET /static/leaflet.css`, `GET /static/leaflet.markercluster.min.js`, `GET /static/MarkerCluster.css`, `GET /static/MarkerCluster.Default.css`, `GET /static/images/marker-icon.png`, `GET /static/images/marker-icon-2x.png`, `GET /static/images/marker-shadow.png`, `GET /static/images/layers.png`, `GET /static/images/layers-2x.png` | Assets embedded at compile time |
 
-### `POST /api/import` -- Start Import
-
-Starts an import job (or runs a dry-run synchronously). Returns 409 if a job is already running.
-
-**Request body**:
-```json
-{
-  "volume_id": "f3a1b...",
-  "subfolder": "2026/04/2026-04-25-paris",
-  "profile": "weekly",
-  "tags": ["paris", "spring-2026"],
-  "auto_group": true,
-  "smart": false,
-  "dry_run": false
-}
-```
-
-All fields except `volume_id` are optional. `subfolder` is volume-relative (no leading `/`).
-
-**Response (live)**:
-```json
-{ "job_id": "uuid-...", "status": "started" }
-```
-
-**Response (dry_run = true)**:
-```json
-{
-  "dry_run": true,
-  "imported": 142,
-  "locations_added": 3,
-  "skipped": 8,
-  "recipes_attached": 142,
-  "recipes_updated": 0,
-  "previews_generated": 0,
-  "sidecars_created": 0,
-  "new_asset_ids": ["uuid", "..."]
-}
-```
-
-### `GET /api/import/progress` -- SSE Progress Stream
-
-Server-Sent Events stream of per-file events while a job runs. On connect: replays a ring buffer of up to 100 recent events first, then continues with the live broadcast — so a page reload mid-import doesn't lose the activity feed. Returns **404** if no job is running.
-
-Each event payload is JSON:
-
-```json
-{ "done": false, "file": "IMG_1234.jpg", "status": "imported",
-  "imported": 17, "skipped": 0, "locations_added": 0, "recipes": 0 }
-```
-
-The terminal event has `"done": true` plus the final summary fields (or `"error"` on failure).
-
-### `GET /api/import/status` -- Job Status
-
-Cheap poll endpoint. Used by the nav badge to show whether a job is running.
-
-**Response (running)**:
-```json
-{
-  "running": true,
-  "job_id": "uuid-...",
-  "started_at": "2026-04-27T14:31:08Z",
-  "imported": 17,
-  "skipped": 0,
-  "locations_added": 0,
-  "recipes": 0
-}
-```
-
-**Response (idle)**:
-```json
-{ "running": false }
-```
-
-### `GET /api/import/profiles` -- Named Import Profiles
-
-Lists named import profiles from `[import.profiles.*]` in `maki.toml`. The global import dialog populates its profile dropdown from this so the partial template carries no template-variable dependencies.
-
-**Response**:
-```json
-{ "profiles": ["weekly", "video"] }
-```
+Responses under `/preview/`, `/smart-preview/` and `/face/` get `Cache-Control: no-cache` from the logging middleware so rotated or regenerated previews revalidate (unchanged files answer 304).
 
 ---
 
-## Static Assets
+## Status codes
 
-### `GET /static/htmx.min.js`
-
-Serves the embedded htmx library. Compiled into the binary at build time.
-
-**Response**: `application/javascript`
-
-### `GET /static/style.css`
-
-Serves the embedded stylesheet. Compiled into the binary at build time.
-
-**Response**: `text/css`
-
-### `GET /preview/*`
-
-Serves preview images from the `previews/` directory within the catalog root. Handled by `tower-http::ServeDir`.
-
-Preview files are stored at `previews/<hash-prefix>/<hash>.jpg` (or `.webp` depending on configuration).
-
-```bash
-curl http://localhost:8080/preview/a1/a1b2c3d4e5f6...abc.jpg -o preview.jpg
-```
+| Code | Where |
+|------|-------|
+| 200 | Success |
+| 201 | `POST /api/collections`, `POST /api/volumes` |
+| 204 | `GET /api/jobs/{id}/result` when the job produced no payload |
+| 206 | Range responses from `/video/{hash}` and `/audio/{hash}` |
+| 303 | `GET /api/search` without `HX-Request` |
+| 400 | Explicit validation failures (empty names, bad combinations such as `mirror_tags` without `all`, compare with fewer than 2 IDs, stack errors) |
+| 401 | Basic auth required or wrong |
+| 403 | Read-only mode (non-GET request), volume browse escaping the mount point |
+| 404 | Unknown asset page, job, query-image token, stroll centre, missing media file |
+| 409 | Duplicate collection / volume / saved-search name; a job of the same kind already running |
+| 416 | Unsatisfiable `Range` |
+| 422 | Unusable query image |
+| 425 | `GET /api/jobs/{id}/result` while the job is running |
+| 500 | Catalog or processing error (`Error: ...` plain text) |
 
 ---
 
-## Error Handling
-
-All endpoints return standard HTTP status codes:
-
-| Code | Meaning                                              |
-|------|------------------------------------------------------|
-| 200  | Success                                              |
-| 201  | Created (collection creation)                        |
-| 303  | See Other (non-htmx redirect from `/api/search`)    |
-| 404  | Not Found (missing asset or saved search)            |
-| 409  | Conflict (duplicate collection name)                 |
-| 500  | Internal Server Error (database or processing error) |
-
-Error responses are plain text with a descriptive message.
-
----
-
-## Content Types Summary
-
-| Endpoint Pattern                      | Request Content-Type             | Response Content-Type  |
-|---------------------------------------|----------------------------------|------------------------|
-| Page routes (`/`, `/asset/*`, etc.)   | --                               | `text/html`            |
-| Single-asset editing (`PUT/POST/DELETE /api/asset/*`) | `application/x-www-form-urlencoded` | `text/html` (partial) |
-| Batch operations (`/api/batch/*`)     | `application/json`               | `application/json`     |
-| Export (`POST /api/batch/export`)     | `application/json`               | `application/zip`      |
-| Data APIs (`GET /api/*`)              | --                               | `application/json`     |
-| Mutation APIs (`POST/DELETE /api/*`)  | `application/json`               | `application/json`     |
+Next: [Module Reference](02-module-reference.md) -- source layout and the responsibilities of each module.

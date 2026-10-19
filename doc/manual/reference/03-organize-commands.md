@@ -644,7 +644,7 @@ Stacks are persisted in `stacks.yaml` at the catalog root and restored during `r
 
 This command only accepts [global flags](00-cli-conventions.md#global-flags).
 
-`--json` outputs the created stack's details (id, member_count, asset_ids).
+`--json` outputs the created stack's details: `id`, `member_count`, and `pick` (the asset ID at position 0).
 
 ### EXAMPLES
 

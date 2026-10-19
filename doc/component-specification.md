@@ -1,6 +1,6 @@
 # Component Specification
 
-> **As of v4.10.3 (September 2026).** Reviewed against the code at that
+> **As of v4.12.2 (October 2026).** Reviewed against the code at that
 > version: the data model below matches `src/models/*.rs` and the SQLite
 > schema in `src/catalog/schema.rs` (schema v12), the routes list is
 > generated from `build_router` in `src/web/mod.rs`, and the config
@@ -211,7 +211,7 @@ recipes:
 
 **Responsibility**: fast queryable index over all metadata. Rebuilt from sidecar files.
 
-**Tables** mirror the data model: `assets` (+ the `assets_fts` and `assets_tags_fts` FTS5 virtual tables and their triggers), `variants`, `file_locations`, `volumes`, `recipes`, `stacks`, `collections`, `collection_assets`, `embeddings` (created unconditionally — the `embed:` filter works in every build), `faces` and `people` (with `--features ai`), and `schema_version`. `SCHEMA_VERSION` is 12; `run_migrations()` applies version-guarded `if current < N` blocks and is executed by `maki init`, `maki migrate` and `maki rebuild-catalog` only — every other command (and the web server) just verifies the stored version at startup and exits if it is behind.
+**Tables** mirror the data model: `assets` (+ the `assets_fts` and `assets_tags_fts` FTS5 virtual tables and their triggers), `variants`, `file_locations`, `volumes`, `recipes`, `stacks`, `collections`, `collection_assets`, `embeddings` (created unconditionally — the `embed:` filter works in every build), `faces` and `people` (with `--features ai`), and `schema_version`. `assets_fts` indexes name, filename, description and source metadata for free-text terms; `assets_tags_fts` (schema v12) is the trigram index behind hierarchy-aware `tag:` patterns, used when `Catalog::plan_tag_index` judges the entry selective enough. `facet_counts()` additionally materialises the ids of the current result set (plus rating, label, format, year and geo flag) into the per-connection TEMP table `facet_match` once per request and aggregates every facet from it. `SCHEMA_VERSION` is 12; `run_migrations()` applies version-guarded `if current < N` blocks and is executed by `maki init`, `maki migrate` and `maki rebuild-catalog` only — every other command (and the web server) just verifies the stored version at startup and exits if it is behind.
 
 This is a **derived cache**, not the source of truth. Running `maki rebuild-catalog` regenerates it from sidecar files, `collections.yaml`, `stacks.yaml`, `faces.yaml`, `people.yaml`, and embedding binary files. This means:
 - No data loss if the SQLite file is deleted.
@@ -418,14 +418,14 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 - `GET /api/jobs` — snapshot of running and recent jobs (nav badge)
 - `GET /api/jobs/{id}` — one job's status and counters
 - `GET /api/jobs/{id}/progress` — SSE progress stream (replays the ring buffer on re-attach)
-- `GET /api/jobs/{id}/result` — the finished job's result payload (e.g. dry-run import report)
+- `GET /api/jobs/{id}/result` — a finished job's structured result payload, set via `Job::set_result` (today only the suggest-tags-review aggregation; import summaries, including dry runs, travel in the terminal SSE event); 425 while running, 204 when the job set none
 
-*Maintenance jobs (each returns `{job_id}`)*
-- `POST /api/maintain/writeback` *(pro)* — `{query?, volume?, all, force}`
+*Maintenance jobs (each returns `{job_id, status: "started"}`; 409 while a job of the same kind runs; booleans default to false)*
+- `POST /api/maintain/writeback` *(pro)* — `{query?, volume?, all, force, mirror_tags, dry_run}` (400 when `mirror_tags` without `all`; `[writeback] mirror_tags` ORs in)
 - `POST /api/maintain/sync-metadata` *(pro)* — `{volume?, media, dry_run}`
 - `POST /api/maintain/verify` — `{volume?, max_age_days?}`
-- `POST /api/maintain/generate-previews` — `{volume?, asset?, smart, force}`
-- `POST /api/maintain/sync` — `{volume, path?, apply}`
+- `POST /api/maintain/generate-previews` — `{volume?, asset?, smart, force, upgrade}` (`upgrade` skips assets whose best-preview variant is still at index 0)
+- `POST /api/maintain/sync` — `{volume, path?, apply, remove_stale}` (400 when `remove_stale` without `apply`; `path` must stay inside the mount)
 - `POST /api/maintain/refresh` — `{volume?, media, dry_run}`
 - `POST /api/maintain/cleanup` — `{volume?, path?, apply}`
 - `POST /api/maintain/suggest-tags-review` *(ai)* — `{asset_ids, threshold?}` — batch suggestion job feeding the per-tag review modal (`templates/tag_review.html`, included from `base.html`)
@@ -448,7 +448,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 - `PUT /api/faces/{face_id}/assign` (`{person_id}`), `DELETE /api/faces/{face_id}/unassign`, `DELETE /api/faces/{face_id}`
 - `POST /api/faces/cluster` — agglomerative clustering of unassigned faces into people
 - `GET /api/people` / `POST /api/people`, `PUT /api/people/{id}/name`, `POST /api/people/{id}/merge` (`{source_id}` or `{source_ids}`), `GET /api/people/merge-suggestions`, `DELETE /api/people/{id}`
-- `GET /api/stroll/neighbors?id&q&n&mode&skip&cross_session` — centre asset plus neighbours with preview URLs and scores; `n` is clamped to `[serve] stroll_neighbors` / `stroll_neighbors_max` (defaults 12 / 25); `mode` `similar` / `explore` (skip-N offset into the ranked list) / `discover`
+- `GET /api/stroll/neighbors?id&q&n&mode&skip&cross_session` — centre asset plus neighbours with preview URLs and scores; `n` is clamped to `[serve] stroll_neighbors` / `stroll_neighbors_max` (defaults 12 / 25); `mode` `nearest` (default) / `explore` (skip-N offset into the ranked list) / `discover` (random sample from `stroll_discover_pool`)
 
 *Media and static*
 - `/preview/…` — `ServeDir` on `<catalog>/previews/`
@@ -623,7 +623,65 @@ After each write, the file is re-hashed and the recipe's `content_hash` is updat
 
 **Analysis**: `maki audio analyze [QUERY] [--force] [--dry-run]` runs the external analyzers configured in `[audio] key_command` (default `keyfinder-cli`) and `bpm_command` (default `beat_this`, BPM derived from the median inter-beat interval) and stores `audio_key` / `audio_bpm`. Missing tools warn and skip their half; analyzed assets are skipped unless `--force`.
 
-### 21. CLI
+### 21. History Store
+
+**Responsibility**: the edit-history journal behind `maki undo` and `maki history` — an independent, non-authoritative, prunable log of field-level metadata edits. Neither a sidecar (not source of truth) nor part of `catalog.db` (not a derived cache): it survives `rebuild-catalog`, is ignored by `doctor`, and can be deleted at the cost of undo capability only.
+
+**Module**: `src/history.rs` — `HistoryStore` over `<catalog_root>/history/`, one JSON file per operation (`<epoch-millis>-<opid>.json`); undone operations move to `history/undone/`. `Operation` carries `command`, `summary`, `source` (`OpSource`, labelled `cli` for every surface in v4.12) and one `AssetDelta` (full prior `Asset` state) per touched asset.
+
+**Operations**:
+- `HistoryStore::from_config(catalog_root)` — honours `[history] enabled` / `max_operations`
+- `record(op)` — append an operation and prune beyond `max_operations`
+- `list(limit)` / `list_for_asset(asset_id, limit)` — newest first
+- `newest_active()` / `mark_undone(op_id)` — LIFO undo bookkeeping
+- Recording happens in the Query Engine: `BatchContext.recorder` collects `AssetDelta`s during a mutation batch (one batch = one operation); `QueryEngine::restore_asset(asset)` undoes by writing the prior state back through sidecar + `insert_asset` + recipes + denormalized columns, flagging XMP recipes `pending_writeback`
+
+### 22. Trash
+
+**Responsibility**: quarantine for destructive file operations so a mistaken batch delete is recoverable.
+
+**Module**: `src/trash.rs` — `Trash` moves media and recipe files into `<catalog_root>/.trash/<YYYY-MM-DD>/<volume_label>/<relative_path>` instead of unlinking them. Used by `delete --remove-files`, `dedup`, `writeback --embed` (pre-splice copy) and the web duplicates page. Derived files (previews, embeddings, face crops) are exempt. Config `[trash] enabled` / `retention_days`; `--no-trash` bypasses it per command.
+
+**Operations**:
+- `Trash::from_config(catalog_root, no_trash)` / `is_enabled()`
+- `dispose(path, volume_label, relative_path) -> Disposition` — move to trash (falls back to copy+delete across filesystems) or delete when disabled
+- `preserve_copy(...)` — keep a copy of a file about to be rewritten in place
+- `list(catalog_root) -> Vec<TrashEntry>`, `restore(catalog_root, trash_path)`, `empty(...) -> EmptyResult` (by age or `--all`, dry-run aware) — the `maki trash list|restore|empty` commands
+
+### 23. Doctor
+
+**Responsibility**: verify (and optionally repair) the dual-store invariant — every sidecar field must match its SQLite row, both directions, including the denormalized columns.
+
+**Module**: `src/doctor.rs` — `run_doctor(catalog_root, sample, repair, on_issue) -> DoctorReport`. Lists sidecar ids and catalog ids, reports `missing_in_catalog`, `missing_sidecar`, `unreadable_sidecars` and per-asset `mismatched` fields (`AssetMismatch`); `--sample N` checks a strided subset of N assets, `--repair` rebuilds the SQLite side from YAML for flagged assets (`repaired` count). `DoctorReport::issues()` / `healthy()` drive the exit status; `--json` serializes the report.
+
+### 24. Watch
+
+**Responsibility**: poll-based filesystem watching for `maki watch` — identical behaviour on macOS, Linux and Windows (no fsevents/inotify).
+
+**Module**: `src/asset_service/watch.rs` — `WatchScanner` snapshots `(size, mtime)` signatures (`FileSig`) of the watched directories on every poll (`[watch] poll_seconds`, `[watch] exclude` additive to `[import] exclude`) and reports a file only once its signature is identical on two consecutive scans, so files still being copied stay pending. `scan() -> ScanOutcome` separates new media, changed media and recipe files (`is_recipe_path`); `run_watch_command` in `src/commands/ingest.rs` loops the scanner and feeds the results into the import and refresh pipelines (`--once` for a single pass).
+
+### 25. Embedding Store
+
+> Only present when built with `--features ai`.
+
+**Responsibility**: persist SigLIP image embeddings and answer nearest-neighbour queries for `similar:`, text-to-image search, auto-stack, the stroll page and search by query image.
+
+**Module**: `src/embedding_store.rs` — `EmbeddingStore` over the `embeddings` table (composite key `(asset_id, model)`, vectors as f32 BLOBs) plus the on-disk mirror `<catalog_root>/embeddings/<model-id>/<prefix>/<asset-id>.bin` for rebuild resilience.
+
+**Operations**:
+- `store(asset_id, embedding, model)` / `get(asset_id, model)` / `has_embedding` / `remove` / `count` / `list_models` / `all_embeddings_for_model(model)`
+- `find_similar(query, limit, exclude, model)` — brute-force scan over the stored rows (no index required)
+- `EmbeddingIndex::load(conn, model, dim)` — in-memory dot-product index cached in `AppState.ai_embedding_index`; `search(query, limit, exclude)`, `upsert(asset_id, embedding)`, `from_rows`
+- `rank_similar(index, query, limit, min_sim, pinned)` — the shared ranker for `similar:<id>`, `similar:@<token>` and `search --image` (pinned asset first at 1.0)
+- `write_embedding_binary` / `read_embedding_binary` / `delete_embedding_binary` / `scan_embedding_binaries` — the binary mirror used by `rebuild-catalog` and `cleanup`
+
+### 26. VLM Client and Model Manager
+
+**VLM client** (`src/vlm.rs`, compiled in every build; the `describe` command and the web describe endpoints are surfaced in Pro builds): Ollama-compatible HTTP client via `curl`. `call_vlm_with_mode(endpoint, model, image_base64, prompt, params, mode, verbosity) -> VlmOutput` sends the image with the prompt for `DescribeMode` `describe` / `tags` / `both` (`default_prompt_for_mode`), `parse_vlm_output` extracts the description and tag list from free-form model output, `encode_image_base64(path, max_edge)` downsizes before upload, and `check_endpoint_status` / `find_matching_model` back `describe --check` and the startup probe that sets `AppState.vlm_enabled`. `VlmParams` carries the `[vlm]` settings with per-model overrides from `[vlm.model_config."name"]`; `BatchDescribeResult` / `DescribeStatus` report per-asset outcomes.
+
+**Model manager** (`src/model_manager.rs`, `--features ai`): download and cache of the SigLIP ONNX model files. `ModelManager::new(model_dir, model_id)` resolves the `ModelSpec`; `model_exists()`, `ensure_model(...)` / `download_model(...)` (via `curl` from HuggingFace), `remove_model()`, `list_files()` / `total_size()`, and `list_available_models(model_base)` back `auto-tag --download` / `--remove-model` / `--list-models`. `default_model_base()` resolves the user model directory, overridable by `[ai] model_dir` (`config::resolve_model_dir`). Face models are handled by `face::resolve_face_model_dir` / `FaceDetector::models_exist` (`faces download`).
+
+### 27. CLI
 
 **Global flags** (defaults for `log` / `time` / `verbose` can be set in `[cli]`):
 - `--json` — output machine-readable JSON

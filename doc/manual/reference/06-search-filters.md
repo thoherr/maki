@@ -44,7 +44,7 @@ The comma operator works within a single filter value. To require multiple tags,
 maki search "tag:landscape tag:sunset"    # assets with BOTH landscape AND sunset tags
 ```
 
-**Repeating a filter means AND only for `tag:` and `meta:`.** Every other repeatable filter flattens its repeated values into one OR list, exactly as if they had been written with commas: `type:image type:video` is the same as `type:image,video`, `camera:sony camera:nikon` matches either camera, `format:nef format:cr3` matches either format. The same holds for `label:`, `lens:`, `description:`, `path:`, `volume:`, and `collection:`. `person:` is the one filter whose repeat semantics differ between front ends — see [person](#person).
+**Repeating a filter means AND only for `tag:`, `meta:`, and `person:`** (the same in the CLI and the web UI; see [person](#person)). The equality and LIKE filters flatten their repeated values into one OR list, exactly as if they had been written with commas: `type:image type:video` is the same as `type:image,video`, `camera:sony camera:nikon` matches either camera, `format:nef format:cr3` matches either format. The same holds for `label:`, `lens:`, `description:`, `path:`, and `volume:`; repeated `collection:` entries OR-union their members. Numeric, date, and string filters (`rating:`, `iso:`, `focal:`, `f:`, `width:`, `height:`, `copies:`, `variants:`, `duration:`, `tagcount:`, `stale:`, `date:`, `dateFrom:`, `dateUntil:`) are single-valued: when repeated, only the last token counts.
 
 ### Combining Negation and OR
 
@@ -309,7 +309,7 @@ maki search "iso:3200+"         # ISO 3200 or higher
 maki search "iso:100-800"       # ISO between 100 and 800 inclusive
 ```
 
-**SQL behavior:** Numeric comparison on the typed `v.iso` column of the variants table (`= ?`, `>= ?`, `BETWEEN`, `IN (...)`), populated at import from EXIF. Triggers a JOIN to the variants table.
+**SQL behavior:** Numeric comparison on the typed `v.iso` column of the variants table (`= ?`, `>= ?`, `(v.iso >= ? AND v.iso <= ?)` for a range, `IN (...)`), populated at import from EXIF. Triggers a JOIN to the variants table.
 
 ---
 
@@ -363,7 +363,7 @@ maki search "width:3840"        # exactly 3840 pixels (4K UHD width)
 maki search "width:4000+ height:2000+"
 ```
 
-**SQL behavior:** Numeric comparison on the typed `v.image_width` column (`= ?` for a bare number, `>= ?` with `+`, `BETWEEN` for a range). Triggers a JOIN to the variants table.
+**SQL behavior:** Numeric comparison on the typed `v.image_width` column (`= ?` for a bare number, `>= ?` with `+`, `(v.image_width >= ? AND v.image_width <= ?)` for a range). Triggers a JOIN to the variants table.
 
 ---
 
@@ -412,14 +412,14 @@ maki search "meta:color_space=sRGB"
 
 | Pattern | Meaning | Speed |
 |---------|---------|-------|
-| `path:Pictures/2026` | Prefix from root: matches `Pictures/2026...` | fast (index scan) |
-| `path:Pictures/*/Capture` | Anything between `Pictures/` and `/Capture` | fast (left-anchored) |
-| `path:*/2026/*/party` | Slash-anchored substring search | slow (full scan) |
-| `path:*party` | Substring match anywhere | slow (full scan) |
+| `path:Pictures/2026` | Prefix from root: matches `Pictures/2026...` | left-anchored (cheap per row) |
+| `path:Pictures/*/Capture` | Anything between `Pictures/` and `/Capture` | left-anchored (cheap per row) |
+| `path:*/2026/*/party` | Slash-anchored substring search | unanchored (costly per row) |
+| `path:*party` | Substring match anywhere | unanchored (costly per row) |
 
 A trailing `*` is implicit — `path:Pictures/2026` and `path:Pictures/2026*` are equivalent.
 
-**Performance note:** Patterns with no leading `*` use the SQLite index on `relative_path` and are fast even on large catalogs. Patterns starting with `*` force a full table scan and are noticeably slower on catalogs with hundreds of thousands of assets.
+**Performance note:** `path:` is evaluated as `fl.relative_path LIKE ? ESCAPE '\'` and there is no index on `file_locations.relative_path` (the table is indexed only on `content_hash` and `volume_id`), so every pattern is a scan over the file-location rows. Left-anchored patterns reject non-matching rows after a few characters and are noticeably cheaper than patterns starting with `*`, which compare the whole path; on catalogs with hundreds of thousands of assets either form costs more than an indexed filter, so combine `path:` with a selective filter (`volume:`, `tag:`, `date:`) where possible.
 
 **Automatic normalization** (CLI only, not in web UI or saved searches):
 
@@ -465,7 +465,7 @@ maki search "date:2026"             # assets created in 2026
 maki search "date:2026-02 tag:landscape"
 ```
 
-**SQL behavior:** `WHERE a.created_at LIKE 'prefix%'`. Pure assets-table filter, no JOIN required. Uses the index on `assets.created_at`.
+**SQL behavior:** `WHERE a.created_at LIKE 'prefix%'`. Pure assets-table filter, no JOIN required. The prefix `LIKE` does not use `idx_assets_created_at` (only the `>=` / `<` comparisons of `dateFrom:` and `dateUntil:` do), so `date:` scans the assets table; on very large catalogs an equivalent `dateFrom:`/`dateUntil:` pair is faster.
 
 ---
 

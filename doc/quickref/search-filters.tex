@@ -139,7 +139,7 @@ All numeric filters support: exact (\cmd{3}), minimum (\cmd{3+}), range (\cmd{3-
 
 \renewcommand{\arraystretch}{1.4}
 \begin{tabularx}{\textwidth}{@{}l X@{}}
-\textbf{AND} & Repeat \cmd{tag:} (or \cmd{meta:}) to require all values; repeating other filters ORs them \\
+\textbf{AND} & Repeat \cmd{tag:}/\cmd{meta:}/\cmd{person:} to require all values; repeating other filters ORs them (numeric/date: last wins) \\
              & \cmd{tag:landscape tag:sunset} \\[6pt]
 \textbf{OR}  & Comma within a single filter \\
              & \cmd{tag:alice,bob} \quad \cmd{format:nef,cr3} \\[6pt]

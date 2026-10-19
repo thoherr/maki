@@ -2,6 +2,85 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## v4.12.2 (2026-10-19)
+
+Consistency release from the October 2026 audit of documentation,
+planning documents, code and tests. Two filter-layer defects fixed, Pro
+feature set added to CI, test coverage widened, and every document
+reconciled with the code. No schema migration.
+
+### Fixed (behaviour)
+
+- **`missing:true` now works in the web UI.** The parsed filter was never
+  carried into the options the web routes build, so browse, search,
+  page IDs and facets silently ignored it while the CLI honoured it. The
+  missing-file resolution is now shared by both front ends.
+- **`[browse] default_filter` honours `duration:`, `codec:`, `key:` and
+  `bpm:`.** The default-filter merge skipped those four fields.
+- **Denormalized media columns refresh on metadata reimport.** The
+  variant-column refresh helper now also recomputes duration, codec and
+  the audio columns, so a reimport that changed them no longer leaves
+  stale values until the next full insert.
+- **`relocate --json` has one shape.** The positional single-asset form
+  printed a different object than the `--target` batch form; both now
+  emit the documented `{assets, copied, skipped, removed, errors, dry_run}`.
+- **Shell tab completion** lists `ai`, `audio`, `create-sidecars`, `doc`,
+  `doctor`, `history`, `licenses`, `status`, `trash`, `undo` and `watch`.
+- **In-app keyboard help** now lists the already-bound select-all-matching
+  shortcut on the browse page, Space (slideshow) in the lightbox and `s`
+  (stroll) on the detail page.
+- **Web error statuses**: deleting, renaming or favouriting an unknown
+  saved search returns 404, and removing the last copy of a file through
+  the duplicates page returns 400; both matched the error text with the
+  wrong capitalisation and fell through to 500.
+
+### Changed
+
+- **CI runs the Pro feature set** (lib and CLI tests) on all three
+  platforms, plus the XMP property tests and the doc tests on the default
+  pass. Previously only the default and `ai` builds were tested, so the
+  Pro-gated tests ran only on a developer machine before a release.
+- **Tests** added for the commands that had none (`preview`, `doc`,
+  `licenses`, `doctor`, `fix-dates`, `describe` without an endpoint,
+  `tag scan` / `expand-ancestors` / `fix-unicode` / `delete` /
+  `export-vocabulary`, `volume split` / `rename`, `faces status`) and
+  web-harness smoke tests for the previously unexercised routes (page
+  IDs, facets, search, stats, jobs, config, collections, saved searches,
+  tag rename/split/delete, batch label/tags, paths, calendar, map,
+  volumes, stacks and the remaining pages).
+
+### Documentation
+
+- **REST API reference rewritten from the router.** It was a year behind:
+  about 45 live endpoints missing, two import endpoints that no longer
+  exist, tag removal documented with a path parameter instead of the
+  query parameter, auto-tag / face detection / import dry-run described
+  as synchronous although they are background jobs, and wrong response
+  shapes for faces, stroll, people and stacks.
+- **Building-and-testing guide** brought up to date: test counts, the
+  `--test cli` target, property and doc tests, the web harness, the
+  Pro-gated command list, the crate table and the CI matrix.
+- **Search-filter semantics** corrected everywhere they were stated:
+  `person:` repeats are AND on both front ends; negation exists only for
+  the listed filters; equality filters flatten repeats to OR while
+  numeric, date and string filters take the last value; `scattered:`
+  counts session roots; no index claims for `path:` and `date:` prefix
+  matches; ranges are two comparisons, not BETWEEN.
+- **Reference corrections**: JSON shapes of `verify`, `tag`, `writeback`,
+  `stack create`, `delete`, `dedup`, `import`, `edit` and `stats` (`jq`
+  paths under `.overview`); a `cleanup` example that did not parse; the
+  nonexistent `serve --per-page`; the two `[writeback]` keys added in
+  v4.11.0 in the specification and the defaults table; data-model
+  corrections (schema version 12, `original_filename` on Variant, field
+  types, nested recipe location); cheat-sheet placeholders and flags;
+  component specification header, maintain request bodies and six
+  components that were missing from its list; web UI guide key tables
+  and the config editor's handling of unknown keys.
+- **Planning documents**: the Horizon 3 release map no longer promises a
+  v4.10.x undo follow-on that never shipped; v4.9.1 is annotated as never
+  published (shipped inside v4.9.2); the May 2026 QA report is archived
+  with a closing status.
+
 ## v4.12.1 (2026-10-12)
 
 Browse sidebar performance and a detail-page request fix. No schema
@@ -593,7 +672,9 @@ skip).
 
 ## v4.9.1 (2026-07-09)
 
-Security + polish patch. No schema migration.
+Security + polish patch. No schema migration. Not published as a
+release — this version was never tagged; everything below shipped
+inside v4.9.2.
 
 ### Security
 

@@ -61,11 +61,11 @@ Filters combine with **AND** — every filter must match. Free-text tokens that 
 
 ## Combining Filters
 
-**AND** — repeat `tag:` (or `meta:`) to require all values:
+**AND** — repeat `tag:` (or `meta:`, `person:`) to require all values:
 
     tag:landscape tag:sunset          both tags required
 
-Repeating any other filter ORs the values (`type:image type:video` = `type:image,video`).
+Repeating an equality filter ORs the values (`type:image type:video` = `type:image,video`); numeric, date, and string filters keep only the last occurrence.
 
 **OR** — comma within a single filter:
 

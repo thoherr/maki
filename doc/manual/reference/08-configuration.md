@@ -100,7 +100,7 @@ When `false`, smart previews must be generated explicitly via `maki import --sma
 
 Changing `max_edge` or `format` affects only newly generated previews. Existing previews are not automatically regenerated. Use `maki generate-previews --force` to regenerate all previews with the new settings.
 
-Smart previews are stored in a separate directory (`smart_previews/`) and do not replace regular thumbnails.
+Smart previews are stored in a separate directory (`smart-previews/`) and do not replace regular thumbnails.
 
 ```toml
 [preview]
@@ -220,10 +220,10 @@ at startup.
 
 ### CLI Override
 
-The `--port`, `--bind`, `--per-page`, and `--read-only` flags on `maki serve` override the values from `maki.toml`:
+The `--port`, `--bind`, and `--read-only` flags on `maki serve` override the values from `maki.toml` (`per_page` has no CLI flag; set it in the config file):
 
 ```bash
-maki serve --port 9090 --bind 0.0.0.0 --per-page 100
+maki serve --port 9090 --bind 0.0.0.0
 ```
 
 ```toml
@@ -1355,6 +1355,8 @@ When a field is absent from `maki.toml`, these defaults apply:
 | `vlm.model_config` | none |
 | `writeback.enabled` | `false` |
 | `writeback.mirror_tags` | `false` |
+| `writeback.sidecar_naming` | `"stem"` |
+| `writeback.create_sidecars` | `false` |
 | `browse.default_filter` | none |
 | `browse.slideshow_seconds` | `5` |
 | `browse.slideshow_loop` | `true` |

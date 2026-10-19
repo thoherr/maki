@@ -71,7 +71,7 @@ settled (revisit if real use argues otherwise):
 
 ## Reversibility arc
 
-### v4.9.x — Edit history + undo
+### v4.9.0 — Edit history + undo (shipped)
 
 **The structural payoff.** Beyond the user-facing undo, this finally
 builds the **write-through choke point** the codebase has wanted since
@@ -117,7 +117,7 @@ methods).
 - `maki undo [--dry-run] [--force]` and `maki history [<asset>]
   [--limit N] [--json]`.
 
-**Follow-ons (v4.9.x):**
+**Follow-ons (unscheduled — none shipped as of v4.12.1):**
 - Operation-level undo for tag rename / split / delete / fix-unicode
   (multi-asset, already operation-shaped).
 - Structural ops (group / split / stack / merge) — these snapshot
@@ -205,7 +205,7 @@ part. Smallest audience — last, or only if asked for.
 | **v4.9.0** | Edit-history journal + write-through choke point; `maki undo` / `maki history` for field edits | ✅ shipped 2026-06-23 |
 | **v4.9.3** | Audio phase 1 (outlier — see `audio-first-class.md`), schema v11 | ✅ shipped 2026-08-15 |
 | **v4.10.0** | Search by query image (outlier, demand-driven — see `query-image-search.md`) | ✅ shipped 2026-09-03 |
-| **v4.10.x** | Undo for tag rename/split/delete; structural-op undo; web undo toast + history panel; (redo) | next |
+| **unscheduled** | Remaining Reversibility work: undo for tag rename/split/delete; structural-op undo; web undo toast + history panel; redo | not started |
 | **v5.0.0** | Multi-machine (after its proposal doc + go/no-go); the Reach headline | proposal-gated |
 | **v5.x** | Mobile/PWA, tethered — interleaved | planned |
 | **when felt** | ANN index (scale-triggered) | deferred |
@@ -216,7 +216,23 @@ point) and the `maki undo` / `maki history` commands landed in v4.9.0.
 The journal is built as the planned `<catalog>/history/` log with
 bounded LIFO undo at operation granularity — both decided forks held.
 What remains in the arc: extending undo past field edits (tag
-rename/split/delete, then structural ops), redo, and the web UI.
+rename/split/delete, then structural ops), redo, and the web UI. As of
+v4.12.1 (2026-10-12) none of that has started: `tag_rename` /
+`tag_split` / `tag_delete` in `src/query.rs` run outside the recorder,
+there is no redo, no web history route, and `OpSource::Web` /
+`OpSource::Shell` exist in `src/history.rs` but every journal entry is
+still labeled `cli`. An earlier revision of this table scheduled the
+remainder as "v4.10.x"; that slot was taken by demand-driven work
+instead, and no release is now promised for it.
+
+What actually shipped between v4.10.0 and v4.12.1 (see `CHANGELOG.md`),
+none of it Reversibility work: query-image search (v4.10.0, 2026-09-03);
+fix releases and the documentation audit (v4.10.1–v4.10.4,
+2026-09-05 → 2026-09-22); sidecar naming + auto-created sidecars for
+Capture One / Lightroom (v4.11.0, 2026-10-10); `import --auto-group`
+session scoping (v4.11.1, 2026-10-12); the tag-filter trigram index
+(schema v12) + detail-page boundary navigation (v4.12.0, 2026-10-12);
+facets materialised once + prefetch marker (v4.12.1, 2026-10-12).
 
 Sequencing rationale: reversibility first — it is the natural
 continuation of the trust arc, the lowest-risk highest-value item, and

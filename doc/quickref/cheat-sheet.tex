@@ -103,7 +103,7 @@ Import files into the catalog. \\
 Poll directories and auto-import new files. \opt{--volume} \opt{--interval SECS} \opt{--once}
 
 \subsection{maki delete \textit{ASSET\_IDS...}}
-Delete assets. \opt{--apply} \opt{--remove-files}
+Delete assets. \opt{--apply} \opt{--remove-files} \opt{--no-trash}
 
 \subsection{maki tag \textit{ASSET\_ID TAGS...}}
 Add or remove tags. \opt{--remove}
@@ -123,7 +123,7 @@ Replace one leaf tag by two or more tags. \opt{--keep} \opt{--apply}
 Report malformed tags (read-only); add missing ancestor levels. \opt{--asset} \opt{--apply}
 
 \subsection{maki tag clear \textit{ASSET\_ID}}
-Remove all tags from an asset.
+Remove all tags from an asset. \opt{--source SRC}
 
 \subsection{maki tag fix-unicode}
 NFC-normalise every tag value catalog-wide; merges NFC/NFD duplicates per asset. \opt{--apply}
@@ -213,7 +213,7 @@ Open documentation PDF in browser.
 Show MAKI license + 3rd-party crate licenses. \opt{--summary}
 
 \subsection{maki serve}
-Start web UI. \opt{--port} \opt{--bind}
+Start web UI. \opt{--port} \opt{--bind} \opt{--read-only}
 
 \subsection{maki shell \textit{[SCRIPT]}}
 Interactive shell, or run a script file. \opt{-c CMD} \opt{--strict}
@@ -234,7 +234,7 @@ Check file integrity. \\
 Sync with disk changes. \opt{--apply} \opt{--remove-stale}
 
 \subsection{maki sync-metadata \textit{[QUERY]} \pro}
-Bidirectional XMP sync. \opt{--asset} \opt{--dry-run}
+Bidirectional XMP sync. \opt{--volume} \opt{--asset} \opt{--media} \opt{--dry-run}
 
 \subsection{maki refresh \textit{[PATHS...]}}
 Re-read changed recipes. \opt{--dry-run} \opt{--media} \\
@@ -247,7 +247,7 @@ Write pending edits to XMP. \opt{--all} \opt{--mirror-tags} \opt{--force} \opt{-
 \opt{--force} rebuilds dc:subject + lr:hierarchicalSubject from catalog (more aggressive).
 
 \subsection{maki cleanup}
-Remove stale records. \opt{--apply} \opt{--list} \opt{--path}
+Remove stale records. \opt{--apply} \opt{--list} \opt{--volume} \opt{--path}
 
 \subsection{maki dedup}
 Remove same-volume duplicate file locations. \opt{--apply} \opt{--prefer}
@@ -450,7 +450,7 @@ All support: \cmd{x} (exact), \cmd{x+} (min), \cmd{x-y} (range), \cmd{x,y} (OR)
 \cmd{'\{id\}\textbackslash t\{name\}'} & Custom template \\
 \end{tabularx}
 
-Placeholders: \cmd{\{id\}}, \cmd{\{name\}}, \cmd{\{filename\}}, \cmd{\{type\}}, \cmd{\{format\}}, \cmd{\{tags\}}, \cmd{\{description\}}, \cmd{\{rating\}}, \cmd{\{label\}}, \cmd{\{date\}}, \cmd{\{size\}}
+Placeholders: \cmd{\{id\}}, \cmd{\{short\_id\}}, \cmd{\{name\}}, \cmd{\{filename\}}, \cmd{\{type\}}, \cmd{\{format\}}, \cmd{\{date\}}, \cmd{\{tags\}}, \cmd{\{description\}}, \cmd{\{hash\}}, \cmd{\{label\}}
 
 \section{Configuration (maki.toml)}
 

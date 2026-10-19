@@ -25,7 +25,14 @@ cargo build --features pro
 cargo build --release --features pro
 ```
 
-Builds the **Pro** edition with SigLIP-based zero-shot image classification, face detection/recognition, and visual similarity search. The `pro` feature enables `ai` automatically. Adds ONNX Runtime (`ort`), `ndarray`, and `tokenizers` as dependencies. The ONNX Runtime shared library is downloaded automatically during build. Without `--features pro` (or `--features ai`), these dependencies are not compiled and AI commands (`auto-tag`, `embed`, `faces`) are not available.
+Builds the **Pro** edition with SigLIP-based zero-shot image classification, face detection/recognition, and visual similarity search. The `pro` feature enables `ai` automatically. Adds ONNX Runtime (`ort`), `ndarray`, and `tokenizers` as dependencies. The ONNX Runtime shared library is downloaded automatically during build.
+
+Two layers of commands are feature-gated (see `print_custom_help` in `src/main.rs`):
+
+- `--features ai` compiles the AI commands `auto-tag`, `auto-stack`, `embed`, `faces` and `ai`, plus the `similar:` / text-query search paths, the stroll page and the AI web endpoints.
+- `--features pro` additionally compiles `describe` (VLM descriptions), `writeback` and `sync-metadata`, and switches the branding to "MAKI Pro".
+
+A standard build (no features) has none of these; `maki --help` lists them under a "download MAKI Pro for ..." note instead.
 
 ### Requirements
 
@@ -39,9 +46,17 @@ Builds the **Pro** edition with SigLIP-based zero-shot image classification, fac
 
 ```bash
 cargo test
+cargo test --features pro
 ```
 
-Runs approximately 693 tests total: ~465 unit tests and ~228 integration tests. With `--features pro` (or `--features ai`), adds ~41 unit tests and ~13 integration tests.
+Both feature matrices must pass before a release. The suite consists of four targets; the counts below are the single place in the manual where they are recorded (as of v4.12.2):
+
+| Target | Command | Standard build | `--features pro` |
+|--------|---------|----------------|------------------|
+| Unit tests (`src/**`, incl. the web harness) | `cargo test --lib` | 988 | 1140 |
+| CLI integration tests (`tests/cli.rs`) | `cargo test --test cli` | 297 | 344 |
+| XMP property tests (`tests/xmp_proptest.rs`) | `cargo test --test xmp_proptest` | 7 | 7 |
+| Doc tests | `cargo test --doc` | 14 | 14 |
 
 ### Unit Tests Only
 
@@ -49,15 +64,35 @@ Runs approximately 693 tests total: ~465 unit tests and ~228 integration tests. 
 cargo test --lib
 ```
 
-Runs the ~465 unit tests embedded in library source files (`#[cfg(test)]` modules within `src/`).
-
-### Integration Tests Only
+Runs the unit tests embedded in library source files (`#[cfg(test)]` modules within `src/`). This target includes the in-process web harness in `src/web/tests.rs`: it builds the real axum `Router` against a temporary catalog and drives it with `tower::ServiceExt::oneshot` (no socket), checking status codes, fragment rendering, the `HX-Trigger: pending-changed` header and the dual-store write of every mutation endpoint. Run just that module with:
 
 ```bash
-cargo test --test integration
+cargo test --lib web::
 ```
 
-Runs the ~228 integration tests defined in `tests/cli.rs`. These tests exercise the full system through the CLI binary and library API, using temporary catalogs and volumes.
+### CLI Integration Tests Only
+
+```bash
+cargo test --test cli
+```
+
+Runs the integration tests defined in `tests/cli.rs`. These tests exercise the full system through the CLI binary and library API, using temporary catalogs and volumes.
+
+### XMP Property Tests
+
+```bash
+cargo test --test xmp_proptest
+```
+
+`tests/xmp_proptest.rs` uses `proptest` to generate tag sets, hierarchical paths, descriptions, labels and ratings and asserts that the XMP writer round-trips them through the reader, stays byte-stable on a no-op rewrite, and is idempotent. Regressions found by the generator are pinned in `tests/xmp_proptest.proptest-regressions`.
+
+### Doc Tests
+
+```bash
+cargo test --doc
+```
+
+Compiles and runs the examples in doc comments (for example `Asset::validate_color_label`).
 
 ### Run a Specific Test
 
@@ -66,6 +101,10 @@ cargo test test_name_pattern
 ```
 
 Runs only tests whose names match the given pattern.
+
+### Continuous Integration
+
+`.github/workflows/ci.yml` runs on every push and pull request with a matrix of three platforms (macOS, Linux, Windows) times three feature sets (default, `--features ai`, `--features pro`). Every matrix cell builds and runs the lib and CLI targets (`cargo test --lib`, `cargo test --test cli`); the default-features cell additionally runs `cargo test --test xmp_proptest` and `cargo test --doc`. The Linux job also runs `cargo deny` (advisories, licenses, bans, sources) against `deny.toml`.
 
 ### Test Helpers
 
@@ -91,7 +130,7 @@ Generates HTML documentation from doc comments and opens it in your browser. The
 bash doc/manual/build-pdf.sh
 ```
 
-Generates `doc/manual/maki-manual.pdf` from the 21 Markdown source files. The script concatenates all sections in order, renders mermaid diagrams to PNG, and produces a PDF with table of contents, headers/footers, and syntax-highlighted code blocks. The version number is read from `Cargo.toml`.
+Generates `doc/manual/maki-manual.pdf` from the 29 Markdown source files (the index, 13 user-guide chapters, 12 reference chapters and 3 developer chapters, listed in the script). The script concatenates all sections in order, renders mermaid diagrams to PNG, and produces a PDF with table of contents, headers/footers, and syntax-highlighted code blocks. The version number is read from `Cargo.toml`.
 
 **Prerequisites** (not required for building or running maki itself):
 
@@ -115,12 +154,12 @@ Generates `doc/manual/maki-manual.pdf` from the 21 Markdown source files. The sc
    ```
    This regenerates `Cargo.lock` with the new version.
 
-4. **Run all tests — both feature matrices**:
+4. **Run all tests -- both feature matrices**:
    ```bash
    cargo test
    cargo test --features pro
    ```
-   All tests must pass in both configurations before releasing.
+   All tests must pass in both configurations before releasing. Update the test-count table in the [Testing](#testing) section when the numbers change.
 
 5. **Commit**:
    ```bash
@@ -187,6 +226,7 @@ Generates `doc/manual/maki-manual.pdf` from the 21 Markdown source files. The sc
 | `axum` | HTTP web framework for the `serve` command |
 | `askama` | Compile-time HTML template engine |
 | `tokio` | Async runtime for the web server |
+| `tokio-stream` | Stream adapters for the job progress SSE endpoint and the ZIP export body |
 | `tower-http` | Static file serving middleware (`ServeDir` for previews) |
 | `toml` / `toml_edit` | Configuration file parsing (`maki.toml`, `searches.toml`); comment-preserving Settings save |
 | `schemars` | JSON Schema generation for the web Settings form |
@@ -194,6 +234,7 @@ Generates `doc/manual/maki-manual.pdf` from the 21 Markdown source files. The sc
 | `zip` | Web export ZIP archives |
 | `rustyline` | Interactive `maki shell` REPL (line editing, completion) |
 | `glob-match` | Filename glob matching for import exclusion patterns |
+| `unicode-normalization` | NFC normalization of tag values (`tag fix-unicode`, tag input) |
 | `chrono` | Date/time handling with serde support |
 | `anyhow` / `thiserror` | Error handling |
 | `ort` | ONNX Runtime bindings for AI inference (optional, `ai` feature) |
