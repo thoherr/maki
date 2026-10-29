@@ -285,7 +285,7 @@ fn best_preview_for_details(
     preview_gen: &crate::preview::PreviewGenerator,
     ext: &str,
 ) -> Option<String> {
-    let idx = crate::models::variant::best_preview_index_details(&details.variants)?;
+    let idx = details.best_variant_index()?;
     let v = &details.variants[idx];
     if preview_gen.has_preview(&v.content_hash) {
         Some(crate::web::templates::preview_url(&v.content_hash, ext))
@@ -299,7 +299,7 @@ fn best_smart_preview_for_details(
     preview_gen: &crate::preview::PreviewGenerator,
     ext: &str,
 ) -> Option<String> {
-    let idx = crate::models::variant::best_preview_index_details(&details.variants)?;
+    let idx = details.best_variant_index()?;
     let v = &details.variants[idx];
     if preview_gen.has_smart_preview(&v.content_hash) {
         Some(crate::web::templates::smart_preview_url(&v.content_hash, ext))

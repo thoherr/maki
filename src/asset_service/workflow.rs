@@ -334,7 +334,12 @@ fn run_auto_group(
         for group in &ag_result.groups {
             if let Ok(uuid) = group.target_id.parse::<uuid::Uuid>() {
                 if let Ok(asset) = metadata_store.load(uuid) {
-                    if let Some(idx) = crate::models::variant::best_preview_index(&asset.variants)
+                    let best_hash = crate::models::variant::compute_best_variant_hash_with_override(
+                        &asset.variants,
+                        asset.preview_variant.as_deref(),
+                    );
+                    if let Some(idx) = best_hash
+                        .and_then(|h| asset.variants.iter().position(|v| v.content_hash == h))
                     {
                         if idx > 0 {
                             let v = &asset.variants[idx];

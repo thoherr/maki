@@ -1198,7 +1198,7 @@ maki [GLOBAL FLAGS] generate-previews [PATHS...] [OPTIONS]
 
 Generates preview thumbnails for assets. Standard image formats produce 800px JPEG thumbnails via the `image` crate. RAW files use `dcraw` or `dcraw_emu` (LibRaw). Videos use `ffmpeg`. Non-visual formats (audio, documents) get an info card showing file metadata.
 
-**Without PATHS**: Iterates all catalog assets and generates previews for the best variant of each asset (Export > Processed > Original, standard image formats preferred over RAW, file size tiebreak). Can be filtered with `--asset` or `--volume`.
+**Without PATHS**: Iterates all catalog assets and generates previews for the best variant of each asset (developed image formats before RAW, then Export > Processed > Original > Alternate, file size tiebreak; a `preview_variant` override wins). Can be filtered with `--asset` or `--volume`.
 
 **With PATHS**: Resolves files on disk and looks up their variants in the catalog, generating previews only for those specific files.
 

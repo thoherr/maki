@@ -160,7 +160,7 @@ fn find_similar_inner(
                 });
 
             let preview_url = {
-                let best_idx = crate::models::variant::best_preview_index_details(&d.variants);
+                let best_idx = d.best_variant_index();
                 best_idx.and_then(|i| {
                     let v = &d.variants[i];
                     if preview_gen.has_preview(&v.content_hash) {

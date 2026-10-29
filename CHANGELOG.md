@@ -4,7 +4,30 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ## Unreleased
 
-October 2026 dependency and model currency check. No schema migration.
+October 2026 dependency and model currency check, plus the preview
+representative fix. No schema migration.
+
+### Fixed (behaviour)
+
+- **Every surface now shows the same preview for an asset.** The stroll
+  page, the similarity and compare views, contact sheets, export, the
+  shell and `maki show` re-ran the variant scoring on every request,
+  while the browse grid read the stored `best_variant_hash`. Where the
+  two disagreed, a concert shoot's colour-corrected JPEGs showed in the
+  grid but the uncorrected RAW previews showed in stroll. All surfaces
+  now read the stored column (user override included) through one
+  accessor, `AssetDetails::best_variant_index()`.
+- **A developed image always represents its asset.** The scoring rule put
+  role and raw file size ahead of format, so a small "alternate" JPEG
+  (50 + 50 + 0 points) lost to a 50 MB RAW original (100 + 0 + 49), and
+  an "original" JPEG beat the same RAW by a single point. Format class
+  now decides first (JPEG, PNG, TIFF, WebP over RAW), then role, then
+  size. Existing catalogs: `maki doctor` reports assets whose stored
+  value disagrees with the new rule and `--repair` fixes them without a
+  rebuild; the `preview_variant` override is unaffected.
+- **Changing a variant's role** (web variant-role editor) now refreshes
+  the stored `best_variant_hash`, as `fix-roles` already did.
+- **Auto-group's preview upgrade** honours a `preview_variant` override.
 
 ### Security
 

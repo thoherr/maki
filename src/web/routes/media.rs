@@ -44,7 +44,7 @@ pub async fn compare_page(
 
         for id in &ids_owned {
             let details = engine.show(id)?;
-            let best = crate::models::variant::best_preview_index_details(&details.variants);
+            let best = details.best_variant_index();
             let purl = best
                 .and_then(|i| {
                     let v = &details.variants[i];

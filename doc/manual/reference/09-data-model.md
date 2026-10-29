@@ -238,15 +238,15 @@ When assets are merged via `maki group` or `maki auto-group`, donor variants wit
 
 ## Display Priority
 
-The preview selection algorithm determines which variant is shown in the browse grid and asset detail page. The scoring follows this priority:
+The preview selection rule determines which variant represents an asset -- in the browse grid, on the detail page, in stroll, similarity and compare views, on contact sheets, in `export` and in `maki show`. The scoring follows this priority:
 
-1. **Role** (highest weight): Export (300) > Processed (200) > Original (100) > Alternate (50) > Sidecar (0)
-2. **Format bonus** (+50): Standard image formats (`jpg`, `jpeg`, `png`, `tiff`, `tif`, `webp`) are preferred over RAW
+1. **Format class** (decisive, +1000): a developed image (`jpg`, `jpeg`, `png`, `tiff`, `tif`, `webp`) always outranks RAW and every other format. A RAW's preview is the camera-embedded, uncorrected rendition; any JPEG in the group is a processed one.
+2. **Role**: Export (300) > Processed (200) > Original (100) > Alternate (50) > Sidecar (0)
 3. **File size tiebreak**: Larger files score slightly higher (up to +49 points)
 
-This means a JPEG export is preferred over a RAW original for display, showing your best-quality deliverable in the browse grid rather than the camera file.
+A user-set `preview_variant` override replaces the rule for that asset. Before v4.12.3 the format bonus was 50 points, less than one role step, so a small "alternate" JPEG lost to a large RAW original.
 
-The `best_variant_hash` denormalized column caches this computation so the browse grid can join directly to the best variant without evaluating all variants per asset.
+The `best_variant_hash` denormalized column stores the result once per asset (override applied), and every surface reads it through `AssetDetails::best_variant_index()` rather than re-scoring, so no two views can disagree. It is recomputed on every write that changes the variants or a role (`insert_asset`, `fix-roles`, the variant-role editor); `maki doctor` reports a stored value that disagrees with the rule and `--repair` rewrites it.
 
 ---
 

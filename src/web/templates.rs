@@ -575,7 +575,7 @@ impl AssetPage {
         });
 
         // Check if the best variant has any online file location
-        let best_idx = crate::models::variant::best_preview_index_details(&details.variants);
+        let best_idx = details.best_variant_index();
         let has_online_source = best_idx.map_or(false, |idx| {
             details.variants[idx].locations.iter().any(|loc| {
                 volume_online.get(&loc.volume_id).copied().unwrap_or(false)

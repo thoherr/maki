@@ -53,10 +53,19 @@ fn role_score(role: &str) -> u64 {
     }
 }
 
+/// Preview score. A developed, directly displayable image (JPEG, PNG, TIFF,
+/// WebP) always outranks a RAW or other format whatever its role: a RAW's
+/// preview is the camera-embedded, uncorrected rendition, while any JPEG
+/// in the group is a processed one. Within a format class, role decides
+/// (Export > Processed > Original > Alternate), then file size.
+///
+/// Before v4.12.3 the format bonus was 50 points — less than one role
+/// step — so a small "alternate" JPEG lost to a 50 MB RAW original and an
+/// "original" JPEG beat the same RAW by a single point.
 fn variant_score(role: &str, format: &str, file_size: u64) -> u64 {
-    let format_bonus: u64 = if is_standard_image_format(format) { 50 } else { 0 };
+    let format_bonus: u64 = if is_standard_image_format(format) { 1000 } else { 0 };
     let size_bonus = (file_size / 1_000_000).min(49);
-    role_score(role) + format_bonus + size_bonus
+    format_bonus + role_score(role) + size_bonus
 }
 
 /// Return the index of the best preview from an iterator of (role, format, file_size) tuples.
@@ -257,10 +266,36 @@ mod tests {
     }
 
     #[test]
-    fn best_preview_prefers_original_over_alternate() {
+    fn best_preview_prefers_developed_image_over_raw_regardless_of_role() {
+        // The concert-shoot case: a small web-export JPEG that ended up with
+        // role Alternate next to a 50 MB RAW original. The JPEG is the
+        // colour-corrected rendition and must represent the asset.
         let variants = vec![
-            make_variant(VariantRole::Alternate, "jpg", 5_000_000),
+            make_variant(VariantRole::Alternate, "jpg", 400_000),
+            make_variant(VariantRole::Original, "nef", 50_000_000),
+        ];
+        assert_eq!(best_preview_index(&variants), Some(0));
+        let details = vec![
+            make_details("alternate", "jpg", 400_000),
+            make_details("original", "nef", 50_000_000),
+        ];
+        assert_eq!(best_preview_index_details(&details), Some(0));
+    }
+
+    #[test]
+    fn best_preview_role_decides_within_raw_only_group() {
+        let variants = vec![
+            make_variant(VariantRole::Alternate, "dng", 30_000_000),
             make_variant(VariantRole::Original, "nef", 25_000_000),
+        ];
+        assert_eq!(best_preview_index(&variants), Some(1));
+    }
+
+    #[test]
+    fn best_preview_role_decides_within_image_group() {
+        let variants = vec![
+            make_variant(VariantRole::Alternate, "jpg", 9_000_000),
+            make_variant(VariantRole::Export, "jpg", 2_000_000),
         ];
         assert_eq!(best_preview_index(&variants), Some(1));
     }
@@ -280,8 +315,10 @@ mod tests {
             make_details("alternate", "jpg", 5_000_000),
             make_details("original", "nef", 25_000_000),
         ];
-        // Original (100) > Alternate (50+50 format bonus) — both score 100, but original has larger file
-        assert_eq!(best_preview_index_details(&variants), Some(1));
+        // Format class decides: the alternate JPEG (1000+50+5) outranks the
+        // RAW original (100+25). Before v4.12.3 both scored ~100 and the
+        // RAW's size tiebreak won.
+        assert_eq!(best_preview_index_details(&variants), Some(0));
     }
 
     #[test]

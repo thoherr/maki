@@ -343,7 +343,7 @@ impl AssetService {
         is_supported: impl Fn(&str) -> bool,
     ) -> Option<PathBuf> {
         // Try smart preview of best variant
-        if let Some(best) = crate::models::variant::best_preview_index_details(&details.variants) {
+        if let Some(best) = details.best_variant_index() {
             let variant = &details.variants[best];
             let smart_path = preview_gen.smart_preview_path(&variant.content_hash);
             if smart_path.exists() {

@@ -2886,8 +2886,10 @@ impl QueryEngine {
 
         store.save(&asset)?;
 
-        // Update catalog
+        // Update catalog — the role feeds the preview rule, so refresh the
+        // denormalized best_variant_hash too (the grid reads it directly).
         catalog.update_variant_role(variant_hash, &role_lower)?;
+        catalog.update_denormalized_variant_columns(&asset)?;
         catalog.update_denormalized_variant_columns(&asset)?;
 
         Ok(())
@@ -3339,6 +3341,38 @@ mod tests {
         let id1 = asset1.id.to_string();
         let id2 = asset2.id.to_string();
         (dir, "sha256:hash1".to_string(), "sha256:hash2".to_string(), id1, id2)
+    }
+
+    #[test]
+    fn set_variant_role_refreshes_best_variant_hash() {
+        let (dir, hash1, hash2, id1, _id2) = setup_group_env();
+        let engine = QueryEngine::new(dir.path());
+        engine.group(&[hash1.clone(), hash2.clone()]).unwrap();
+
+        let catalog = Catalog::open(dir.path()).unwrap();
+        assert_eq!(
+            catalog.get_asset_best_variant_hash(&id1).unwrap().as_deref(),
+            Some(hash2.as_str()),
+            "JPEG export represents the ARW+JPEG pair"
+        );
+        // Sabotage the stored column, then change a role: the editor must
+        // refresh the denormalized value, not just the role.
+        catalog
+            .conn()
+            .execute(
+                "UPDATE assets SET best_variant_hash = ?1 WHERE id = ?2",
+                rusqlite::params![hash1, id1],
+            )
+            .unwrap();
+        engine.set_variant_role(&id1, &hash2, "processed").unwrap();
+        assert_eq!(
+            catalog.get_asset_best_variant_hash(&id1).unwrap().as_deref(),
+            Some(hash2.as_str())
+        );
+        let details = catalog.load_asset_details(&id1).unwrap().unwrap();
+        let v = &details.variants[details.best_variant_index().unwrap()];
+        assert_eq!(v.content_hash, hash2);
+        assert_eq!(v.role, "processed");
     }
 
     #[test]

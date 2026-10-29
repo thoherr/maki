@@ -150,7 +150,7 @@ pub fn run_preview_command(
     let best_hash = catalog.get_asset_best_variant_hash(full_id)
         .unwrap_or(None)
         .or_else(|| {
-            maki::models::variant::best_preview_index_details(&details.variants)
+            details.best_variant_index()
                 .map(|i| details.variants[i].content_hash.clone())
         });
 
@@ -290,7 +290,7 @@ pub fn run_show_command(
         }
 
         // Show preview status for the best preview variant
-        if let Some(idx) = maki::models::variant::best_preview_index_details(&details.variants) {
+        if let Some(idx) = details.best_variant_index() {
             let v = &details.variants[idx];
             let preview_path = preview_gen.preview_path(&v.content_hash);
             if preview_gen.has_preview(&v.content_hash) {

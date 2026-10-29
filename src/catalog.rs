@@ -141,6 +141,25 @@ pub struct AssetDetails {
     pub color_label: Option<String>,
     pub variants: Vec<VariantDetails>,
     pub recipes: Vec<RecipeDetails>,
+    /// The asset's stored `best_variant_hash` (user override already
+    /// applied at write time). Every surface that shows "the" preview of
+    /// an asset reads this through [`AssetDetails::best_variant_index`].
+    pub best_variant_hash: Option<String>,
+}
+
+impl AssetDetails {
+    /// Index of the variant that represents this asset for previews: the
+    /// stored `best_variant_hash` (which honours the user's preview
+    /// override), falling back to the scoring rule only when the stored
+    /// hash is absent or no longer belongs to the asset. Using this on
+    /// every surface (grid, detail, stroll, similarity, compare, contact
+    /// sheets, export, shell) keeps them from disagreeing with each other.
+    pub fn best_variant_index(&self) -> Option<usize> {
+        self.best_variant_hash
+            .as_ref()
+            .and_then(|h| self.variants.iter().position(|v| &v.content_hash == h))
+            .or_else(|| crate::models::variant::best_preview_index_details(&self.variants))
+    }
 }
 
 /// Variant details within an `AssetDetails`.
@@ -2490,6 +2509,59 @@ mod tests {
         let f = catalog.facet_counts(&opts).unwrap();
         assert_eq!(f.total, 1);
         assert_eq!(f.geotagged, 0);
+    }
+
+    // ── AssetDetails::best_variant_index ───────────────
+
+    #[test]
+    fn details_best_variant_index_reads_stored_hash_and_override() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:bvi-raw");
+        let raw = crate::models::Variant {
+            content_hash: "sha256:bvi-raw".to_string(),
+            asset_id: asset.id,
+            role: crate::models::VariantRole::Original,
+            format: "nef".to_string(),
+            file_size: 50_000_000,
+            original_filename: "x.nef".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        let jpg = crate::models::Variant {
+            content_hash: "sha256:bvi-jpg".to_string(),
+            role: crate::models::VariantRole::Alternate,
+            format: "jpg".to_string(),
+            file_size: 400_000,
+            original_filename: "x.jpg".to_string(),
+            ..raw.clone()
+        };
+        asset.variants = vec![raw.clone(), jpg.clone()];
+        catalog.insert_asset(&asset).unwrap();
+        catalog.insert_variant(&raw).unwrap();
+        catalog.insert_variant(&jpg).unwrap();
+
+        // Rule: the developed JPEG represents the asset.
+        let d = catalog.load_asset_details(&asset.id.to_string()).unwrap().unwrap();
+        assert_eq!(d.best_variant_hash.as_deref(), Some("sha256:bvi-jpg"));
+        let i = d.best_variant_index().unwrap();
+        assert_eq!(d.variants[i].content_hash, "sha256:bvi-jpg");
+
+        // User override to the RAW: stored column follows it, so does the accessor.
+        asset.preview_variant = Some("sha256:bvi-raw".to_string());
+        catalog.insert_asset(&asset).unwrap();
+        let d = catalog.load_asset_details(&asset.id.to_string()).unwrap().unwrap();
+        let i = d.best_variant_index().unwrap();
+        assert_eq!(d.variants[i].content_hash, "sha256:bvi-raw");
+
+        // Stored hash that no longer belongs to the asset: fall back to the rule.
+        catalog.conn.execute(
+            "UPDATE assets SET best_variant_hash = 'sha256:gone' WHERE id = ?1",
+            [asset.id.to_string()],
+        ).unwrap();
+        let d = catalog.load_asset_details(&asset.id.to_string()).unwrap().unwrap();
+        let i = d.best_variant_index().unwrap();
+        assert_eq!(d.variants[i].content_hash, "sha256:bvi-jpg");
     }
 
     // ── assets_tags_fts (schema v12) ────────────────────

@@ -625,6 +625,64 @@ mod tests {
     }
 
     #[test]
+    fn detects_and_repairs_best_variant_hash_divergence() {
+        // A RAW + JPEG pair whose stored best_variant_hash points at the
+        // RAW (the pre-v4.12.3 scoring outcome); the rule says JPEG.
+        let (_d, root) = setup();
+        let mut asset = seed_asset(&root, "sha256:doc-best-jpg", "pair");
+        asset.variants[0].role = VariantRole::Alternate;
+        asset.variants[0].file_size = 400_000;
+        let raw = Variant {
+            content_hash: "sha256:doc-best-raw".to_string(),
+            asset_id: asset.id,
+            role: VariantRole::Original,
+            format: "nef".to_string(),
+            file_size: 50_000_000,
+            original_filename: "pair.nef".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        };
+        asset.variants.push(raw.clone());
+        let store = MetadataStore::new(&root);
+        store.save(&asset).unwrap();
+        {
+            let catalog = Catalog::open_fast(&root).unwrap();
+            catalog.insert_asset(&asset).unwrap();
+            catalog.insert_variant(&raw).unwrap();
+            assert_eq!(
+                catalog.get_asset_best_variant_hash(&asset.id.to_string()).unwrap().as_deref(),
+                Some("sha256:doc-best-jpg"),
+                "developed image must win regardless of role"
+            );
+            // Sabotage: stored column disagrees with the rule.
+            catalog
+                .conn()
+                .execute(
+                    "UPDATE assets SET best_variant_hash = 'sha256:doc-best-raw' WHERE id = ?1",
+                    rusqlite::params![asset.id.to_string()],
+                )
+                .unwrap();
+        }
+
+        let report = run_doctor(&root, None, false, |_, _| {}).unwrap();
+        assert_eq!(report.mismatched.len(), 1, "{report:?}");
+        assert!(
+            report.mismatched[0].fields.contains(&"best_variant_hash".to_string()),
+            "{:?}",
+            report.mismatched[0].fields
+        );
+
+        run_doctor(&root, None, true, |_, _| {}).unwrap();
+        let clean = run_doctor(&root, None, false, |_, _| {}).unwrap();
+        assert!(clean.healthy(), "{clean:?}");
+        let catalog = Catalog::open_fast(&root).unwrap();
+        assert_eq!(
+            catalog.get_asset_best_variant_hash(&asset.id.to_string()).unwrap().as_deref(),
+            Some("sha256:doc-best-jpg")
+        );
+    }
+
+    #[test]
     fn detects_stale_pending_writeback_flag() {
         // The v4.5.15 divergence class: sidecar says pending, SQLite says clean.
         let (_d, root) = setup();

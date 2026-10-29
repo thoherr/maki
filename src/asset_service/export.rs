@@ -28,8 +28,7 @@ impl AssetService {
         source: ExportSource,
     ) -> Result<(Vec<ExportFilePlan>, usize, Vec<String>)> {
         use crate::catalog::Catalog;
-        use crate::models::variant::best_preview_index_details;
-
+        
         let catalog = Catalog::open(&self.catalog_root)?;
         let registry = DeviceRegistry::new(&self.catalog_root);
 
@@ -66,7 +65,7 @@ impl AssetService {
             let variant_indices: Vec<usize> = if all_variants {
                 (0..details.variants.len()).collect()
             } else {
-                match best_preview_index_details(&details.variants) {
+                match details.best_variant_index() {
                     Some(i) => vec![i],
                     None => {
                         errors.push(format!("Asset {} has no variants", &asset_id[..8]));

@@ -252,7 +252,7 @@ MAKI generates preview thumbnails (800px JPEG by default) for each variant durin
 
 Preview failure never blocks import. If an external tool is missing, an info card is generated as a fallback.
 
-The display logic prefers Export > Processed > Original variant previews, with standard image formats preferred over RAW within the same role. This means your best-quality deliverable is shown in the browse grid, not the camera original.
+The display logic prefers a developed image (JPEG, PNG, TIFF, WebP) over a RAW file whatever its role, then Export > Processed > Original > Alternate within that. This means your colour-corrected export is shown everywhere -- browse grid, detail page, stroll, similarity -- not the camera original with its uncorrected embedded preview.
 
 Preview settings (max edge size, format, quality) are configurable in `maki.toml`. See [Setup](02-setup.md) for configuration details and [Ingesting Assets](03-ingest.md) for the `generate-previews` command.
 

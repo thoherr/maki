@@ -120,6 +120,8 @@ pub(super) fn resolve_best_variant_idx(
     asset_id: &str,
     variants: &[crate::catalog::VariantDetails],
 ) -> anyhow::Result<usize> {
+    // Same rule as `AssetDetails::best_variant_index`, for callers that
+    // hold the variants without the details struct.
     let stored_hash = catalog.get_asset_best_variant_hash(asset_id).unwrap_or(None);
     stored_hash.as_ref()
         .and_then(|h| variants.iter().position(|v| &v.content_hash == h))

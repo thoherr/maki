@@ -57,8 +57,7 @@ impl AssetService {
         dry_run: bool,
         on_asset: impl Fn(&str, &AudioAnalyzeStatus, std::time::Duration),
     ) -> Result<AudioAnalyzeResult> {
-        use crate::models::variant::best_preview_index_details;
-
+        
         let engine = crate::query::QueryEngine::new(&self.catalog_root);
         let full_query = if query.trim().is_empty() {
             "type:audio".to_string()
@@ -103,7 +102,7 @@ impl AssetService {
                 Some(d) => d,
                 None => continue,
             };
-            let Some(vi) = best_preview_index_details(&details.variants) else {
+            let Some(vi) = details.best_variant_index() else {
                 continue;
             };
             let variant = &details.variants[vi];

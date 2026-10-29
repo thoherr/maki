@@ -82,7 +82,7 @@ impl Catalog {
     pub fn load_asset_details(&self, asset_id: &str) -> Result<Option<AssetDetails>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, asset_type, created_at, tags, description, rating, color_label, \
-             COALESCE(tag_sources, '{}') \
+             COALESCE(tag_sources, '{}'), best_variant_hash \
              FROM assets WHERE id = ?1",
         )?;
         let mut rows = stmt.query(rusqlite::params![asset_id])?;
@@ -101,6 +101,7 @@ impl Catalog {
         let rating = rating_val.map(|r| r as u8);
         let color_label: Option<String> = row.get(7)?;
         let tag_sources_json: String = row.get(8)?;
+        let best_variant_hash: Option<String> = row.get(9)?;
         let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
         let tag_sources: std::collections::BTreeMap<String, crate::models::TagSource> =
             serde_json::from_str(&tag_sources_json).unwrap_or_default();
@@ -196,6 +197,7 @@ impl Catalog {
             color_label,
             variants,
             recipes,
+            best_variant_hash,
         }))
     }
 

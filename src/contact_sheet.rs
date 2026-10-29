@@ -16,7 +16,6 @@ use imageproc::drawing::{draw_filled_rect_mut, draw_hollow_rect_mut, draw_text_m
 use imageproc::rect::Rect;
 
 use crate::catalog::{AssetDetails, Catalog, SearchRow, VariantDetails};
-use crate::models::variant::best_preview_index_details;
 use crate::preview::PreviewGenerator;
 use crate::query::QueryEngine;
 
@@ -707,7 +706,7 @@ fn collect_field_values(
 }
 
 fn best_variant(details: &AssetDetails) -> Option<&VariantDetails> {
-    best_preview_index_details(&details.variants).map(|i| &details.variants[i])
+    details.best_variant_index().map(|i| &details.variants[i])
 }
 
 fn group_value_for(row: &SearchRow, field: GroupByField) -> String {

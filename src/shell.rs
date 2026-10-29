@@ -1003,7 +1003,7 @@ fn handle_preview_builtin(
         let best_hash = catalog.get_asset_best_variant_hash(full_id)
             .unwrap_or(None)
             .or_else(|| {
-                crate::models::variant::best_preview_index_details(&details.variants)
+                details.best_variant_index()
                     .map(|i| details.variants[i].content_hash.clone())
             });
 

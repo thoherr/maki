@@ -37,7 +37,7 @@ The central entity. Represents a logical asset (e.g. "photo of sunset at beach, 
 
 | Column | Since | Description |
 |---|---|---|
-| best_variant_hash | v1 | Content hash of the best display variant (Export > Processed > Original, image formats preferred, size tiebreak) |
+| best_variant_hash | v1 | Content hash of the best display variant (developed image format first, then Export > Processed > Original > Alternate, size tiebreak; `preview_variant` override wins). Read by every surface via `AssetDetails::best_variant_index()` |
 | primary_variant_format | v1 | Identity format of the asset (Original+RAW first, then Original+any, then best variant) |
 | variant_count | v1 | Number of variants |
 | stack_id, stack_position | v1 | Stack membership; position 0 is the pick |
