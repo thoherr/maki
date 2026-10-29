@@ -117,7 +117,7 @@ is the still-solid previous generation.
 
 | Model | RAM `\newline`{=latex} Download | Notes |
 |-------------------:|---------:|:----------------------------------------------------------------------|
-| **Qwen3.5 2B** `qwen3.5:2b` | **3 GB** | Budget / batch; fast. |
+| **Qwen3.5 2B** `qwen3.5:2b` | **3 GB** | Budget / batch; fast. (A `qwen3.5:0.8b` tag exists too -- too small for useful photo descriptions.) |
 | **Qwen3.5 4B** `qwen3.5:4b` | **4 GB** | **Recommended everyday upgrade from Qwen2.5-VL 3B** — same class, current architecture. |
 | **Qwen3.5 9B** `qwen3.5:9b` | **8 GB** | Clear quality jump; the sweet spot when RAM allows. |
 | **Qwen3.5 27B** `qwen3.5:27b` | **20 GB** | High quality on a workstation. |
@@ -155,12 +155,20 @@ and **Qwen3.8** runs on the native engine with vision wired up (on
 v0.32.14+, see above). **Qwen3.6** image input was *not* wired up in
 Ollama through mid-2026 (text generation worked, the vision projector
 wasn't loaded); the library rebuilt every `qwen3.6` tag in late August
-2026 and now lists image input on all of them. We haven't re-verified
-it ourselves, so treat it as "works on current Ollama, confirm before
-a batch run" — or use llama.cpp / LM Studio, where Qwen3.6 vision has
-worked all along. Quick test for any new model: describe an obviously
+2026 and, as of late October 2026, lists image input on all 35 of them,
+with the main tags refreshed again in early October. We haven't
+re-verified it on our own hardware, so treat it as "works on current
+Ollama, confirm before a batch run" — or use llama.cpp / LM Studio,
+where Qwen3.6 vision has worked all along. Quick test for any new model: describe an obviously
 distinctive image (e.g. a sunset over water) — a generic answer that
 could fit any photo means vision isn't wired up.
+
+**New arrivals, untested (October 2026):** Ollama v0.40.10 added
+**Nemotron 3.5 Bolt E4B** (NVIDIA, a Gemma 4 E4B-based vision-language
+model) and v0.40.12 added Liquid AI's **LFM3-VL**. Both accept image
+input and sit in the same 4--8 GB class as `gemma4:e4b` / `qwen3.5:4b`;
+we have not evaluated them for photo descriptions yet, so they are
+listed here for completeness, not as recommendations.
 
 ### Gemma 4 (Native Multimodal)
 
@@ -289,12 +297,14 @@ Any OpenAI-compatible cloud API works. Note that cloud APIs charge per request a
 # maki.toml — example with a self-hosted proxy that adds auth
 [vlm]
 endpoint = "https://api.openai.com"
-model = "gpt-6-astra"        # or gpt-6-sol for a cheaper tier
+model = "gpt-6-astra"        # or gpt-6.1-sol / gpt-6.1-terra / gpt-6-luna for cheaper tiers
 ```
 
 Cloud model identifiers churn quickly (`gpt-4o` and the GPT-5.x line
-were both retired during 2026) — check your provider's current model
-list rather than copying an identifier from documentation.
+were both retired during 2026; `gpt-6-sol` became `gpt-6.1-sol` in
+October 2026) — check your provider's current model list rather than
+copying an identifier from documentation. As of late October 2026 every
+current OpenAI chat model accepts image input.
 
 ---
 

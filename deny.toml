@@ -60,6 +60,12 @@ ignore = [
     # vulnerability, just archived; no safe upgrade exists. Revisit if a
     # vulnerability lands or the font stack changes.
     "RUSTSEC-2026-0192",
+    # basic-toml — unmaintained (RUSTSEC-2026-0374, archived 2025-03); pulled
+    # in only by askama_derive (0.15.6 through 0.16.1, the current release)
+    # to parse askama.toml at compile time. Proc-macro-only, no vulnerability;
+    # upstream would have to switch to `toml`. Revisit on the next askama
+    # release.
+    "RUSTSEC-2026-0374",
 ]
 
 # ── Bans ──────────────────────────────────────────────────────────────

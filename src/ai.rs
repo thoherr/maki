@@ -11,6 +11,16 @@ use ort::value::Tensor;
 use serde::Serialize;
 use tokenizers::Tokenizer;
 
+/// Process-wide ONNX Runtime environment. ort 2.0.0-rc.14+ no longer creates
+/// one implicitly; building it is cheap and idempotent, and `Environment` is
+/// an `Arc` handle so sessions just borrow this one.
+fn ort_environment() -> Result<&'static ort::environment::Environment> {
+    static ENV: std::sync::LazyLock<std::result::Result<ort::environment::Environment, String>> =
+        std::sync::LazyLock::new(|| ort::init().build().map_err(|e| e.to_string()));
+    ENV.as_ref()
+        .map_err(|e| anyhow::anyhow!("Failed to initialise ONNX Runtime environment: {e}"))
+}
+
 /// Build an ONNX session with the best available execution provider.
 ///
 /// When built with `--features ai-gpu`, registers CoreML on macOS (using
@@ -21,9 +31,13 @@ use tokenizers::Tokenizer;
 /// available, "cpu" forces CPU-only, "coreml" requests CoreML explicitly.
 pub fn build_onnx_session(model_path: &Path, provider: &str, verbosity: crate::Verbosity) -> Result<Session> {
     let debug = verbosity.debug;
+    // ort 2.0.0-rc.14+ requires an explicit `Environment` (previously created
+    // implicitly on first use); one process-wide instance is shared by every
+    // session (SigLIP vision/text, YuNet, ArcFace).
+    let env = ort_environment()?;
     // ort 2.0.0-rc.12+ returns `Error<SessionBuilder>` (recoverable-value errors)
     // from builder methods; those aren't Send+Sync, so map to anyhow explicitly.
-    let mut builder = Session::builder()
+    let mut builder = Session::builder(env)
         .context("Failed to create ONNX session builder")?
         .with_intra_threads(4)
         .map_err(|e| anyhow::anyhow!("Failed to set intra threads: {e}"))?;

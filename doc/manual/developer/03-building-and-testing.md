@@ -36,7 +36,7 @@ A standard build (no features) has none of these; `maki --help` lists them under
 
 ### Requirements
 
-- **Rust edition**: 2021; minimum Rust **1.89** (std file locking; the bundled-SQLite stack needs 1.88). CI tracks stable.
+- **Rust edition**: 2021; minimum Rust **1.89** for the standard build (std file locking; the bundled-SQLite stack needs 1.88) and **1.92** for `--features ai` / `pro` (the `ort` ONNX Runtime binding, rc.15, declares 1.92). CI tracks stable.
 - **Platforms**: macOS, Linux, Windows
 - **SQLite**: Bundled via `rusqlite` with the `bundled` feature (no system SQLite required)
 

@@ -2,6 +2,46 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## Unreleased
+
+October 2026 dependency and model currency check. No schema migration.
+
+### Security
+
+- **`cargo update`** refreshes 66 transitive crates, closing
+  RUSTSEC advisory on `webpki-root-certs` (distrusted emSign
+  intermediates in the bundled roots; 1.0.9 → 1.0.11), the yanked
+  `clipboard-win` 5.4.1, and the `tokio` `AsyncFd` I/O-safety advisory
+  (1.53 → 1.54).
+
+### Changed
+
+- **rusqlite 0.40 → 0.41** (bundled SQLite 3.53 → 3.54.0).
+- **ort rc.13 → rc.15** (ONNX Runtime 1.28 → 1.31). rc.14 made the
+  runtime environment explicit; MAKI now creates one process-wide
+  `Environment` shared by the SigLIP, YuNet and ArcFace sessions. The
+  binding declares Rust 1.92, so AI and Pro builds now need 1.92 or
+  newer; the standard build stays at 1.89.
+- `cargo deny`: the unmaintained `basic-toml` (RUSTSEC-2026-0374, a
+  compile-time dependency of `askama_derive` with no replacement
+  upstream yet) is ignored with a justification, like `paste` and
+  `ttf-parser` before it.
+- Deliberately not taken: `rustyline` 19 (needs Rust 1.95 for
+  `cfg_select!`; MAKI builds on 1.89+) and `quick-xml` 0.42 (a
+  bytes-to-`str` API rewrite touching 14 sites in the XMP reader;
+  scheduled as its own change with the property-test suite as the
+  safety net).
+
+### Documentation
+
+- VLM guide: OpenAI's cheaper tier is now `gpt-6.1-sol` (plus
+  `gpt-6.1-terra` and `gpt-6-luna`); every `qwen3.6` tag on Ollama has
+  listed image input since late August and was refreshed in October;
+  `qwen3.5:0.8b` exists; the October arrivals Nemotron 3.5 Bolt E4B and
+  LFM3-VL are listed as untested. Moondream 3 is still not on Ollama,
+  Qwen3.8 is still 27B-only, and all six SigLIP / SigLIP 2 model
+  downloads were verified reachable.
+
 ## v4.12.2 (2026-10-19)
 
 Consistency release from the October 2026 audit of documentation,
