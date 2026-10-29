@@ -2834,6 +2834,8 @@ impl QueryEngine {
         asset.preview_variant = content_hash.map(|s| s.to_string());
         store.save(&asset)?;
         catalog.update_asset_preview_variant(&full_id, content_hash)?;
+        // best_variant_hash follows the override (or the rule when cleared).
+        catalog.update_denormalized_variant_columns(&asset)?;
 
         Ok(())
     }
@@ -3373,6 +3375,19 @@ mod tests {
         let v = &details.variants[details.best_variant_index().unwrap()];
         assert_eq!(v.content_hash, hash2);
         assert_eq!(v.role, "processed");
+    }
+
+    #[test]
+    fn clearing_preview_override_recomputes_with_the_shared_rule() {
+        let (dir, hash1, hash2, id1, _id2) = setup_group_env();
+        let engine = QueryEngine::new(dir.path());
+        engine.group(&[hash1.clone(), hash2.clone()]).unwrap();
+        let catalog = Catalog::open(dir.path()).unwrap();
+        // Override to the ARW, then clear: the JPEG must come back (format-first rule).
+        engine.set_preview_variant(&id1, Some(&hash1)).unwrap();
+        assert_eq!(catalog.get_asset_best_variant_hash(&id1).unwrap().as_deref(), Some(hash1.as_str()));
+        engine.set_preview_variant(&id1, None).unwrap();
+        assert_eq!(catalog.get_asset_best_variant_hash(&id1).unwrap().as_deref(), Some(hash2.as_str()));
     }
 
     #[test]

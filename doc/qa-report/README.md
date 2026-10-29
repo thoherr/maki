@@ -9,6 +9,7 @@ report is closed it moves to `archive/` and is not updated further.
 |---|---|---|
 | `archive/qa-report-2026-04-17.md` | commit `855ad50` (post P1a) | Closed — superseded by the 2026-05-03 report |
 | `archive/qa-report-2026-05-03.md` | v4.4.14 | Closed 2026-10-19 (see below) |
+| `architecture-audit-2026-10-29.md` | v4.12.3 | **Open** — design audit (SRP, DRY, separation of concerns, layering, invariants, error model, tests) with a four-phase improvement plan; F1 fixed with the report, all other findings pending |
 
 ## Closing status of the 2026-05-03 report (as of 2026-10-19, v4.12.1)
 

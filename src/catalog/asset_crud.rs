@@ -169,6 +169,12 @@ impl Catalog {
     }
 
     /// Update the preview variant override and recompute best_variant_hash.
+    /// Store the user's preview override. Does NOT recompute
+    /// `best_variant_hash`: callers hold the loaded `Asset` and must follow
+    /// up with [`Catalog::update_denormalized_variant_columns`], so the
+    /// column is always derived by the one Rust rule (`compute_best_variant_hash_with_override`).
+    /// Until v4.12.3 this method carried its own SQL copy of the scoring,
+    /// which silently diverged when the rule changed.
     pub fn update_asset_preview_variant(
         &self,
         asset_id: &str,
@@ -178,28 +184,6 @@ impl Catalog {
             "UPDATE assets SET preview_variant = ?1 WHERE id = ?2",
             rusqlite::params![preview_variant, asset_id],
         )?;
-        // Recompute best_variant_hash: if override set, use it; else fall back to scoring
-        if let Some(hash) = preview_variant {
-            self.conn.execute(
-                "UPDATE assets SET best_variant_hash = ?1 WHERE id = ?2 AND EXISTS (SELECT 1 FROM variants WHERE content_hash = ?1 AND asset_id = ?2)",
-                rusqlite::params![hash, asset_id],
-            )?;
-        } else {
-            // Clear override — recompute from scoring via SQL
-            self.conn.execute(
-                "UPDATE assets SET best_variant_hash = (
-                    SELECT content_hash FROM variants WHERE asset_id = ?1
-                    ORDER BY
-                        CASE role WHEN 'export' THEN 300 WHEN 'processed' THEN 200
-                            WHEN 'original' THEN 100 ELSE 0 END +
-                        CASE WHEN LOWER(format) IN ('jpg','jpeg','png','tiff','tif','webp')
-                            THEN 50 ELSE 0 END +
-                        MIN(file_size / 1000000, 49)
-                    DESC LIMIT 1
-                ) WHERE id = ?1",
-                rusqlite::params![asset_id],
-            )?;
-        }
         Ok(())
     }
 

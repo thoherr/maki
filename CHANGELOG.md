@@ -2,6 +2,17 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## Unreleased
+
+### Fixed
+
+- **Clearing a preview override re-scores with the current rule.** The
+  override-clearing path carried its own SQL copy of the preview scoring
+  with the pre-v4.12.3 weights, so clearing an override could pick the
+  RAW again until the next full insert. The column is now derived through
+  the one shared Rust rule, as everywhere else. Found by the October
+  architecture audit.
+
 ## v4.12.3 (2026-10-29)
 
 October 2026 dependency and model currency check, plus the preview
