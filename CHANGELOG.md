@@ -2,10 +2,11 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## Unreleased
+## v4.12.3 (2026-10-29)
 
 October 2026 dependency and model currency check, plus the preview
-representative fix. No schema migration.
+representative fix. No schema migration. After upgrading, run
+`maki doctor --repair` once so stored preview choices follow the new rule.
 
 ### Fixed (behaviour)
 
