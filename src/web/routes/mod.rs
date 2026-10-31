@@ -64,6 +64,8 @@ pub use volumes::*;
 ///
 /// Returns `Result<T, Response>` so callers can keep choice over the
 /// success-shape (Json/Html/redirect/etc.) while the error path is uniform.
+/// Endpoints whose inner error maps to another status or wording use
+/// [`spawn_blocking_with`] and pass that mapping.
 pub(super) async fn spawn_catalog_blocking<T, F>(f: F) -> Result<T, axum::response::Response>
 where
     T: Send + 'static,
@@ -71,14 +73,69 @@ where
 {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
+    spawn_blocking_with(f, |e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
+    })
+    .await
+}
+
+/// [`spawn_catalog_blocking`] with a caller-supplied mapping for the
+/// closure's error (status + wording differ per endpoint: 400 for
+/// user-input failures, 404 for "not found", JSON `{"error"}` bodies for
+/// fetch-driven UIs). The spawn-join error — only a panic or cancellation
+/// of the blocking task — is always `500 "Error: <join error>"`.
+pub(super) async fn spawn_blocking_with<T, F, M>(
+    f: F,
+    on_error: M,
+) -> Result<T, axum::response::Response>
+where
+    T: Send + 'static,
+    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+    M: FnOnce(anyhow::Error) -> axum::response::Response,
+{
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
     match tokio::task::spawn_blocking(f).await {
         Ok(Ok(value)) => Ok(value),
-        Ok(Err(e)) => Err(
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        ),
+        Ok(Err(e)) => Err(on_error(e)),
         Err(e) => Err(
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
         ),
+    }
+}
+
+/// Inner-error mappers for [`spawn_blocking_with`], named after the
+/// response shape the endpoints' JS expects. Each keeps the exact status
+/// and wording the endpoint produced inline before the migration.
+pub(super) mod err {
+    use axum::http::StatusCode;
+    use axum::response::{IntoResponse, Response};
+
+    /// `400 "<message chain>"` — user-input failures (tag ops, volumes).
+    pub(crate) fn bad_request(e: anyhow::Error) -> Response {
+        (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response()
+    }
+
+    /// `400 "Error: <message chain>"` — the stack endpoints' wording.
+    pub(crate) fn bad_request_prefixed(e: anyhow::Error) -> Response {
+        (StatusCode::BAD_REQUEST, format!("Error: {e:#}")).into_response()
+    }
+
+    /// `500 "<message chain>"` — the face/people endpoints (no prefix).
+    #[cfg(feature = "ai")]
+    pub(crate) fn internal(e: anyhow::Error) -> Response {
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
+    }
+
+    /// `500 {"error": "<message chain>"}` — fetch-driven UIs that read
+    /// `body.error`.
+    #[cfg(feature = "ai")]
+    pub(crate) fn internal_json(e: anyhow::Error) -> Response {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": format!("{e:#}")})),
+        )
+            .into_response()
     }
 }
 
@@ -98,19 +155,18 @@ pub(super) fn with_pending_trigger(html: String) -> axum::response::Response {
 }
 
 /// Resolve an asset ID prefix to its full ID, mapping "not found" to a
-/// uniform error.
+/// uniform error (`no asset found matching '<prefix>'`, which the 404
+/// mappers key on).
 ///
-/// Replaces the `catalog.resolve_asset_id(...)?` + `.ok_or_else(...)` boilerplate
-/// repeated across every web route that mutates a single asset. Callers that
-/// need a `String` error (e.g. inner functions returning `Result<_, String>`)
-/// can `.map_err(|e| format!("{e:#}"))` at the call site.
+/// Thin alias of [`Catalog::resolve_asset_id_required`] kept for the
+/// route code's `super::` call sites. Callers that need a `String` error
+/// (e.g. inner functions returning `Result<_, String>`) can
+/// `.map_err(|e| format!("{e:#}"))` at the call site.
 pub(super) fn resolve_asset_id_or_err(
     catalog: &crate::catalog::Catalog,
     prefix: &str,
 ) -> anyhow::Result<String> {
-    catalog
-        .resolve_asset_id(prefix)?
-        .ok_or_else(|| anyhow::anyhow!("no asset found matching '{prefix}'"))
+    catalog.resolve_asset_id_required(prefix)
 }
 
 /// Resolve the best variant index for an asset, respecting user override.
@@ -154,9 +210,9 @@ fn resolve_similar_filter(
         return Ok(None);
     };
     let model_id = &state.ai_config.model;
-    let Some(spec) = crate::ai::get_model_spec(model_id) else {
+    if crate::ai::get_model_spec(model_id).is_none() {
         return Ok(None);
-    };
+    }
     // limit defaults to 40 results (including the pinned asset);
     // min_sim is specified as percentage 0-100, convert to 0.0-1.0
     let limit = parsed.similar_limit.unwrap_or(40);
@@ -188,28 +244,17 @@ fn resolve_similar_filter(
             (Some(emb), Some(full_id))
         };
 
-    // Ensure embedding index is loaded (only needed when there is an embedding)
-    if query_emb.is_some() {
-        let needs_load = state.ai_embedding_index.read().unwrap().is_none();
-        if needs_load {
-            if let Ok(index) = crate::embedding_store::EmbeddingIndex::load(
-                catalog.conn(), model_id, spec.embedding_dim,
-            ) {
-                *state.ai_embedding_index.write().unwrap() = Some(index);
-            }
-        }
-    }
-    let ranked = {
-        let idx_guard = state.ai_embedding_index.read().unwrap();
-        match *idx_guard {
-            Some(ref idx) => crate::embedding_store::rank_similar(
-                idx, query_emb.as_deref(), limit, min_sim, pinned.as_deref(),
-            ),
-            None => crate::embedding_store::rank_similar(
-                &crate::embedding_store::EmbeddingIndex::from_rows(1, Vec::new()),
-                None, limit, min_sim, pinned.as_deref(),
-            ),
-        }
+    // The index is only needed when there is an embedding; a failed lazy
+    // load degrades to "pinned asset only" rather than failing the page.
+    let index = query_emb.as_ref().map(|_| state.embedding_index(catalog));
+    let ranked = match index {
+        Some(Ok(idx)) => crate::embedding_store::rank_similar(
+            &idx, query_emb.as_deref(), limit, min_sim, pinned.as_deref(),
+        ),
+        _ => crate::embedding_store::rank_similar(
+            &crate::embedding_store::EmbeddingIndex::from_rows(1, Vec::new()),
+            None, limit, min_sim, pinned.as_deref(),
+        ),
     };
     let scores: HashMap<String, f32> = ranked.iter().cloned().collect();
     let ids: Vec<String> = ranked.into_iter().map(|(id, _)| id).collect();
@@ -418,46 +463,30 @@ impl ResolvedSearch {
         self.similar_requested = parsed.similar.is_some();
         if let Some(ref text_q) = parsed.text_query {
             let model_id = &state.ai_config.model;
-            let spec = crate::ai::get_model_spec(model_id);
-            if let Some(spec) = spec {
-                let model_dir = ai::resolve_model_dir(&state.ai_config);
-                let mut model_guard = state.ai_model.blocking_lock();
-                if model_guard.is_none() {
-                    if let Ok(m) = crate::ai::SigLipModel::load_with_provider(
-                        &model_dir, model_id, state.verbosity, &state.ai_config.execution_provider,
-                    ) {
-                        *model_guard = Some(m);
-                    }
-                }
-                if let Some(ref mut model) = *model_guard {
-                    if let Ok(embs) = model.encode_texts(&[text_q.clone()]) {
-                        let query_emb = &embs[0];
-                        let needs_load = state.ai_embedding_index.read().unwrap().is_none();
-                        if needs_load {
-                            if let Ok(index) = crate::embedding_store::EmbeddingIndex::load(
-                                catalog.conn(), model_id, spec.embedding_dim,
-                            ) {
-                                *state.ai_embedding_index.write().unwrap() = Some(index);
-                            }
-                        }
-                        let results = {
-                            let idx_guard = state.ai_embedding_index.read().unwrap();
-                            if let Some(ref idx) = *idx_guard {
-                                idx.search(query_emb, parsed.text_query_limit.unwrap_or(state.ai_config.text_limit), None)
-                            } else {
-                                Vec::new()
-                            }
-                        };
-                        // min_sim: applies to text queries too (percent → 0.0–1.0)
-                        let min_sim = parsed.min_sim.unwrap_or(0.0) / 100.0;
-                        self.text_query_ids = Some(
-                            results
-                                .into_iter()
-                                .filter(|(_, score)| *score >= min_sim)
-                                .map(|(id, _)| id)
-                                .collect(),
-                        );
-                    }
+            if crate::ai::get_model_spec(model_id).is_some() {
+                // Model-load and encode failures silently leave the text
+                // filter unapplied (historical behaviour); an index-load
+                // failure yields an empty result set.
+                let encoded = state.with_siglip(|model| model.encode_texts(std::slice::from_ref(text_q)));
+                if let Ok(Ok(embs)) = encoded {
+                    let query_emb = &embs[0];
+                    let results = match state.embedding_index(catalog) {
+                        Ok(idx) => idx.search(
+                            query_emb,
+                            parsed.text_query_limit.unwrap_or(state.ai_config.text_limit),
+                            None,
+                        ),
+                        Err(_) => Vec::new(),
+                    };
+                    // min_sim: applies to text queries too (percent → 0.0–1.0)
+                    let min_sim = parsed.min_sim.unwrap_or(0.0) / 100.0;
+                    self.text_query_ids = Some(
+                        results
+                            .into_iter()
+                            .filter(|(_, score)| *score >= min_sim)
+                            .map(|(id, _)| id)
+                            .collect(),
+                    );
                 }
             }
         }

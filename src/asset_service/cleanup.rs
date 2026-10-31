@@ -357,7 +357,7 @@ impl AssetService {
         let catalog = Catalog::open(&self.catalog_root)?;
         let metadata_store = MetadataStore::new(&self.catalog_root);
         let registry = DeviceRegistry::new(&self.catalog_root);
-        let trash = crate::trash::Trash::from_config(&self.catalog_root, no_trash);
+        let trash = crate::trash::Trash::new_with(&self.catalog_root, &self.config.trash, no_trash);
         let preview_gen = crate::preview::PreviewGenerator::new(
             &self.catalog_root,
             self.verbosity,
@@ -473,7 +473,7 @@ impl AssetService {
                 }
 
                 // 4b. Remove from stacks
-                if stack_store.remove(&[asset_id.clone()]).unwrap_or(0) > 0 {
+                if stack_store.remove(std::slice::from_ref(&asset_id)).unwrap_or(0) > 0 {
                     stacks_changed = true;
                 }
 
@@ -552,17 +552,15 @@ impl AssetService {
                 // 4i. Delete previews
                 for hash in &variant_hashes {
                     let preview_path = preview_gen.preview_path(hash);
-                    if preview_path.exists() {
-                        if std::fs::remove_file(&preview_path).is_ok() {
+                    if preview_path.exists()
+                        && std::fs::remove_file(&preview_path).is_ok() {
                             result.previews_removed += 1;
                         }
-                    }
                     let smart_path = preview_gen.smart_preview_path(hash);
-                    if smart_path.exists() {
-                        if std::fs::remove_file(&smart_path).is_ok() {
+                    if smart_path.exists()
+                        && std::fs::remove_file(&smart_path).is_ok() {
                             result.previews_removed += 1;
                         }
-                    }
                 }
 
                 result.deleted += 1;

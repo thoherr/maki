@@ -64,7 +64,7 @@ pub async fn duplicates_page(
                 for loc in &entry.locations {
                     *vol_counts.entry(&loc.volume_id).or_insert(0) += 1;
                 }
-                for (_, count) in &vol_counts {
+                for count in vol_counts.values() {
                     if *count > 1 {
                         total_wasted += entry.file_size * (*count as u64 - 1);
                     }
@@ -153,9 +153,9 @@ pub struct RemoveLocationRequest {
 pub async fn dedup_remove_location_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RemoveLocationRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
 
         let location_count: u64 = catalog.conn().query_row(
@@ -239,20 +239,15 @@ pub async fn dedup_remove_location_api(
         }
 
         Ok::<_, anyhow::Error>(serde_json::json!({"removed": true, "recipes_removed": recipes_removed}))
+    }, |e| {
+        let msg = format!("{e:#}");
+        let status = if msg.contains("cannot remove") || msg.contains("offline") {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        (status, msg).into_response()
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => {
-            let msg = format!("{e:#}");
-            let status = if msg.contains("cannot remove") || msg.contains("offline") {
-                StatusCode::BAD_REQUEST
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            (status, msg).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }

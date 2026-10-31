@@ -79,8 +79,7 @@
         var tok = currentToken();
         if (!tok) { hidePill(); return; }
         if (pill.dataset.token === tok && pill.style.display !== 'none') return;
-        fetch('/api/query-image/' + encodeURIComponent(tok))
-            .then(function(r) { return r.ok ? r.json() : null; })
+        MAKI.api.get('/api/query-image/' + encodeURIComponent(tok))
             .then(function(info) {
                 if (info) showPill(info, false);
                 else showPill({ token: tok, filename: '' }, true);

@@ -26,7 +26,7 @@ impl Catalog {
                 recipe.id.to_string(),
                 recipe.variant_hash,
                 recipe.software,
-                format!("{:?}", recipe.recipe_type).to_lowercase(),
+                recipe.recipe_type.as_str(),
                 recipe.content_hash,
                 recipe.location.volume_id.to_string(),
                 recipe.location.relative_path_str(),

@@ -751,6 +751,8 @@ pub struct AssetService {
     catalog_root: PathBuf,
     verbosity: crate::Verbosity,
     preview_config: crate::config::PreviewConfig,
+    /// The catalog's `maki.toml`, loaded once per service (never per call).
+    config: std::sync::Arc<crate::config::CatalogConfig>,
 }
 
 /// Walk a sharded directory (`dir/<prefix>/<id>.<ext>`) and find files whose stem
@@ -808,13 +810,45 @@ fn scan_orphaned_sharded_files(
 impl AssetService {
     /// Create an `AssetService` rooted at the given catalog directory.
     /// Verbosity controls per-operation logging; the preview config is
-    /// cloned so the service owns its own copy.
+    /// cloned so the service owns its own copy. Loads `maki.toml` once
+    /// for the remaining sections (defaults when the file is missing or
+    /// unreadable); callers that already hold a config use
+    /// [`Self::with_config`].
     pub fn new(catalog_root: &Path, verbosity: crate::Verbosity, preview_config: &crate::config::PreviewConfig) -> Self {
+        let config = std::sync::Arc::new(
+            crate::config::CatalogConfig::load(catalog_root).unwrap_or_default(),
+        );
         Self {
             catalog_root: catalog_root.to_path_buf(),
             verbosity,
             preview_config: preview_config.clone(),
+            config,
         }
+    }
+
+    /// Create an `AssetService` over a configuration the caller already
+    /// loaded; the preview section is taken from it.
+    pub fn with_config(
+        catalog_root: &Path,
+        verbosity: crate::Verbosity,
+        config: std::sync::Arc<crate::config::CatalogConfig>,
+    ) -> Self {
+        Self {
+            catalog_root: catalog_root.to_path_buf(),
+            verbosity,
+            preview_config: config.preview.clone(),
+            config,
+        }
+    }
+
+    /// The loaded catalog configuration.
+    pub fn config(&self) -> &crate::config::CatalogConfig {
+        &self.config
+    }
+
+    /// A `QueryEngine` sharing this service's configuration.
+    fn query_engine(&self) -> crate::query::QueryEngine {
+        crate::query::QueryEngine::with_config(&self.catalog_root, self.config.clone())
     }
 
 }
@@ -884,10 +918,6 @@ fn compute_prefixes(paths: &[PathBuf], mount_point: &Path) -> Vec<String> {
     prefixes
 }
 
-/// Merge XMP metadata into an asset and its primary variant.
-/// - Keywords merge into `asset.tags` (deduplicated)
-/// - Description sets `asset.description` if not already set
-/// - source_metadata merges into the variant (EXIF takes precedence via `or_insert`)
 /// Merge flat `dc:subject` keywords with hierarchical `lr:hierarchicalSubject` keywords.
 ///
 /// Hierarchical tags use `|` as separator internally. Flat keywords that are components
@@ -1680,7 +1710,7 @@ mod tests {
 
         let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
         let result = service
-            .import(&[photos.clone()], &volume, &default_filter())
+            .import(std::slice::from_ref(&photos), &volume, &default_filter())
             .unwrap();
 
         assert_eq!(result.imported, 2);
@@ -1721,7 +1751,7 @@ mod tests {
 
         let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
         let result = service
-            .import(&[photos.clone()], &volume, &default_filter())
+            .import(std::slice::from_ref(&photos), &volume, &default_filter())
             .unwrap();
 
         assert_eq!(result.imported, 2);
@@ -1756,7 +1786,7 @@ mod tests {
 
         let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
         let result = service
-            .import(&[photos.clone()], &volume, &default_filter())
+            .import(std::slice::from_ref(&photos), &volume, &default_filter())
             .unwrap();
 
         assert_eq!(result.imported, 1);
@@ -1794,7 +1824,7 @@ mod tests {
         let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
         let mut filter = FileTypeFilter::default();
         filter.include("captureone").unwrap();
-        let result = service.import(&[photos.clone()], &volume, &filter).unwrap();
+        let result = service.import(std::slice::from_ref(&photos), &volume, &filter).unwrap();
 
         assert_eq!(result.imported, 2);
         assert_eq!(result.recipes_attached, 2);
@@ -2439,7 +2469,7 @@ mod tests {
         );
 
         let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
-        service.import(&[photos.clone()], &volume, &default_filter()).unwrap();
+        service.import(std::slice::from_ref(&photos), &volume, &default_filter()).unwrap();
 
         // Manually set the JPG variant back to Original (simulating pre-fix import)
         let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
@@ -2486,7 +2516,7 @@ mod tests {
         );
 
         let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
-        service.import(&[photos.clone()], &volume, &default_filter()).unwrap();
+        service.import(std::slice::from_ref(&photos), &volume, &default_filter()).unwrap();
 
         // Both should be Original (no RAW)
         let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
@@ -2524,7 +2554,7 @@ mod tests {
         );
 
         let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
-        service.import(&[photos.clone()], &volume, &default_filter()).unwrap();
+        service.import(std::slice::from_ref(&photos), &volume, &default_filter()).unwrap();
 
         // Manually set the JPG variant back to Original
         let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());

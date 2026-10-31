@@ -14,7 +14,7 @@ mod tests;
 use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use anyhow::Result;
 use axum::Router;
@@ -22,7 +22,7 @@ use tower_http::services::ServeDir;
 
 use crate::asset_service::AssetService;
 use crate::catalog::Catalog;
-use crate::config::PreviewConfig;
+use crate::config::{CatalogConfig, PreviewConfig};
 use crate::preview::PreviewGenerator;
 use crate::query::QueryEngine;
 
@@ -51,7 +51,7 @@ impl CatalogPool {
     /// Take a connection from the pool (or open a fresh one if pool is empty).
     pub fn get(self: &Arc<Self>) -> Result<PooledCatalog> {
         let conn = {
-            let mut pool = self.pool.lock().unwrap();
+            let mut pool = self.pool.lock().unwrap_or_else(PoisonError::into_inner);
             pool.pop()
         };
         let catalog = match conn {
@@ -62,7 +62,7 @@ impl CatalogPool {
     }
 
     fn return_conn(&self, catalog: Catalog) {
-        let mut pool = self.pool.lock().unwrap();
+        let mut pool = self.pool.lock().unwrap_or_else(PoisonError::into_inner);
         if pool.len() < self.capacity {
             pool.push(catalog);
         }
@@ -130,10 +130,10 @@ impl DropdownCache {
     }
 
     pub fn get_tags(&self, catalog: &Catalog) -> Vec<(String, u64)> {
-        if let Some(cached) = self.inner.read().unwrap().tags.as_ref() {
+        if let Some(cached) = self.inner.read().unwrap_or_else(PoisonError::into_inner).tags.as_ref() {
             return cached.clone();
         }
-        let mut w = self.inner.write().unwrap();
+        let mut w = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         if let Some(cached) = w.tags.as_ref() {
             return cached.clone();
         }
@@ -143,10 +143,10 @@ impl DropdownCache {
     }
 
     pub fn get_formats(&self, catalog: &Catalog) -> Vec<(String, u64)> {
-        if let Some(cached) = self.inner.read().unwrap().formats.as_ref() {
+        if let Some(cached) = self.inner.read().unwrap_or_else(PoisonError::into_inner).formats.as_ref() {
             return cached.clone();
         }
-        let mut w = self.inner.write().unwrap();
+        let mut w = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         if let Some(cached) = w.formats.as_ref() {
             return cached.clone();
         }
@@ -156,10 +156,10 @@ impl DropdownCache {
     }
 
     pub fn get_volumes(&self, catalog: &Catalog) -> Vec<(String, String)> {
-        if let Some(cached) = self.inner.read().unwrap().volumes.as_ref() {
+        if let Some(cached) = self.inner.read().unwrap_or_else(PoisonError::into_inner).volumes.as_ref() {
             return cached.clone();
         }
-        let mut w = self.inner.write().unwrap();
+        let mut w = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         if let Some(cached) = w.volumes.as_ref() {
             return cached.clone();
         }
@@ -169,10 +169,10 @@ impl DropdownCache {
     }
 
     pub fn get_collections(&self, catalog: &Catalog) -> Vec<String> {
-        if let Some(cached) = self.inner.read().unwrap().collections.as_ref() {
+        if let Some(cached) = self.inner.read().unwrap_or_else(PoisonError::into_inner).collections.as_ref() {
             return cached.clone();
         }
-        let mut w = self.inner.write().unwrap();
+        let mut w = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         if let Some(cached) = w.collections.as_ref() {
             return cached.clone();
         }
@@ -189,10 +189,10 @@ impl DropdownCache {
 
     #[cfg(feature = "ai")]
     pub fn get_people(&self, catalog: &Catalog) -> Vec<(String, String)> {
-        if let Some(cached) = self.inner.read().unwrap().people.as_ref() {
+        if let Some(cached) = self.inner.read().unwrap_or_else(PoisonError::into_inner).people.as_ref() {
             return cached.clone();
         }
-        let mut w = self.inner.write().unwrap();
+        let mut w = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         if let Some(cached) = w.people.as_ref() {
             return cached.clone();
         }
@@ -211,16 +211,16 @@ impl DropdownCache {
     }
 
     pub fn invalidate_tags(&self) {
-        self.inner.write().unwrap().tags = None;
+        self.inner.write().unwrap_or_else(PoisonError::into_inner).tags = None;
     }
 
     pub fn invalidate_collections(&self) {
-        self.inner.write().unwrap().collections = None;
+        self.inner.write().unwrap_or_else(PoisonError::into_inner).collections = None;
     }
 
     #[cfg(feature = "ai")]
     pub fn invalidate_people(&self) {
-        self.inner.write().unwrap().people = None;
+        self.inner.write().unwrap_or_else(PoisonError::into_inner).people = None;
     }
 }
 
@@ -228,6 +228,15 @@ impl DropdownCache {
 pub struct AppState {
     catalog_root: PathBuf,
     catalog_pool: Arc<CatalogPool>,
+    /// The parsed `maki.toml`, loaded once at startup and swapped in
+    /// place by the config editor (`POST /api/config`) so sections that
+    /// routes read at request time (`[import] profiles`, `[writeback]
+    /// mirror_tags`, …) take effect without a restart — the same
+    /// semantics those routes had when they re-read the file per request.
+    /// Startup-only values (pool, previews, auth, AI model) are copied
+    /// into the dedicated fields below and are *not* refreshed; the
+    /// editor's `restart_required` hint covers those.
+    config: RwLock<Arc<CatalogConfig>>,
     preview_config: PreviewConfig,
     pub preview_ext: String,
     pub log_requests: bool,
@@ -276,14 +285,22 @@ pub struct AppState {
     /// taking precedence over the config password.
     pub basic_auth: Option<(String, String)>,
     pub vlm_config: crate::config::VlmConfig,
+    /// Lazily loaded SigLIP model — use [`AppState::siglip`] /
+    /// [`AppState::with_siglip`] rather than locking this directly, so
+    /// every path loads with the configured `[ai] execution_provider`.
     #[cfg(feature = "ai")]
-    pub ai_model: tokio::sync::Mutex<Option<crate::ai::SigLipModel>>,
+    ai_model: tokio::sync::Mutex<Option<crate::ai::SigLipModel>>,
     #[cfg(feature = "ai")]
     pub ai_label_cache: tokio::sync::RwLock<Option<(Vec<String>, Vec<Vec<f32>>)>>,
     #[cfg(feature = "ai")]
     pub ai_config: AiConfig,
+    /// In-memory similarity index. Starts as an empty placeholder and is
+    /// filled on first use by [`AppState::embedding_index`]; `loaded`
+    /// tells the two apart so a failed load is retried next time.
     #[cfg(feature = "ai")]
-    pub ai_embedding_index: std::sync::RwLock<Option<crate::embedding_store::EmbeddingIndex>>,
+    ai_embedding_index: std::sync::RwLock<crate::embedding_store::EmbeddingIndex>,
+    #[cfg(feature = "ai")]
+    ai_embedding_index_loaded: std::sync::atomic::AtomicBool,
     #[cfg(feature = "ai")]
     pub face_detector: tokio::sync::Mutex<Option<crate::face::FaceDetector>>,
     /// Uploaded query images (search by image), referenced from the
@@ -309,40 +326,43 @@ pub struct ImportJobSummary {
     pub described: std::sync::atomic::AtomicUsize,
 }
 
+/// Everything `maki serve` needs beyond the catalog root. One struct for
+/// both feature variants: the `[ai]` section travels inside `config` and
+/// is only read on `ai` builds.
+pub struct ServeOptions {
+    /// Listen address (`[serve] bind` unless overridden by `--bind`).
+    pub bind: String,
+    /// Listen port (`[serve] port` unless overridden by `--port`).
+    pub port: u16,
+    /// The parsed `maki.toml`, loaded once by the caller. Every
+    /// per-section value the server needs (`[preview]`, `[serve]`,
+    /// `[dedup] prefer`, `[browse]`, `[import]`, `[ai]`, `[vlm]`) is
+    /// derived from it in [`AppState::new`].
+    pub config: CatalogConfig,
+    /// Per-request stderr logging (`--log`).
+    pub log_requests: bool,
+    /// `--read-only`; OR-ed with `[serve] read_only`.
+    pub read_only: bool,
+    pub verbosity: crate::Verbosity,
+}
+
 impl AppState {
     /// Build the shared application state for `maki serve`.
     ///
-    /// All values arrive pre-resolved (maki.toml merged with CLI flags)
-    /// from the serve command. Parameter groups:
-    /// - `catalog_root`, `preview_config`, `verbosity` — catalog location
-    ///   and preview generation settings
-    /// - `log_requests` — per-request stderr logging (`--log`)
-    /// - `dedup_prefer` — `[dedup] prefer` heuristic for auto-resolve on
-    ///   the duplicates page
-    /// - `per_page` — browse results per page (`[serve] per_page`)
-    /// - `stroll_*` — stroll-page tuning (`[serve] stroll_*`); the `_max`
-    ///   values cap what the UI sliders may request
-    /// - `ai_config`, `vlm_config` — `[ai]` / `[vlm]` model and endpoint
-    ///   settings (the VLM endpoint is probed once here; AI models are
-    ///   lazy-loaded on first use)
-    /// - `default_filter` — `[browse] default_filter`, applied when no
-    ///   query is given
+    /// All values arrive pre-resolved in [`ServeOptions`] (maki.toml
+    /// merged with CLI flags). The VLM endpoint is probed once here;
+    /// AI models are lazy-loaded on first use.
     ///
     /// Opens the SQLite connection pool (4 pre-opened connections) —
     /// panics if the catalog can't be opened, since the server is useless
     /// without it.
-    #[cfg(feature = "ai")]
-    pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, read_only: bool, ai_config: AiConfig, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Self {
+    pub fn new(catalog_root: PathBuf, opts: ServeOptions) -> Self {
+        let ServeOptions { config: cfg, log_requests, read_only, verbosity, .. } = opts;
+        let preview_config = cfg.preview.clone();
         let preview_ext = preview_config.format.extension().to_string();
         let smart_on_demand = preview_config.generate_on_demand;
-        let vlm_enabled = cfg!(feature = "pro") && check_vlm_at_startup(&vlm_config);
+        let vlm_enabled = cfg!(feature = "pro") && check_vlm_at_startup(&cfg.vlm);
         let catalog_pool = Arc::new(CatalogPool::new(&catalog_root, 4).expect("Failed to open catalog pool"));
-        // Read slideshow/serve config from disk once at startup; lightbox
-        // JS pulls the slideshow values via /api/build-info. Loose load
-        // (default_filter is already passed in by caller) avoids growing
-        // the new() signature further.
-        let cfg = crate::config::CatalogConfig::load(&catalog_root).unwrap_or_default();
-        let browse_cfg = cfg.browse;
         let read_only = read_only || cfg.serve.read_only;
         let basic_auth = Self::resolve_basic_auth(&cfg.serve);
         Self {
@@ -352,19 +372,19 @@ impl AppState {
             preview_ext,
             log_requests,
             dropdown_cache: DropdownCache::new(),
-            dedup_prefer,
+            dedup_prefer: cfg.dedup.prefer.clone(),
             smart_on_demand,
-            per_page,
-            stroll_neighbors,
-            stroll_neighbors_max,
-            stroll_fanout,
-            stroll_fanout_max,
-            stroll_discover_pool,
-            ai_enabled: true,
-            default_filter,
-            slideshow_seconds: browse_cfg.slideshow_seconds.max(1),
-            slideshow_loop: browse_cfg.slideshow_loop,
-            remember_latest_filter: browse_cfg.remember_latest_filter,
+            per_page: cfg.serve.per_page,
+            stroll_neighbors: cfg.serve.stroll_neighbors,
+            stroll_neighbors_max: cfg.serve.stroll_neighbors_max,
+            stroll_fanout: cfg.serve.stroll_fanout,
+            stroll_fanout_max: cfg.serve.stroll_fanout_max,
+            stroll_discover_pool: cfg.serve.stroll_discover_pool,
+            ai_enabled: cfg!(feature = "ai"),
+            default_filter: cfg.browse.default_filter.clone(),
+            slideshow_seconds: cfg.browse.slideshow_seconds.max(1),
+            slideshow_loop: cfg.browse.slideshow_loop,
+            remember_latest_filter: cfg.browse.remember_latest_filter,
             import_smart_previews: cfg.import.smart_previews,
             import_embeddings: cfg.import.embeddings,
             import_descriptions: cfg.import.descriptions,
@@ -372,14 +392,25 @@ impl AppState {
             basic_auth,
             verbosity,
             vlm_enabled,
-            vlm_config,
+            vlm_config: cfg.vlm.clone(),
+            #[cfg(feature = "ai")]
             ai_model: tokio::sync::Mutex::new(None),
+            #[cfg(feature = "ai")]
             ai_label_cache: tokio::sync::RwLock::new(None),
-            ai_config,
-            ai_embedding_index: std::sync::RwLock::new(None),
+            #[cfg(feature = "ai")]
+            ai_config: cfg.ai.clone(),
+            #[cfg(feature = "ai")]
+            ai_embedding_index: std::sync::RwLock::new(
+                crate::embedding_store::EmbeddingIndex::from_rows(1, Vec::new()),
+            ),
+            #[cfg(feature = "ai")]
+            ai_embedding_index_loaded: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(feature = "ai")]
             face_detector: tokio::sync::Mutex::new(None),
+            #[cfg(feature = "ai")]
             query_images: std::sync::Mutex::new(Default::default()),
             jobs: Arc::new(jobs::JobRegistry::new()),
+            config: RwLock::new(Arc::new(cfg)),
         }
     }
 
@@ -400,49 +431,16 @@ impl AppState {
         }
     }
 
-    /// Non-AI variant of [`AppState::new`] — identical except `ai_config`
-    /// and the lazy AI model/index fields are absent. See the AI variant
-    /// for the parameter-group documentation.
-    #[cfg(not(feature = "ai"))]
-    pub fn new(catalog_root: PathBuf, preview_config: PreviewConfig, log_requests: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, read_only: bool, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Self {
-        let preview_ext = preview_config.format.extension().to_string();
-        let smart_on_demand = preview_config.generate_on_demand;
-        let vlm_enabled = cfg!(feature = "pro") && check_vlm_at_startup(&vlm_config);
-        let catalog_pool = Arc::new(CatalogPool::new(&catalog_root, 4).expect("Failed to open catalog pool"));
-        let cfg = crate::config::CatalogConfig::load(&catalog_root).unwrap_or_default();
-        let browse_cfg = cfg.browse;
-        let read_only = read_only || cfg.serve.read_only;
-        let basic_auth = Self::resolve_basic_auth(&cfg.serve);
-        Self {
-            catalog_root,
-            catalog_pool,
-            preview_config,
-            preview_ext,
-            log_requests,
-            dropdown_cache: DropdownCache::new(),
-            dedup_prefer,
-            smart_on_demand,
-            per_page,
-            stroll_neighbors,
-            stroll_neighbors_max,
-            stroll_fanout,
-            stroll_fanout_max,
-            stroll_discover_pool,
-            ai_enabled: false,
-            default_filter,
-            slideshow_seconds: browse_cfg.slideshow_seconds.max(1),
-            slideshow_loop: browse_cfg.slideshow_loop,
-            remember_latest_filter: browse_cfg.remember_latest_filter,
-            import_smart_previews: cfg.import.smart_previews,
-            import_embeddings: cfg.import.embeddings,
-            import_descriptions: cfg.import.descriptions,
-            read_only,
-            basic_auth,
-            verbosity,
-            vlm_enabled,
-            vlm_config,
-            jobs: Arc::new(jobs::JobRegistry::new()),
-        }
+    /// The current `maki.toml` (see the `config` field for the
+    /// swap-on-save semantics). Cheap: an `Arc` clone.
+    pub fn config(&self) -> Arc<CatalogConfig> {
+        self.config.read().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// Install a freshly validated config (called by the config editor
+    /// after it wrote `maki.toml`) so request-time readers see it.
+    pub(crate) fn replace_config(&self, cfg: CatalogConfig) {
+        *self.config.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(cfg);
     }
 
     /// Get a catalog connection from the pool (returned on drop).
@@ -450,9 +448,9 @@ impl AppState {
         self.catalog_pool.get()
     }
 
-    /// Create a QueryEngine for this catalog.
+    /// Create a QueryEngine for this catalog, sharing the loaded config.
     pub fn query_engine(&self) -> QueryEngine {
-        QueryEngine::new(&self.catalog_root)
+        QueryEngine::with_config(&self.catalog_root, self.config())
     }
 
     /// Create a PreviewGenerator for checking preview existence.
@@ -460,9 +458,104 @@ impl AppState {
         PreviewGenerator::new(&self.catalog_root, crate::Verbosity::quiet(), &self.preview_config)
     }
 
-    /// Create an AssetService for dedup and other operations.
+    /// Create an AssetService for dedup and other operations, sharing the
+    /// loaded config (its `[preview]` section is the one `preview_config`
+    /// was copied from).
     pub fn asset_service(&self) -> AssetService {
-        AssetService::new(&self.catalog_root, crate::Verbosity::quiet(), &self.preview_config)
+        AssetService::with_config(&self.catalog_root, crate::Verbosity::quiet(), self.config())
+    }
+}
+
+#[cfg(feature = "ai")]
+impl AppState {
+    /// Lock the SigLIP model slot, loading the model on first use with
+    /// the configured `[ai] execution_provider`. The guard always holds
+    /// `Some`; callers that process a batch keep it for the batch's
+    /// duration, everyone else goes through [`Self::with_siglip`].
+    ///
+    /// Blocking: call from `spawn_blocking` (or any non-async context).
+    pub fn siglip(
+        &self,
+    ) -> anyhow::Result<tokio::sync::MutexGuard<'_, Option<crate::ai::SigLipModel>>> {
+        let mut guard = self.ai_model.blocking_lock();
+        if guard.is_none() {
+            let model_dir =
+                crate::config::resolve_model_dir(&self.ai_config.model_dir, &self.ai_config.model);
+            *guard = Some(crate::ai::SigLipModel::load_with_provider(
+                &model_dir,
+                &self.ai_config.model,
+                self.verbosity,
+                &self.ai_config.execution_provider,
+            )?);
+        }
+        Ok(guard)
+    }
+
+    /// Run `f` against the (lazily loaded) SigLIP model under its lock.
+    /// Errors only when the model fails to load.
+    pub fn with_siglip<R>(
+        &self,
+        f: impl FnOnce(&mut crate::ai::SigLipModel) -> R,
+    ) -> anyhow::Result<R> {
+        let mut guard = self.siglip()?;
+        Ok(f(guard.as_mut().expect("siglip() guarantees a loaded model")))
+    }
+
+    /// Load the similarity index on first use (double-checked under the
+    /// write lock). A failed load leaves the placeholder in place so the
+    /// next call retries; the error is the store's, un-decorated, so each
+    /// caller keeps its own wording.
+    fn ensure_embedding_index(&self, catalog: &Catalog) -> anyhow::Result<()> {
+        use std::sync::atomic::Ordering;
+        if self.ai_embedding_index_loaded.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let model_id = &self.ai_config.model;
+        let spec = crate::ai::get_model_spec(model_id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown model: {model_id}"))?;
+        let mut w = self.ai_embedding_index.write().unwrap_or_else(PoisonError::into_inner);
+        if self.ai_embedding_index_loaded.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        *w = crate::embedding_store::EmbeddingIndex::load(
+            catalog.conn(),
+            model_id,
+            spec.embedding_dim,
+        )?;
+        self.ai_embedding_index_loaded.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Read access to the similarity index, loading it on first use.
+    pub fn embedding_index(
+        &self,
+        catalog: &Catalog,
+    ) -> anyhow::Result<std::sync::RwLockReadGuard<'_, crate::embedding_store::EmbeddingIndex>> {
+        self.ensure_embedding_index(catalog)?;
+        Ok(self.ai_embedding_index.read().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// Write access to the similarity index (for `upsert` after a fresh
+    /// embedding), loading it on first use.
+    pub fn embedding_index_mut(
+        &self,
+        catalog: &Catalog,
+    ) -> anyhow::Result<std::sync::RwLockWriteGuard<'_, crate::embedding_store::EmbeddingIndex>> {
+        self.ensure_embedding_index(catalog)?;
+        Ok(self.ai_embedding_index.write().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// Upsert into the similarity index only if it has already been
+    /// loaded — a cold index is left for the next lazy load to fill, so
+    /// a batch that embeds thousands of assets never triggers the load
+    /// itself.
+    pub fn upsert_embedding_if_loaded(&self, asset_id: &str, embedding: &[f32]) {
+        if self.ai_embedding_index_loaded.load(std::sync::atomic::Ordering::Acquire) {
+            self.ai_embedding_index
+                .write()
+                .unwrap_or_else(PoisonError::into_inner)
+                .upsert(asset_id, embedding);
+        }
     }
 }
 
@@ -936,15 +1029,15 @@ fn check_vlm_at_startup(vlm_config: &crate::config::VlmConfig) -> bool {
     }
 }
 
-/// Start the `maki serve` web server: build the [`AppState`] (see
-/// [`AppState::new`] for the parameter groups — `serve` forwards them
-/// verbatim, adding only `bind`/`port`), open the catalog once with
-/// `Catalog::open` (which runs any pending schema migrations — the
-/// pool's per-request connections then use `open_fast`), warm the
-/// dropdown caches, and listen on `bind:port` until SIGINT/SIGTERM.
-#[cfg(feature = "ai")]
-pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config: PreviewConfig, log: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, read_only: bool, ai_config: AiConfig, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Result<()> {
-    let state = Arc::new(AppState::new(catalog_root, preview_config, log, dedup_prefer, per_page, stroll_neighbors, stroll_neighbors_max, stroll_fanout, stroll_fanout_max, stroll_discover_pool, read_only, ai_config, vlm_config, default_filter, verbosity));
+/// Start the `maki serve` web server: build the [`AppState`] from
+/// `opts`, open the catalog once with `Catalog::open` (which runs any
+/// pending schema migrations — the pool's per-request connections then
+/// use `open_fast`), warm the dropdown caches, and listen on
+/// `bind:port` until SIGINT/SIGTERM.
+pub async fn serve(catalog_root: PathBuf, opts: ServeOptions) -> Result<()> {
+    let bind = opts.bind.clone();
+    let port = opts.port;
+    let state = Arc::new(AppState::new(catalog_root, opts));
 
     // Verify catalog is accessible and warm dropdown caches
     {
@@ -957,35 +1050,7 @@ pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config:
         state.dropdown_cache.get_people(&catalog);
     }
 
-    report_access_protection(&state, bind);
-    let app = build_router(state);
-
-    let addr: SocketAddr = format!("{bind}:{port}").parse()?;
-    eprintln!("MAKI {} web UI: http://{addr}", env!("CARGO_PKG_VERSION"));
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-
-    Ok(())
-}
-
-/// Non-AI variant of [`serve`] — identical except `ai_config` is absent.
-#[cfg(not(feature = "ai"))]
-pub async fn serve(catalog_root: PathBuf, bind: &str, port: u16, preview_config: PreviewConfig, log: bool, dedup_prefer: Option<String>, per_page: u32, stroll_neighbors: u32, stroll_neighbors_max: u32, stroll_fanout: u32, stroll_fanout_max: u32, stroll_discover_pool: u32, read_only: bool, vlm_config: crate::config::VlmConfig, default_filter: Option<String>, verbosity: crate::Verbosity) -> Result<()> {
-    let state = Arc::new(AppState::new(catalog_root, preview_config, log, dedup_prefer, per_page, stroll_neighbors, stroll_neighbors_max, stroll_fanout, stroll_fanout_max, stroll_discover_pool, read_only, vlm_config, default_filter, verbosity));
-
-    // Verify catalog is accessible and warm dropdown caches
-    {
-        let catalog = Catalog::open(&state.catalog_root)?;
-        state.dropdown_cache.get_tags(&catalog);
-        state.dropdown_cache.get_formats(&catalog);
-        state.dropdown_cache.get_volumes(&catalog);
-        state.dropdown_cache.get_collections(&catalog);
-    }
-
-    report_access_protection(&state, bind);
+    report_access_protection(&state, &bind);
     let app = build_router(state);
 
     let addr: SocketAddr = format!("{bind}:{port}").parse()?;

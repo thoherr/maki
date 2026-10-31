@@ -8,21 +8,13 @@ pub fn run_serve_command(
         port: Option<u16>,
         bind: Option<String>,
         read_only: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (catalog_root, config) = maki::config::load_config()?;
     let port = port.unwrap_or(config.serve.port);
     let bind = bind.unwrap_or_else(|| config.serve.bind.clone());
     let rt = tokio::runtime::Runtime::new()?;
-    #[cfg(feature = "ai")]
-    rt.block_on(maki::web::serve(catalog_root, &bind, port, config.preview, cli.log, config.dedup.prefer, config.serve.per_page, config.serve.stroll_neighbors, config.serve.stroll_neighbors_max, config.serve.stroll_fanout, config.serve.stroll_fanout_max, config.serve.stroll_discover_pool, read_only, config.ai, config.vlm, config.browse.default_filter, verbosity))?;
-    #[cfg(not(feature = "ai"))]
-    rt.block_on(maki::web::serve(catalog_root, &bind, port, config.preview, cli.log, config.dedup.prefer, config.serve.per_page, config.serve.stroll_neighbors, config.serve.stroll_neighbors_max, config.serve.stroll_fanout, config.serve.stroll_fanout_max, config.serve.stroll_discover_pool, read_only, config.vlm, config.browse.default_filter, verbosity))?;
+    rt.block_on(maki::web::serve(catalog_root, maki::web::ServeOptions { bind, port, config, log_requests: ctx.log, read_only, verbosity: ctx.verbosity }))?;
     Ok(())
 }
 
@@ -30,13 +22,8 @@ pub fn run_serve_command(
 /// extraction pattern.
 pub fn run_doc_command(
         document: String,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let url = match document.to_lowercase().as_str() {
         "manual" | "man" | "guide" => "https://github.com/thoherr/maki/releases/latest/download/maki-manual.pdf",
         "cheatsheet" | "cheat" | "cs" => "https://github.com/thoherr/maki/releases/latest/download/cheat-sheet.pdf",
@@ -46,16 +33,12 @@ pub fn run_doc_command(
             anyhow::bail!("unknown document '{}'. Available: manual, cheatsheet, filters, tagging", document);
         }
     };
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::json!({ "url": url }));
     } else {
         println!("Opening {url}");
-        #[cfg(target_os = "macos")]
-        { let _ = std::process::Command::new("open").arg(url).spawn(); }
-        #[cfg(target_os = "linux")]
-        { let _ = std::process::Command::new("xdg-open").arg(url).spawn(); }
-        #[cfg(target_os = "windows")]
-        { let _ = std::process::Command::new("cmd").args(["/c", "start", url]).spawn(); }
+        // Best effort, as before: a missing opener must not fail the command.
+        let _ = maki::platform::open_url(url);
     }
     Ok(())
 }
@@ -64,16 +47,11 @@ pub fn run_doc_command(
 /// extraction pattern.
 pub fn run_licenses_command(
         summary: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let third_party_url = "https://github.com/thoherr/maki/releases/latest/download/THIRD_PARTY_LICENSES.md";
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::json!({
             "maki_license": "Apache-2.0",
             "maki_license_url": "https://github.com/thoherr/maki/blob/main/LICENSE",
@@ -132,19 +110,14 @@ pub fn run_licenses_command(
 /// extraction pattern.
 pub fn run_preview_command(
         asset_id: String,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (catalog_root, config) = maki::config::load_config()?;
     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
     let engine = QueryEngine::new(&catalog_root);
     let details = engine.show(&asset_id)?;
     let full_id = &details.id;
-    let preview_gen = maki::preview::PreviewGenerator::new(&catalog_root, verbosity, &config.preview);
+    let preview_gen = maki::preview::PreviewGenerator::new(&catalog_root, ctx.verbosity, &config.preview);
 
     // Find best preview file (smart preview > regular preview)
     let best_hash = catalog.get_asset_best_variant_hash(full_id)
@@ -165,11 +138,11 @@ pub fn run_preview_command(
     match preview_path {
         Some(path) => {
             maki::preview::open_in_viewer(&path)?;
-            if !cli.json {
+            if !ctx.json {
                 let name = details.name.as_deref().unwrap_or(full_id);
                 eprintln!("Opened preview for {name}");
             }
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "id": full_id,
                     "preview": path.display().to_string(),
@@ -178,7 +151,7 @@ pub fn run_preview_command(
         }
         None => {
             let name = details.name.as_deref().unwrap_or(full_id);
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "id": full_id,
                     "preview": null,
@@ -197,19 +170,14 @@ pub fn run_preview_command(
 pub fn run_show_command(
         asset_id: String,
         locations: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (catalog_root, config) = maki::config::load_config()?;
     let engine = QueryEngine::new(&catalog_root);
     let details = engine.show(&asset_id)?;
 
     if locations {
-        if cli.json {
+        if ctx.json {
             let locs: Vec<serde_json::Value> = details.variants.iter()
                 .flat_map(|v| v.locations.iter().map(move |loc| {
                     serde_json::json!({
@@ -251,10 +219,10 @@ pub fn run_show_command(
         return Ok(());
     }
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&details)?);
     } else {
-        let preview_gen = maki::preview::PreviewGenerator::new(&catalog_root, verbosity, &config.preview);
+        let preview_gen = maki::preview::PreviewGenerator::new(&catalog_root, ctx.verbosity, &config.preview);
 
         println!("Asset: {}", details.id);
         if let Some(name) = &details.name {
@@ -340,5 +308,64 @@ pub fn run_show_command(
         }
     }
 
+    Ok(())
+}
+
+/// `maki init` — create the catalog skeleton (directories, maki.toml,
+/// SQLite schema, volumes registry, .gitignore, default vocabulary).
+pub fn run_init_command(ctx: CliContext) -> anyhow::Result<()> {
+    use maki::config::CatalogConfig;
+    let catalog_root = std::env::current_dir()?;
+    let config_path = catalog_root.join("maki.toml");
+    if config_path.exists() {
+        anyhow::bail!("a maki catalog already exists in this directory.");
+    }
+
+    // Create directories
+    std::fs::create_dir_all(catalog_root.join("metadata"))?;
+    std::fs::create_dir_all(catalog_root.join("previews"))?;
+    std::fs::create_dir_all(catalog_root.join("smart-previews"))?;
+
+    // Write config
+    CatalogConfig::default().save(&catalog_root)?;
+
+    // Initialize SQLite schema
+    let catalog = Catalog::open(&catalog_root)?;
+    catalog.initialize()?;
+
+    // Write empty volumes registry
+    DeviceRegistry::init(&catalog_root)?;
+
+    // Write .gitignore for optional git-based backup
+    let gitignore_path = catalog_root.join(".gitignore");
+    if !gitignore_path.exists() {
+        std::fs::write(&gitignore_path, "\
+# Derived cache — rebuilt from YAML sidecars via 'maki rebuild-catalog'\n\
+catalog.db*\n\
+\n\
+# Generated thumbnails — regenerated via 'maki generate-previews'\n\
+previews/\n\
+smart-previews/\n\
+\n\
+# AI artifacts — regenerated via 'maki embed' / 'maki faces detect'\n\
+embeddings/\n\
+faces/\n\
+")?;
+    }
+
+    // Write default tag vocabulary
+    let vocab_path = catalog_root.join("vocabulary.yaml");
+    if !vocab_path.exists() {
+        std::fs::write(&vocab_path, maki::vocabulary::default_vocabulary())?;
+    }
+
+    if ctx.json {
+        println!("{}", serde_json::json!({
+            "status": "initialized",
+            "path": catalog_root.display().to_string()
+        }));
+    } else {
+        println!("Initialized new maki catalog in {}", catalog_root.display());
+    }
     Ok(())
 }

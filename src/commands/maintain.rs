@@ -5,11 +5,8 @@ use super::*;
 /// Extracted body of `Commands::RebuildCatalog`.
 pub fn run_rebuild_catalog_command(
     asset: Option<String>,
-    json: bool,
-    log: bool,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    struct Ctx { json: bool }
-    let cli = Ctx { json };
     let catalog_root = maki::config::find_catalog_root()?;
 
     if let Some(ref asset_id) = asset {
@@ -129,7 +126,7 @@ pub fn run_rebuild_catalog_command(
             let _ = catalog.backfill_face_scan_status(&id_str);
         }
 
-        if cli.json {
+        if ctx.json {
             println!("{}", serde_json::json!({
                 "asset_id": id_str,
                 "variants": asset_obj.variants.len(),
@@ -156,7 +153,7 @@ pub fn run_rebuild_catalog_command(
 
     // Sync sidecar files into catalog
     let store = MetadataStore::new(&catalog_root);
-    let result = store.sync_to_catalog_with_log(&catalog, log)?;
+    let result = store.sync_to_catalog_with_log(&catalog, ctx.log)?;
 
     // Restore collections from YAML
     let collections_restored = {
@@ -247,7 +244,7 @@ pub fn run_rebuild_catalog_command(
         (people_restored, faces_restored, face_embeddings_restored, embeddings_restored)
     };
 
-    if cli.json {
+    if ctx.json {
         #[allow(unused_mut)]
         let mut json = serde_json::json!({
             "synced": result.synced,
@@ -334,15 +331,10 @@ pub fn run_fix_recipes_command(
         asset: Option<String>,
         apply: bool,
         asset_ids: Vec<String>,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
     let engine = maki::query::QueryEngine::new(&catalog_root);
 
     // Resolve scope (query/asset/asset_ids) to individual asset IDs
@@ -352,7 +344,7 @@ pub fn run_fix_recipes_command(
         None => vec![None], // process all
     };
 
-    let show_log = cli.log;
+    let show_log = ctx.log;
     let mut result = maki::asset_service::FixRecipesResult { dry_run: !apply, ..Default::default() };
     for aid in &asset_id_list {
         let r = service.fix_recipes(
@@ -379,7 +371,7 @@ pub fn run_fix_recipes_command(
         result.errors.extend(r.errors);
     }
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         for err in &result.errors {
@@ -419,15 +411,10 @@ pub fn run_fix_dates_command(
         asset: Option<String>,
         apply: bool,
         asset_ids: Vec<String>,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
     let engine = maki::query::QueryEngine::new(&catalog_root);
 
     // Resolve scope (query/asset/asset_ids) to individual asset IDs
@@ -437,7 +424,7 @@ pub fn run_fix_dates_command(
         None => vec![None], // process all
     };
 
-    let show_log = cli.log;
+    let show_log = ctx.log;
     let mut result = maki::asset_service::FixDatesResult { dry_run: !apply, ..Default::default() };
     for aid in &asset_id_list {
         let r = service.fix_dates(
@@ -476,7 +463,7 @@ pub fn run_fix_dates_command(
         }
     }
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         // Print offline volume warnings
@@ -526,15 +513,10 @@ pub fn run_fix_roles_command(
         volume: Option<String>,
         asset: Option<String>,
         apply: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
     let canonical_paths: Vec<PathBuf> = paths
         .iter()
@@ -544,7 +526,7 @@ pub fn run_fix_roles_command(
         })
         .collect();
 
-    let show_log = cli.log;
+    let show_log = ctx.log;
     let result = service.fix_roles(
         &canonical_paths,
         volume.as_deref(),
@@ -563,7 +545,7 @@ pub fn run_fix_roles_command(
         },
     )?;
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         for err in &result.errors {
@@ -609,17 +591,12 @@ pub fn run_generate_previews_command(
         force: bool,
         upgrade: bool,
         smart: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     use maki::asset_service::FileTypeFilter;
 
     let (catalog_root, config) = maki::config::load_config()?;
-    let preview_gen = maki::preview::PreviewGenerator::new(&catalog_root, verbosity, &config.preview);
+    let preview_gen = maki::preview::PreviewGenerator::new(&catalog_root, ctx.verbosity, &config.preview);
     let metadata_store = MetadataStore::new(&catalog_root);
     let registry = maki::device_registry::DeviceRegistry::new(&catalog_root);
     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
@@ -719,11 +696,11 @@ pub fn run_generate_previews_command(
                 match result {
                     Ok(Some(_)) => {
                         generated += 1;
-                        if cli.log { item_status(name, "generated", Some(file_elapsed)); }
+                        if ctx.log { item_status(name, "generated", Some(file_elapsed)); }
                     }
                     Ok(None) => {
                         skipped += 1;
-                        if cli.log { item_status(name, "skipped", Some(file_elapsed)); }
+                        if ctx.log { item_status(name, "skipped", Some(file_elapsed)); }
                     }
                     Err(e) => {
                         eprintln!("  Failed for {}: {e:#} ({})", file_path.display(), format_duration(file_elapsed));
@@ -809,12 +786,12 @@ pub fn run_generate_previews_command(
                     if variant_type == maki::models::AssetType::Video
                         && !variant.source_metadata.contains_key("video_duration")
                     {
-                        let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+                        let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
                         service.backfill_video_metadata(&asset_data.id.to_string(), &variant.content_hash, &path);
                     } else if variant_type == maki::models::AssetType::Audio
                         && !variant.source_metadata.contains_key("audio_duration")
                     {
-                        let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+                        let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
                         service.backfill_audio_metadata(&asset_data.id.to_string(), &variant.content_hash, &path);
                     }
 
@@ -842,11 +819,11 @@ pub fn run_generate_previews_command(
                         Ok(Some(_)) => {
                             generated += 1;
                             if upgrade { upgraded += 1; }
-                            if cli.log { item_status(name, if upgrade { "upgraded" } else { "generated" }, Some(file_elapsed)); }
+                            if ctx.log { item_status(name, if upgrade { "upgraded" } else { "generated" }, Some(file_elapsed)); }
                         }
                         Ok(None) => {
                             skipped += 1;
-                            if cli.log { item_status(name, "skipped", Some(file_elapsed)); }
+                            if ctx.log { item_status(name, "skipped", Some(file_elapsed)); }
                         }
                         Err(e) => {
                             eprintln!("  Failed for {}: {e:#} ({})", asset_data.id, format_duration(file_elapsed));
@@ -863,7 +840,7 @@ pub fn run_generate_previews_command(
     }
 
     let preview_label = if smart { "smart preview(s)" } else { "preview(s)" };
-    if cli.json {
+    if ctx.json {
         let mut result = serde_json::json!({
             "generated": generated,
             "skipped": skipped,
@@ -910,15 +887,10 @@ pub fn run_update_location_command(
         from: String,
         to: String,
         volume: Option<String>,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
     let to_path = std::fs::canonicalize(&to)
         .unwrap_or_else(|_| PathBuf::from(&to));
@@ -930,7 +902,7 @@ pub fn run_update_location_command(
         volume.as_deref(),
     )?;
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         let short_id = &result.asset_id[..8];
@@ -950,15 +922,10 @@ pub fn run_cleanup_command(
         path: Option<String>,
         list: bool,
         apply: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
     // If --path is given without --volume, try to auto-detect the volume
     let volume = if volume.is_none() && path.is_some() {
@@ -998,13 +965,13 @@ pub fn run_cleanup_command(
         path
     };
 
-    if verbosity.verbose {
+    if ctx.verbosity.verbose {
         if let Some(ref prefix) = path_prefix {
             eprintln!("  Cleanup: path prefix \"{}\"", prefix);
         }
     }
 
-    let show_log = cli.log;
+    let show_log = ctx.log;
     let show_list = list;
     let result = if show_log || show_list {
         use maki::asset_service::CleanupStatus;
@@ -1059,7 +1026,7 @@ pub fn run_cleanup_command(
         )?
     };
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         for err in &result.errors {
@@ -1160,13 +1127,8 @@ pub fn run_refresh_command(
         media: bool,
         reimport: bool,
         exif_only: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     if reimport || exif_only {
         // --reimport: clear and re-extract all metadata from source files
         // --exif-only: re-extract only EXIF, leave tags/description/rating/label
@@ -1193,7 +1155,7 @@ pub fn run_refresh_command(
             match result {
                 Ok(tags) => {
                     reimported += 1;
-                    if cli.log {
+                    if ctx.log {
                         let short = if id.len() > 8 { &id[..8] } else { id };
                         eprintln!("  {} — reimported ({} tags)", short, tags.len());
                     }
@@ -1204,7 +1166,7 @@ pub fn run_refresh_command(
             }
         }
 
-        if cli.json {
+        if ctx.json {
             println!("{}", serde_json::json!({ "reimported": reimported }));
         } else {
             println!("Reimport metadata: {} asset(s) refreshed", reimported);
@@ -1235,16 +1197,13 @@ pub fn run_refresh_command(
     // Resolve asset ID prefix
     let resolved_asset_id = if let Some(prefix) = &asset {
         let catalog = Catalog::open(&catalog_root)?;
-        match catalog.resolve_asset_id(prefix)? {
-            Some(id) => Some(id),
-            None => anyhow::bail!("no asset found matching '{prefix}'"),
-        }
+        Some(catalog.resolve_asset_id_required(prefix)?)
     } else {
         None
     };
 
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
-    let result = if cli.log {
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let result = if ctx.log {
         use maki::asset_service::RefreshStatus;
         service.refresh(
             &canonical_paths,
@@ -1279,7 +1238,7 @@ pub fn run_refresh_command(
         )?
     };
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         for err in &result.errors {
@@ -1322,15 +1281,10 @@ pub fn run_relocate_command(
         remove_source: bool,
         create_sidecars: bool,
         dry_run: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
     // Resolve asset IDs: --query, positional args, or stdin
     let ids: Vec<String> = if let Some(ref q) = query {
@@ -1339,7 +1293,7 @@ pub fn run_relocate_command(
     } else if asset_ids.is_empty() {
         use std::io::BufRead;
         std::io::stdin().lock().lines()
-            .filter_map(|l| l.ok())
+            .map_while(Result::ok)
             .map(|l| l.trim().to_string())
             .filter(|l| !l.is_empty())
             .collect()
@@ -1362,7 +1316,7 @@ pub fn run_relocate_command(
                 let single_id = ids[0].clone();
                 let result = service.relocate(&single_id, &vol, remove_source, create_sidecars, dry_run)?;
 
-                if cli.json {
+                if ctx.json {
                     // Same shape as the `--target` batch form below (one
                     // documented JSON shape for `relocate`): a successful
                     // single-asset relocate is a batch of one with no errors.
@@ -1412,7 +1366,7 @@ pub fn run_relocate_command(
     let mut total_removed: usize = 0;
     let mut errors: Vec<String> = Vec::new();
 
-    if dry_run && !cli.json {
+    if dry_run && !ctx.json {
         println!("Dry run — no changes will be made:");
     }
 
@@ -1423,7 +1377,7 @@ pub fn run_relocate_command(
                 total_skipped += result.skipped;
                 total_removed += result.removed;
 
-                if cli.log {
+                if ctx.log {
                     let verb = if remove_source { "moved" } else { "copied" };
                     eprintln!("[{}/{}] {} — {} {verb}, {} skipped",
                         i + 1, total, &id[..8.min(id.len())],
@@ -1432,7 +1386,7 @@ pub fn run_relocate_command(
             }
             Err(e) => {
                 let msg = format!("{}: {e:#}", &id[..8.min(id.len())]);
-                if cli.log {
+                if ctx.log {
                     eprintln!("[{}/{}] ERROR {msg}", i + 1, total);
                 }
                 errors.push(msg);
@@ -1440,7 +1394,7 @@ pub fn run_relocate_command(
         }
     }
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::json!({
             "assets": total,
             "copied": total_copied,
@@ -1473,12 +1427,12 @@ pub fn run_relocate_command(
 
 /// Extracted body of `Commands::Trash`. See `run_import_command` for the
 /// extraction pattern.
-pub fn run_trash_command(cmd: TrashCommands, json: bool) -> anyhow::Result<()> {
+pub fn run_trash_command(cmd: TrashCommands, ctx: CliContext) -> anyhow::Result<()> {
     let (catalog_root, config) = maki::config::load_config()?;
     match cmd {
         TrashCommands::List => {
             let entries = maki::trash::Trash::list(&catalog_root)?;
-            if json {
+            if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&entries)?);
             } else if entries.is_empty() {
                 println!("Trash is empty.");
@@ -1496,7 +1450,7 @@ pub fn run_trash_command(cmd: TrashCommands, json: bool) -> anyhow::Result<()> {
         }
         TrashCommands::Restore { path } => {
             let target = maki::trash::Trash::restore(&catalog_root, &path)?;
-            if json {
+            if ctx.json {
                 println!("{}", serde_json::json!({"restored": target.display().to_string()}));
             } else {
                 println!("Restored: {}", target.display());
@@ -1512,7 +1466,7 @@ pub fn run_trash_command(cmd: TrashCommands, json: bool) -> anyhow::Result<()> {
                 Some(older_than.unwrap_or(config.trash.retention_days))
             };
             let result = maki::trash::Trash::empty(&catalog_root, cutoff, dry_run)?;
-            if json {
+            if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else if dry_run {
                 println!(
@@ -1539,19 +1493,18 @@ pub fn run_trash_command(cmd: TrashCommands, json: bool) -> anyhow::Result<()> {
 pub fn run_doctor_command(
     sample: Option<usize>,
     repair: bool,
-    json: bool,
-    log: bool,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
     let (catalog_root, _config) = maki::config::load_config()?;
 
     let report = maki::doctor::run_doctor(&catalog_root, sample, repair, |asset_id, issue| {
-        if log {
+        if ctx.log {
             let short_id = &asset_id[..8.min(asset_id.len())];
             eprintln!("  {short_id} — {issue}");
         }
     })?;
 
-    if json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
@@ -1592,7 +1545,7 @@ pub fn run_doctor_command(
     if !report.mismatched.is_empty() {
         println!("  {} asset(s) with field mismatches:", report.mismatched.len());
         // Aggregate by field so the summary reads as "what kind of drift"
-        // rather than a per-asset wall of text (use --log for per-asset).
+        // rather than a per-asset wall of text (use --ctx.log for per-asset).
         let mut by_field: std::collections::BTreeMap<&str, usize> =
             std::collections::BTreeMap::new();
         for m in &report.mismatched {
@@ -1679,8 +1632,7 @@ fn describe_asset_change(before: &maki::models::Asset, after: &maki::models::Ass
 pub fn run_undo_command(
     dry_run: bool,
     force: bool,
-    json: bool,
-    log: bool,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
     let catalog_root = maki::config::find_catalog_root()?;
     let history = maki::history::HistoryStore::from_config(&catalog_root);
@@ -1689,7 +1641,7 @@ pub fn run_undo_command(
     let op = match history.newest_active()? {
         Some(op) => op,
         None => {
-            if json {
+            if ctx.json {
                 println!("{}", serde_json::json!({ "undone": false, "reason": "nothing to undo" }));
             } else {
                 println!("Nothing to undo.");
@@ -1723,7 +1675,7 @@ pub fn run_undo_command(
 
         if changed_since && !force {
             conflicted.push(delta.asset_id.clone());
-            if log {
+            if ctx.log {
                 eprintln!("  {} — changed since this edit; skipped (use --force)", &delta.asset_id[..8.min(delta.asset_id.len())]);
             }
             continue;
@@ -1740,7 +1692,7 @@ pub fn run_undo_command(
             engine.restore_asset(&delta.before)?;
         }
         restored.push(delta.asset_id.clone());
-        if log {
+        if ctx.log {
             eprintln!("  {} — restored", &delta.asset_id[..8.min(delta.asset_id.len())]);
         }
     }
@@ -1752,7 +1704,7 @@ pub fn run_undo_command(
         history.mark_undone(&op.id)?;
     }
 
-    if json {
+    if ctx.json {
         let report = serde_json::json!({
             "undone": will_mark,
             "dry_run": dry_run,
@@ -1798,7 +1750,7 @@ pub fn run_undo_command(
 pub fn run_history_command(
     asset: Option<String>,
     limit: usize,
-    json: bool,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
     let catalog_root = maki::config::find_catalog_root()?;
     let history = maki::history::HistoryStore::from_config(&catalog_root);
@@ -1807,11 +1759,10 @@ pub fn run_history_command(
         Some(prefix) => {
             let catalog = Catalog::open(&catalog_root)?;
             let full_id = catalog
-                .resolve_asset_id(&prefix)?
-                .ok_or_else(|| anyhow::anyhow!("no asset found matching '{prefix}'"))?;
+                .resolve_asset_id_required(&prefix)?;
             let ops = history.list_for_asset(&full_id, Some(limit))?;
 
-            if json {
+            if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&ops)?);
                 return Ok(());
             }
@@ -1838,7 +1789,7 @@ pub fn run_history_command(
         }
         None => {
             let ops = history.list(Some(limit))?;
-            if json {
+            if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&ops)?);
                 return Ok(());
             }
@@ -1856,6 +1807,51 @@ pub fn run_history_command(
                     op.assets.len(),
                 );
             }
+        }
+    }
+    Ok(())
+}
+
+/// `maki migrate` — run schema migrations, initialise the AI stores,
+/// and repair sidecar ratings left as MicrosoftPhoto percentages.
+pub fn run_migrate_command(ctx: CliContext) -> anyhow::Result<()> {
+    let catalog_root = maki::config::find_catalog_root()?;
+    let catalog = Catalog::open_and_migrate(&catalog_root)?;
+    #[cfg(feature = "ai")]
+    {
+        let _ = maki::face_store::FaceStore::initialize(catalog.conn());
+        let _ = maki::embedding_store::EmbeddingStore::initialize(catalog.conn());
+    }
+    // Fix sidecar YAML files with MicrosoftPhoto:Rating percentage values
+    let store = maki::metadata_store::MetadataStore::new(&catalog_root);
+    let mut fixed_sidecars = 0u32;
+    let mut stmt = catalog.conn().prepare(
+        "SELECT id FROM assets WHERE rating IS NOT NULL",
+    )?;
+    let ids: Vec<String> = stmt.query_map([], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stmt);
+    for id_str in &ids {
+        if let Ok(uuid) = id_str.parse::<uuid::Uuid>() {
+            if let Ok(mut asset) = store.load_raw(uuid) {
+                if let Some(r) = asset.rating {
+                    if r > 5 {
+                        asset.rating = Some(maki::asset_service::normalize_rating(r));
+                        let _ = store.save(&asset);
+                        fixed_sidecars += 1;
+                    }
+                }
+            }
+        }
+    }
+    let version = catalog.schema_version();
+    if ctx.json {
+        println!("{}", serde_json::json!({"status": "ok", "schema_version": version, "fixed_ratings": fixed_sidecars}));
+    } else {
+        println!("Schema migrations applied successfully (schema version {version}).");
+        if fixed_sidecars > 0 {
+            println!("Fixed {fixed_sidecars} sidecar files with out-of-range rating values.");
         }
     }
     Ok(())

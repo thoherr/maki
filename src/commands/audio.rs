@@ -8,16 +8,14 @@ pub fn run_audio_analyze_command(
         query: String,
         force: bool,
         dry_run: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
     use maki::asset_service::AudioAnalyzeStatus;
 
     let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
-    let show_log = log;
+    let show_log = ctx.log;
     let result = service.audio_analyze(
         &query,
         &config.audio,
@@ -51,7 +49,7 @@ pub fn run_audio_analyze_command(
         },
     )?;
 
-    if json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         for err in &result.errors {

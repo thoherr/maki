@@ -2,6 +2,9 @@
 name = "maki"
 version = "4.12.3"
 edition = "2021"
+# Enforced floor for every feature set; `ort` (ai/pro) declares 1.92 and the
+# standard build has no reason to lag behind it (see doc/qa-report F27).
+rust-version = "1.92"
 description = "A digital asset manager for large collections of images and videos"
 license = "Apache-2.0"
 
@@ -50,9 +53,24 @@ ai-gpu = ["ai", "ort/coreml"]
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
-sha2 = "0.11"
 # Web-layer test harness: drive the axum Router in-process (no socket)
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 # Property-based round-trip tests for the XMP reader/writer
 proptest = "1"
+
+# Release binaries ship as the eleven workflow assets; trade build time for
+# size and speed. `thin` LTO keeps the cross-platform build under the CI
+# job limits; `strip` drops symbols the assets never needed.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# Clippy is a CI gate (`-D warnings`). Two lints are allowed crate-wide with
+# a reason: both are addressed structurally by Phase 2 of the architecture
+# audit (request structs for the 13–18-parameter service entry points,
+# named types for the search-builder tuples), not by local suppression.
+[lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"

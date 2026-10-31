@@ -36,8 +36,7 @@
 (function() {
     var cache = window._damTagCache;
     if (!cache || Date.now() - cache.ts > 30000) {
-        fetch('/api/tags')
-            .then(function(r) { return r.json(); })
+        MAKI.api.get('/api/tags')
             .then(function(data) {
                 window._damTagCache = { tags: data.map(function(t) { return t[0]; }), ts: Date.now() };
                 initDetailTagAc(window._damTagCache.tags);

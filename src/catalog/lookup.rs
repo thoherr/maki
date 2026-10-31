@@ -44,11 +44,7 @@ impl Catalog {
             },
             rating: if let Some(min) = rating_min {
                 Some(NumericFilter::Min(min as f64))
-            } else if let Some(exact) = rating_exact {
-                Some(NumericFilter::Exact(exact as f64))
-            } else {
-                None
-            },
+            } else { rating_exact.map(|exact| NumericFilter::Exact(exact as f64)) },
             per_page: u32::MAX,
             ..Default::default()
         };
@@ -76,6 +72,14 @@ impl Catalog {
                 "Ambiguous asset ID prefix '{prefix}': matches {n} assets"
             ),
         }
+    }
+
+    /// [`Self::resolve_asset_id`] for callers that need the asset to exist:
+    /// `no asset found matching '<prefix>'` when nothing matches (the
+    /// ambiguous-prefix error passes through unchanged).
+    pub fn resolve_asset_id_required(&self, prefix: &str) -> Result<String> {
+        self.resolve_asset_id(prefix)?
+            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{prefix}'"))
     }
 
     /// Load full asset details from the catalog (variants + locations).

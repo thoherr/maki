@@ -43,15 +43,6 @@ pub struct AutoClusterResult {
     pub singletons_skipped: u32,
 }
 
-/// A face with its similarity score (from search).
-#[derive(Debug, Clone)]
-pub struct FaceMatch {
-    pub face_id: String,
-    pub person_id: Option<String>,
-    pub asset_id: String,
-    pub similarity: f32,
-}
-
 impl<'a> FaceStore<'a> {
     /// Create a new FaceStore backed by the given connection.
     pub fn new(conn: &'a Connection) -> Self {
@@ -194,49 +185,6 @@ impl<'a> FaceStore<'a> {
         self.conn
             .query_row("SELECT COUNT(*) FROM people", [], |row| row.get(0))
             .unwrap_or(0)
-    }
-
-    /// Find faces similar to a query embedding using cosine similarity.
-    /// Returns matches above the threshold, sorted by similarity descending.
-    pub fn find_similar_faces(
-        &self,
-        query_emb: &[f32],
-        threshold: f32,
-        limit: usize,
-        exclude_face_id: Option<&str>,
-    ) -> Result<Vec<FaceMatch>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, asset_id, person_id, embedding FROM faces")?;
-        let rows = stmt.query_map([], |row| {
-            let id: String = row.get(0)?;
-            let asset_id: String = row.get(1)?;
-            let person_id: Option<String> = row.get(2)?;
-            let blob: Vec<u8> = row.get(3)?;
-            Ok((id, asset_id, person_id, blob))
-        })?;
-
-        let mut results: Vec<FaceMatch> = Vec::new();
-        for row in rows {
-            let (id, asset_id, person_id, blob) = row?;
-            if exclude_face_id == Some(id.as_str()) {
-                continue;
-            }
-            let emb = blob_to_embedding(&blob);
-            let sim = crate::ai::cosine_similarity(query_emb, &emb);
-            if sim >= threshold {
-                results.push(FaceMatch {
-                    face_id: id,
-                    person_id,
-                    asset_id,
-                    similarity: sim,
-                });
-            }
-        }
-
-        results.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap());
-        results.truncate(limit);
-        Ok(results)
     }
 
     /// Assign a face to a person. Auto-sets representative if the person has none.
@@ -526,12 +474,6 @@ impl<'a> FaceStore<'a> {
             rusqlite::params![person_id],
         )?;
         Ok(())
-    }
-
-    /// Get all face embeddings grouped by person (for clustering).
-    /// Returns (face_id, person_id, embedding, confidence, recognition_model) tuples.
-    pub fn all_face_embeddings(&self) -> Result<Vec<(String, Option<String>, Vec<f32>, f32, Option<String>)>> {
-        self.face_embeddings_scoped(None)
     }
 
     /// Get face embeddings, optionally scoped to specific asset IDs.
@@ -1291,35 +1233,6 @@ mod tests {
         assert!(store.get_person(&pid).unwrap().is_none());
         let faces = store.faces_for_asset("asset-1").unwrap();
         assert!(faces[0].person_id.is_none());
-    }
-
-    #[test]
-    fn find_similar_faces() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
-
-        let emb_a = vec![1.0f32; 512];
-        let emb_b = vec![0.9f32; 512];
-        let mut emb_c = vec![0.0f32; 512];
-        emb_c[0] = 1.0;
-
-        store
-            .store_face("f1", "asset-1", 0.0, 0.0, 0.5, 0.5, &emb_a, 0.9, crate::face::RECOGNITION_MODEL.id)
-            .unwrap();
-        store
-            .store_face("f2", "asset-1", 0.5, 0.0, 0.5, 0.5, &emb_b, 0.8, crate::face::RECOGNITION_MODEL.id)
-            .unwrap();
-        store
-            .store_face("f3", "asset-2", 0.0, 0.0, 0.5, 0.5, &emb_c, 0.7, crate::face::RECOGNITION_MODEL.id)
-            .unwrap();
-
-        let results = store
-            .find_similar_faces(&emb_a, 0.5, 10, Some("f1"))
-            .unwrap();
-        // emb_b is very similar to emb_a, emb_c is different
-        assert!(!results.is_empty());
-        assert_eq!(results[0].face_id, "f2");
-        assert!(results[0].similarity > 0.9);
     }
 
     #[test]

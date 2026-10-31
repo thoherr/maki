@@ -8,6 +8,11 @@
     <script>var t=localStorage.getItem('maki-theme');if(t)document.documentElement.setAttribute('data-theme',t);</script>
     <link rel="stylesheet" href="/static/style.css">
     <script src="/static/htmx.min.js"></script>
+    <script>
+{{ ""|maki_core_js|safe }}
+// Colour-label vocabulary, rendered once from models::asset::COLOR_LABELS.
+MAKI.setLabels({{ ""|color_labels_json|safe }});
+    </script>
     {% block extra_head %}{% endblock %}
 </head>
 <body>
@@ -218,8 +223,8 @@
     var timer = null;
 
     function refresh() {
-        return fetch('/api/jobs')
-            .then(function(r) { return r.ok ? r.json() : { running: 0, jobs: [] }; })
+        return MAKI.api.get('/api/jobs')
+            .catch(function() { return { running: 0, jobs: [] }; })
             .then(function(s) {
                 var jobs = s.jobs || [];
                 var nowImport = false, nowMaint = false;

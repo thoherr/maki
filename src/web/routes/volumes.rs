@@ -43,9 +43,9 @@ pub async fn volumes_page(State(state): State<Arc<AppState>>) -> Response {
 }
 
 /// GET /api/volumes — list volumes as JSON.
-pub async fn list_volumes_api(State(state): State<Arc<AppState>>) -> Response {
+pub async fn list_volumes_api(State(state): State<Arc<AppState>>) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_catalog_blocking(move || {
         let registry = crate::device_registry::DeviceRegistry::new(&state.catalog_root);
         let volumes = registry.list()?;
         let json: Vec<serde_json::Value> = volumes
@@ -63,13 +63,8 @@ pub async fn list_volumes_api(State(state): State<Arc<AppState>>) -> Response {
             .collect();
         Ok::<_, anyhow::Error>(serde_json::json!(json))
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -83,9 +78,9 @@ pub struct RegisterVolumeRequest {
 pub async fn register_volume_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RegisterVolumeRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let path = std::path::PathBuf::from(&req.path);
         if !path.exists() {
             anyhow::bail!("path does not exist: {}", req.path);
@@ -109,22 +104,17 @@ pub async fn register_volume_api(
             "id": volume.id.to_string(),
             "label": volume.label,
         }))
+    }, |e| {
+        let msg = format!("{e:#}");
+        let status = if msg.contains("already") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        (status, msg).into_response()
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => (StatusCode::CREATED, Json(json)).into_response(),
-        Ok(Err(e)) => {
-            let msg = format!("{e:#}");
-            let status = if msg.contains("already") {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::BAD_REQUEST
-            };
-            (status, msg).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok((StatusCode::CREATED, Json(json)).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -137,9 +127,9 @@ pub async fn rename_volume_api(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(req): Json<RenameVolumeRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let label = req.label.trim().to_string();
         if label.is_empty() {
             anyhow::bail!("label cannot be empty");
@@ -147,14 +137,9 @@ pub async fn rename_volume_api(
         let registry = crate::device_registry::DeviceRegistry::new(&state.catalog_root);
         registry.rename(&id, &label)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"ok": true}))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    }, super::err::bad_request)
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -167,9 +152,9 @@ pub async fn set_volume_purpose_api(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(req): Json<SetPurposeRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let purpose = req
             .purpose
             .as_deref()
@@ -182,14 +167,9 @@ pub async fn set_volume_purpose_api(
         let registry = crate::device_registry::DeviceRegistry::new(&state.catalog_root);
         registry.set_purpose(&id, purpose)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"ok": true}))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    }, super::err::bad_request)
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -226,9 +206,9 @@ pub async fn browse_volume_api(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     axum::extract::Query(params): axum::extract::Query<BrowseVolumeParams>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let registry = crate::device_registry::DeviceRegistry::new(&state.catalog_root);
         let volume = registry.resolve_volume(&id)?;
         if !volume.is_online {
@@ -282,24 +262,19 @@ pub async fn browse_volume_api(
             "prefix": prefix,
             "entries": entries,
         }))
+    }, |e| {
+        let msg = format!("{e:#}");
+        let status = if msg.contains("escapes") {
+            StatusCode::FORBIDDEN
+        } else if msg.contains("not accessible") || msg.contains("not a directory") {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        (status, msg).into_response()
     })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => {
-            let msg = format!("{e:#}");
-            let status = if msg.contains("escapes") {
-                StatusCode::FORBIDDEN
-            } else if msg.contains("not accessible") || msg.contains("not a directory") {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::BAD_REQUEST
-            };
-            (status, msg).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// Resolve a volume-relative `prefix` into a canonical filesystem path
@@ -331,9 +306,9 @@ fn resolve_browse_target(
 pub async fn remove_volume_api(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let service = state.asset_service();
         let result = service.remove_volume(&id, true, |_, _, _| {})?;
         Ok::<_, anyhow::Error>(serde_json::json!({
@@ -342,14 +317,9 @@ pub async fn remove_volume_api(
             "recipes_removed": result.recipes_removed,
             "assets_removed": result.removed_assets,
         }))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    }, super::err::bad_request)
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 #[cfg(test)]

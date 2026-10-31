@@ -19,7 +19,7 @@ impl Catalog {
                 volume.id.to_string(),
                 volume.label,
                 volume.mount_point.to_string_lossy().to_string(),
-                format!("{:?}", volume.volume_type).to_lowercase(),
+                volume.volume_type.as_str(),
                 volume.purpose.as_ref().map(|p| p.as_str()),
             ],
         )?;
@@ -42,26 +42,6 @@ impl Catalog {
             rusqlite::params![new_label, volume_id],
         )?;
         Ok(())
-    }
-
-    /// Count file_location rows on a given volume.
-    pub fn count_locations_for_volume(&self, volume_id: &str) -> Result<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM file_locations WHERE volume_id = ?1",
-            rusqlite::params![volume_id],
-            |row| row.get(0),
-        )?;
-        Ok(count as usize)
-    }
-
-    /// Count recipe rows on a given volume.
-    pub fn count_recipes_for_volume(&self, volume_id: &str) -> Result<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM recipes WHERE volume_id = ?1",
-            rusqlite::params![volume_id],
-            |row| row.get(0),
-        )?;
-        Ok(count as usize)
     }
 
     /// List distinct asset IDs that have file_locations or recipes on a given volume.
@@ -214,6 +194,16 @@ impl Catalog {
             tag_index_memo: Default::default(),
             tag_index_limit: std::cell::Cell::new(crate::catalog::TAG_INDEX_MAX_MATCHES),
         })
+    }
+
+
+    /// List all volumes from the catalog's volumes table.
+    pub fn list_volumes(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, label FROM volumes ORDER BY label",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 
 }

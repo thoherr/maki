@@ -56,8 +56,10 @@ fn label_color(name: &str) -> Option<Rgb<u8>> {
 /// How color labels are rendered on contact sheet thumbnails.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum LabelStyle {
     /// Colored border around the entire thumbnail cell.
+    #[default]
     Border,
     /// Small colored dot next to the filename.
     Dot,
@@ -65,11 +67,6 @@ pub enum LabelStyle {
     None,
 }
 
-impl Default for LabelStyle {
-    fn default() -> Self {
-        Self::Border
-    }
-}
 
 impl std::fmt::Display for LabelStyle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -433,7 +430,7 @@ pub fn generate_contact_sheet(
     let page_count = if config.group_by.is_some() {
         count_pages_with_groups(&cells, cols, rows)
     } else {
-        (cells.len() as u32 + cells_per_page - 1) / cells_per_page
+        (cells.len() as u32).div_ceil(cells_per_page)
     };
 
     let layout_name = match config.layout {
@@ -1092,7 +1089,7 @@ fn truncate_to_width(text: &str, scale: f32, font: &FontRef, max_width: u32) -> 
     let mut lo = 0usize;
     let mut hi = chars.len();
     while lo < hi {
-        let mid = (lo + hi + 1) / 2;
+        let mid = (lo + hi).div_ceil(2);
         let prefix: String = chars[..mid].iter().collect();
         let (pw, _) = text_size(scale, font, &prefix);
         if pw <= target {

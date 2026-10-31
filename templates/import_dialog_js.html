@@ -28,8 +28,8 @@
 
     function loadBuildInfo() {
         if (buildInfoLoaded) return Promise.resolve();
-        return fetch('/api/build-info')
-            .then(function(r) { return r.ok ? r.json() : { ai: false, pro: false }; })
+        return MAKI.api.get('/api/build-info')
+            .catch(function() { return { ai: false, pro: false }; })
             .then(function(data) {
                 buildInfo = data || { ai: false, pro: false };
                 if (buildInfo.ai) {
@@ -66,8 +66,8 @@
 
     function loadProfiles() {
         if (profilesLoaded) return Promise.resolve();
-        return fetch('/api/import/profiles')
-            .then(function(r) { return r.ok ? r.json() : { profiles: [] }; })
+        return MAKI.api.get('/api/import/profiles')
+            .catch(function() { return { profiles: [] }; })
             .then(function(data) {
                 var profiles = data.profiles || [];
                 if (profiles.length > 0) {
@@ -88,8 +88,8 @@
     function loadVolumesIntoPicker() {
         var listEl = document.getElementById('import-volume-list');
         listEl.innerHTML = '<em class="import-loading">Loading volumes…</em>';
-        fetch('/api/volumes')
-            .then(function(r) { return r.ok ? r.json() : []; })
+        MAKI.api.get('/api/volumes')
+            .catch(function() { return []; })
             .then(function(vols) {
                 var online = (vols || []).filter(function(v) { return v.is_online; });
                 if (online.length === 0) {
@@ -100,8 +100,8 @@
                 online.forEach(function(v) {
                     var btn = document.createElement('button');
                     btn.className = 'batch-btn import-volume-pick-btn';
-                    btn.innerHTML = '<strong>' + escHtml(v.label) + '</strong> ' +
-                        '<span class="import-volume-mount">' + escHtml(v.mount_point) + '</span>';
+                    btn.innerHTML = '<strong>' + MAKI.escHtml(v.label) + '</strong> ' +
+                        '<span class="import-volume-mount">' + MAKI.escHtml(v.mount_point) + '</span>';
                     btn.addEventListener('click', function() {
                         showFormPhase(v.id, v.label);
                     });
@@ -111,10 +111,6 @@
             .catch(function() {
                 listEl.innerHTML = '<em>Failed to load volumes.</em>';
             });
-    }
-
-    function escHtml(s) {
-        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
     }
 
     function openDialog(volId, volLabel) {
@@ -132,7 +128,7 @@
             showFormPhase(volId, volLabel);
         } else {
             showPhase('pick');
-            overlay.style.display = 'flex';
+            MAKI.dialog.open(overlay);
             loadVolumesIntoPicker();
         }
     }
@@ -141,11 +137,11 @@
         document.getElementById('import-vol-id').value = volId;
         document.getElementById('import-vol-label').textContent = volLabel;
         showPhase('form');
-        overlay.style.display = 'flex';
+        MAKI.dialog.open(overlay);
     }
 
     function closeDialog() {
-        overlay.style.display = 'none';
+        MAKI.dialog.close(overlay);
         if (eventSource) { eventSource.close(); eventSource = null; }
         activeJobId = null;
     }
@@ -246,8 +242,7 @@
 
         function fetchAllTags() {
             if (allTagsLoaded) return Promise.resolve();
-            return fetch('/api/tags')
-                .then(function(r) { return r.ok ? r.json() : []; })
+            return MAKI.api.get('/api/tags')
                 .then(function(data) {
                     allTags = (data || []).map(function(t) { return t[0]; });
                     allTagsLoaded = true;
@@ -315,10 +310,6 @@
             showSuggestions(t);
         }
 
-        function escHtml(s) {
-            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
-        }
-
         function showSuggestions(query) {
             query = query.toLowerCase();
             var anchored = false;
@@ -355,7 +346,7 @@
                 if (parts.length > 1) {
                     var prefix = parts.slice(0, -1).join('|') + '|';
                     div.innerHTML = '<span class="tag-path-prefix">' +
-                        escHtml(prefix) + '</span>' + escHtml(parts[parts.length - 1]);
+                        MAKI.escHtml(prefix) + '</span>' + MAKI.escHtml(parts[parts.length - 1]);
                 } else {
                     div.textContent = t;
                 }
@@ -445,119 +436,15 @@
     })();
 
     // ── Subfolder autocomplete ──────────────────────────────
-    // Hierarchical filesystem completion via /api/volumes/{id}/browse.
-    // Same pattern as filter-bar path autocomplete: debounced fetch,
-    // ↑/↓/Tab/Enter/Esc, drill on directory, commit on file.
-    (function() {
-        var input = document.getElementById('import-subfolder');
-        var ac = document.getElementById('import-subfolder-autocomplete');
-        if (!input || !ac) return;
-
-        var acIndex = -1;
-        var debounceTimer = null;
-        var lastQuery = null;
-
-        function hide() { ac.style.display = 'none'; acIndex = -1; }
-
-        function splitPath(p) {
-            var i = p.lastIndexOf('/');
-            if (i < 0) return { dir: '', leaf: p };
-            return { dir: p.substring(0, i + 1), leaf: p.substring(i + 1) };
-        }
-
-        function render(entries, leafFilter) {
-            ac.innerHTML = '';
-            acIndex = -1;
-            var leafLc = leafFilter.toLowerCase();
-            var matches = entries.filter(function(e) {
-                return e.name.toLowerCase().indexOf(leafLc) === 0;
-            });
-            if (matches.length === 0) { hide(); return; }
-            matches.forEach(function(e) {
-                var div = document.createElement('div');
-                div.className = 'tag-suggestion';
-                var display = e.is_dir ? e.relative_path + '/' : e.relative_path;
-                div.setAttribute('data-path', display);
-                div.setAttribute('data-is-dir', e.is_dir ? '1' : '0');
-                var icon = e.is_dir ? '📁' : '📄';
-                div.innerHTML = '<span class="path-entry-icon">' + icon + '</span>' +
-                    escHtml(e.name) + (e.is_dir ? '/' : '');
-                div.onmousedown = function(ev) {
-                    ev.preventDefault();
-                    accept(display, e.is_dir);
-                };
-                ac.appendChild(div);
-            });
-            ac.style.display = 'block';
-        }
-
-        function highlight(idx) {
-            var items = ac.querySelectorAll('.tag-suggestion');
-            items.forEach(function(el, i) { el.classList.toggle('active', i === idx); });
-            if (idx >= 0 && items[idx]) items[idx].scrollIntoView({block: 'nearest'});
-        }
-
-        function accept(path, isDir) {
-            input.value = path;
-            hide();
-            if (isDir) {
-                input.focus();
-                fetchEntries(path);
-            }
-        }
-
-        function fetchEntries(currentValue) {
-            var volId = document.getElementById('import-vol-id').value;
-            if (!volId) { hide(); return; }
-            var split = splitPath(currentValue);
-            var prefix = split.dir.replace(/\/+$/, '');
-            var key = volId + '|' + prefix + '|' + split.leaf;
-            if (key === lastQuery) return;
-            lastQuery = key;
-            var url = '/api/volumes/' + encodeURIComponent(volId) +
-                '/browse?limit=50&prefix=' + encodeURIComponent(prefix);
-            fetch(url)
-                .then(function(r) { return r.ok ? r.json() : { entries: [] }; })
-                .then(function(data) {
-                    if (input.value !== currentValue) return;
-                    render(data.entries || [], split.leaf);
-                })
-                .catch(function() { hide(); });
-        }
-
-        function schedule(value) {
-            if (debounceTimer) clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(function() { fetchEntries(value); }, 120);
-        }
-
-        input.addEventListener('input', function() { schedule(this.value); });
-        input.addEventListener('focus', function() {
-            lastQuery = null;
-            fetchEntries(this.value);
-        });
-        input.addEventListener('blur', function() { setTimeout(hide, 150); });
-
-        input.addEventListener('keydown', function(e) {
-            var items = ac.querySelectorAll('.tag-suggestion');
-            var open = ac.style.display === 'block' && items.length > 0;
-            if (e.key === 'ArrowDown' && open) {
-                e.preventDefault();
-                acIndex = Math.min(acIndex + 1, items.length - 1);
-                highlight(acIndex);
-            } else if (e.key === 'ArrowUp' && open) {
-                e.preventDefault();
-                acIndex = Math.max(acIndex - 1, 0);
-                highlight(acIndex);
-            } else if ((e.key === 'Tab' || e.key === 'Enter') && open && acIndex >= 0) {
-                e.preventDefault();
-                var el = items[acIndex];
-                accept(el.getAttribute('data-path'), el.getAttribute('data-is-dir') === '1');
-            } else if (e.key === 'Escape' && open) {
-                e.preventDefault();
-                hide();
-            }
-        });
-    })();
+    // Hierarchical filesystem completion via /api/volumes/{id}/browse
+    // (shared widget: MAKI.pathAutocomplete + MAKI.volumeBrowseSource):
+    // debounced fetch, ↑/↓/Tab/Enter/Esc, drill on directory, commit on file.
+    MAKI.pathAutocomplete(document.getElementById('import-subfolder'), {
+        container: document.getElementById('import-subfolder-autocomplete'),
+        source: MAKI.volumeBrowseSource(function() {
+            return document.getElementById('import-vol-id').value;
+        })
+    });
 
     // ── Wire phase buttons ─────────────────────────────
     document.getElementById('import-pick-cancel').addEventListener('click', closeDialog);
@@ -579,15 +466,7 @@
     function launchImport(dryRun) {
         var params = getImportParams(dryRun);
         var headlineEl = document.querySelector('#import-progress-phase h2');
-        fetch('/api/import', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(params)
-        })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-            return r.json();
-        })
+        MAKI.api.post('/api/import', params)
         .then(function(data) {
             activeJobId = data.job_id;
             showPhase('progress');
@@ -624,20 +503,16 @@
 
     function attachProgressStream() {
         if (!activeJobId) return;
-        eventSource = new EventSource('/api/jobs/' + encodeURIComponent(activeJobId) + '/progress');
-        eventSource.onmessage = function(e) {
-            var evt;
-            try { evt = JSON.parse(e.data); } catch (_) { return; }
-            if (evt.done) {
-                eventSource.close();
+        eventSource = MAKI.attachJobStream(activeJobId, {
+            onDone: function(evt) {
                 eventSource = null;
                 if (evt.error) {
                     document.getElementById('import-status-text').textContent = 'Failed: ' + evt.error;
                 } else {
                     showResult(evt);
                 }
-                return;
-            }
+            },
+            onEvent: function(evt) {
             // Phase-aware status line. The import phase emits per-file events
             // without a `phase` field (legacy shape); embed/describe per-file
             // events carry their own phase tag and per-phase counters.
@@ -672,12 +547,13 @@
             log.appendChild(line);
             if (log.children.length > 50) log.removeChild(log.firstChild);
             log.scrollTop = log.scrollHeight;
-        };
-        eventSource.onerror = function() {
-            if (eventSource) { eventSource.close(); eventSource = null; }
-            document.getElementById('import-status-text').textContent =
-                'Connection lost. The import may still be running on the server.';
-        };
+            },
+            onError: function() {
+                eventSource = null;
+                document.getElementById('import-status-text').textContent =
+                    'Connection lost. The import may still be running on the server.';
+            }
+        });
     }
 
     // Minimize: hand the running import off to the global progress toast and
@@ -699,7 +575,7 @@
             // job off, so we don't have two listeners on the same broadcast
             // racing on the done event.
             if (eventSource) { eventSource.close(); eventSource = null; }
-            overlay.style.display = 'none';
+            MAKI.dialog.close(overlay);
             activeJobId = null;
             window.makiJob.watch(jobId, 'Import', {
                 onDone: function(evt) {
@@ -725,32 +601,22 @@
         if (e.target === overlay) closeDialog();
     });
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && overlay.style.display !== 'none') closeDialog();
+        if (e.key === 'Escape' && MAKI.dialog.isOpen(overlay)) closeDialog();
     });
 
     // Re-attach to a running job when reopening the dialog. Polls /api/jobs
     // for the most recent still-running import; if found, sets activeJobId
     // and subscribes to its SSE progress stream.
     function reattachIfRunning() {
-        return fetch('/api/jobs')
-            .then(function(r) { return r.ok ? r.json() : { jobs: [] }; })
-            .then(function(s) {
-                var imp = (s.jobs || []).find(function(j) {
-                    return j.kind === 'import' && !j.completed;
-                });
-                if (imp) {
-                    activeJobId = imp.id;
-                    showPhase('progress');
-                    overlay.style.display = 'flex';
-                    document.getElementById('import-status-text').textContent =
-                        'Importing… (re-attached to running job)';
-                    document.getElementById('import-log').innerHTML = '';
-                    attachProgressStream();
-                    return true;
-                }
-                return false;
-            })
-            .catch(function() { return false; });
+        return MAKI.reattachIfRunning('import', function(imp) {
+            activeJobId = imp.id;
+            showPhase('progress');
+            MAKI.dialog.open(overlay);
+            document.getElementById('import-status-text').textContent =
+                'Importing… (re-attached to running job)';
+            document.getElementById('import-log').innerHTML = '';
+            attachProgressStream();
+        });
     }
 
     window.makiImport = {

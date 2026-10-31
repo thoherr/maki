@@ -33,6 +33,9 @@ pub async fn get_config_api(State(state): State<Arc<AppState>>) -> Result<Respon
     let json = super::spawn_catalog_blocking(move || {
         let path = state.catalog_root.join("maki.toml");
         let raw = std::fs::read_to_string(&path).unwrap_or_default();
+        // Deliberately re-read from disk rather than `state.config()`:
+        // the editor shows what is *in the file* (hand edits included),
+        // next to the raw TOML it also returns.
         let config = crate::config::CatalogConfig::load(&state.catalog_root)
             .unwrap_or_default();
         Ok::<_, anyhow::Error>(serde_json::json!({
@@ -78,9 +81,9 @@ pub struct SaveConfigRequest {
 pub async fn save_config_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SaveConfigRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         // Validate by round-tripping through the typed struct. serde
         // rejects type mismatches and (per the existing `deny_unknown_fields`
         // behaviour we'd inherit if any sub-struct sets it) unknown keys.
@@ -91,7 +94,9 @@ pub async fn save_config_api(
 
         // Compare against current to detect boot-time-only changes that
         // need a restart, AND to drive the in-place diff that preserves
-        // comments + per-key formatting in the on-disk maki.toml.
+        // comments + per-key formatting in the on-disk maki.toml. Read
+        // from disk on purpose (not `state.config()`): the diff must be
+        // against the file we are about to rewrite, hand edits included.
         let current = crate::config::CatalogConfig::load(&state.catalog_root).unwrap_or_default();
         let restart_required = needs_restart(&current, &new_config);
 
@@ -104,19 +109,20 @@ pub async fn save_config_api(
 
         save_preserving_comments(&path, &new_config, &current)?;
 
-        Ok::<_, anyhow::Error>(serde_json::json!({
+        // Make the saved values visible to request-time readers
+        // (`[import] profiles`, `[writeback] mirror_tags`, …) at once —
+        // the `restart_required` hint only covers the startup-bound
+        // sections listed in `needs_restart`.
+        state.replace_config(new_config);
+
+        Ok(serde_json::json!({
             "ok": true,
             "restart_required": restart_required,
             "backup_path": state.catalog_root.join("maki.toml.bak").display().to_string(),
         }))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
+    }, |e| (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response())
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// Write `new_config` to `path` while keeping the existing file's
@@ -161,10 +167,12 @@ fn save_preserving_comments(
 }
 
 /// Recursive diff applicator. For each key in `new_obj`:
-///   - if unchanged from `current_obj` → leave the table alone
-///   - if changed (leaf) → overwrite the value in place (decor preserved)
-///   - if changed (object) → recurse into the inner table, creating it
-///     in `table` if it didn't exist yet
+///
+/// - if unchanged from `current_obj` → leave the table alone
+/// - if changed (leaf) → overwrite the value in place (decor preserved)
+/// - if changed (object) → recurse into the inner table, creating it
+///   in `table` if it didn't exist yet
+///
 /// And for each key present in `current_obj` but absent in `new_obj` →
 /// remove it from the table (handles Option<T> being cleared by the
 /// user clicking the field's value down to empty).

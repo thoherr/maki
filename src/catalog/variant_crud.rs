@@ -31,7 +31,7 @@ impl Catalog {
             rusqlite::params![
                 variant.content_hash,
                 variant.asset_id.to_string(),
-                format!("{:?}", variant.role).to_lowercase(),
+                variant.role.as_str(),
                 variant.format,
                 variant.file_size,
                 variant.original_filename,

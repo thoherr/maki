@@ -27,7 +27,7 @@ impl AssetService {
         let registry = DeviceRegistry::new(&self.catalog_root);
         let catalog = Catalog::open(&self.catalog_root)?;
         let metadata_store = MetadataStore::new(&self.catalog_root);
-        let trash = crate::trash::Trash::from_config(&self.catalog_root, no_trash);
+        let trash = crate::trash::Trash::new_with(&self.catalog_root, &self.config.trash, no_trash);
 
         let filter_volume_id = if let Some(label) = volume_filter {
             let vol = registry.resolve_volume(label)?;

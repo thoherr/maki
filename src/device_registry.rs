@@ -1,6 +1,7 @@
 //! Volume registry — tracks the storage volumes the catalog knows about
 //! and resolves their current online/offline status by probing mount points.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -191,14 +192,43 @@ impl DeviceRegistry {
         }
     }
 
-    /// Check which mount points are currently available.
-    pub fn detect_online(&self) -> Result<()> {
-        anyhow::bail!("not yet implemented")
+    /// Mount points of the volumes that are online right now, keyed by
+    /// volume id. The one shape every write path that touches files on
+    /// disk (XMP writeback, sidecar creation, relocate) consumes. A
+    /// catalog without a `volumes.yaml` has no volumes (empty map); an
+    /// unreadable or malformed file is an error, never "everything
+    /// offline".
+    pub fn online_map(&self) -> Result<HashMap<Uuid, PathBuf>> {
+        Ok(Self::online_map_of(&self.list_if_present()?))
     }
 
-    /// Scan a volume for new/changed/deleted files.
-    pub fn scan(&self, _volume_id: Uuid) -> Result<()> {
-        anyhow::bail!("not yet implemented")
+    /// Labels of ALL registered volumes (online or not), keyed by id, so
+    /// reports can name the offline drives a user needs to reconnect.
+    /// Same missing-file rule as [`Self::online_map`].
+    pub fn label_map(&self) -> Result<HashMap<Uuid, String>> {
+        Ok(Self::label_map_of(&self.list_if_present()?))
+    }
+
+    /// [`Self::list`], or an empty list when `volumes.yaml` does not exist.
+    fn list_if_present(&self) -> Result<Vec<Volume>> {
+        if !self.volumes_path().exists() {
+            return Ok(Vec::new());
+        }
+        self.list()
+    }
+
+    /// [`Self::online_map`] over an already-listed volume set.
+    pub fn online_map_of(volumes: &[Volume]) -> HashMap<Uuid, PathBuf> {
+        volumes
+            .iter()
+            .filter(|v| v.is_online)
+            .map(|v| (v.id, v.mount_point.clone()))
+            .collect()
+    }
+
+    /// [`Self::label_map`] over an already-listed volume set.
+    pub fn label_map_of(volumes: &[Volume]) -> HashMap<Uuid, String> {
+        volumes.iter().map(|v| (v.id, v.label.clone())).collect()
     }
 }
 
@@ -230,6 +260,40 @@ mod tests {
         let volumes = registry.load().unwrap();
         assert_eq!(volumes.len(), 1);
         assert_eq!(volumes[0].id, vol.id);
+    }
+
+    #[test]
+    fn online_map_without_registry_file_is_empty_but_malformed_file_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = DeviceRegistry::new(dir.path());
+        assert!(registry.online_map().unwrap().is_empty());
+        assert!(registry.label_map().unwrap().is_empty());
+
+        std::fs::write(dir.path().join("volumes.yaml"), "- not: [valid").unwrap();
+        assert!(registry.online_map().is_err());
+    }
+
+    #[test]
+    fn online_map_filters_offline_and_label_map_keeps_all() {
+        let dir = setup();
+        let registry = DeviceRegistry::new(dir.path());
+        // The temp dir exists (online); the other mount point does not.
+        let on = registry
+            .register("On", dir.path(), VolumeType::Local, None)
+            .unwrap();
+        let off = registry
+            .register("Off", Path::new("/nonexistent/maki-offline-volume"), VolumeType::External, None)
+            .unwrap();
+
+        let online = registry.online_map().unwrap();
+        assert_eq!(online.len(), 1);
+        assert_eq!(online.get(&on.id), Some(&dir.path().to_path_buf()));
+        assert!(!online.contains_key(&off.id));
+
+        let labels = registry.label_map().unwrap();
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels.get(&on.id).map(String::as_str), Some("On"));
+        assert_eq!(labels.get(&off.id).map(String::as_str), Some("Off"));
     }
 
     #[test]

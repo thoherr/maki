@@ -80,7 +80,7 @@ impl AssetService {
                 // `/`-separated, causing modified files to look like
                 // (new + missing) and silently breaking move detection
                 // for non-root paths.
-                Ok(rp) => rp.to_string_lossy().replace('\\', "/"),
+                Ok(rp) => crate::path_util::forward_slashes(rp),
                 Err(_) => {
                     result.errors.push(format!(
                         "File {} is not under volume mount point {}",
@@ -285,7 +285,7 @@ impl AssetService {
 
                 let file_start = Instant::now();
 
-                if let Some((new_path, full_path)) = recipe_hash_to_new_path.remove(&*content_hash) {
+                if let Some((new_path, full_path)) = recipe_hash_to_new_path.remove(content_hash) {
                     // Recipe was moved
                     result.moved += 1;
                     if apply {
@@ -331,12 +331,12 @@ impl AssetService {
 
         // Any remaining entries in hash_to_new_path are files that matched a hash
         // but whose old location wasn't in our scanned prefixes — report as new
-        for (_hash, (_path, full_path)) in &media_hash_to_new_path {
+        for (_path, full_path) in media_hash_to_new_path.values() {
             let file_start = Instant::now();
             result.new_files += 1;
             on_file(full_path, SyncStatus::New, file_start.elapsed());
         }
-        for (_hash, (_path, full_path)) in &recipe_hash_to_new_path {
+        for (_path, full_path) in recipe_hash_to_new_path.values() {
             let file_start = Instant::now();
             result.new_files += 1;
             on_file(full_path, SyncStatus::New, file_start.elapsed());

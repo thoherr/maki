@@ -58,7 +58,7 @@ impl AssetService {
         on_asset: impl Fn(&str, &AudioAnalyzeStatus, std::time::Duration),
     ) -> Result<AudioAnalyzeResult> {
         
-        let engine = crate::query::QueryEngine::new(&self.catalog_root);
+        let engine = self.query_engine();
         let full_query = if query.trim().is_empty() {
             "type:audio".to_string()
         } else {

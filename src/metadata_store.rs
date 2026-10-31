@@ -200,13 +200,8 @@ impl MetadataStore {
         Ok(summaries)
     }
 
-    /// Rebuild SQLite catalog from sidecar files.
-    pub fn sync_to_catalog(&self, catalog: &crate::catalog::Catalog) -> Result<SyncResult> {
-        self.sync_to_catalog_with_log(catalog, false)
-    }
-
-    /// [`sync_to_catalog`](Self::sync_to_catalog) with optional per-sidecar
-    /// progress on stderr (`maki rebuild-catalog --log`).
+    /// Rebuild the SQLite catalog from sidecar files, with optional
+    /// per-sidecar progress on stderr (`maki rebuild-catalog --log`).
     pub fn sync_to_catalog_with_log(&self, catalog: &crate::catalog::Catalog, log: bool) -> Result<SyncResult> {
         let summaries = self.list()?;
         let mut synced = 0u64;
@@ -354,7 +349,7 @@ mod tests {
         asset.variants.push(variant);
         store.save(&asset).unwrap();
 
-        let result = store.sync_to_catalog(&catalog).unwrap();
+        let result = store.sync_to_catalog_with_log(&catalog, false).unwrap();
         assert_eq!(result.synced, 1);
         assert_eq!(result.errors, 0);
 

@@ -130,7 +130,7 @@ proptest! {
         xmp_reader::update_tags(&path, &tags, &[]).unwrap();
 
         let victim = tags[pick.index(tags.len())].clone();
-        let changed = xmp_reader::update_tags(&path, &[], &[victim.clone()]).unwrap();
+        let changed = xmp_reader::update_tags(&path, &[], std::slice::from_ref(&victim)).unwrap();
         prop_assert!(changed);
 
         let data = xmp_reader::extract(&path);

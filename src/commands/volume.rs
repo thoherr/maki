@@ -6,14 +6,9 @@ use super::*;
 /// `VolumeCommands` subcommand variants.
 pub fn run_volume_command(
     cmd: VolumeCommands,
-    json: bool,
-    log: bool,
-    #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
-    let _ = verbosity;
+    let _ = ctx.verbosity;
     match cmd {
     VolumeCommands::Add { args, purpose } => {
         // Two positional args: LABEL PATH. One arg: PATH (label derived).
@@ -44,7 +39,7 @@ pub fn run_volume_command(
             maki::models::VolumeType::Local,
             parsed_purpose,
         )?;
-        if cli.json {
+        if ctx.json {
             println!("{}", serde_json::json!({
                 "id": volume.id.to_string(),
                 "label": volume.label,
@@ -87,7 +82,7 @@ pub fn run_volume_command(
             true
         }).collect();
 
-        if cli.json {
+        if ctx.json {
             let json_volumes: Vec<serde_json::Value> = volumes.iter().map(|v| {
                 serde_json::json!({
                     "id": v.id.to_string(),
@@ -131,7 +126,7 @@ pub fn run_volume_command(
         // Update the SQLite cache too
         let catalog = maki::catalog::Catalog::open(&catalog_root)?;
         catalog.ensure_volume(&vol)?;
-        if cli.json {
+        if ctx.json {
             println!("{}", serde_json::json!({
                 "id": vol.id.to_string(),
                 "label": vol.label,
@@ -146,9 +141,9 @@ pub fn run_volume_command(
     }
     VolumeCommands::Remove { volume, apply } => {
         let (catalog_root, config) = maki::config::load_config()?;
-        let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+        let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
-        let show_log = cli.log;
+        let show_log = ctx.log;
         let result = if show_log {
             use maki::asset_service::CleanupStatus;
             service.remove_volume(
@@ -188,7 +183,7 @@ pub fn run_volume_command(
             )?
         };
 
-        if cli.json {
+        if ctx.json {
             println!("{}", serde_json::to_string_pretty(&result)?);
         } else {
             for err in &result.errors {
@@ -228,9 +223,9 @@ pub fn run_volume_command(
     }
     VolumeCommands::Combine { source, target, apply } => {
         let (catalog_root, config) = maki::config::load_config()?;
-        let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+        let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
-        let show_log = cli.log;
+        let show_log = ctx.log;
         let result = service.combine_volume(
             &source,
             &target,
@@ -242,7 +237,7 @@ pub fn run_volume_command(
             },
         )?;
 
-        if cli.json {
+        if ctx.json {
             println!("{}", serde_json::to_string_pretty(&result)?);
         } else {
             for err in &result.errors {
@@ -278,9 +273,9 @@ pub fn run_volume_command(
     }
     VolumeCommands::Split { source, new_label, path, purpose, apply } => {
         let (catalog_root, config) = maki::config::load_config()?;
-        let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+        let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
-        let show_log = cli.log;
+        let show_log = ctx.log;
         let result = service.split_volume(
             &source,
             &new_label,
@@ -294,7 +289,7 @@ pub fn run_volume_command(
             },
         )?;
 
-        if cli.json {
+        if ctx.json {
             println!("{}", serde_json::to_string_pretty(&result)?);
         } else {
             for err in &result.errors {
@@ -339,7 +334,7 @@ pub fn run_volume_command(
         let catalog = maki::catalog::Catalog::open(&catalog_root)?;
         catalog.rename_volume(&vol.id.to_string(), &new_label)?;
 
-        if cli.json {
+        if ctx.json {
             println!("{}", serde_json::json!({
                 "old_label": old_label,
                 "new_label": new_label,

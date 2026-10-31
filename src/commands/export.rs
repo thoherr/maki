@@ -16,13 +16,8 @@ pub fn run_export_command(
         dry_run: bool,
         overwrite: bool,
         zip: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     use maki::asset_service::{ExportLayout, ExportSource, ExportStatus};
 
     let export_layout = match layout.as_str() {
@@ -40,9 +35,9 @@ pub fn run_export_command(
     };
 
     let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
-    let show_log = cli.log;
+    let show_log = ctx.log;
     let log_callback = |path: &std::path::Path, status: &ExportStatus, elapsed: std::time::Duration| {
         if show_log {
             let name = path
@@ -105,7 +100,7 @@ pub fn run_export_command(
         )?
     };
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         for err in &result.errors {
@@ -176,13 +171,8 @@ pub fn run_contact_sheet_command(
         quality: Option<u8>,
         copyright: Option<String>,
         dry_run: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     use maki::contact_sheet::{
         generate_contact_sheet, ContactSheetConfig, ContactSheetLayout,
         ContactSheetStatus, GroupByField, LabelStyle, MetadataField, PaperSize,
@@ -242,7 +232,7 @@ pub fn run_contact_sheet_command(
     };
 
     let output_path = PathBuf::from(&output);
-    let show_log = cli.log;
+    let show_log = ctx.log;
 
     let result = generate_contact_sheet(
         &catalog_root,
@@ -257,7 +247,7 @@ pub fn run_contact_sheet_command(
                         eprintln!("  {} ({})", msg, format_duration(elapsed));
                     }
                     ContactSheetStatus::Complete => {
-                        if !cli.json {
+                        if !ctx.json {
                             eprintln!("{}", msg);
                         }
                     }
@@ -269,7 +259,7 @@ pub fn run_contact_sheet_command(
         },
     )?;
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else if !dry_run {
         println!(
@@ -290,13 +280,8 @@ pub fn run_duplicates_command(
         volume: Option<String>,
         filter_format: Option<String>,
         path: Option<String>,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     use maki::format::{self, OutputFormat};
 
     if same_volume && cross_volume {
@@ -339,7 +324,7 @@ pub fn run_duplicates_command(
 
     let output_format = if let Some(fmt) = &format {
         format::parse_format(fmt).map_err(|e| anyhow::anyhow!(e))?
-    } else if cli.json {
+    } else if ctx.json {
         OutputFormat::Json
     } else {
         OutputFormat::Short
@@ -471,20 +456,15 @@ pub fn run_dedup_command(
         min_copies: usize,
         apply: bool,
         no_trash: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
     // CLI --prefer overrides config [dedup] prefer
     let effective_prefer = prefer.or(config.dedup.prefer);
 
-    let show_log = cli.log;
+    let show_log = ctx.log;
     let result = if show_log {
         use maki::asset_service::DedupStatus;
         service.dedup(
@@ -522,7 +502,7 @@ pub fn run_dedup_command(
         )?
     };
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         for err in &result.errors {

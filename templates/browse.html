@@ -98,13 +98,9 @@
         </span>
         <span class="batch-sep"></span>
         <span class="batch-label-group" id="batch-label">
-            <span class="batch-label-dot" data-label="Red" style="background:#e74c3c;" title="Red"></span>
-            <span class="batch-label-dot" data-label="Orange" style="background:#e67e22;" title="Orange"></span>
-            <span class="batch-label-dot" data-label="Yellow" style="background:#f1c40f;" title="Yellow"></span>
-            <span class="batch-label-dot" data-label="Green" style="background:#27ae60;" title="Green"></span>
-            <span class="batch-label-dot" data-label="Blue" style="background:#3498db;" title="Blue"></span>
-            <span class="batch-label-dot" data-label="Pink" style="background:#e91e8e;" title="Pink"></span>
-            <span class="batch-label-dot" data-label="Purple" style="background:#9b59b6;" title="Purple"></span>
+            {% for l in crate::models::asset::COLOR_LABELS %}
+            <span class="batch-label-dot" data-label="{{ l.name }}" style="background:{{ l.hex }};" title="{{ l.name }}"></span>
+            {% endfor %}
             <span class="batch-label-clear" id="batch-label-clear" title="Clear label">&times;</span>
         </span>
         <span class="batch-sep"></span>
@@ -312,10 +308,8 @@ window.onFilterChange = onFilterChange;
         saveBtn.addEventListener('click', function() {
             var params = new URLSearchParams(window.location.search);
             // Quote a filter value if it contains spaces
-            function qv(prefix, val) {
-                if (val.indexOf(' ') >= 0) return prefix + '"' + val + '"';
-                return prefix + val;
-            }
+            // Quote values with spaces (shared rule: MAKI.quoteFilterValue).
+            function qv(prefix, val) { return prefix + MAKI.quoteFilterValue(val); }
             // Build query string from current filters
             var parts = [];
             var q = params.get('q') || document.querySelector('[name=q]').value || '';
@@ -337,8 +331,7 @@ window.onFilterChange = onFilterChange;
             var sortVal = sort === 'date_desc' ? null : sort;
 
             // Check for duplicate query+sort before prompting for name
-            fetch('/api/saved-searches')
-                .then(function(r) { return r.json(); })
+            MAKI.api.get('/api/saved-searches')
                 .then(function(searches) {
                     var dup = searches.find(function(s) {
                         return s.query === queryStr && (s.sort || null) === sortVal;
@@ -351,12 +344,7 @@ window.onFilterChange = onFilterChange;
                     if (!name || !name.trim()) return;
                     name = name.trim();
 
-                    fetch('/api/saved-searches', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({name: name, query: queryStr, sort: sortVal, favorite: true})
-                    })
-                    .then(function(r) { return r.json(); })
+                    MAKI.api.post('/api/saved-searches', {name: name, query: queryStr, sort: sortVal, favorite: true})
                     .then(function() { window.location.reload(); })
                     .catch(function(err) { console.error('Save search error:', err); });
                 })
@@ -628,11 +616,7 @@ window.onFilterChange = onFilterChange;
         if (batchBusy) return;
         // Use the live URL so every active filter param flows through —
         // avoids re-implementing the search-param whitelist of getFilterParams().
-        fetch('/api/all-ids' + window.location.search)
-            .then(function(r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
+        MAKI.api.get('/api/all-ids' + window.location.search)
             .then(function(data) {
                 var ids = data.ids || [];
                 var totalPages = data.total_pages || 1;
@@ -726,12 +710,7 @@ window.onFilterChange = onFilterChange;
         var tag = input.value.trim();
         if (!tag || selected.size === 0 || batchBusy) return;
         setButtonsBusy(true);
-        fetch('/api/batch/tags', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({asset_ids: Array.from(selected), tags: [tag], remove: false})
-        })
-        .then(function(r) { return r.json(); })
+        MAKI.api.post('/api/batch/tags', {asset_ids: Array.from(selected), tags: [tag], remove: false})
         .then(function() {
             input.value = '';
             if (window.damTags) window.damTags.fetchTags();
@@ -747,12 +726,7 @@ window.onFilterChange = onFilterChange;
         var tag = input.value.trim();
         if (!tag || selected.size === 0 || batchBusy) return;
         setButtonsBusy(true);
-        fetch('/api/batch/tags', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({asset_ids: Array.from(selected), tags: [tag], remove: true})
-        })
-        .then(function(r) { return r.json(); })
+        MAKI.api.post('/api/batch/tags', {asset_ids: Array.from(selected), tags: [tag], remove: true})
         .then(function() {
             input.value = '';
             if (window.damTags) window.damTags.fetchTags();
@@ -911,12 +885,7 @@ window.onFilterChange = onFilterChange;
             if (selected.size === 0 || batchBusy) return;
             var val = parseInt(this.getAttribute('data-value'));
             setButtonsBusy(true);
-            fetch('/api/batch/rating', {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({asset_ids: Array.from(selected), rating: val})
-            })
-            .then(function(r) { return r.json(); })
+            MAKI.api.put('/api/batch/rating', {asset_ids: Array.from(selected), rating: val})
             .then(function() {
                 refreshResults();
             })
@@ -929,12 +898,7 @@ window.onFilterChange = onFilterChange;
     document.getElementById('batch-rating-clear').addEventListener('click', function() {
         if (selected.size === 0 || batchBusy) return;
         setButtonsBusy(true);
-        fetch('/api/batch/rating', {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({asset_ids: Array.from(selected), rating: null})
-        })
-        .then(function(r) { return r.json(); })
+        MAKI.api.put('/api/batch/rating', {asset_ids: Array.from(selected), rating: null})
         .then(function() {
             refreshResults();
         })
@@ -949,12 +913,7 @@ window.onFilterChange = onFilterChange;
             if (selected.size === 0 || batchBusy) return;
             var lbl = this.getAttribute('data-label');
             setButtonsBusy(true);
-            fetch('/api/batch/label', {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({asset_ids: Array.from(selected), label: lbl})
-            })
-            .then(function(r) { return r.json(); })
+            MAKI.api.put('/api/batch/label', {asset_ids: Array.from(selected), label: lbl})
             .then(function() {
                 refreshResults();
             })
@@ -967,12 +926,7 @@ window.onFilterChange = onFilterChange;
     document.getElementById('batch-label-clear').addEventListener('click', function() {
         if (selected.size === 0 || batchBusy) return;
         setButtonsBusy(true);
-        fetch('/api/batch/label', {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({asset_ids: Array.from(selected), label: null})
-        })
-        .then(function(r) { return r.json(); })
+        MAKI.api.put('/api/batch/label', {asset_ids: Array.from(selected), label: null})
         .then(function() {
             refreshResults();
         })
@@ -986,8 +940,7 @@ window.onFilterChange = onFilterChange;
     function populateCollectionDropdown() {
         // Keep the first placeholder option, remove the rest
         while (colSelect.options.length > 1) colSelect.remove(1);
-        return fetch('/api/collections')
-            .then(function(r) { return r.json(); })
+        return MAKI.api.get('/api/collections')
             .then(function(data) {
                 data.forEach(function(c) {
                     var opt = document.createElement('option');
@@ -1010,15 +963,7 @@ window.onFilterChange = onFilterChange;
         var name = prompt('New collection name:');
         if (!name || !name.trim()) return;
         name = name.trim();
-        fetch('/api/collections', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({name: name, description: null})
-        })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-            return r.json();
-        })
+        MAKI.api.post('/api/collections', {name: name, description: null})
         .then(function() {
             return populateCollectionDropdown();
         })
@@ -1032,12 +977,7 @@ window.onFilterChange = onFilterChange;
         var colName = colSelect.value;
         if (!colName || colName === '__new__' || selected.size === 0 || batchBusy) return;
         setButtonsBusy(true);
-        fetch('/api/batch/collection', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({asset_ids: Array.from(selected), collection: colName})
-        })
-        .then(function(r) { return r.json(); })
+        MAKI.api.post('/api/batch/collection', {asset_ids: Array.from(selected), collection: colName})
         .then(function() {
             clearSelection();
             refreshResults();
@@ -1052,12 +992,7 @@ window.onFilterChange = onFilterChange;
         var colName = colSelect.value;
         if (!colName || colName === '__new__' || selected.size === 0 || batchBusy) return;
         setButtonsBusy(true);
-        fetch('/api/batch/collection', {
-            method: 'DELETE',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({asset_ids: Array.from(selected), collection: colName})
-        })
-        .then(function(r) { return r.json(); })
+        MAKI.api.del('/api/batch/collection', {asset_ids: Array.from(selected), collection: colName})
         .then(function() {
             clearSelection();
             refreshResults();
@@ -1110,12 +1045,7 @@ window.onFilterChange = onFilterChange;
     document.getElementById('batch-stack').addEventListener('click', function() {
         if (selected.size < 2 || batchBusy) return;
         setButtonsBusy(true);
-        fetch('/api/batch/stack', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({asset_ids: Array.from(selected)})
-        })
-        .then(function(r) { return r.json(); })
+        MAKI.api.post('/api/batch/stack', {asset_ids: Array.from(selected)})
         .then(function() {
             clearSelection();
             refreshResults();
@@ -1128,12 +1058,7 @@ window.onFilterChange = onFilterChange;
     document.getElementById('batch-unstack').addEventListener('click', function() {
         if (selected.size === 0 || batchBusy) return;
         setButtonsBusy(true);
-        fetch('/api/batch/stack', {
-            method: 'DELETE',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({asset_ids: Array.from(selected)})
-        })
-        .then(function(r) { return r.json(); })
+        MAKI.api.del('/api/batch/stack', {asset_ids: Array.from(selected)})
         .then(function() {
             clearSelection();
             refreshResults();
@@ -1156,15 +1081,7 @@ window.onFilterChange = onFilterChange;
         });
         if (!referenceId || addIds.length === 0) return;
         setButtonsBusy(true);
-        fetch('/api/asset/' + encodeURIComponent(referenceId) + '/stack-add', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({asset_ids: addIds})
-        })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-            return r.json();
-        })
+        MAKI.api.post('/api/asset/' + encodeURIComponent(referenceId) + '/stack-add', {asset_ids: addIds})
         .then(function() { clearSelection(); refreshResults(); })
         .catch(function(err) { alert('Failed to add to stack: ' + err.message); })
         .finally(function() { setButtonsBusy(false); });
@@ -1179,12 +1096,7 @@ window.onFilterChange = onFilterChange;
         });
         if (ids.length === 0) return;
         setButtonsBusy(true);
-        fetch('/api/batch/stack', {
-            method: 'DELETE',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({asset_ids: ids})
-        })
-        .then(function(r) { return r.json(); })
+        MAKI.api.del('/api/batch/stack', {asset_ids: ids})
         .then(function() { clearSelection(); refreshResults(); })
         .catch(function(err) { console.error('Remove from stack error:', err); })
         .finally(function() { setButtonsBusy(false); });
@@ -1196,15 +1108,7 @@ window.onFilterChange = onFilterChange;
         var ids = Array.from(selected);
         if (ids.length !== 1) return;
         setButtonsBusy(true);
-        fetch('/api/asset/' + encodeURIComponent(ids[0]) + '/stack-pick', {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({})
-        })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-            return r.json();
-        })
+        MAKI.api.put('/api/asset/' + encodeURIComponent(ids[0]) + '/stack-pick', {})
         .then(function() { clearSelection(); refreshResults(); })
         .catch(function(err) { alert('Failed to set pick: ' + err.message); })
         .finally(function() { setButtonsBusy(false); });
@@ -1267,15 +1171,7 @@ window.onFilterChange = onFilterChange;
             setButtonsBusy(true);
             var payload = {asset_ids: Array.from(selected)};
             if (targetId) payload.target_id = targetId;
-            fetch('/api/batch/group', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(payload)
-            })
-            .then(function(r) {
-                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                return r.json();
-            })
+            MAKI.api.post('/api/batch/group', payload)
             .then(function(data) {
                 clearSelection();
                 refreshResults();
@@ -1290,12 +1186,7 @@ window.onFilterChange = onFilterChange;
         if (selected.size === 0 || batchBusy) return;
         if (!confirm('Group ' + selected.size + ' selected asset(s) by filename stem? Assets with the same name will be merged. This cannot be undone.')) return;
         setButtonsBusy(true);
-        fetch('/api/batch/auto-group', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({asset_ids: Array.from(selected)})
-        })
-        .then(function(r) { return r.json(); })
+        MAKI.api.post('/api/batch/auto-group', {asset_ids: Array.from(selected)})
         .then(function(data) {
             clearSelection();
             refreshResults();
@@ -1322,15 +1213,7 @@ window.onFilterChange = onFilterChange;
             var batchPayload = {asset_ids: ids};
             var batchModelSelect = document.getElementById('batch-vlm-model-select');
             if (batchModelSelect) batchPayload.model = batchModelSelect.value;
-            fetch('/api/batch/describe', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(batchPayload)
-            })
-            .then(function(r) {
-                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                return r.json();
-            })
+            MAKI.api.post('/api/batch/describe', batchPayload)
             .then(function(data) {
                 clearSelection();
                 window.makiJob.watch(data.job_id, 'Describe (' + ids.length + ')', {
@@ -1354,15 +1237,7 @@ window.onFilterChange = onFilterChange;
             // Async via job registry: POST returns a job_id, the toast shows
             // live progress and the final summary, then we refresh the grid
             // on done so the new tags surface in the UI.
-            fetch('/api/batch/auto-tag', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({asset_ids: ids})
-            })
-            .then(function(r) {
-                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                return r.json();
-            })
+            MAKI.api.post('/api/batch/auto-tag', {asset_ids: ids})
             .then(function(data) {
                 clearSelection();
                 window.makiJob.watch(data.job_id, 'Auto-tag (' + ids.length + ')', {
@@ -1387,15 +1262,7 @@ window.onFilterChange = onFilterChange;
             var startReview = function(ids) {
                 if (!ids || ids.length === 0) return;
                 if (!confirm('Compute tag suggestions for ' + ids.length + ' asset(s)?\n\nThis runs the AI classifier on each image (roughly 1–2 s per image on CPU; faster on GPU). No tags are applied — you review each suggested tag\'s candidate set in the next step.')) return;
-                fetch('/api/maintain/suggest-tags-review', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({asset_ids: ids})
-                })
-                .then(function(r) {
-                    if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                    return r.json();
-                })
+                MAKI.api.post('/api/maintain/suggest-tags-review', {asset_ids: ids})
                 .then(function(data) {
                     // Open the review modal immediately in its "computing"
                     // phase — it subscribes to the job's progress stream
@@ -1418,11 +1285,7 @@ window.onFilterChange = onFilterChange;
                 return;
             }
             // No manual selection — pull every ID matching the live filter.
-            fetch('/api/all-ids' + window.location.search)
-                .then(function(r) {
-                    if (!r.ok) throw new Error('HTTP ' + r.status);
-                    return r.json();
-                })
+            MAKI.api.get('/api/all-ids' + window.location.search)
                 .then(function(data) {
                     startReview(data.ids || []);
                 })
@@ -1438,15 +1301,7 @@ window.onFilterChange = onFilterChange;
             if (selected.size === 0 || batchBusy) return;
             if (!confirm('Generate embeddings for ' + selected.size + ' selected asset(s)?\n\nNo tags will be applied — this only builds the visual-similarity index.')) return;
             var ids = Array.from(selected);
-            fetch('/api/batch/embed', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({asset_ids: ids})
-            })
-            .then(function(r) {
-                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                return r.json();
-            })
+            MAKI.api.post('/api/batch/embed', {asset_ids: ids})
             .then(function(data) {
                 clearSelection();
                 window.makiJob.watch(data.job_id, 'Embed (' + ids.length + ')');
@@ -1463,15 +1318,7 @@ window.onFilterChange = onFilterChange;
             if (selected.size === 0 || batchBusy) return;
             if (!confirm('Detect faces in ' + selected.size + ' selected asset(s)?')) return;
             var ids = Array.from(selected);
-            fetch('/api/batch/detect-faces', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({asset_ids: ids})
-            })
-            .then(function(r) {
-                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                return r.json();
-            })
+            MAKI.api.post('/api/batch/detect-faces', {asset_ids: ids})
             .then(function(data) {
                 clearSelection();
                 window.makiJob.watch(data.job_id, 'Detect faces (' + ids.length + ')', {
@@ -1664,15 +1511,7 @@ window.onFilterChange = onFilterChange;
             var removeFiles = document.getElementById('delete-remove-files').checked;
             overlay.remove();
             setButtonsBusy(true);
-            fetch('/api/batch/delete', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({asset_ids: ids, remove_files: removeFiles})
-            })
-            .then(function(r) {
-                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                return r.json();
-            })
+            MAKI.api.post('/api/batch/delete', {asset_ids: ids, remove_files: removeFiles})
             .then(function(data) {
                 clearSelection();
                 refreshResults();
@@ -1800,7 +1639,7 @@ window.onFilterChange = onFilterChange;
 // --- Per-stack expand/collapse ---
 (function() {
     var expandedStacks = {};  // stackId -> [inserted card elements]
-    var labelColors = {Red:'#e74c3c',Orange:'#e67e22',Yellow:'#f1c40f',Green:'#27ae60',Blue:'#3498db',Pink:'#e91e8e',Purple:'#9b59b6'};
+    var labelColors = MAKI.labelColors;
 
     function buildCardHtml(m) {
         var stackStyle = m.stack_id ? '--stack-color: hsl(' + stackHue(m.stack_id) + ', 60%, 50%);' : '';
@@ -1813,14 +1652,14 @@ window.onFilterChange = onFilterChange;
         } else if (m.label) {
             ratingHtml = '<div class="card-stars"><span class="card-label-dot" style="background:' + (labelColors[m.label] || '#999') + ';"></span></div>';
         }
-        return '<div class="asset-card stacked stack-expanded-member" data-asset-id="' + m.asset_id + '" data-preview="' + m.preview_url + '" data-name="' + esc(m.name) + '" data-type="' + m.asset_type + '" data-format="' + m.format + '" data-date="' + m.date + '" data-rating="' + m.rating + '" data-label="' + (m.label || '') + '" data-variants="' + m.variant_count + '" data-rotation="' + m.preview_rotation + '" data-stack="' + (m.stack_id || '') + '" data-prev="" data-next="" data-video-url="" style="' + stackStyle + '">' +
+        return '<div class="asset-card stacked stack-expanded-member" data-asset-id="' + m.asset_id + '" data-preview="' + m.preview_url + '" data-name="' + MAKI.escHtml(m.name) + '" data-type="' + m.asset_type + '" data-format="' + m.format + '" data-date="' + m.date + '" data-rating="' + m.rating + '" data-label="' + (m.label || '') + '" data-variants="' + m.variant_count + '" data-rotation="' + m.preview_rotation + '" data-stack="' + (m.stack_id || '') + '" data-prev="" data-next="" data-video-url="" style="' + stackStyle + '">' +
             '<label class="select-checkbox" onclick="event.stopPropagation()">' +
                 '<input type="checkbox" class="asset-select-cb" value="' + m.asset_id + '">' +
                 '<span class="checkmark"></span>' +
             '</label>' +
-            '<img class="thumb" src="' + m.preview_url + '" alt="' + esc(m.name) + '" loading="lazy" draggable="false">' +
+            '<img class="thumb" src="' + m.preview_url + '" alt="' + MAKI.escHtml(m.name) + '" loading="lazy" draggable="false">' +
             '<a class="card-body" href="/asset/' + m.asset_id + '">' +
-                '<div class="card-title">' + esc(m.name) + '</div>' +
+                '<div class="card-title">' + MAKI.escHtml(m.name) + '</div>' +
                 '<div class="card-meta">' +
                     '<span class="badge badge-type-' + m.asset_type.toLowerCase() + '">' + m.asset_type + '</span>' +
                     '<span class="badge">' + m.format + '</span>' +
@@ -1831,7 +1670,6 @@ window.onFilterChange = onFilterChange;
             '</a></div>';
     }
 
-    function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
     function stackHue(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) >>> 0; return h % 360; }
 
     // Find all server-rendered members of a stack in the grid (in DOM order)
@@ -1885,8 +1723,7 @@ window.onFilterChange = onFilterChange;
 
         // Fetch and expand (stacks are globally collapsed, need to load members)
         badge.classList.add('stack-loading');
-        fetch('/api/stack/' + stackId + '/members')
-            .then(function(r) { return r.json(); })
+        MAKI.api.get('/api/stack/' + stackId + '/members')
             .then(function(members) {
                 badge.classList.remove('stack-loading');
                 badge.classList.add('stack-expanded');
@@ -2019,15 +1856,7 @@ window.onFilterChange = onFilterChange;
                 if (!colName || !colName.trim()) return;
                 colName = colName.trim();
             }
-            fetch('/api/batch/collection', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({asset_ids: ids, collection: colName})
-            })
-            .then(function(r) {
-                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                return r.json();
-            })
+            MAKI.api.post('/api/batch/collection', {asset_ids: ids, collection: colName})
             .then(function(data) {
                 var n = data.added || ids.length;
                 showDropToast(n + ' asset' + (n !== 1 ? 's' : '') + ' added to "' + colName + '"');
@@ -2052,18 +1881,8 @@ window.onFilterChange = onFilterChange;
         setupDropTarget(filterColSel, function() { return filterColSel.value; });
     }
 
-    // Toast notification for drop feedback
-    function showDropToast(msg) {
-        var toast = document.createElement('div');
-        toast.className = 'drop-toast';
-        toast.textContent = msg;
-        document.body.appendChild(toast);
-        requestAnimationFrame(function() { toast.classList.add('show'); });
-        setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() { toast.remove(); }, 300);
-        }, 2000);
-    }
+    // Toast notification for drop feedback (shared MAKI.toast, 'drop' kind)
+    function showDropToast(msg) { MAKI.toast(msg, 'drop'); }
 })();
 
 // --- Results loading indicator ---
@@ -2274,12 +2093,7 @@ window.onFilterChange = onFilterChange;
         } else {
             // Batch
             window.damBatch.setButtonsBusy(true);
-            fetch('/api/batch/rating', {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({asset_ids: ids, rating: rating || null})
-            })
-            .then(function(r) { return r.json(); })
+            MAKI.api.put('/api/batch/rating', {asset_ids: ids, rating: rating || null})
             .then(function() {
                 refreshResults();
             })
@@ -2289,8 +2103,8 @@ window.onFilterChange = onFilterChange;
     }
 
     // Label: empty string clears, color name sets
-    var labelNumMap = {'1':'Red', '2':'Orange', '3':'Yellow', '4':'Green', '5':'Blue', '6':'Pink', '7':'Purple'};
-    var labelLetterMap = {'r':'Red', 'o':'Orange', 'y':'Yellow', 'g':'Green', 'b':'Blue', 'p':'Pink', 'u':'Purple'};
+    var labelNumMap = MAKI.labelNumMap;
+    var labelLetterMap = MAKI.labelLetterMap;
 
     function applyLabel(label) {
         var ids = getTargetIds();
@@ -2306,12 +2120,7 @@ window.onFilterChange = onFilterChange;
         } else {
             // Batch
             window.damBatch.setButtonsBusy(true);
-            fetch('/api/batch/label', {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({asset_ids: ids, label: label || null})
-            })
-            .then(function(r) { return r.json(); })
+            MAKI.api.put('/api/batch/label', {asset_ids: ids, label: label || null})
             .then(function() {
                 refreshResults();
             })
@@ -2683,8 +2492,7 @@ window.damCalendar = (function() {
         Object.keys(filterParams).forEach(function(k) {
             qs += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(filterParams[k]);
         });
-        fetch('/api/calendar?' + qs)
-            .then(function(r) { return r.json(); })
+        MAKI.api.get('/api/calendar?' + qs)
             .then(function(data) {
                 render(data.year, data.counts, data.years);
             })
@@ -2762,10 +2570,7 @@ window.damMap = (function() {
     var container = document.getElementById('map-container');
     var truncatedDiv = null;
 
-    var LABEL_COLORS = {
-        'Red': '#e74c3c', 'Orange': '#e67e22', 'Yellow': '#f1c40f',
-        'Green': '#27ae60', 'Blue': '#3498db', 'Pink': '#e91e8e', 'Purple': '#9b59b6'
-    };
+    var LABEL_COLORS = MAKI.labelColors;
 
     function initMap() {
         if (map) return;
@@ -2799,8 +2604,7 @@ window.damMap = (function() {
         Object.keys(filterParams).forEach(function(k) {
             qs += (qs ? '&' : '') + encodeURIComponent(k) + '=' + encodeURIComponent(filterParams[k]);
         });
-        fetch('/api/map?' + qs)
-            .then(function(r) { return r.json(); })
+        MAKI.api.get('/api/map?' + qs)
             .then(function(data) {
                 clusterGroup.clearLayers();
                 if (truncatedDiv) { truncatedDiv.remove(); truncatedDiv = null; }
@@ -2813,12 +2617,12 @@ window.damMap = (function() {
                         popupHtml += '<img class="map-popup-thumb" src="' + m.preview + '" loading="lazy" alt=""'
                             + ' data-id="' + m.id + '"'
                             + ' data-preview="' + m.preview + '"'
-                            + ' data-name="' + escapeHtml(m.name) + '"'
+                            + ' data-name="' + MAKI.escHtml(m.name) + '"'
                             + ' data-rating="' + (m.rating || 0) + '"'
                             + ' data-label="' + (m.label || '') + '">';
                     }
                     popupHtml += '<a class="popup-detail-link" href="/asset/' + m.id + '">';
-                    popupHtml += '<div class="popup-name">' + escapeHtml(m.name) + '</div>';
+                    popupHtml += '<div class="popup-name">' + MAKI.escHtml(m.name) + '</div>';
                     popupHtml += '<div class="popup-meta">';
                     popupHtml += starsHtml(m.rating);
                     if (m.label && LABEL_COLORS[m.label]) {
@@ -2858,12 +2662,6 @@ window.damMap = (function() {
             .catch(function(err) {
                 console.error('Map fetch error:', err);
             });
-    }
-
-    function escapeHtml(s) {
-        var d = document.createElement('div');
-        d.textContent = s;
-        return d.innerHTML;
     }
 
     function invalidateSize() {
@@ -3009,23 +2807,12 @@ window.damFacets = (function() {
         var params = getFilterParams();
         var qs = Object.keys(params).map(function(k) { return k + '=' + encodeURIComponent(params[k]); }).join('&');
         content.innerHTML = '<div class="facet-loading">Loading\u2026</div>';
-        fetch('/api/facets?' + qs, { signal: fetchController.signal })
-            .then(function(r) { return r.json(); })
+        MAKI.api.get('/api/facets?' + qs, { signal: fetchController.signal })
             .then(function(data) { render(data); })
             .catch(function(e) { if (e.name !== 'AbortError') content.innerHTML = '<div class="facet-loading">Error loading facets</div>'; });
     }
 
-    var labelColors = {
-        'Red': '#e74c3c', 'Orange': '#e67e22', 'Yellow': '#f1c40f',
-        'Green': '#27ae60', 'Blue': '#3498db', 'Pink': '#e91e8e', 'Purple': '#9b59b6'
-    };
-
-    function escAttr(s) {
-        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
-    }
-    function escHtml(s) {
-        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
-    }
+    var labelColors = MAKI.labelColors;
 
     // Build a tree from the catalog's flat (auto-expanded) tag list.
     // Input: [["event", 47], ["event|festival", 47], ["event|festival|H...|2024", 12], ...]
@@ -3071,11 +2858,11 @@ window.damFacets = (function() {
                 var c = node.children[k];
                 h += '<div class="facet-item facet-clickable facet-tag-row" ' +
                      'data-facet-type="tag" ' +
-                     'data-facet-value="' + escAttr(c.fullPath) + '" ' +
+                     'data-facet-value="' + MAKI.escAttr(c.fullPath) + '" ' +
                      'style="--depth: ' + depth + '" ' +
                      'role="button" tabindex="0" ' +
-                     'title="' + escAttr(c.fullPath) + ' — click to narrow">';
-                h += '<span class="facet-label">' + escHtml(c.name) + '</span>';
+                     'title="' + MAKI.escAttr(c.fullPath) + ' — click to narrow">';
+                h += '<span class="facet-label">' + MAKI.escHtml(c.name) + '</span>';
                 h += '<span class="facet-count">' + c.count + '</span>';
                 h += '</div>';
                 walk(c, depth + 1);
@@ -3136,10 +2923,10 @@ window.damFacets = (function() {
                 var dot = val && labelColors[val] ? '<span class="facet-label-dot" style="background:' + labelColors[val] + '"></span>' : '';
                 h += '<div class="facet-item facet-clickable" ' +
                      'data-facet-type="label" ' +
-                     'data-facet-value="' + escAttr(labelValue) + '" ' +
+                     'data-facet-value="' + MAKI.escAttr(labelValue) + '" ' +
                      'role="button" tabindex="0" ' +
                      'title="Click to filter by this label">';
-                h += '<span class="facet-label">' + dot + escHtml(val || 'No label') + '</span>';
+                h += '<span class="facet-label">' + dot + MAKI.escHtml(val || 'No label') + '</span>';
                 h += '<span class="facet-count">' + cnt + '</span>';
                 h += '</div>';
             }
@@ -3168,10 +2955,10 @@ window.damFacets = (function() {
                     var pct = Math.round((cnt / maxCount) * 100);
                     h += '<div class="facet-item facet-clickable" ' +
                          'data-facet-type="year" ' +
-                         'data-facet-value="' + escAttr(val) + '" ' +
+                         'data-facet-value="' + MAKI.escAttr(val) + '" ' +
                          'role="button" tabindex="0" ' +
                          'title="Click to filter by this year">';
-                    h += '<span class="facet-label">' + escHtml(val) + '</span>';
+                    h += '<span class="facet-label">' + MAKI.escHtml(val) + '</span>';
                     h += '<span class="facet-bar-wrap"><span class="facet-bar" style="width:' + pct + '%"></span></span>';
                     h += '<span class="facet-count">' + cnt + '</span>';
                     h += '</div>';
@@ -3188,10 +2975,10 @@ window.damFacets = (function() {
                 var cnt = data.formats[i][1];
                 h += '<div class="facet-item facet-clickable" ' +
                      'data-facet-type="format" ' +
-                     'data-facet-value="' + escAttr(val) + '" ' +
+                     'data-facet-value="' + MAKI.escAttr(val) + '" ' +
                      'role="button" tabindex="0" ' +
                      'title="Click to toggle this format">';
-                h += '<span class="facet-label">' + escHtml(val) + '</span>';
+                h += '<span class="facet-label">' + MAKI.escHtml(val) + '</span>';
                 h += '<span class="facet-count">' + cnt + '</span>';
                 h += '</div>';
             }
@@ -3208,10 +2995,10 @@ window.damFacets = (function() {
                     var cnt = data.volumes[i][2];
                     h += '<div class="facet-item facet-clickable" ' +
                          'data-facet-type="volume" ' +
-                         'data-facet-value="' + escAttr(vid) + '" ' +
+                         'data-facet-value="' + MAKI.escAttr(vid) + '" ' +
                          'role="button" tabindex="0" ' +
                          'title="Click to filter by this volume">';
-                    h += '<span class="facet-label">' + escHtml(vlabel) + '</span>';
+                    h += '<span class="facet-label">' + MAKI.escHtml(vlabel) + '</span>';
                     h += '<span class="facet-count">' + cnt + '</span>';
                     h += '</div>';
                 }
@@ -3377,11 +3164,7 @@ window.damFacets = (function() {
         var saved = readSaved();
         if (!saved || !saved.search) return;
 
-        fetch('/api/all-ids' + saved.search)
-            .then(function(r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
+        MAKI.api.get('/api/all-ids' + saved.search)
             .then(function(data) {
                 var currentIds = data.ids || [];
                 if (currentIds.length === 0) {
@@ -3448,8 +3231,8 @@ window.damFacets = (function() {
     // entirely. (The Clear button can still wipe stale state from a
     // previous "on" setting — flipping the config off shouldn't strand
     // a forgotten filter in storage.)
-    fetch('/api/build-info')
-        .then(function(r) { return r.ok ? r.json() : null; })
+    MAKI.api.get('/api/build-info')
+        .catch(function() { return null; })
         .then(function(info) {
             rememberEnabled = info && info.remember_latest_filter !== false;
             if (!rememberEnabled) return;

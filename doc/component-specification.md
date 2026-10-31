@@ -205,7 +205,7 @@ recipes:
 - `save(asset)` — write/update sidecar YAML.
 - `load(asset_id) -> Asset` — read sidecar YAML.
 - `list() -> Vec<AssetSummary>` — enumerate all known assets.
-- `sync_to_catalog()` — rebuild SQLite catalog from sidecar files (source of truth → cache).
+- `sync_to_catalog_with_log(&catalog, log)` — rebuild SQLite catalog from sidecar files (source of truth → cache), with optional per-sidecar progress.
 
 ### 3. Local Catalog (SQLite)
 
@@ -673,7 +673,7 @@ After each write, the file is re-hashed and the recipe's `content_hash` is updat
 - `find_similar(query, limit, exclude, model)` — brute-force scan over the stored rows (no index required)
 - `EmbeddingIndex::load(conn, model, dim)` — in-memory dot-product index cached in `AppState.ai_embedding_index`; `search(query, limit, exclude)`, `upsert(asset_id, embedding)`, `from_rows`
 - `rank_similar(index, query, limit, min_sim, pinned)` — the shared ranker for `similar:<id>`, `similar:@<token>` and `search --image` (pinned asset first at 1.0)
-- `write_embedding_binary` / `read_embedding_binary` / `delete_embedding_binary` / `scan_embedding_binaries` — the binary mirror used by `rebuild-catalog` and `cleanup`
+- `write_embedding_binary` / `delete_embedding_binary` / `scan_embedding_binaries` — the binary mirror used by `rebuild-catalog` and `cleanup`
 
 ### 26. VLM Client and Model Manager
 

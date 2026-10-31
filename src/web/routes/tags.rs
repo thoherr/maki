@@ -112,9 +112,9 @@ pub struct RenameTagRequest {
 pub async fn rename_tag_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RenameTagRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let old_storage = crate::tag_util::tag_input_to_storage(&req.old_tag);
         let new_storage = crate::tag_util::tag_input_to_storage(&req.new_tag);
         if new_storage.is_empty() {
@@ -132,14 +132,9 @@ pub async fn rename_tag_api(
             "skipped": result.skipped,
             "dry_run": result.dry_run,
         }))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    }, super::err::bad_request)
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -156,9 +151,9 @@ pub struct SplitTagRequest {
 pub async fn split_tag_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SplitTagRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let old_storage = crate::tag_util::tag_input_to_storage(&req.old_tag);
         let new_storage: Vec<String> = req.new_tags.iter()
             .map(|t| crate::tag_util::tag_input_to_storage(t))
@@ -178,14 +173,9 @@ pub async fn split_tag_api(
             "skipped": result.skipped,
             "dry_run": result.dry_run,
         }))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    }, super::err::bad_request)
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -199,14 +189,14 @@ pub struct DeleteTagRequest {
 pub async fn delete_tag_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DeleteTagRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         // Strip markers (=/^/) before normalising via tag_input_to_storage
         // so the marker stays attached to the tag string the engine parses.
         // tag_input_to_storage only swaps `>` → `|`, so markers pass through.
         let tag_storage = crate::tag_util::tag_input_to_storage(&req.tag);
-        if tag_storage.trim_start_matches(|c: char| c == '=' || c == '/' || c == '^').is_empty() {
+        if tag_storage.trim_start_matches(['=', '/', '^']).is_empty() {
             anyhow::bail!("tag must not be empty");
         }
         let engine = state.query_engine();
@@ -220,14 +210,9 @@ pub async fn delete_tag_api(
             "skipped": result.skipped,
             "dry_run": result.dry_run,
         }))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    }, super::err::bad_request)
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]

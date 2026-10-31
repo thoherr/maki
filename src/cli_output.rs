@@ -5,6 +5,53 @@
 
 use std::time::Duration;
 
+/// Cross-cutting CLI flags every command handler receives as its last
+/// parameter: `--json`, `--log`, and the `--verbose`/`--debug` pair.
+///
+/// Replaces the former positional `json: bool, log: bool, verbosity`
+/// triple (and the per-handler `struct Ctx { json, log }` shims).
+#[derive(Clone, Copy, Default)]
+pub struct CliContext {
+    /// `--json`: machine-readable JSON on stdout, messages on stderr.
+    pub json: bool,
+    /// `--log`: per-file progress on stderr.
+    pub log: bool,
+    /// `--verbose` / `--debug`.
+    pub verbosity: crate::Verbosity,
+}
+
+impl CliContext {
+    pub fn new(json: bool, log: bool, verbosity: crate::Verbosity) -> Self {
+        Self { json, log, verbosity }
+    }
+
+    /// Context with every flag off (tests, internal callers).
+    pub fn quiet() -> Self {
+        Self::default()
+    }
+
+    /// True when verbose or debug output is enabled.
+    pub fn verbose(&self) -> bool {
+        self.verbosity.verbose()
+    }
+
+    /// True when debug output is enabled.
+    pub fn debug(&self) -> bool {
+        self.verbosity.debug()
+    }
+
+    /// Print `value` as pretty JSON on stdout when `--json` is set,
+    /// otherwise run the human-readable printer.
+    pub fn emit<T: serde::Serialize>(&self, value: &T, human: impl FnOnce()) -> anyhow::Result<()> {
+        if self.json {
+            println!("{}", serde_json::to_string_pretty(value)?);
+        } else {
+            human();
+        }
+        Ok(())
+    }
+}
+
 /// Format a Duration as `h m s.ms`, dropping leading zero fields.
 pub fn format_duration(d: Duration) -> String {
     let total_millis = d.as_millis();

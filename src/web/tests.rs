@@ -26,7 +26,7 @@ use crate::catalog::Catalog;
 use crate::metadata_store::MetadataStore;
 use crate::models::{Asset, AssetType, Variant, VariantRole};
 
-use super::{build_router, AppState};
+use super::{build_router, AppState, ServeOptions};
 
 /// A temp catalog with one seeded image asset, plus the `AppState` the
 /// router runs against. Dropping it removes the temp directory.
@@ -89,56 +89,38 @@ impl TestServer {
             asset_id = asset.id.to_string();
         }
 
-        // Point the VLM probe at a closed port so AppState::new fails the
-        // endpoint check instantly instead of contacting a real local LLM.
-        let mut vlm_config = crate::config::VlmConfig::default();
-        vlm_config.endpoint = "http://127.0.0.1:1".to_string();
-
-        // `[ai]` from the supplied maki.toml (tests point `model_dir` at a
-        // nonexistent path so the lazy SigLIP load fails deterministically
-        // even on a dev machine that has the model downloaded).
-        #[cfg(feature = "ai")]
-        let ai_config = if maki_toml.is_empty() {
-            crate::config::AiConfig::default()
+        // The supplied maki.toml, as `maki serve` would load it (tests
+        // point `[ai] model_dir` at a nonexistent path so the lazy SigLIP
+        // load fails deterministically even on a dev machine that has the
+        // model downloaded). Harness-fixed values on top: the VLM probe
+        // points at a closed port so AppState::new fails the endpoint
+        // check instantly instead of contacting a real local LLM, and the
+        // stroll tuning is pinned to the values the stroll tests assert.
+        let mut config = if maki_toml.is_empty() {
+            crate::config::CatalogConfig::default()
         } else {
-            crate::config::CatalogConfig::load(&root)
-                .map(|c| c.ai)
-                .unwrap_or_default()
+            crate::config::CatalogConfig::load(&root).unwrap_or_default()
         };
-        #[cfg(feature = "ai")]
+        config.vlm.endpoint = "http://127.0.0.1:1".to_string();
+        config.preview = crate::config::PreviewConfig::default();
+        config.dedup.prefer = None;
+        config.browse.default_filter = None;
+        config.serve.per_page = 60;
+        config.serve.stroll_neighbors = 6;
+        config.serve.stroll_neighbors_max = 24;
+        config.serve.stroll_fanout = 3;
+        config.serve.stroll_fanout_max = 9;
+        config.serve.stroll_discover_pool = 200;
         let state = Arc::new(AppState::new(
             root.clone(),
-            crate::config::PreviewConfig::default(),
-            false,
-            None,
-            60,
-            6,
-            24,
-            3,
-            9,
-            200,
-            read_only,
-            ai_config,
-            vlm_config,
-            None,
-            crate::Verbosity::quiet(),
-        ));
-        #[cfg(not(feature = "ai"))]
-        let state = Arc::new(AppState::new(
-            root.clone(),
-            crate::config::PreviewConfig::default(),
-            false,
-            None,
-            60,
-            6,
-            24,
-            3,
-            9,
-            200,
-            read_only,
-            vlm_config,
-            None,
-            crate::Verbosity::quiet(),
+            ServeOptions {
+                bind: "127.0.0.1".to_string(),
+                port: 0,
+                config,
+                log_requests: false,
+                read_only,
+                verbosity: crate::Verbosity::quiet(),
+            },
         ));
 
         Self { _dir: dir, root, state, asset_id }

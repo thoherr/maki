@@ -2,7 +2,7 @@
 //! network shares, etc.) and the relative paths where variants live on
 //! them. `online_map` resolves which volumes are currently mounted.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,29 @@ pub enum VolumeType {
     Local,
     External,
     Network,
+}
+
+impl VolumeType {
+    /// The serde / SQLite spelling.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            VolumeType::Local => "local",
+            VolumeType::External => "external",
+            VolumeType::Network => "network",
+        }
+    }
+}
+
+impl std::str::FromStr for VolumeType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "local" => Ok(VolumeType::Local),
+            "external" => Ok(VolumeType::External),
+            "network" => Ok(VolumeType::Network),
+            _ => Err(format!("unknown volume type '{s}'")),
+        }
+    }
 }
 
 /// The logical purpose of a volume in the storage hierarchy.
@@ -110,8 +133,8 @@ pub struct FileLocation {
 }
 
 /// Serialize a PathBuf with forward slashes for cross-platform YAML/JSON consistency.
-fn serialize_path_forward_slash<S: serde::Serializer>(path: &PathBuf, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_str(&path.to_string_lossy().replace('\\', "/"))
+fn serialize_path_forward_slash<S: serde::Serializer>(path: &Path, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&crate::path_util::forward_slashes(path))
 }
 
 impl FileLocation {
@@ -132,6 +155,6 @@ impl FileLocation {
     /// assert_eq!(loc.relative_path_str(), "photos/2026/sunset.jpg");
     /// ```
     pub fn relative_path_str(&self) -> String {
-        self.relative_path.to_string_lossy().replace('\\', "/")
+        crate::path_util::forward_slashes(&self.relative_path)
     }
 }

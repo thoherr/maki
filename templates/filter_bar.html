@@ -52,13 +52,9 @@
             </div>
             <div class="label-filter" id="label-filter">
                 <span class="label-unlabeled{% if label == "none" %} active{% endif %}" id="label-unlabeled" title="Unlabeled (no color label)" data-label="none">&#x2205;</span>
-                <span class="label-dot-filter{% if label == "Red" %} active{% endif %}" data-label="Red" style="background: #e74c3c;" title="Red"></span>
-                <span class="label-dot-filter{% if label == "Orange" %} active{% endif %}" data-label="Orange" style="background: #e67e22;" title="Orange"></span>
-                <span class="label-dot-filter{% if label == "Yellow" %} active{% endif %}" data-label="Yellow" style="background: #f1c40f;" title="Yellow"></span>
-                <span class="label-dot-filter{% if label == "Green" %} active{% endif %}" data-label="Green" style="background: #27ae60;" title="Green"></span>
-                <span class="label-dot-filter{% if label == "Blue" %} active{% endif %}" data-label="Blue" style="background: #3498db;" title="Blue"></span>
-                <span class="label-dot-filter{% if label == "Pink" %} active{% endif %}" data-label="Pink" style="background: #e91e8e;" title="Pink"></span>
-                <span class="label-dot-filter{% if label == "Purple" %} active{% endif %}" data-label="Purple" style="background: #9b59b6;" title="Purple"></span>
+                {% for l in crate::models::asset::COLOR_LABELS %}
+                <span class="label-dot-filter{% if label == l.name %} active{% endif %}" data-label="{{ l.name }}" style="background: {{ l.hex }};" title="{{ l.name }}"></span>
+                {% endfor %}
             </div>
         </div>
         <div class="filter-row-right">

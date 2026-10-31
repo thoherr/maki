@@ -121,24 +121,18 @@ impl AssetService {
         use crate::vlm::{self, BatchDescribeResult, DescribeMode, DescribeResult, DescribeStatus};
 
         let catalog = crate::catalog::Catalog::open(&self.catalog_root)?;
-        let engine = crate::query::QueryEngine::new(&self.catalog_root);
+        let engine = self.query_engine();
         let preview_gen =
             crate::preview::PreviewGenerator::new(&self.catalog_root, self.verbosity, &self.preview_config);
         let registry = DeviceRegistry::new(&self.catalog_root);
         let volumes = registry.list()?;
-        let online_volumes: HashMap<String, &crate::models::Volume> = volumes
-            .iter()
-            .filter(|v| v.is_online)
-            .map(|v| (v.id.to_string(), v))
-            .collect();
+        let online_volumes = crate::models::Volume::online_map(&volumes);
 
         // Resolve target assets
         let asset_ids: Vec<String> = if let Some(ids) = explicit_ids {
             ids.to_vec()
         } else if let Some(id) = asset_id {
-            let full_id = catalog
-                .resolve_asset_id(id)?
-                .ok_or_else(|| anyhow::anyhow!("no asset found matching '{id}'"))?;
+            let full_id = catalog.resolve_asset_id_required(id)?;
             vec![full_id]
         } else {
             let q = if let Some(query) = query {
@@ -299,7 +293,7 @@ impl AssetService {
                                     params, mode, verbosity,
                                 ) {
                                     Ok(output) => {
-                                        if output.description.as_ref().map_or(true, |d| d.is_empty())
+                                        if output.description.as_ref().is_none_or(|d| d.is_empty())
                                             && output.tags.is_empty()
                                         {
                                             (

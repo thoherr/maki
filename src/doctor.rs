@@ -269,7 +269,7 @@ fn compare_asset(catalog: &Catalog, asset: &Asset) -> Result<Vec<String>> {
     if row.1 != asset.created_at.to_rfc3339() {
         fields.push("created_at".to_string());
     }
-    if row.2 != format!("{:?}", asset.asset_type).to_lowercase() {
+    if row.2 != asset.asset_type.as_str() {
         fields.push("asset_type".to_string());
     }
     let stored_tags: Vec<String> = serde_json::from_str(&row.3).unwrap_or_default();

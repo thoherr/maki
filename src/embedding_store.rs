@@ -359,15 +359,23 @@ pub fn rank_similar(
     out
 }
 
-/// Wrapper for f32 that implements Ord (for BinaryHeap).
-#[derive(PartialEq, PartialOrd)]
+/// Wrapper for f32 that implements Ord (for BinaryHeap). Uses `total_cmp`,
+/// so a NaN similarity (zero-norm embedding) sorts deterministically
+/// instead of panicking or comparing equal to everything.
+#[derive(PartialEq)]
 struct OrderedF32(f32);
 
 impl Eq for OrderedF32 {}
 
+impl PartialOrd for OrderedF32 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl Ord for OrderedF32 {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+        self.0.total_cmp(&other.0)
     }
 }
 
@@ -433,20 +441,6 @@ pub fn delete_embedding_binary(
 ) {
     let path = embedding_binary_path(catalog_root, model, asset_id);
     let _ = std::fs::remove_file(path);
-}
-
-/// Read an embedding from a binary file.
-pub fn read_embedding_binary(
-    catalog_root: &std::path::Path,
-    model: &str,
-    asset_id: &str,
-) -> Result<Option<Vec<f32>>> {
-    let path = embedding_binary_path(catalog_root, model, asset_id);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = std::fs::read(&path)?;
-    Ok(Some(blob_to_embedding(&bytes)))
 }
 
 /// Scan all embedding binaries for a given model.
@@ -719,7 +713,7 @@ mod tests {
     fn index_upsert() {
         let conn = setup_db();
         let store = EmbeddingStore::new(&conn);
-        store.store("a", &vec![1.0, 0.0, 0.0], TEST_MODEL).unwrap();
+        store.store("a", &[1.0, 0.0, 0.0], TEST_MODEL).unwrap();
 
         let mut index = EmbeddingIndex::load(&conn, TEST_MODEL, 3).unwrap();
         assert_eq!(index.len(), 1);
@@ -771,13 +765,12 @@ mod tests {
         assert!(path_str.contains(&format!("{TEST_MODEL}/as/asset-abc123.bin")));
 
         // Read it back
-        let loaded = read_embedding_binary(dir.path(), TEST_MODEL, "asset-abc123").unwrap().unwrap();
+        let loaded = blob_to_embedding(&std::fs::read(&path).unwrap());
         assert_eq!(loaded, embedding);
 
         // Delete
         delete_embedding_binary(dir.path(), TEST_MODEL, "asset-abc123");
         assert!(!path.exists());
-        assert!(read_embedding_binary(dir.path(), TEST_MODEL, "asset-abc123").unwrap().is_none());
     }
 
     #[test]

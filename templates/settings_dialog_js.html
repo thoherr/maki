@@ -12,13 +12,13 @@
     var closeBtn = document.getElementById('settings-close');
 
     function open() {
-        overlay.style.display = 'flex';
+        MAKI.dialog.open(overlay);
         if (window.makiConfigForm && window.makiConfigForm.load) {
             window.makiConfigForm.load();
         }
     }
     function close() {
-        overlay.style.display = 'none';
+        MAKI.dialog.close(overlay);
     }
     closeBtn.addEventListener('click', close);
     overlay.addEventListener('click', function(e) {
@@ -28,7 +28,7 @@
     // fight with the Maintain dialog's identical handler when both are
     // wired into the same document.
     document.addEventListener('keydown', function(e) {
-        if (overlay.style.display !== 'none' && e.key === 'Escape') {
+        if (MAKI.dialog.isOpen(overlay) && e.key === 'Escape') {
             // Don't close when an in-form input might be capturing the key
             // (browsers like Safari send Escape to inputs to clear them);
             // the form-level click-outside or Close button is the formal

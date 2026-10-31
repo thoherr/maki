@@ -26,8 +26,8 @@
     var volumesByLabel = {};   // label → volume object — used by path autocomplete to resolve label → ID for the /api/volumes/{id}/browse call.
     function populateVolumes() {
         if (volumesLoaded) return Promise.resolve();
-        return fetch('/api/volumes')
-            .then(function(r) { return r.ok ? r.json() : []; })
+        return MAKI.api.get('/api/volumes')
+            .catch(function() { return []; })
             .then(function(data) {
                 // /api/volumes returns a JSON array directly.
                 var vols = (Array.isArray(data) ? data : []).filter(function(v) { return v.is_online; });
@@ -67,18 +67,18 @@
 
     function openDialog(initialTab) {
         populateVolumes();
-        overlay.style.display = 'flex';
+        MAKI.dialog.open(overlay);
         if (initialTab) showTab(initialTab);
     }
     function closeDialog() {
-        overlay.style.display = 'none';
+        MAKI.dialog.close(overlay);
     }
     closeBtn.addEventListener('click', closeDialog);
     overlay.addEventListener('click', function(e) {
         if (e.target === overlay) closeDialog();
     });
     document.addEventListener('keydown', function(e) {
-        if (overlay.style.display !== 'none' && e.key === 'Escape') {
+        if (MAKI.dialog.isOpen(overlay) && e.key === 'Escape') {
             closeDialog();
         }
     });
@@ -96,24 +96,13 @@
     // if they want to hand it off again.
     function reattachIfRunning() {
         return populateVolumes().then(function() {
-            return fetch('/api/jobs');
-        })
-        .then(function(r) { return r.ok ? r.json() : { jobs: [] }; })
-        .then(function(s) {
-            var jobs = s.jobs || [];
-            for (var i = 0; i < jobs.length; i++) {
-                if (jobs[i].completed) continue;
-                var k = jobs[i].kind;
-                if (MAINT_KINDS[k]) {
-                    var label = jobs[i].kind_label || k.replace(/_/g, ' ');
-                    overlay.style.display = 'flex';
-                    showProgressPhase(label);
-                    progressStatusEl.textContent = label + '… (re-attached to running job)';
-                    attachProgressStream(jobs[i].id, label);
-                    return true;
-                }
-            }
-            return false;
+            return MAKI.reattachIfRunning(MAINT_KINDS, function(job) {
+                var label = job.kind_label || job.kind.replace(/_/g, ' ');
+                MAKI.dialog.open(overlay);
+                showProgressPhase(label);
+                progressStatusEl.textContent = label + '… (re-attached to running job)';
+                attachProgressStream(job.id, label);
+            });
         })
         .catch(function() { return false; });
     }
@@ -298,19 +287,12 @@
         return rows.length === 0 ? 'Done' : '<ul style="margin:0; padding-left:1.2em">' + rows.join('') + '</ul>';
     }
 
-    function escHtml(s) {
-        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-
     function attachProgressStream(jobId, label) {
         activeJobId = jobId;
         if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
-        activeEventSource = new EventSource('/api/jobs/' + encodeURIComponent(jobId) + '/progress');
-        activeEventSource.onmessage = function(e) {
-            var evt;
-            try { evt = JSON.parse(e.data); } catch (_) { return; }
-            if (evt.done) {
-                if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
+        activeEventSource = MAKI.attachJobStream(jobId, {
+            onDone: function(evt) {
+                activeEventSource = null;
                 showResultPhase(label, evt);
                 // Some maintain ops change the catalog tag set (cleanup,
                 // sync --apply --remove-stale). Invalidate the
@@ -321,28 +303,29 @@
                     window._damTagCache = null;
                 }
                 if (window.makiMaintainStatus) window.makiMaintainStatus.refresh();
-                return;
+            },
+            onEvent: function(evt) {
+                // Phase-aware status line — the maintain endpoints emit per-
+                // file events with `processed`, `status`, optional `asset`.
+                // No phase boundaries (these are single-phase jobs) so the
+                // import dialog's `phase_started` handling isn't needed.
+                var status = (typeof evt.processed === 'number')
+                    ? (evt.processed + ' done' + (evt.status ? ' — ' + evt.status : '') + (evt.asset ? ' (' + evt.asset + ')' : ''))
+                    : (evt.status || 'Working…');
+                progressStatusEl.textContent = status;
+                // Append a log line; cap at last 50 like the import dialog.
+                var line = document.createElement('div');
+                line.textContent = (evt.status || '') + (evt.asset ? ' ' + evt.asset : '');
+                progressLogEl.appendChild(line);
+                if (progressLogEl.children.length > 50) progressLogEl.removeChild(progressLogEl.firstChild);
+                progressLogEl.scrollTop = progressLogEl.scrollHeight;
+            },
+            onError: function() {
+                activeEventSource = null;
+                progressStatusEl.textContent =
+                    'Connection lost. The job may still be running on the server — check the badge.';
             }
-            // Phase-aware status line — the maintain endpoints emit per-
-            // file events with `processed`, `status`, optional `asset`.
-            // No phase boundaries (these are single-phase jobs) so the
-            // import dialog's `phase_started` handling isn't needed.
-            var status = (typeof evt.processed === 'number')
-                ? (evt.processed + ' done' + (evt.status ? ' — ' + evt.status : '') + (evt.asset ? ' (' + evt.asset + ')' : ''))
-                : (evt.status || 'Working…');
-            progressStatusEl.textContent = status;
-            // Append a log line; cap at last 50 like the import dialog.
-            var line = document.createElement('div');
-            line.textContent = (evt.status || '') + (evt.asset ? ' ' + evt.asset : '');
-            progressLogEl.appendChild(line);
-            if (progressLogEl.children.length > 50) progressLogEl.removeChild(progressLogEl.firstChild);
-            progressLogEl.scrollTop = progressLogEl.scrollHeight;
-        };
-        activeEventSource.onerror = function() {
-            if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
-            progressStatusEl.textContent =
-                'Connection lost. The job may still be running on the server — check the badge.';
-        };
+        });
     }
 
     // Minimize hands the running job to the global progress toast and
@@ -369,17 +352,7 @@
     // ── Common: POST → switch to progress phase → stream SSE → result ──
     function launchJob(url, body, label) {
         showProgressPhase(label);
-        fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        })
-        .then(function(r) {
-            if (!r.ok) {
-                return r.text().then(function(t) { throw new Error(t || ('HTTP ' + r.status)); });
-            }
-            return r.json();
-        })
+        MAKI.api.post(url, body)
         .then(function(data) {
             if (!data.job_id) throw new Error('server returned no job id');
             attachProgressStream(data.job_id, label);
@@ -395,128 +368,23 @@
     }
 
     // ── Path autocomplete (Sync, Cleanup) ──────────────────────────────
-    // Same pattern as the import dialog's subfolder field: debounced fetch
-    // against /api/volumes/{id}/browse, ↑/↓/Tab/Enter to drill into a
-    // directory (or commit a file). Volume label → ID is resolved through
-    // the cached volumesByLabel map so the volume select can stay
-    // user-friendly (label) while the API call needs the UUID.
+    // Same widget as the import dialog's subfolder field
+    // (MAKI.pathAutocomplete + MAKI.volumeBrowseSource). Volume label → ID
+    // is resolved through the cached volumesByLabel map so the volume
+    // select can stay user-friendly (label) while the API call needs the
+    // UUID; a volume change drops the cached query so the next keystroke
+    // (or focus) hits the new volume's tree.
     function attachPathAutocomplete(input, volumeSelect, ac) {
         if (!input || !volumeSelect || !ac) return;
-        var acIndex = -1;
-        var lastQuery = null;
-        var debounceTimer = null;
-
-        function hide() { ac.style.display = 'none'; acIndex = -1; }
-
-        function splitPath(p) {
-            var i = p.lastIndexOf('/');
-            return i < 0
-                ? { dir: '', leaf: p }
-                : { dir: p.substring(0, i + 1), leaf: p.substring(i + 1) };
-        }
-
-        function escHtml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
-
-        function render(entries, leafFilter) {
-            ac.innerHTML = '';
-            acIndex = -1;
-            var leafLc = leafFilter.toLowerCase();
-            var matches = entries.filter(function(e) {
-                return e.name.toLowerCase().indexOf(leafLc) === 0;
-            });
-            if (matches.length === 0) { hide(); return; }
-            matches.forEach(function(e) {
-                var div = document.createElement('div');
-                div.className = 'tag-suggestion';
-                var display = e.is_dir ? e.relative_path + '/' : e.relative_path;
-                div.setAttribute('data-path', display);
-                div.setAttribute('data-is-dir', e.is_dir ? '1' : '0');
-                var icon = e.is_dir ? '📁' : '📄';
-                div.innerHTML = '<span class="path-entry-icon">' + icon + '</span>' +
-                    escHtml(e.name) + (e.is_dir ? '/' : '');
-                div.onmousedown = function(ev) {
-                    ev.preventDefault();
-                    accept(display, e.is_dir);
-                };
-                ac.appendChild(div);
-            });
-            ac.style.display = 'block';
-        }
-
-        function highlight(idx) {
-            var items = ac.querySelectorAll('.tag-suggestion');
-            items.forEach(function(el, i) { el.classList.toggle('active', i === idx); });
-            if (idx >= 0 && items[idx]) items[idx].scrollIntoView({block: 'nearest'});
-        }
-
-        function accept(path, isDir) {
-            input.value = path;
-            hide();
-            if (isDir) { input.focus(); fetchEntries(path); }
-        }
-
-        function currentVolumeId() {
-            var label = volumeSelect.value;
-            if (!label) return null;
-            var v = volumesByLabel[label];
-            return v ? v.id : null;
-        }
-
-        function fetchEntries(currentValue) {
-            var volId = currentVolumeId();
-            if (!volId) { hide(); return; }
-            var split = splitPath(currentValue);
-            var prefix = split.dir.replace(/\/+$/, '');
-            var key = volId + '|' + prefix + '|' + split.leaf;
-            if (key === lastQuery) return;
-            lastQuery = key;
-            var url = '/api/volumes/' + encodeURIComponent(volId) +
-                '/browse?limit=50&prefix=' + encodeURIComponent(prefix);
-            fetch(url)
-                .then(function(r) { return r.ok ? r.json() : { entries: [] }; })
-                .then(function(data) {
-                    if (input.value !== currentValue) return;
-                    render(data.entries || [], split.leaf);
-                })
-                .catch(hide);
-        }
-
-        function schedule(value) {
-            if (debounceTimer) clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(function() { fetchEntries(value); }, 120);
-        }
-
-        input.addEventListener('input', function() { schedule(this.value); });
-        input.addEventListener('focus', function() {
-            // Clear the cache so a refocus after a volume change refetches
-            // (the user may have switched volume since last typing).
-            lastQuery = null;
-            fetchEntries(this.value);
-        });
-        input.addEventListener('blur', function() { setTimeout(hide, 150); });
-        // When the volume selector changes, drop the cached query so the
-        // next keystroke (or focus) hits the new volume's tree.
-        volumeSelect.addEventListener('change', function() { lastQuery = null; });
-
-        input.addEventListener('keydown', function(e) {
-            var items = ac.querySelectorAll('.tag-suggestion');
-            var open = ac.style.display === 'block' && items.length > 0;
-            if (e.key === 'ArrowDown' && open) {
-                e.preventDefault();
-                acIndex = Math.min(acIndex + 1, items.length - 1);
-                highlight(acIndex);
-            } else if (e.key === 'ArrowUp' && open) {
-                e.preventDefault();
-                acIndex = Math.max(acIndex - 1, 0);
-                highlight(acIndex);
-            } else if ((e.key === 'Tab' || e.key === 'Enter') && open && acIndex >= 0) {
-                e.preventDefault();
-                var el = items[acIndex];
-                accept(el.getAttribute('data-path'), el.getAttribute('data-is-dir') === '1');
-            } else if (e.key === 'Escape' && open) {
-                e.preventDefault();
-                hide();
-            }
+        MAKI.pathAutocomplete(input, {
+            container: ac,
+            resetOn: [volumeSelect],
+            source: MAKI.volumeBrowseSource(function() {
+                var label = volumeSelect.value;
+                if (!label) return null;
+                var v = volumesByLabel[label];
+                return v ? v.id : null;
+            })
         });
     }
 

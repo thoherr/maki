@@ -119,15 +119,7 @@ document.getElementById('reg-submit').addEventListener('click', function() {
     var label = document.getElementById('reg-label').value.trim() || path.replace(/\/+$/, '').split('/').pop();
     var purpose = document.getElementById('reg-purpose').value || null;
 
-    fetch('/api/volumes', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({path: path, label: label, purpose: purpose})
-    })
-    .then(function(r) {
-        if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-        return r.json();
-    })
+    MAKI.api.post('/api/volumes', {path: path, label: label, purpose: purpose})
     .then(function() { window.location.reload(); })
     .catch(function(err) { alert('Failed to register volume: ' + err.message); });
 });
@@ -139,13 +131,8 @@ document.querySelectorAll('.vol-rename').forEach(function(btn) {
         var current = this.dataset.label;
         var name = prompt('New label:', current);
         if (!name || !name.trim() || name.trim() === current) return;
-        fetch('/api/volumes/' + id + '/rename', {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({label: name.trim()})
-        })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+        MAKI.api.put('/api/volumes/' + id + '/rename', {label: name.trim()})
+        .then(function() {
             window.location.reload();
         })
         .catch(function(err) { alert('Rename failed: ' + err.message); });
@@ -158,13 +145,8 @@ document.querySelectorAll('.vol-purpose').forEach(function(btn) {
         var purpose = prompt('Purpose (media, working, archive, backup, cloud, or empty to clear):');
         if (purpose === null) return;
         purpose = purpose.trim().toLowerCase() || null;
-        fetch('/api/volumes/' + id + '/purpose', {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({purpose: purpose})
-        })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+        MAKI.api.put('/api/volumes/' + id + '/purpose', {purpose: purpose})
+        .then(function() {
             window.location.reload();
         })
         .catch(function(err) { alert('Set purpose failed: ' + err.message); });
@@ -176,9 +158,8 @@ document.querySelectorAll('.vol-remove').forEach(function(btn) {
         var id = this.dataset.id;
         var label = this.dataset.label;
         if (!confirm('Remove volume "' + label + '"? This removes all location and recipe records for this volume from the catalog.')) return;
-        fetch('/api/volumes/' + id, {method: 'DELETE'})
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+        MAKI.api.del('/api/volumes/' + id)
+        .then(function() {
             window.location.reload();
         })
         .catch(function(err) { alert('Remove failed: ' + err.message); });

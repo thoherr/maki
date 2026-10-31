@@ -32,9 +32,7 @@ impl AssetService {
 
         // Resolve asset list
         let assets = if let Some(asset_id) = asset_filter {
-            let full_id = catalog
-                .resolve_asset_id(asset_id)?
-                .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id}'"))?;
+            let full_id = catalog.resolve_asset_id_required(asset_id)?;
             let uuid: Uuid = full_id.parse()?;
             vec![metadata_store.load(uuid)?]
         } else if !paths.is_empty() {
@@ -206,9 +204,7 @@ impl AssetService {
 
         // Resolve asset list
         let assets = if let Some(asset_id) = asset_filter {
-            let full_id = catalog
-                .resolve_asset_id(asset_id)?
-                .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id}'"))?;
+            let full_id = catalog.resolve_asset_id_required(asset_id)?;
             let uuid: Uuid = full_id.parse()?;
             vec![metadata_store.load(uuid)?]
         } else {
@@ -395,9 +391,7 @@ impl AssetService {
         // Resolve optional asset filter
         let asset_id = match asset_filter {
             Some(prefix) => Some(
-                catalog
-                    .resolve_asset_id(prefix)?
-                    .ok_or_else(|| anyhow::anyhow!("no asset found matching '{prefix}'"))?,
+                catalog.resolve_asset_id_required(prefix)?,
             ),
             None => None,
         };

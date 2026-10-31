@@ -314,7 +314,7 @@ fn run_auto_group(
         return Ok(None);
     }
 
-    let engine = crate::query::QueryEngine::new(&service.catalog_root);
+    let engine = service.query_engine();
     let ag_result = engine.auto_group_scoped(&all_ids, dry_run, import_roots)?;
     if ag_result.groups.is_empty() {
         return Ok(None);
@@ -441,7 +441,7 @@ fn run_describe_phase(
         return Ok(None);
     }
 
-    let mode = crate::vlm::DescribeMode::from_str(&config.vlm.mode)
+    let mode = crate::vlm::DescribeMode::parse_mode(&config.vlm.mode)
         .unwrap_or(crate::vlm::DescribeMode::Describe);
     let params = config.vlm.params_for_model(vlm_model);
     // describe_assets requires `Fn + Sync` because it dispatches across worker

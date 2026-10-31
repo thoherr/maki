@@ -7,7 +7,7 @@ use tempfile::tempdir;
 
 /// Return a Command for the `maki` binary.
 fn maki() -> Command {
-    cargo_bin_cmd!(assert_cmd::pkg_name!()).into()
+    cargo_bin_cmd!(assert_cmd::pkg_name!())
 }
 
 /// Initialize a catalog and register a volume pointing at `dir`.
@@ -3786,7 +3786,7 @@ fn update_location_moves_variant_path() {
     std::fs::create_dir_all(&new_sub).unwrap();
     std::fs::rename(&file, new_sub.join("photo.jpg")).unwrap();
 
-    let old_path = format!("originals/photo.jpg");
+    let old_path = "originals/photo.jpg".to_string();
     let new_path = new_sub.join("photo.jpg");
 
     // Run update-location
@@ -8536,7 +8536,7 @@ fn delete_json_output() {
     let json: serde_json::Value =
         serde_json::from_str(&String::from_utf8(output).unwrap()).expect("valid JSON");
     assert_eq!(json["deleted"].as_u64().unwrap(), 1);
-    assert_eq!(json["dry_run"].as_bool().unwrap(), false);
+    assert!(!json["dry_run"].as_bool().unwrap());
     assert!(json["not_found"].as_array().unwrap().is_empty());
 }
 
@@ -9192,7 +9192,7 @@ fn export_json_output() {
         serde_json::from_str(&String::from_utf8(output).unwrap()).expect("valid JSON");
     assert_eq!(json["assets_matched"].as_u64().unwrap(), 1);
     assert_eq!(json["files_exported"].as_u64().unwrap(), 1);
-    assert_eq!(json["dry_run"].as_bool().unwrap(), false);
+    assert!(!json["dry_run"].as_bool().unwrap());
 }
 
 #[test]

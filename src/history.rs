@@ -43,17 +43,14 @@ use crate::models::Asset;
 /// threading is a noted follow-on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum OpSource {
+    #[default]
     Cli,
     Web,
     Shell,
 }
 
-impl Default for OpSource {
-    fn default() -> Self {
-        OpSource::Cli
-    }
-}
 
 /// One asset's before/after state within an operation. Stores the full
 /// prior and next `Asset` — sidecars are small, and whole-state is robust:
@@ -101,15 +98,22 @@ pub struct HistoryStore {
 }
 
 impl HistoryStore {
-    /// Construct a store from the catalog root, reading `[history]` config
-    /// (enabled default true, max_operations default 200).
-    pub fn from_config(catalog_root: &Path) -> Self {
-        let cfg = crate::config::CatalogConfig::load(catalog_root).unwrap_or_default();
+    /// Construct a store from the catalog root and an already-loaded
+    /// `[history]` section (enabled default true, max_operations default 200).
+    pub fn new_with(catalog_root: &Path, cfg: &crate::config::HistoryConfig) -> Self {
         Self {
             history_dir: catalog_root.join("history"),
-            enabled: cfg.history.enabled,
-            max_operations: cfg.history.max_operations,
+            enabled: cfg.enabled,
+            max_operations: cfg.max_operations,
         }
+    }
+
+    /// [`Self::new_with`] over a freshly loaded `maki.toml`. Thin wrapper
+    /// for callers that have no config at hand (the CLI `undo`/`history`
+    /// handlers); the engine passes its own config.
+    pub fn from_config(catalog_root: &Path) -> Self {
+        let cfg = crate::config::CatalogConfig::load(catalog_root).unwrap_or_default();
+        Self::new_with(catalog_root, &cfg.history)
     }
 
     /// Construct a store with explicit settings (used by tests).

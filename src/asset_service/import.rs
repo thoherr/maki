@@ -49,9 +49,7 @@ impl AssetService {
         // recipe get a sidecar right away, so the tags assigned at import
         // time reach Capture One / Lightroom without a separate
         // `maki create-sidecars` pass.
-        let wb_cfg = crate::config::CatalogConfig::load(&self.catalog_root)
-            .map(|c| c.writeback)
-            .unwrap_or_default();
+        let wb_cfg = &self.config.writeback;
         let auto_create_sidecars = wb_cfg.enabled && wb_cfg.create_sidecars && !dry_run;
         let online_here: HashMap<Uuid, PathBuf> =
             [(volume.id, volume.mount_point.clone())].into_iter().collect();
@@ -80,7 +78,7 @@ impl AssetService {
             for p in paths {
                 let dir = if p.is_dir() { p.as_path() } else { p.parent().unwrap_or(p.as_path()) };
                 if let Ok(rel) = dir.strip_prefix(&volume.mount_point) {
-                    roots.insert(rel.to_string_lossy().replace('\\', "/"));
+                    roots.insert(crate::path_util::forward_slashes(rel));
                 }
             }
             roots.into_iter().collect()
@@ -98,7 +96,7 @@ impl AssetService {
                 // Track volume-relative directory for auto-group neighborhood
                 if let Ok(rel) = file_path.strip_prefix(&volume.mount_point) {
                     if let Some(parent) = rel.parent() {
-                        imported_dirs.insert(parent.to_string_lossy().replace('\\', "/"));
+                        imported_dirs.insert(crate::path_util::forward_slashes(parent));
                     }
                 }
 
@@ -285,7 +283,10 @@ impl AssetService {
                     new_asset_ids.push(asset.id.to_string());
                     group_asset = Some(asset);
                 } else {
-                    // Additional media file → add variant to existing group asset
+                    // Additional media file → add variant to existing group asset.
+                    // The `is_none()` branch above guarantees `Some`; the
+                    // enum-based restructuring is audit item F13.
+                    #[allow(clippy::unnecessary_unwrap)]
                     let asset = group_asset.as_mut().expect("group_asset must be Some when processing grouped recipe");
                     let mut exif_data = crate::exif_reader::extract(file_path);
                     if determine_asset_type(ext) == AssetType::Video {

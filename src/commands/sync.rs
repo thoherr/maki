@@ -16,13 +16,8 @@ pub fn run_writeback_command(
         no_trash: bool,
         dry_run: bool,
         asset_ids: Vec<String>,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let catalog_root = maki::config::find_catalog_root()?;
     let engine = maki::query::QueryEngine::new(&catalog_root);
     let _start = std::time::Instant::now();
@@ -49,11 +44,11 @@ pub fn run_writeback_command(
             effective_mirror_tags,
             no_trash,
             dry_run,
-            cli.log,
+            ctx.log,
             None,
         )?;
 
-        if cli.json {
+        if ctx.json {
             println!("{}", serde_json::to_string_pretty(&result)?);
         } else {
             if dry_run {
@@ -102,11 +97,11 @@ pub fn run_writeback_command(
         force,
         effective_mirror_tags,
         dry_run,
-        cli.log,
+        ctx.log,
         None,
     )?;
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         if dry_run {
@@ -156,13 +151,8 @@ pub fn run_sync_metadata_command(
         dry_run: bool,
         media: bool,
         asset_ids: Vec<String>,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let _start = std::time::Instant::now();
     let (catalog_root, config) = maki::config::load_config()?;
     let registry = DeviceRegistry::new(&catalog_root);
@@ -182,10 +172,10 @@ pub fn run_sync_metadata_command(
         None => vec![None], // process all
     };
 
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
     let mut result = maki::asset_service::SyncMetadataResult { dry_run, ..Default::default() };
     for aid in &asset_id_list {
-        let r = if cli.log {
+        let r = if ctx.log {
             use maki::asset_service::SyncMetadataStatus;
             service.sync_metadata(
                 resolved_volume.as_ref(),
@@ -228,7 +218,7 @@ pub fn run_sync_metadata_command(
         result.errors.extend(r.errors);
     }
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         for err in &result.errors {
@@ -279,13 +269,8 @@ pub fn run_sync_command(
         volume: Option<String>,
         apply: bool,
         remove_stale: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     if paths.is_empty() {
         anyhow::bail!("no paths specified for sync.");
     }
@@ -310,8 +295,8 @@ pub fn run_sync_command(
         registry.find_volume_for_path(&canonical_paths[0])?
     };
 
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
-    let result = if cli.log {
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let result = if ctx.log {
         use maki::asset_service::SyncStatus;
         service.sync(
             &canonical_paths,
@@ -344,7 +329,7 @@ pub fn run_sync_command(
         )?
     };
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         for err in &result.errors {
@@ -418,17 +403,12 @@ pub fn run_verify_command(
         skip: Vec<String>,
         max_age: Option<u64>,
         force: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     use maki::asset_service::FileTypeFilter;
 
     let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
     let max_age_days: Option<u64> = if force {
         None
@@ -461,7 +441,7 @@ pub fn run_verify_command(
         })
         .collect();
 
-    let result = if cli.log {
+    let result = if ctx.log {
         use maki::asset_service::VerifyStatus;
         service.verify(
             &canonical_paths,
@@ -496,7 +476,7 @@ pub fn run_verify_command(
         )?
     };
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         // Print error details

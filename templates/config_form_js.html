@@ -558,35 +558,17 @@
         try { saveBtn.focus({preventScroll: true}); } catch (_) { saveBtn.focus(); }
     }
 
-    // Floating toast for save feedback. Appears bottom-right (out of the
-    // way of the modal-open form), auto-dismisses after a few seconds.
-    // Reuses the .job-toast styling so it visually matches Embed /
-    // Auto-tag completion notifications. We don't pipe through the
-    // shared makiJob.watch helper because there's no SSE feed for a
-    // synchronous save — just a one-shot success / error message.
+    // Save feedback goes through the shared one-shot toast (MAKI.toast):
+    // bottom-right, .job-toast chrome, auto-dismiss (8 s for errors).
     function showToast(text, kind) {
-        var existing = document.getElementById('config-save-toast');
-        if (existing) existing.remove();
-        var toast = document.createElement('div');
-        toast.id = 'config-save-toast';
-        toast.className = 'job-toast config-save-toast config-save-toast-' + (kind || 'success');
-        toast.style.display = 'block';
-        toast.innerHTML =
-            '<div class="job-toast-label">' + (kind === 'error' ? 'Save failed' : 'Settings saved') + '</div>' +
-            '<div class="job-toast-status">' + escHtml(text) + '</div>';
-        document.body.appendChild(toast);
-        var ms = kind === 'error' ? 8000 : 4000;
-        setTimeout(function() { if (toast.parentNode) toast.remove(); }, ms);
-    }
-    function escHtml(s) {
-        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        MAKI.toast(text, kind || 'success', null, kind === 'error' ? 'Save failed' : 'Settings saved');
     }
 
     function loadAndRender() {
         setStatus('Loading…', 'info');
         Promise.all([
-            fetch('/api/config').then(function(r) { return r.ok ? r.json() : Promise.reject('GET /api/config failed'); }),
-            fetch('/api/config/schema').then(function(r) { return r.ok ? r.json() : Promise.reject('GET /api/config/schema failed'); })
+            MAKI.api.get('/api/config').catch(function() { return Promise.reject('GET /api/config failed'); }),
+            MAKI.api.get('/api/config/schema').catch(function() { return Promise.reject('GET /api/config/schema failed'); })
         ]).then(function(results) {
             currentConfig = results[0].config;
             rawSchema = results[1];
@@ -601,14 +583,7 @@
     function save() {
         var body = { config: collectValues() };
         setStatus('Saving…', 'info');
-        fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        }).then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t || ('HTTP ' + r.status)); });
-            return r.json();
-        }).then(function(data) {
+        MAKI.api.post('/api/config', body).then(function(data) {
             currentConfig = body.config;
             // Inline status disappears (clean form); toast carries the
             // confirmation so the user sees it whether or not the

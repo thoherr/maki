@@ -359,7 +359,7 @@ mod tests {
                 crate::models::Asset::new(crate::models::AssetType::Image, &hash);
             let variant = crate::models::Variant {
                 content_hash: hash,
-                asset_id: asset.id.clone(),
+                asset_id: asset.id,
                 role: crate::models::VariantRole::Original,
                 format: "jpg".to_string(),
                 file_size: 1000,

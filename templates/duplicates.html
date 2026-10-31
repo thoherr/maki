@@ -196,12 +196,7 @@
             resolveBtn.textContent = 'Checking\u2026';
 
             // Step 1: dry-run to preview what would happen
-            fetch('/api/dedup/resolve', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(getFilterPayload(true))
-            })
-            .then(function(r) { return r.json(); })
+            MAKI.api.post('/api/dedup/resolve', getFilterPayload(true))
             .then(function(data) {
                 if (data.locations_to_remove === 0) {
                     alert('No duplicate locations to remove.');
@@ -223,12 +218,7 @@
                 }
                 // Step 3: execute for real
                 resolveBtn.textContent = 'Resolving\u2026';
-                return fetch('/api/dedup/resolve', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(getFilterPayload(false))
-                })
-                .then(function(r) { return r.json(); })
+                return MAKI.api.post('/api/dedup/resolve', getFilterPayload(false))
                 .then(function(result) {
                     if (result.errors && result.errors.length > 0) {
                         alert('Completed with errors:\n' + result.errors.join('\n'));
@@ -252,19 +242,11 @@
         if (!btn) return;
         if (!confirm('Remove this file copy?\n\nThe file will be permanently deleted from disk.')) return;
         btn.disabled = true;
-        fetch('/api/dedup/location', {
-            method: 'DELETE',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
+        MAKI.api.del('/api/dedup/location', {
                 content_hash: btn.dataset.hash,
                 volume_id: btn.dataset.vol,
                 relative_path: btn.dataset.path
             })
-        })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-            return r.json();
-        })
         .then(function() {
             // Remove the row; if only one row left, hide remaining remove buttons
             var tbody = btn.closest('tbody');

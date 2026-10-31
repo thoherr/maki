@@ -233,24 +233,98 @@ impl Asset {
         if s.is_empty() {
             return Ok(None);
         }
-        match s.to_lowercase().as_str() {
-            "red" => Ok(Some("Red".to_string())),
-            "orange" => Ok(Some("Orange".to_string())),
-            "yellow" => Ok(Some("Yellow".to_string())),
-            "green" => Ok(Some("Green".to_string())),
-            "blue" => Ok(Some("Blue".to_string())),
-            "pink" => Ok(Some("Pink".to_string())),
-            "purple" => Ok(Some("Purple".to_string())),
-            _ => Err(format!(
-                "unknown color label '{s}'. Valid colors: Red, Orange, Yellow, Green, Blue, Pink, Purple"
+        match COLOR_LABELS.iter().find(|l| l.name.eq_ignore_ascii_case(s)) {
+            Some(l) => Ok(Some(l.name.to_string())),
+            None => Err(format!(
+                "unknown color label '{s}'. Valid colors: {}",
+                color_label_names().join(", ")
             )),
         }
     }
 }
 
+/// One entry of the colour-label vocabulary.
+///
+/// `name` is the canonical title-case value stored in sidecars and the
+/// catalog, `hex` the swatch colour used by the web UI, `key` the
+/// single-letter keyboard shortcut and `number` the digit shortcut
+/// (browse grid, asset page, compare page, lightbox).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ColorLabel {
+    pub name: &'static str,
+    pub hex: &'static str,
+    pub key: char,
+    pub number: u8,
+}
+
+/// The single source of the colour-label vocabulary (CaptureOne superset).
+///
+/// Order matters: it is the display order of every label picker and the
+/// `number` shortcut sequence. Rendered into Askama templates and injected
+/// once into JavaScript as `window.MAKI.labels` (see `web::templates`).
+pub const COLOR_LABELS: &[ColorLabel] = &[
+    ColorLabel { name: "Red", hex: "#e74c3c", key: 'r', number: 1 },
+    ColorLabel { name: "Orange", hex: "#e67e22", key: 'o', number: 2 },
+    ColorLabel { name: "Yellow", hex: "#f1c40f", key: 'y', number: 3 },
+    ColorLabel { name: "Green", hex: "#27ae60", key: 'g', number: 4 },
+    ColorLabel { name: "Blue", hex: "#3498db", key: 'b', number: 5 },
+    ColorLabel { name: "Pink", hex: "#e91e8e", key: 'p', number: 6 },
+    ColorLabel { name: "Purple", hex: "#9b59b6", key: 'u', number: 7 },
+];
+
+/// Canonical label names in vocabulary order.
+pub fn color_label_names() -> Vec<&'static str> {
+    COLOR_LABELS.iter().map(|l| l.name).collect()
+}
+
+/// Swatch colour for a canonical label name, if it is in the vocabulary.
+pub fn color_label_hex(name: &str) -> Option<&'static str> {
+    COLOR_LABELS.iter().find(|l| l.name == name).map(|l| l.hex)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_color_label_accepts_exactly_the_vocabulary() {
+        for l in COLOR_LABELS {
+            assert_eq!(
+                Asset::validate_color_label(l.name).unwrap(),
+                Some(l.name.to_string())
+            );
+            assert_eq!(
+                Asset::validate_color_label(&l.name.to_uppercase()).unwrap(),
+                Some(l.name.to_string())
+            );
+            assert_eq!(
+                Asset::validate_color_label(&l.name.to_lowercase()).unwrap(),
+                Some(l.name.to_string())
+            );
+        }
+        assert_eq!(Asset::validate_color_label("  ").unwrap(), None);
+        for bad in ["magenta", "Cyan", "none", "re", "Redd"] {
+            assert!(Asset::validate_color_label(bad).is_err(), "{bad} accepted");
+        }
+        assert_eq!(
+            color_label_names(),
+            vec!["Red", "Orange", "Yellow", "Green", "Blue", "Pink", "Purple"]
+        );
+    }
+
+    #[test]
+    fn color_labels_have_unique_names_keys_and_numbers() {
+        let mut names = std::collections::HashSet::new();
+        let mut keys = std::collections::HashSet::new();
+        let mut numbers = std::collections::HashSet::new();
+        for (i, l) in COLOR_LABELS.iter().enumerate() {
+            assert!(names.insert(l.name));
+            assert!(keys.insert(l.key));
+            assert!(numbers.insert(l.number));
+            assert_eq!(l.number as usize, i + 1);
+            assert!(l.hex.starts_with('#') && l.hex.len() == 7);
+        }
+    }
 
     fn asset() -> Asset {
         Asset::new(AssetType::Image, "sha256:tagsource-test")

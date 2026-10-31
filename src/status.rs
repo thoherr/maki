@@ -194,6 +194,10 @@ pub fn gather(
     pending_writebacks_by_volume.sort_by(|a, b| {
         b.count.cmp(&a.count).then_with(|| a.volume_label.cmp(&b.volume_label))
     });
+    // `gather` is the entry-level report behind `maki status`; its
+    // signature (called from the CLI) takes only the preview section, so
+    // the `[writeback]` flag is read here once per report rather than
+    // injected. Moves to the entry point when `gather` takes the config.
     let writeback_enabled = crate::config::CatalogConfig::load(catalog_root)
         .map(|c| c.writeback.enabled)
         .unwrap_or(false);

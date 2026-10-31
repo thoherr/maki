@@ -17,9 +17,7 @@ pub fn run_import_command(
     smart: bool,
     #[cfg(feature = "ai")] embed: bool,
     #[cfg(feature = "pro")] describe: bool,
-    json: bool,
-    log: bool,
-    #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
     use maki::asset_service::{ImportEvent, ImportPhase, ImportRequest};
 
@@ -53,7 +51,7 @@ pub fn run_import_command(
         describe: false,
     };
 
-    if verbosity.verbose {
+    if ctx.verbosity.verbose {
         eprintln!(
             "  Import: {} file(s){}",
             req.paths.len(),
@@ -70,15 +68,15 @@ pub fn run_import_command(
         }
     }
 
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
     let workflow_result = service.import_workflow(&req, &config, |evt| {
-        // Per-event progress: only emit per-item lines in --log mode. Phase
-        // boundaries print a one-line announcement when --log is on (or
+        // Per-event progress: only emit per-item lines in --ctx.log mode. Phase
+        // boundaries print a one-line announcement when --ctx.log is on (or
         // verbose); skipped phases always print so the user knows why a
         // phase didn't run.
         match evt {
             ImportEvent::PhaseStarted(phase) => {
-                if log && phase != ImportPhase::Import {
+                if ctx.log && phase != ImportPhase::Import {
                     eprintln!("  Phase: {}", phase.label());
                 }
             }
@@ -86,7 +84,7 @@ pub fn run_import_command(
                 eprintln!("  Skipping {} phase: {reason}", phase.label());
             }
             ImportEvent::File { path, status, elapsed } => {
-                if !log { return; }
+                if !ctx.log { return; }
                 use maki::asset_service::FileStatus;
                 let label = match status {
                     FileStatus::Imported => "imported",
@@ -104,7 +102,7 @@ pub fn run_import_command(
             }
             #[cfg(feature = "ai")]
             ImportEvent::Embed { asset_id, status } => {
-                if !log { return; }
+                if !ctx.log { return; }
                 let short = &asset_id[..8.min(asset_id.len())];
                 match status {
                     maki::asset_service::EmbedStatus::Embedded => {
@@ -118,7 +116,7 @@ pub fn run_import_command(
             }
             #[cfg(feature = "pro")]
             ImportEvent::Describe { asset_id, status, elapsed } => {
-                if !log { return; }
+                if !ctx.log { return; }
                 let short = &asset_id[..8.min(asset_id.len())];
                 match status {
                     maki::vlm::DescribeStatus::Described => {
@@ -144,7 +142,7 @@ pub fn run_import_command(
     #[cfg(feature = "pro")]
     let describe_result = workflow_result.describe.as_ref();
 
-    if json {
+    if ctx.json {
         #[allow(unused_mut)]
         let mut json_val = serde_json::to_value(result)?;
         if let Some(ag) = auto_group_result {
@@ -192,7 +190,7 @@ pub fn run_import_command(
         }
 
         if let Some(ag) = auto_group_result {
-            if log {
+            if ctx.log {
                 for group in &ag.groups {
                     let short_id = &group.target_id[..8.min(group.target_id.len())];
                     eprintln!(
@@ -420,9 +418,7 @@ pub fn run_watch_command(
     volume: Option<String>,
     interval: Option<u64>,
     once: bool,
-    json: bool,
-    log: bool,
-    verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -493,7 +489,7 @@ pub fn run_watch_command(
             .collect();
 
     let poll_seconds = interval.unwrap_or(config.watch.poll_seconds).max(2);
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
     if once {
         // ── Single cycle: scan, ~1s stability wait, re-scan, act ───
@@ -503,7 +499,7 @@ pub fn run_watch_command(
         // tracked .xmp recipes are refreshed if their content changed.
         let mut scanner = WatchScanner::new(roots.clone(), excludes.clone(), ignore_prefixes, true);
         let baseline = scanner.scan();
-        if verbosity.verbose {
+        if ctx.verbosity.verbose {
             eprintln!(
                 "  Watch: single cycle over {} root(s), {} candidate file(s); waiting 1s for stability",
                 roots.len(),
@@ -554,7 +550,7 @@ pub fn run_watch_command(
             }
         }
 
-        let mut summary = watch_act(&service, &registry, &config, &excludes, &to_import, &to_refresh, log);
+        let mut summary = watch_act(&service, &registry, &config, &excludes, &to_import, &to_refresh, ctx.log);
         summary.errors.extend(pre_errors);
 
         for e in &summary.errors {
@@ -566,7 +562,7 @@ pub fn run_watch_command(
                 outcome.pending
             );
         }
-        if json {
+        if ctx.json {
             println!("{}", serde_json::to_string_pretty(&summary)?);
         } else {
             let parts = summary.parts();
@@ -600,7 +596,7 @@ pub fn run_watch_command(
         poll_seconds,
         baseline.tracked
     );
-    if verbosity.verbose {
+    if ctx.verbosity.verbose {
         for r in &roots {
             eprintln!("  watching {}", r.display());
         }
@@ -611,7 +607,7 @@ pub fn run_watch_command(
             break;
         }
         let outcome = scanner.scan();
-        if verbosity.verbose {
+        if ctx.verbosity.verbose {
             for p in &outcome.deleted {
                 eprintln!("  deleted (ignored — see `maki cleanup`): {}", p.display());
             }
@@ -622,13 +618,13 @@ pub fn run_watch_command(
         for p in outcome.changed_stable {
             if is_recipe_path(&p) {
                 to_refresh.push(p);
-            } else if verbosity.verbose {
+            } else if ctx.verbosity.verbose {
                 eprintln!("  changed (ignored — see `maki sync`): {}", p.display());
             }
         }
 
         if to_import.is_empty() && to_refresh.is_empty() {
-            if verbosity.verbose {
+            if ctx.verbosity.verbose {
                 eprintln!(
                     "[{}] Watch: quiet tick ({} tracked, {} pending)",
                     chrono::Local::now().format("%H:%M:%S"),
@@ -639,7 +635,7 @@ pub fn run_watch_command(
             continue;
         }
 
-        let summary = watch_act(&service, &registry, &config, &excludes, &to_import, &to_refresh, log);
+        let summary = watch_act(&service, &registry, &config, &excludes, &to_import, &to_refresh, ctx.log);
         for e in &summary.errors {
             eprintln!("  {e}");
         }
@@ -649,7 +645,7 @@ pub fn run_watch_command(
             chrono::Local::now().format("%H:%M:%S"),
             if parts.is_empty() { "no changes applied".to_string() } else { parts.join(", ") }
         );
-        if json {
+        if ctx.json {
             println!("{}", serde_json::to_string(&summary)?);
         }
     }
@@ -666,13 +662,8 @@ pub fn run_create_sidecars_command(
         asset: Option<String>,
         apply: bool,
         asset_ids: Vec<String>,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let catalog_root = maki::config::find_catalog_root()?;
     let catalog = Catalog::open(&catalog_root)?;
     let metadata_store = MetadataStore::new(&catalog_root);
@@ -731,7 +722,7 @@ pub fn run_create_sidecars_command(
             naming,
             apply,
             |path, status| {
-                if cli.log {
+                if ctx.log {
                     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
                     match status {
                         maki::asset_service::SidecarStatus::Created => eprintln!("  {name} — created"),
@@ -751,7 +742,7 @@ pub fn run_create_sidecars_command(
         }
     }
 
-    if cli.json {
+    if ctx.json {
         let result = serde_json::json!({
             "dry_run": !apply,
             "checked": checked,
@@ -789,13 +780,8 @@ pub fn run_delete_command(
         apply: bool,
         remove_files: bool,
         no_trash: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     if remove_files && !apply {
         anyhow::bail!("--remove-files requires --apply");
     }
@@ -804,7 +790,7 @@ pub fn run_delete_command(
     let ids: Vec<String> = if asset_ids.is_empty() {
         use std::io::BufRead;
         std::io::stdin().lock().lines()
-            .filter_map(|l| l.ok())
+            .map_while(Result::ok)
             .map(|l| l.trim().to_string())
             .filter(|l| !l.is_empty())
             .collect()
@@ -816,7 +802,7 @@ pub fn run_delete_command(
     }
 
     let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
     // Collect face IDs for deleted assets before deletion (for AI cleanup)
     #[cfg(feature = "ai")]
@@ -834,7 +820,7 @@ pub fn run_delete_command(
         Vec::new()
     };
 
-    let show_log = cli.log;
+    let show_log = ctx.log;
     let result = service.delete_assets(
         &ids,
         apply,
@@ -887,7 +873,7 @@ pub fn run_delete_command(
         let _ = face_store.save_all_yaml(&catalog_root);
     }
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         for err in &result.errors {

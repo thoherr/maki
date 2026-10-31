@@ -19,7 +19,7 @@
 //   4. QUERY TOKENIZER .................. tokenize_query
 //   5. SEARCH PARSER .................... parse_search_query (filter:value dispatch)
 //   6. NUMERIC FILTER ................... NumericFilter enum, parse_numeric_filter
-//   7. FREE FUNCTIONS ................... stem_prefix_matches, find_session_root
+//   7. FREE FUNCTIONS ................... stem_prefix_matches (find_session_root lives in session_root.rs)
 //   8. RESULT TYPES ..................... GroupResult, SplitResult, EditFields, etc.
 //   9. PATH NORMALIZATION ............... normalize_path_for_search, clean_path
 //  10. QUERY ENGINE STRUCT .............. BatchContext, QueryEngine
@@ -79,71 +79,7 @@ fn stem_prefix_matches(short: &str, long: &str) -> bool {
     }
 }
 
-/// Find the session/shoot root directory from a file's directory path.
-///
-/// Walks up from the file's directory looking for the deepest component that
-/// matches `session_root_pattern` (default: starts with YYYY-MM). Everything
-/// below that level (Capture/, Selects/, Output/ and their subdirectories)
-/// belongs to the same session.
-///
-/// When no component matches, the fallback depends on `import_roots` — the
-/// volume-relative directories handed to `maki import` (empty for the
-/// standalone `maki auto-group` command):
-///
-/// - `dir` lies strictly below one of the import roots → that import root.
-///   Importing a whole session folder makes the folder the session, however
-///   deep its exports are nested (`Output/Final/Web`).
-/// - otherwise (no import roots, or `dir` *is* the import root) → the parent
-///   directory, one level up, so importing just `Capture/` or `Output/`
-///   still sees its sibling folders.
-///
-/// Examples (default pattern, no import roots):
-/// - `Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Capture` → `Pictures/Masters/2024/2024-10/2024-10-05-jazz-band`
-/// - `Pictures/Masters/2024/2024-10/2024-10-05-jazz-band/Output/Web` → `Pictures/Masters/2024/2024-10/2024-10-05-jazz-band`
-/// - `Photos/2024-10-05/RAW` → `Photos/2024-10-05`
-/// - `Unsorted/photos/batch1` → `Unsorted/photos` (no date found, one level up)
-pub(crate) fn find_session_root(dir: &str, session_root_pattern: &str, import_roots: &[String]) -> String {
-    let parts: Vec<&str> = dir.split('/').collect();
-    let re = if session_root_pattern.is_empty() {
-        None
-    } else {
-        regex::Regex::new(session_root_pattern).ok()
-    };
-
-    // Find the deepest (rightmost) component that matches the session root pattern
-    let mut session_idx = None;
-    if let Some(ref re) = re {
-        for (i, part) in parts.iter().enumerate() {
-            if re.is_match(part) {
-                session_idx = Some(i);
-            }
-        }
-    }
-
-    if let Some(idx) = session_idx {
-        return parts[..=idx].join("/");
-    }
-
-    // No pattern match — the deepest import root that strictly contains
-    // `dir` is the session (the user imported that tree as one unit).
-    let containing_root = import_roots
-        .iter()
-        .filter(|root| {
-            root.is_empty() && !dir.is_empty()
-                || dir.len() > root.len() && dir.starts_with(root.as_str()) && dir.as_bytes()[root.len()] == b'/'
-        })
-        .max_by_key(|root| root.len());
-    if let Some(root) = containing_root {
-        return root.clone();
-    }
-
-    // Otherwise fall back to the parent directory (one level up from the
-    // file's directory), so sibling Capture/ and Output/ folders meet.
-    std::path::Path::new(dir)
-        .parent()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| dir.to_string())
-}
+pub(crate) use crate::session_root::find_session_root;
 
 // ═══ RESULT TYPES ═══
 
@@ -409,6 +345,8 @@ pub struct BatchContext {
     pub meta_store: MetadataStore,
     pub online_volumes: HashMap<uuid::Uuid, PathBuf>,
     pub content_store: ContentStore,
+    /// The engine's configuration, shared (not re-read) per batch.
+    pub config: std::sync::Arc<crate::config::CatalogConfig>,
     /// Optional edit-history recorder. When `Some`, the `*_inner` /
     /// `set_*` write methods that flow through this context capture a
     /// `before`/`after` [`crate::history::AssetDelta`] for every asset
@@ -450,32 +388,49 @@ pub struct ImageSearchInfo {
 pub struct QueryEngine {
     catalog_root: PathBuf,
     default_filter: Option<String>,
+    /// The catalog's `maki.toml`, loaded once per engine (never per call).
+    config: std::sync::Arc<crate::config::CatalogConfig>,
 }
 
 impl QueryEngine {
     /// Create a `QueryEngine` rooted at the given catalog directory, with
-    /// no default filter applied.
+    /// no default filter applied. Loads `maki.toml` once (defaults when
+    /// the file is missing or unreadable); callers that already hold a
+    /// config use [`Self::with_config`].
     pub fn new(catalog_root: &Path) -> Self {
+        Self::with_config(catalog_root, Self::load_config(catalog_root))
+    }
+
+    /// Create a `QueryEngine` over a configuration the caller already
+    /// loaded (CLI entry point, web `AppState`, services).
+    pub fn with_config(
+        catalog_root: &Path,
+        config: std::sync::Arc<crate::config::CatalogConfig>,
+    ) -> Self {
         Self {
             catalog_root: catalog_root.to_path_buf(),
             default_filter: None,
+            config,
         }
-    }
-
-    /// The `[writeback]` section of maki.toml (defaults when the file is
-    /// missing or unreadable).
-    fn writeback_config(&self) -> crate::config::WritebackConfig {
-        crate::config::CatalogConfig::load(&self.catalog_root)
-            .map(|c| c.writeback)
-            .unwrap_or_default()
     }
 
     /// Create a QueryEngine with a default filter from config.
     pub fn with_default_filter(catalog_root: &Path, default_filter: Option<String>) -> Self {
         Self {
-            catalog_root: catalog_root.to_path_buf(),
             default_filter,
+            ..Self::new(catalog_root)
         }
+    }
+
+    /// The one place the engine reads `maki.toml` from disk (the
+    /// constructors). Later phases move this to the entry points.
+    fn load_config(catalog_root: &Path) -> std::sync::Arc<crate::config::CatalogConfig> {
+        std::sync::Arc::new(crate::config::CatalogConfig::load(catalog_root).unwrap_or_default())
+    }
+
+    /// The loaded catalog configuration.
+    pub fn config(&self) -> &crate::config::CatalogConfig {
+        &self.config
     }
 
     // ═══ SEARCH & SHOW ═══
@@ -542,13 +497,12 @@ impl QueryEngine {
             path_volume_id = None;
         }
 
-        // Load session root pattern from config for the scattered: filter
-        let config = crate::config::CatalogConfig::load(&self.catalog_root).unwrap_or_default();
-        let session_pattern = config.group.session_root_pattern;
+        // Session root pattern from config for the scattered: filter
+        let session_pattern = &self.config.group.session_root_pattern;
 
         let mut opts = SearchOptions {
             per_page: u32::MAX,
-            session_root_pattern: &session_pattern,
+            session_root_pattern: session_pattern,
             ..parsed.to_search_options()
         };
 
@@ -588,11 +542,8 @@ impl QueryEngine {
             if image.is_some() {
                 anyhow::bail!("--image cannot be combined with a similar: filter");
             }
-            let full_id = catalog
-                .resolve_asset_id(similar_ref)?
-                .ok_or_else(|| anyhow::anyhow!("no asset found matching '{similar_ref}'"))?;
-            let config = crate::config::CatalogConfig::load(&self.catalog_root).unwrap_or_default();
-            let model_id = &config.ai.model;
+            let full_id = catalog.resolve_asset_id_required(similar_ref)?;
+            let model_id = &self.config.ai.model;
             let emb_store = crate::embedding_store::EmbeddingStore::new(catalog.conn());
             let query_emb = emb_store
                 .get(&full_id, model_id)?
@@ -612,7 +563,7 @@ impl QueryEngine {
             similar_ids = ranked.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
             opts.similar_asset_ids = Some(&similar_ids);
         } else if let Some(img) = image {
-            let config = crate::config::CatalogConfig::load(&self.catalog_root).unwrap_or_default();
+            let config = &self.config;
             let model_id = config.ai.model.clone();
             let preview_gen = crate::preview::PreviewGenerator::new(
                 &self.catalog_root, crate::Verbosity::quiet(), &config.preview,
@@ -666,17 +617,17 @@ impl QueryEngine {
         let text_query_ids;
         #[cfg(feature = "ai")]
         if let Some(ref text_q) = parsed.text_query {
-            let config = crate::config::CatalogConfig::load(&self.catalog_root).unwrap_or_default();
+            let config = &self.config;
             let model_id = &config.ai.model;
             let spec = crate::ai::get_model_spec(model_id)
                 .ok_or_else(|| anyhow::anyhow!("unknown AI model: {model_id}"))?;
 
             // Resolve model directory
             let model_dir_str = &config.ai.model_dir;
-            let model_base = if model_dir_str.starts_with("~/") {
+            let model_base = if let Some(rest) = model_dir_str.strip_prefix("~/") {
                 let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
                     .map_err(|_| anyhow::anyhow!("cannot determine home directory"))?;
-                std::path::PathBuf::from(home).join(&model_dir_str[2..])
+                std::path::PathBuf::from(home).join(rest)
             } else {
                 std::path::PathBuf::from(model_dir_str)
             };
@@ -686,7 +637,7 @@ impl QueryEngine {
             let mut model = crate::ai::SigLipModel::load_with_provider(
                 &model_dir, model_id, crate::Verbosity::quiet(), &config.ai.execution_provider,
             )?;
-            let query_emb = model.encode_texts(&[text_q.clone()])?;
+            let query_emb = model.encode_texts(std::slice::from_ref(text_q))?;
             let query_emb = &query_emb[0];
 
             // Search embedding index
@@ -783,9 +734,7 @@ impl QueryEngine {
     /// Look up a single asset by its full ID or a unique prefix.
     pub fn show(&self, asset_id_prefix: &str) -> Result<AssetDetails> {
         let catalog = Catalog::open(&self.catalog_root)?;
-        let full_id = catalog
-            .resolve_asset_id(asset_id_prefix)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id_prefix}'"))?;
+        let full_id = catalog.resolve_asset_id_required(asset_id_prefix)?;
         catalog
             .load_asset_details(&full_id)?
             .ok_or_else(|| anyhow::anyhow!("asset '{full_id}' not found in catalog"))
@@ -807,9 +756,7 @@ impl QueryEngine {
             let catalog = Catalog::open(&self.catalog_root)?;
             let mut ids = HashSet::new();
             for raw_id in asset_ids {
-                let full_id = catalog
-                    .resolve_asset_id(raw_id)?
-                    .ok_or_else(|| anyhow::anyhow!("no asset found matching '{raw_id}'"))?;
+                let full_id = catalog.resolve_asset_id_required(raw_id)?;
                 ids.insert(full_id);
             }
             return Ok(Some(ids));
@@ -817,9 +764,7 @@ impl QueryEngine {
         // Single asset ID
         if let Some(prefix) = asset {
             let catalog = Catalog::open(&self.catalog_root)?;
-            let full_id = catalog
-                .resolve_asset_id(prefix)?
-                .ok_or_else(|| anyhow::anyhow!("no asset found matching '{prefix}'"))?;
+            let full_id = catalog.resolve_asset_id_required(prefix)?;
             return Ok(Some(HashSet::from([full_id])));
         }
         // Search query
@@ -1146,9 +1091,7 @@ impl QueryEngine {
         let store = MetadataStore::new(&self.catalog_root);
 
         // Resolve asset ID (supports prefix matching)
-        let full_id = catalog
-            .resolve_asset_id(asset_id)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id}'"))?;
+        let full_id = catalog.resolve_asset_id_required(asset_id)?;
         let source_uuid: uuid::Uuid = full_id.parse()?;
         let mut source = store.load(source_uuid)?;
 
@@ -1359,8 +1302,7 @@ impl QueryEngine {
         let neighborhoods: Vec<Vec<StemEntry>> = if global_scope {
             vec![entries]
         } else {
-            let config = crate::config::CatalogConfig::load(&self.catalog_root).unwrap_or_default();
-            let pattern = &config.group.session_root_pattern;
+            let pattern = &self.config.group.session_root_pattern;
             let mut dir_groups: HashMap<String, Vec<StemEntry>> = HashMap::new();
             for entry in entries {
                 let session_root = find_session_root(&entry.dir, pattern, import_roots);
@@ -1496,17 +1438,7 @@ impl QueryEngine {
         remove: bool,
         source: crate::models::TagSource,
     ) -> Result<TagResult> {
-        let catalog = Catalog::open(&self.catalog_root)?;
-        let store = MetadataStore::new(&self.catalog_root);
-        let online = Self::load_online_volumes(&self.catalog_root);
-        let content_store = ContentStore::new(&self.catalog_root);
-        let ctx = BatchContext {
-            catalog,
-            meta_store: store,
-            online_volumes: online,
-            content_store,
-            recorder: Some(std::cell::RefCell::new(Vec::new())),
-        };
+        let ctx = self.recording_context()?;
         let result = self.tag_inner(&ctx, asset_id_prefix, tags, remove, source);
         // One operation boundary per public call. Summarise from the
         // result so the journal carries a human label even on partial
@@ -1528,9 +1460,7 @@ impl QueryEngine {
         remove: bool,
         source: crate::models::TagSource,
     ) -> Result<TagResult> {
-        let full_id = ctx.catalog
-            .resolve_asset_id(asset_id_prefix)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id_prefix}'"))?;
+        let full_id = ctx.catalog.resolve_asset_id_required(asset_id_prefix)?;
 
         let uuid: uuid::Uuid = full_id.parse()?;
         let mut asset = ctx.meta_store.load(uuid)?;
@@ -1562,8 +1492,7 @@ impl QueryEngine {
             &normalized_storage
         };
 
-        let changed;
-        if remove {
+        let changed = if remove {
             // Collect tags to remove, including orphaned ancestors
             let mut all_to_remove = Vec::new();
             for tag in effective_tags {
@@ -1591,7 +1520,7 @@ impl QueryEngine {
                 .collect();
             // Removes from both the tag list and the provenance map.
             asset.remove_tags(&all_to_remove);
-            changed = actually_removed;
+            actually_removed
         } else {
             // Expand hierarchical tags to include all ancestor paths
             let expanded = crate::tag_util::expand_all_ancestors(effective_tags);
@@ -1603,8 +1532,8 @@ impl QueryEngine {
                 .collect();
             // Records `source` for the genuinely-new tags only.
             asset.add_tags_with_source(&added, source);
-            changed = added;
-        }
+            added
+        };
 
         ctx.meta_store.save(&asset)?;
         ctx.catalog.insert_asset(&asset)?;
@@ -1656,7 +1585,7 @@ impl QueryEngine {
     ) -> Result<TagRenameResult> {
         let catalog = Catalog::open(&self.catalog_root)?;
         let store = MetadataStore::new(&self.catalog_root);
-        let online = Self::load_online_volumes(&self.catalog_root);
+        let online = DeviceRegistry::new(&self.catalog_root).online_map()?;
         let content_store = ContentStore::new(&self.catalog_root);
 
         // Strip the optional =/^// markers from `old_tag`. The new_tag is always
@@ -1902,7 +1831,7 @@ impl QueryEngine {
 
         let catalog = Catalog::open(&self.catalog_root)?;
         let store = MetadataStore::new(&self.catalog_root);
-        let online = Self::load_online_volumes(&self.catalog_root);
+        let online = DeviceRegistry::new(&self.catalog_root).online_map()?;
         let content_store = ContentStore::new(&self.catalog_root);
 
         // Parse markers on old_tag. Split is always exact-tag-only; the
@@ -2064,7 +1993,7 @@ impl QueryEngine {
     ) -> Result<TagDeleteResult> {
         let catalog = Catalog::open(&self.catalog_root)?;
         let store = MetadataStore::new(&self.catalog_root);
-        let online = Self::load_online_volumes(&self.catalog_root);
+        let online = DeviceRegistry::new(&self.catalog_root).online_map()?;
         let content_store = ContentStore::new(&self.catalog_root);
 
         // Same marker grammar as `tag rename`. `|` (prefix anchor) is rejected
@@ -2214,7 +2143,7 @@ impl QueryEngine {
     ) -> Result<TagFixUnicodeResult> {
         let catalog = Catalog::open(&self.catalog_root)?;
         let store = MetadataStore::new(&self.catalog_root);
-        let online = Self::load_online_volumes(&self.catalog_root);
+        let online = DeviceRegistry::new(&self.catalog_root).online_map()?;
         let content_store = ContentStore::new(&self.catalog_root);
 
         let mut result = TagFixUnicodeResult { dry_run: !apply, ..Default::default() };
@@ -2341,9 +2270,7 @@ impl QueryEngine {
         let store = MetadataStore::new(&self.catalog_root);
         let registry = DeviceRegistry::new(&self.catalog_root);
 
-        let full_id = catalog
-            .resolve_asset_id(asset_id_prefix)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id_prefix}'"))?;
+        let full_id = catalog.resolve_asset_id_required(asset_id_prefix)?;
 
         let uuid: uuid::Uuid = full_id.parse()?;
         let mut asset = store.load(uuid)?;
@@ -2544,9 +2471,7 @@ impl QueryEngine {
     /// Edit asset metadata (name, description, rating). Updates both sidecar YAML and SQLite.
     pub fn edit(&self, asset_id_prefix: &str, fields: EditFields) -> Result<EditResult> {
         let catalog = Catalog::open(&self.catalog_root)?;
-        let full_id = catalog
-            .resolve_asset_id(asset_id_prefix)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id_prefix}'"))?;
+        let full_id = catalog.resolve_asset_id_required(asset_id_prefix)?;
 
         let uuid: uuid::Uuid = full_id.parse()?;
         let store = MetadataStore::new(&self.catalog_root);
@@ -2646,9 +2571,7 @@ impl QueryEngine {
         name: Option<String>,
     ) -> Result<Option<String>> {
         let catalog = Catalog::open(&self.catalog_root)?;
-        let full_id = catalog
-            .resolve_asset_id(asset_id_prefix)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id_prefix}'"))?;
+        let full_id = catalog.resolve_asset_id_required(asset_id_prefix)?;
 
         let uuid: uuid::Uuid = full_id.parse()?;
         let store = MetadataStore::new(&self.catalog_root);
@@ -2676,9 +2599,7 @@ impl QueryEngine {
     /// Returns the new date as an RFC 3339 string.
     pub fn set_date(&self, asset_id_prefix: &str, date: DateTime<Utc>) -> Result<String> {
         let catalog = Catalog::open(&self.catalog_root)?;
-        let full_id = catalog
-            .resolve_asset_id(asset_id_prefix)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id_prefix}'"))?;
+        let full_id = catalog.resolve_asset_id_required(asset_id_prefix)?;
 
         let uuid: uuid::Uuid = full_id.parse()?;
         let store = MetadataStore::new(&self.catalog_root);
@@ -2713,9 +2634,7 @@ impl QueryEngine {
     }
 
     fn set_rating_inner(&self, ctx: &BatchContext, asset_id_prefix: &str, rating: Option<u8>) -> Result<Option<u8>> {
-        let full_id = ctx.catalog
-            .resolve_asset_id(asset_id_prefix)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id_prefix}'"))?;
+        let full_id = ctx.catalog.resolve_asset_id_required(asset_id_prefix)?;
 
         let uuid: uuid::Uuid = full_id.parse()?;
         let mut asset = ctx.meta_store.load(uuid)?;
@@ -2756,9 +2675,7 @@ impl QueryEngine {
     }
 
     fn set_color_label_inner(&self, ctx: &BatchContext, asset_id_prefix: &str, label: Option<String>) -> Result<Option<String>> {
-        let full_id = ctx.catalog
-            .resolve_asset_id(asset_id_prefix)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id_prefix}'"))?;
+        let full_id = ctx.catalog.resolve_asset_id_required(asset_id_prefix)?;
 
         let uuid: uuid::Uuid = full_id.parse()?;
         let mut asset = ctx.meta_store.load(uuid)?;
@@ -2792,9 +2709,7 @@ impl QueryEngine {
         rotation: Option<u16>,
     ) -> Result<Option<u16>> {
         let catalog = Catalog::open(&self.catalog_root)?;
-        let full_id = catalog
-            .resolve_asset_id(asset_id_prefix)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id_prefix}'"))?;
+        let full_id = catalog.resolve_asset_id_required(asset_id_prefix)?;
 
         let uuid: uuid::Uuid = full_id.parse()?;
         let store = MetadataStore::new(&self.catalog_root);
@@ -2815,9 +2730,7 @@ impl QueryEngine {
         content_hash: Option<&str>,
     ) -> Result<()> {
         let catalog = Catalog::open(&self.catalog_root)?;
-        let full_id = catalog
-            .resolve_asset_id(asset_id_prefix)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id_prefix}'"))?;
+        let full_id = catalog.resolve_asset_id_required(asset_id_prefix)?;
 
         // Validate that the content_hash belongs to this asset
         if let Some(hash) = content_hash {
@@ -2858,9 +2771,7 @@ impl QueryEngine {
         }
 
         let catalog = Catalog::open(&self.catalog_root)?;
-        let full_id = catalog
-            .resolve_asset_id(asset_id_prefix)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id_prefix}'"))?;
+        let full_id = catalog.resolve_asset_id_required(asset_id_prefix)?;
 
         // Verify variant belongs to this asset
         let details = self.show(&full_id)?;
@@ -2873,14 +2784,9 @@ impl QueryEngine {
         let store = MetadataStore::new(&self.catalog_root);
         let mut asset = store.load(uuid)?;
 
-        let variant_role = match role_lower.as_str() {
-            "original" => crate::models::VariantRole::Original,
-            "alternate" => crate::models::VariantRole::Alternate,
-            "processed" => crate::models::VariantRole::Processed,
-            "export" => crate::models::VariantRole::Export,
-            "sidecar" => crate::models::VariantRole::Sidecar,
-            _ => unreachable!(),
-        };
+        // Validated against the role list above; `parse` mirrors serde.
+        let variant_role: crate::models::VariantRole =
+            role_lower.parse().map_err(|e: String| anyhow::anyhow!(e))?;
 
         if let Some(v) = asset.variants.iter_mut().find(|v| v.content_hash == variant_hash) {
             v.role = variant_role;
@@ -2906,9 +2812,7 @@ impl QueryEngine {
         description: Option<String>,
     ) -> Result<Option<String>> {
         let catalog = Catalog::open(&self.catalog_root)?;
-        let full_id = catalog
-            .resolve_asset_id(asset_id_prefix)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id_prefix}'"))?;
+        let full_id = catalog.resolve_asset_id_required(asset_id_prefix)?;
 
         let uuid: uuid::Uuid = full_id.parse()?;
         let store = MetadataStore::new(&self.catalog_root);
@@ -2994,7 +2898,7 @@ impl QueryEngine {
             let remove_all_tags = |ids: &[String], result: &mut FromTagResult| {
                 if remove_tags && apply {
                     for id in ids {
-                        let _ = self.tag(id, &[tag.clone()], true);
+                        let _ = self.tag(id, std::slice::from_ref(tag), true);
                         result.tags_removed += 1;
                     }
                 }
@@ -3070,47 +2974,32 @@ impl QueryEngine {
 
     // ═══ BATCH METHODS ═══
 
-    /// Load online volume mount points. Returns empty map if no volumes registered.
-    fn load_online_volumes(catalog_root: &Path) -> HashMap<uuid::Uuid, PathBuf> {
-        let registry = DeviceRegistry::new(catalog_root);
-        match registry.list() {
-            Ok(volumes) => volumes
-                .iter()
-                .filter(|v| v.is_online)
-                .map(|v| (v.id, v.mount_point.clone()))
-                .collect(),
-            Err(_) => HashMap::new(),
-        }
-    }
-
-    /// Create a `BatchContext` using `open_fast()` for use by batch web handlers.
+    /// Create a `BatchContext` for batch web handlers (no edit-history
+    /// recorder).
     fn batch_context_fast(&self) -> Result<BatchContext> {
-        let catalog = Catalog::open_fast(&self.catalog_root)?;
-        let store = MetadataStore::new(&self.catalog_root);
-        let online = Self::load_online_volumes(&self.catalog_root);
-        let content_store = ContentStore::new(&self.catalog_root);
-        Ok(BatchContext {
-            catalog,
-            meta_store: store,
-            online_volumes: online,
-            content_store,
-            recorder: None,
-        })
+        self.build_context(None)
     }
 
     /// Build a `BatchContext` for single-asset edits with a fresh
     /// edit-history recorder installed.
     fn recording_context(&self) -> Result<BatchContext> {
-        let catalog = Catalog::open(&self.catalog_root)?;
-        let store = MetadataStore::new(&self.catalog_root);
-        let online = Self::load_online_volumes(&self.catalog_root);
-        let content_store = ContentStore::new(&self.catalog_root);
+        self.build_context(Some(std::cell::RefCell::new(Vec::new())))
+    }
+
+    /// Open the catalog, metadata store, online-volume map and content
+    /// store once for a batch. A registry read failure propagates: an
+    /// edit must not silently treat every volume as offline.
+    fn build_context(
+        &self,
+        recorder: Option<std::cell::RefCell<Vec<crate::history::AssetDelta>>>,
+    ) -> Result<BatchContext> {
         Ok(BatchContext {
-            catalog,
-            meta_store: store,
-            online_volumes: online,
-            content_store,
-            recorder: Some(std::cell::RefCell::new(Vec::new())),
+            catalog: Catalog::open(&self.catalog_root)?,
+            meta_store: MetadataStore::new(&self.catalog_root),
+            online_volumes: DeviceRegistry::new(&self.catalog_root).online_map()?,
+            content_store: ContentStore::new(&self.catalog_root),
+            config: self.config.clone(),
+            recorder,
         })
     }
 
@@ -3133,7 +3022,7 @@ impl QueryEngine {
             crate::history::OpSource::Cli,
             deltas,
         );
-        let store = crate::history::HistoryStore::from_config(&self.catalog_root);
+        let store = crate::history::HistoryStore::new_with(&self.catalog_root, &self.config.history);
         if let Err(e) = store.record(op) {
             eprintln!("note: failed to record edit history: {e:#}");
         }
@@ -3161,7 +3050,7 @@ impl QueryEngine {
                 after,
             }],
         );
-        let store = crate::history::HistoryStore::from_config(&self.catalog_root);
+        let store = crate::history::HistoryStore::new_with(&self.catalog_root, &self.config.history);
         if let Err(e) = store.record(op) {
             eprintln!("note: failed to record edit history: {e:#}");
         }
@@ -4858,7 +4747,7 @@ mod tests {
     fn normalize_absolute_path_matching_volume() {
         let vol = make_volume("Photos", "/Volumes/Photos");
         let (rel, vid) = normalize_path_for_search(
-            "/Volumes/Photos/Capture/2026", &[vol.clone()], None,
+            "/Volumes/Photos/Capture/2026", std::slice::from_ref(&vol), None,
         );
         assert_eq!(rel, "Capture/2026");
         assert_eq!(vid, Some(vol.id.to_string()));
@@ -4901,7 +4790,7 @@ mod tests {
         let cwd = std::path::Path::new("/tmp");
 
         let (rel, vid) = normalize_path_for_search(
-            "~/Photos/2026", &[vol.clone()], Some(cwd),
+            "~/Photos/2026", std::slice::from_ref(&vol), Some(cwd),
         );
         assert_eq!(rel, "Photos/2026");
         assert_eq!(vid, Some(vol.id.to_string()));
@@ -4914,7 +4803,7 @@ mod tests {
         let vol = make_volume("Home", &home);
         let cwd = std::path::Path::new("/tmp");
 
-        let (rel, vid) = normalize_path_for_search("~", &[vol.clone()], Some(cwd));
+        let (rel, vid) = normalize_path_for_search("~", std::slice::from_ref(&vol), Some(cwd));
         assert_eq!(rel, "");
         assert_eq!(vid, Some(vol.id.to_string()));
     }
@@ -4934,7 +4823,7 @@ mod tests {
         let cwd = std::path::Path::new("/Volumes/Photos/Capture");
 
         let (rel, vid) = normalize_path_for_search(
-            "./2026-02-22", &[vol.clone()], Some(cwd),
+            "./2026-02-22", std::slice::from_ref(&vol), Some(cwd),
         );
         assert_eq!(rel, "Capture/2026-02-22");
         assert_eq!(vid, Some(vol.id.to_string()));
@@ -4947,7 +4836,7 @@ mod tests {
         let cwd = std::path::Path::new("/Volumes/Photos/Capture/2026");
 
         let (rel, vid) = normalize_path_for_search(
-            "../2025", &[vol.clone()], Some(cwd),
+            "../2025", std::slice::from_ref(&vol), Some(cwd),
         );
         assert_eq!(rel, "Capture/2025");
         assert_eq!(vid, Some(vol.id.to_string()));

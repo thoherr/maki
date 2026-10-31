@@ -5,14 +5,9 @@ use super::*;
 /// Extracted body of `Commands::SavedSearch`.
 pub fn run_saved_search_command(
     cmd: SavedSearchCommands,
-    json: bool,
-    log: bool,
-    #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
-    let _ = verbosity;
+    let _ = ctx.verbosity;
     let catalog_root = maki::config::find_catalog_root()?;
     match cmd {
         SavedSearchCommands::Save { name, query, sort, favorite } => {
@@ -30,7 +25,7 @@ pub fn run_saved_search_command(
                 file.searches.push(entry);
             }
             maki::saved_search::save(&catalog_root, &file)?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "status": "saved",
                     "name": name,
@@ -42,7 +37,7 @@ pub fn run_saved_search_command(
         }
         SavedSearchCommands::List => {
             let file = maki::saved_search::load(&catalog_root)?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&file.searches)?);
             } else if file.searches.is_empty() {
                 println!("No saved searches.");
@@ -67,7 +62,7 @@ pub fn run_saved_search_command(
 
             let output_format = if let Some(fmt) = &format {
                 format::parse_format(fmt).map_err(|e| anyhow::anyhow!(e))?
-            } else if cli.json {
+            } else if ctx.json {
                 OutputFormat::Json
             } else {
                 OutputFormat::Short
@@ -165,7 +160,7 @@ pub fn run_saved_search_command(
                 anyhow::bail!("no saved search named '{name}'");
             }
             maki::saved_search::save(&catalog_root, &file)?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "status": "deleted",
                     "name": name,
@@ -181,14 +176,9 @@ pub fn run_saved_search_command(
 /// Extracted body of `Commands::Stack`.
 pub fn run_stack_command(
     cmd: StackCommands,
-    json: bool,
-    log: bool,
-    #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
-    let _ = verbosity;
+    let _ = ctx.verbosity;
     let catalog_root = maki::config::find_catalog_root()?;
     let catalog = Catalog::open(&catalog_root)?;
     let store = maki::stack::StackStore::new(catalog.conn());
@@ -200,7 +190,7 @@ pub fn run_stack_command(
             let stack = store.create(&asset_ids)?;
             let yaml = store.export_all()?;
             maki::stack::save_yaml(&catalog_root, &yaml)?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "id": stack.id.to_string(),
                     "member_count": stack.asset_ids.len(),
@@ -218,7 +208,7 @@ pub fn run_stack_command(
             let added = store.add(&reference, &asset_ids)?;
             let yaml = store.export_all()?;
             maki::stack::save_yaml(&catalog_root, &yaml)?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({ "added": added }));
             } else {
                 println!("Added {} asset(s) to stack", added);
@@ -232,7 +222,7 @@ pub fn run_stack_command(
             let removed = store.remove(&asset_ids)?;
             let yaml = store.export_all()?;
             maki::stack::save_yaml(&catalog_root, &yaml)?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({ "removed": removed }));
             } else {
                 println!("Removed {} asset(s) from stack(s)", removed);
@@ -243,7 +233,7 @@ pub fn run_stack_command(
             store.set_pick(&asset_id)?;
             let yaml = store.export_all()?;
             maki::stack::save_yaml(&catalog_root, &yaml)?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({ "pick": asset_id }));
             } else {
                 println!("Set {} as stack pick", &asset_id[..8.min(asset_id.len())]);
@@ -254,7 +244,7 @@ pub fn run_stack_command(
             store.dissolve(&asset_id)?;
             let yaml = store.export_all()?;
             maki::stack::save_yaml(&catalog_root, &yaml)?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({ "status": "dissolved" }));
             } else {
                 println!("Stack dissolved");
@@ -263,7 +253,7 @@ pub fn run_stack_command(
         }
         StackCommands::List => {
             let list = store.list()?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&list)?);
             } else if list.is_empty() {
                 println!("No stacks.");
@@ -280,7 +270,7 @@ pub fn run_stack_command(
         StackCommands::Show { asset_id, format } => {
             let (stack_id, members) = store.stack_for_asset(&asset_id)?
                 .ok_or_else(|| anyhow::anyhow!("asset {asset_id} is not in a stack"))?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "stack_id": stack_id,
                     "members": members,
@@ -311,9 +301,9 @@ pub fn run_stack_command(
         }
         StackCommands::FromTag { pattern, remove_tags, apply } => {
             let engine = QueryEngine::new(&catalog_root);
-            let result = engine.stack_from_tag(&pattern, remove_tags, apply, cli.log)?;
+            let result = engine.stack_from_tag(&pattern, remove_tags, apply, ctx.log)?;
 
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 let mode = if result.dry_run { " (dry run)" } else { "" };
@@ -334,14 +324,9 @@ pub fn run_stack_command(
 /// Extracted body of `Commands::Collection`.
 pub fn run_collection_command(
     cmd: CollectionCommands,
-    json: bool,
-    log: bool,
-    #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
-    let _ = verbosity;
+    let _ = ctx.verbosity;
     let catalog_root = maki::config::find_catalog_root()?;
     let catalog = Catalog::open(&catalog_root)?;
     let store = maki::collection::CollectionStore::new(catalog.conn());
@@ -351,7 +336,7 @@ pub fn run_collection_command(
             // Persist to YAML
             let yaml = store.export_all()?;
             maki::collection::save_yaml(&catalog_root, &yaml)?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "id": col.id.to_string(),
                     "name": col.name,
@@ -363,7 +348,7 @@ pub fn run_collection_command(
         }
         CollectionCommands::List => {
             let list = store.list()?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&list)?);
             } else if list.is_empty() {
                 println!("No collections.");
@@ -386,7 +371,7 @@ pub fn run_collection_command(
                 .ok_or_else(|| anyhow::anyhow!("no collection named '{name}'"))?;
 
             if col.asset_ids.is_empty() {
-                if cli.json {
+                if ctx.json {
                     println!("{}", serde_json::to_string_pretty(&col)?);
                 } else {
                     println!("Collection '{}' is empty.", name);
@@ -401,7 +386,7 @@ pub fn run_collection_command(
 
             let output_format = if let Some(fmt) = &format {
                 format::parse_format(fmt).map_err(|e| anyhow::anyhow!(e))?
-            } else if cli.json {
+            } else if ctx.json {
                 OutputFormat::Json
             } else {
                 OutputFormat::Short
@@ -488,7 +473,7 @@ pub fn run_collection_command(
             let ids = if asset_ids.is_empty() {
                 use std::io::BufRead;
                 std::io::stdin().lock().lines()
-                    .filter_map(|l| l.ok())
+                    .map_while(Result::ok)
                     .map(|l| l.trim().to_string())
                     .filter(|l| !l.is_empty())
                     .collect()
@@ -502,7 +487,7 @@ pub fn run_collection_command(
             // Persist to YAML
             let yaml = store.export_all()?;
             maki::collection::save_yaml(&catalog_root, &yaml)?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "added": added,
                     "collection": name,
@@ -520,7 +505,7 @@ pub fn run_collection_command(
             // Persist to YAML
             let yaml = store.export_all()?;
             maki::collection::save_yaml(&catalog_root, &yaml)?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "removed": removed,
                     "collection": name,
@@ -535,7 +520,7 @@ pub fn run_collection_command(
             // Persist to YAML
             let yaml = store.export_all()?;
             maki::collection::save_yaml(&catalog_root, &yaml)?;
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "status": "deleted",
                     "name": name,
@@ -554,13 +539,8 @@ pub fn run_auto_group_command(
         query: Option<String>,
         apply: bool,
         global: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let catalog_root = maki::config::find_catalog_root()?;
     let engine = QueryEngine::new(&catalog_root);
 
@@ -575,7 +555,7 @@ pub fn run_auto_group_command(
             .collect()
     };
 
-    let show_log = cli.log;
+    let show_log = ctx.log;
     let result = if global {
         engine.auto_group_global(&asset_ids, !apply)?
     } else {
@@ -586,7 +566,7 @@ pub fn run_auto_group_command(
         })?
     };
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string(&result)?);
     } else {
         if result.groups.is_empty() {
@@ -624,18 +604,13 @@ pub fn run_auto_group_command(
 pub fn run_split_command(
         asset_id: String,
         variant_hashes: Vec<String>,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let catalog_root = maki::config::find_catalog_root()?;
     let engine = QueryEngine::new(&catalog_root);
     let result = engine.split(&asset_id, &variant_hashes)?;
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string(&result)?);
     } else {
         let short_src = &result.source_id[..8];
@@ -658,18 +633,13 @@ pub fn run_split_command(
 /// extraction pattern.
 pub fn run_group_command(
         variant_hashes: Vec<String>,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let catalog_root = maki::config::find_catalog_root()?;
     let engine = QueryEngine::new(&catalog_root);
     let result = engine.group(&variant_hashes)?;
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::json!({
             "target_id": result.target_id,
             "variants_moved": result.variants_moved,
@@ -707,13 +677,8 @@ pub fn run_edit_command(
         clear_date: bool,
         role: Option<String>,
         variant: Option<String>,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     use maki::query::{EditFields, parse_date_input};
 
     // Handle --role --variant separately from asset-level edits
@@ -725,7 +690,7 @@ pub fn run_edit_command(
         let engine = QueryEngine::new(&catalog_root);
         engine.set_variant_role(&asset_id, &variant_hash, &role)?;
 
-        if cli.json {
+        if ctx.json {
             println!("{}", serde_json::json!({
                 "asset_id": asset_id,
                 "variant": variant_hash,
@@ -801,7 +766,7 @@ pub fn run_edit_command(
 
     let result = engine.edit(&asset_id, fields)?;
 
-    if cli.json {
+    if ctx.json {
         let mut json = serde_json::to_value(&result)?;
         if clear_tags {
             json["tags_cleared"] = serde_json::json!(tags_cleared);

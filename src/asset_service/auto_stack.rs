@@ -126,7 +126,7 @@ impl AssetService {
             )
         })?;
         let catalog = Catalog::open(&self.catalog_root)?;
-        let engine = crate::query::QueryEngine::new(&self.catalog_root);
+        let engine = self.query_engine();
         let scope = engine.resolve_scope(query, asset, &[])?;
         auto_stack_catalog(
             &catalog,

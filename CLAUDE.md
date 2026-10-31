@@ -72,8 +72,15 @@ Rating, tag, description, and label changes are written back to `.xmp` recipe fi
 - `--verbose` shows operational flow (file counts, volume detection, VLM settings); `--debug` shows external tool stderr and implies `--verbose`; `--time` shows elapsed time
 - `search --format` supports presets (`ids`, `short`, `full`, `json`) and custom templates (`'{id}\t{name}'`)
 
+### Shared Helpers (use these, do not re-implement)
+- `CliContext { json, log, verbosity }` (`cli_output.rs`) is the single trailing parameter of every `run_*_command`; `ctx.emit(&value, || human)` for plain JSON-or-human output. `maki --help` is rendered from clap metadata via `HELP_GROUPS` (unit-tested against `Cli::command()`).
+- `QueryEngine` / `AssetService` hold `Arc<CatalogConfig>` (loaded once in `new`; `with_config` when the caller already has one); `BatchContext.config`; `HistoryStore::new_with` / `Trash::new_with`. Never call `CatalogConfig::load` inside a loop or per request.
+- `DeviceRegistry::online_map()` / `label_map()`; `Catalog::resolve_asset_id_required(prefix)` (one error text); `session_root::find_session_root` (also behind the SQL `session_root()` function); `path_util::forward_slashes` (every volume-relative path string); `platform::{open_path, reveal_path, open_terminal, open_url}` (all OS-specific process spawning).
+- Web: one `ServeOptions` → `AppState::new` / `web::serve`; `AppState::config()` (swapped on config-editor save), `embedding_index()`, `with_siglip()`; `jobs::launch_job(state, kind, LaunchOptions, run)` for every background job; `routes::spawn_catalog_blocking` / `spawn_blocking_with` for every blocking handler body.
+- Front end: `src/web/static/maki-core.js` (embedded by `base.html`) owns `MAKI.escHtml/escAttr/toast/api/dialog/pathAutocomplete/attachJobStream/quoteFilterValue` and the colour-label maps; the vocabulary itself is `models::asset::COLOR_LABELS`.
+
 ### Test Helpers
-`setup_search_catalog()` and `setup_metadata_catalog()` require `asset.variants` populated before `catalog.insert_asset()` (because of denormalized columns).
+The catalog unit tests' private `setup_search_catalog()` / `setup_metadata_catalog()` (in `catalog.rs` tests) require `asset.variants` populated before `catalog.insert_asset()` (because of denormalized columns); a shared `test_support` module is a Phase 3 item of the architecture audit.
 
 ## Configuration (`maki.toml`)
 

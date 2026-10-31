@@ -6,9 +6,7 @@ use super::*;
 #[cfg(feature = "ai")]
 pub fn run_faces_command(
     cmd: FacesCommands,
-    json: bool,
-    log: bool,
-    #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
     let catalog_root = maki::config::find_catalog_root()?;
     let config = maki::config::CatalogConfig::load(&catalog_root)?;
@@ -16,10 +14,7 @@ pub fn run_faces_command(
 
     // Shadow `cli` with a lightweight struct carrying the two flags the
     // faces subcommands read, so the extracted body can keep referencing
-    // `cli.json` and `cli.log` unchanged.
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
+    // `ctx.json` and `ctx.log` unchanged.
 
     match cmd {
         FacesCommands::Download => {
@@ -58,7 +53,7 @@ pub fn run_faces_command(
                 }
             }
 
-            if cli.json {
+            if ctx.json {
                 let json = serde_json::json!({
                     "model_dir": face_model_dir.to_string_lossy(),
                     "models_downloaded": exists,
@@ -89,14 +84,13 @@ pub fn run_faces_command(
             }
 
             let engine = QueryEngine::new(&catalog_root);
-            let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+            let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
             // Resolve target assets
             let catalog = maki::catalog::Catalog::open(&catalog_root)?;
             let asset_ids: Vec<String> = if let Some(ref aid) = asset {
                 let full_id = catalog
-                    .resolve_asset_id(aid)?
-                    .ok_or_else(|| anyhow::anyhow!("no asset found matching '{aid}'"))?;
+                    .resolve_asset_id_required(aid)?;
                 vec![full_id]
             } else {
                 let q = if let Some(ref query) = query {
@@ -116,9 +110,9 @@ pub fn run_faces_command(
             };
             drop(catalog);
 
-            let mut detector = maki::face::FaceDetector::load_with_provider(&face_model_dir, verbosity, &config.ai.execution_provider)?;
+            let mut detector = maki::face::FaceDetector::load_with_provider(&face_model_dir, ctx.verbosity, &config.ai.execution_provider)?;
 
-            let show_log = cli.log;
+            let show_log = ctx.log;
             let result = service.detect_faces(
                 &asset_ids,
                 &mut detector,
@@ -145,7 +139,7 @@ pub fn run_faces_command(
             let total_skipped = result.assets_skipped;
             let errors = result.errors;
 
-            if cli.json {
+            if ctx.json {
                 let json = serde_json::json!({
                     "assets_processed": total_assets,
                     "assets_skipped": total_skipped,
@@ -192,8 +186,7 @@ pub fn run_faces_command(
                 let engine = QueryEngine::new(&catalog_root);
                 if let Some(ref a) = asset {
                     let full_id = catalog
-                        .resolve_asset_id(a)?
-                        .ok_or_else(|| anyhow::anyhow!("no asset found matching '{a}'"))?;
+                        .resolve_asset_id_required(a)?;
                     Some(vec![full_id])
                 } else {
                     let q = if let Some(ref query) = query {
@@ -218,7 +211,7 @@ pub fn run_faces_command(
                 if let Err(e) = face_store.save_all_yaml(&catalog_root) {
                     eprintln!("  Warning: failed to save faces/people YAML: {e:#}");
                 }
-                if cli.json {
+                if ctx.json {
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 } else {
                     println!(
@@ -229,7 +222,7 @@ pub fn run_faces_command(
             } else {
                 let (clusters, _unassigned) = face_store.cluster_faces(thresh, min_conf, scope)?;
                 let total_faces: usize = clusters.iter().map(|c| c.len()).sum();
-                if cli.json {
+                if ctx.json {
                     println!("{}", serde_json::json!({
                         "dry_run": true,
                         "clusters": clusters.len(),
@@ -255,7 +248,7 @@ pub fn run_faces_command(
             let face_store = maki::face_store::FaceStore::new(catalog.conn());
 
             let people = face_store.list_people()?;
-            if cli.json {
+            if ctx.json {
                 let json_people: Vec<_> = people.iter().map(|(p, count)| {
                     serde_json::json!({
                         "id": p.id,
@@ -269,7 +262,7 @@ pub fn run_faces_command(
                 if people.is_empty() {
                     println!("No people found. Run 'maki faces cluster --apply' to create people from detected faces.");
                 } else {
-                    println!("{:<10} {:<30} {}", "ID", "Name", "Faces");
+                    println!("{:<10} {:<30} Faces", "ID", "Name");
                     for (person, count) in &people {
                         let short_id = &person.id[..8.min(person.id.len())];
                         let name = person.name.as_deref().unwrap_or("(unnamed)");
@@ -337,7 +330,7 @@ pub fn run_faces_command(
             let face_store = maki::face_store::FaceStore::new(catalog.conn());
 
             let count = face_store.count_unassigned_faces()?;
-            if cli.json {
+            if ctx.json {
                 if apply {
                     let deleted = face_store.delete_unassigned_faces()?;
                     if let Err(e) = face_store.save_all_yaml(&catalog_root) {
@@ -374,8 +367,7 @@ pub fn run_faces_command(
             // Resolve scope to asset IDs.
             let scoped_ids: Vec<String> = if let Some(ref a) = asset {
                 let full_id = catalog
-                    .resolve_asset_id(a)?
-                    .ok_or_else(|| anyhow::anyhow!("no asset found matching '{a}'"))?;
+                    .resolve_asset_id_required(a)?;
                 vec![full_id]
             } else {
                 let q = query.as_deref().unwrap_or("*");
@@ -455,8 +447,7 @@ pub fn run_faces_command(
                 let engine = QueryEngine::new(&catalog_root);
                 if let Some(ref a) = asset {
                     let full_id = catalog
-                        .resolve_asset_id(a)?
-                        .ok_or_else(|| anyhow::anyhow!("no asset found matching '{a}'"))?;
+                        .resolve_asset_id_required(a)?;
                     Some(vec![full_id])
                 } else {
                     let q = if let Some(ref query) = query {
@@ -487,7 +478,7 @@ pub fn run_faces_command(
 
             let n = filtered.len();
             if n < 2 {
-                if cli.json {
+                if ctx.json {
                     println!("{}", serde_json::json!({"faces": n, "pairs": 0}));
                 } else {
                     println!("Not enough faces to analyze ({n}). Need at least 2.");
@@ -534,7 +525,7 @@ pub fn run_faces_command(
                 buckets[b] += 1;
             }
 
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "faces": n,
                     "pairs": sims.len(),
@@ -623,7 +614,7 @@ pub fn run_faces_command(
                 }
             }
 
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "faces": faces_file.faces.len(),
                     "people": people_file.people.len(),

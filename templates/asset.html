@@ -171,23 +171,11 @@
             } catch (e) { /* leave allPeople empty */ }
 
             function assignFaceToPerson(faceId, personId) {
-                return fetch('/api/faces/' + faceId + '/assign', {
-                    method: 'PUT',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({person_id: personId})
-                }).then(function(r) {
-                    if (!r.ok) throw new Error('HTTP ' + r.status);
-                    return r.json();
-                });
+                return MAKI.api.put('/api/faces/' + faceId + '/assign', {person_id: personId});
             }
 
             function createPersonAndAssign(name, faceId) {
-                return fetch('/api/people', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({name: name})
-                })
-                .then(function(r) { return r.json(); })
+                return MAKI.api.post('/api/people', {name: name})
                 .then(function(data) {
                     if (!data.id) throw new Error('Failed to create person');
                     return assignFaceToPerson(faceId, data.id);
@@ -319,8 +307,7 @@
                 btn.addEventListener('click', function(e) {
                     e.preventDefault();
                     var faceId = this.dataset.faceId;
-                    fetch('/api/faces/' + faceId + '/unassign', {method: 'DELETE'})
-                        .then(function(r) { return r.json(); })
+                    MAKI.api.del('/api/faces/' + faceId + '/unassign')
                         .then(function() { markBrowseDirty(); window.location.reload(); })
                         .catch(function(err) { alert('Unassign failed: ' + err.message); });
                 });
@@ -331,8 +318,7 @@
                     e.preventDefault();
                     if (!confirm('Delete this face detection?')) return;
                     var faceId = this.dataset.faceId;
-                    fetch('/api/faces/' + faceId, {method: 'DELETE'})
-                        .then(function(r) { return r.json(); })
+                    MAKI.api.del('/api/faces/' + faceId)
                         .then(function() { markBrowseDirty(); window.location.reload(); })
                         .catch(function(err) { alert('Delete failed: ' + err.message); });
                 });
@@ -359,15 +345,7 @@
                 e.preventDefault();
                 var colName = btn.getAttribute('data-collection');
                 var assetId = '{{ asset_id }}';
-                fetch('/api/batch/collection', {
-                    method: 'DELETE',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({asset_ids: [assetId], collection: colName})
-                })
-                .then(function(r) {
-                    if (!r.ok) throw new Error('Failed');
-                    return r.json();
-                })
+                MAKI.api.del('/api/batch/collection', {asset_ids: [assetId], collection: colName})
                 .then(function() {
                     var wrap = btn.closest('.collection-chip-wrap');
                     if (wrap) wrap.remove();
@@ -413,15 +391,7 @@
             var pickBtn = document.getElementById('set-pick-btn');
             if (pickBtn) {
                 pickBtn.addEventListener('click', function() {
-                    fetch('/api/asset/' + assetId + '/stack-pick', {
-                        method: 'PUT',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({})
-                    })
-                    .then(function(r) {
-                        if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                        return r.json();
-                    })
+                    MAKI.api.put('/api/asset/' + assetId + '/stack-pick', {})
                     .then(function() { markBrowseDirty(); window.location.reload(); })
                     .catch(function(err) { alert('Failed to set pick: ' + err.message); });
                 });
@@ -430,13 +400,7 @@
             if (dissolveBtn) {
                 dissolveBtn.addEventListener('click', function() {
                     if (!confirm('Dissolve this entire stack? All members will become unstacked.')) return;
-                    fetch('/api/asset/' + assetId + '/stack', {
-                        method: 'DELETE'
-                    })
-                    .then(function(r) {
-                        if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                        return r.json();
-                    })
+                    MAKI.api.del('/api/asset/' + assetId + '/stack')
                     .then(function() { markBrowseDirty(); window.location.reload(); })
                     .catch(function(err) { alert('Failed to dissolve stack: ' + err.message); });
                 });
@@ -446,15 +410,7 @@
             if (removeBtn) {
                 removeBtn.addEventListener('click', function() {
                     if (!confirm('Remove this asset from its stack?')) return;
-                    fetch('/api/batch/stack', {
-                        method: 'DELETE',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ asset_ids: [assetId] })
-                    })
-                    .then(function(r) {
-                        if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                        return r.json();
-                    })
+                    MAKI.api.del('/api/batch/stack', { asset_ids: [assetId] })
                     .then(function() { markBrowseDirty(); window.location.reload(); })
                     .catch(function(err) { alert('Failed to remove from stack: ' + err.message); });
                 });
@@ -506,15 +462,7 @@
                     var newFirst = container.children[0];
                     var newFirstId = newFirst.getAttribute('href').split('/').pop();
                     if (newFirst !== allMembers[0]) {
-                        fetch('/api/asset/' + newFirstId + '/stack-pick', {
-                            method: 'PUT',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({})
-                        })
-                        .then(function(r) {
-                            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                            return r.json();
-                        })
+                        MAKI.api.put('/api/asset/' + newFirstId + '/stack-pick', {})
                         .then(function() { markBrowseDirty(); window.location.reload(); })
                         .catch(function(err) { alert('Failed to set pick: ' + err.message); });
                     }
@@ -568,8 +516,8 @@
                             {% for loc in v.locations %}
                             <div><span class="badge volume-badge">{{ loc.volume_label }}</span> {{ loc.relative_path }}{% if loc.is_online %}
                                 <button class="reveal-btn" title="Reveal in file manager"
-                                    onclick="fetch('/api/open-location',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({volume_id:'{{ loc.volume_id }}',relative_path:'{{ loc.relative_path }}'})}).then(function(r){if(!r.ok)r.text().then(function(t){alert(t)})})">&#128194;</button><button class="reveal-btn" title="Open terminal here"
-                                    onclick="fetch('/api/open-terminal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({volume_id:'{{ loc.volume_id }}',relative_path:'{{ loc.relative_path }}'})}).then(function(r){if(!r.ok)r.text().then(function(t){alert(t)})})">&gt;_</button>{% endif %}</div>
+                                    onclick="MAKI.api.post('/api/open-location',{volume_id:'{{ loc.volume_id }}',relative_path:'{{ loc.relative_path }}'}).catch(function(e){alert(e.message)})\">&#128194;</button><button class="reveal-btn" title="Open terminal here"
+                                    onclick="MAKI.api.post('/api/open-terminal',{volume_id:'{{ loc.volume_id }}',relative_path:'{{ loc.relative_path }}'}).catch(function(e){alert(e.message)})\">&gt;_</button>{% endif %}</div>
                             {% endfor %}
                         </td>
                         {% if variants.len() > 1 %}
@@ -611,15 +559,7 @@
                 if (hashes.length === 0 || hashes.length >= total) return;
                 if (!confirm('Extract ' + hashes.length + ' variant(s) into new asset(s)? Tags, rating, and label will be copied.')) return;
                 extractBtn.disabled = true;
-                fetch('/api/asset/{{ asset_id }}/split', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({variant_hashes: hashes})
-                })
-                .then(function(r) {
-                    if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                    return r.json();
-                })
+                MAKI.api.post('/api/asset/{{ asset_id }}/split', {variant_hashes: hashes})
                 .then(function(data) {
                     window.location.reload();
                 })
@@ -632,26 +572,16 @@
         {% if variants.len() > 1 %}
         <script>
         function setVariantRole(assetId, contentHash, role, selectEl) {
-            fetch('/api/asset/' + assetId + '/variant-role', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({content_hash: contentHash, role: role})
-            })
-            .then(function(r) {
-                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            MAKI.api.post('/api/asset/' + assetId + '/variant-role', {content_hash: contentHash, role: role})
+            .then(function() {
                 selectEl.style.outline = '2px solid #4a4';
                 setTimeout(function() { selectEl.style.outline = ''; }, 800);
             })
             .catch(function(err) { alert('Failed: ' + err.message); selectEl.style.outline = '2px solid #a44'; });
         }
         function setPreviewVariant(assetId, contentHash) {
-            fetch('/api/asset/' + assetId + '/preview-variant', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({content_hash: contentHash})
-            })
-            .then(function(r) {
-                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+            MAKI.api.post('/api/asset/' + assetId + '/preview-variant', {content_hash: contentHash})
+            .then(function() {
                 window.location.reload();
             })
             .catch(function(err) { alert('Failed: ' + err.message); });
@@ -689,8 +619,8 @@
                                 {% for loc in r.locations %}
                                 <div><span class="badge volume-badge">{{ loc.volume_label }}</span> {{ loc.relative_path }}{% if loc.pending_writeback %} <span class="pending-writeback-marker" tabindex="0" role="img" aria-label="Pending writeback: this XMP location has not yet received the staged metadata edits" data-tip="Staged metadata edits in MAKI's catalog have not yet been written to this XMP file. Use the &ldquo;Write back to XMP&rdquo; button below (or run &ldquo;maki writeback&rdquo;) to flush them.">&#x21bb;</span>{% endif %}{% if loc.is_online %}
                                     <button class="reveal-btn" title="Reveal in file manager"
-                                        onclick="fetch('/api/open-location',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({volume_id:'{{ loc.volume_id }}',relative_path:'{{ loc.relative_path }}'})}).then(function(r){if(!r.ok)r.text().then(function(t){alert(t)})})">&#128194;</button><button class="reveal-btn" title="Open terminal here"
-                                        onclick="fetch('/api/open-terminal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({volume_id:'{{ loc.volume_id }}',relative_path:'{{ loc.relative_path }}'})}).then(function(r){if(!r.ok)r.text().then(function(t){alert(t)})})">&gt;_</button>{% endif %}</div>
+                                        onclick="MAKI.api.post('/api/open-location',{volume_id:'{{ loc.volume_id }}',relative_path:'{{ loc.relative_path }}'}).catch(function(e){alert(e.message)})\">&#128194;</button><button class="reveal-btn" title="Open terminal here"
+                                        onclick="MAKI.api.post('/api/open-terminal',{volume_id:'{{ loc.volume_id }}',relative_path:'{{ loc.relative_path }}'}).catch(function(e){alert(e.message)})\">&gt;_</button>{% endif %}</div>
                                 {% endfor %}
                             </td>
                         </tr>
@@ -733,11 +663,7 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
     if (!btn) return;
     btn.addEventListener('click', function() {
         if (!confirm('Clear all tags, description, rating, and label, then re-extract from source files?')) return;
-        fetch('/api/asset/{{ asset_id }}/reimport-metadata', { method: 'POST' })
-            .then(function(r) {
-                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                return r.text();
-            })
+        MAKI.api.post('/api/asset/{{ asset_id }}/reimport-metadata')
             .then(function() { markBrowseDirty(); window.location.reload(); })
             .catch(function(err) { alert('Re-import failed: ' + err.message); });
     });
@@ -791,8 +717,8 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
 
 (function() {
     var assetId = '{{ asset_id }}';
-    var labelNumMap = {'1':'Red','2':'Orange','3':'Yellow','4':'Green','5':'Blue','6':'Pink','7':'Purple'};
-    var labelLetterMap = {r:'Red',o:'Orange',y:'Yellow',g:'Green',b:'Blue',p:'Pink',u:'Purple'};
+    var labelNumMap = MAKI.labelNumMap;
+    var labelLetterMap = MAKI.labelLetterMap;
 
     sessionStorage.setItem('maki-browse-focus', assetId);
 
@@ -866,7 +792,7 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
             u.searchParams.set('nocount', '1');
             url = u.pathname + u.search;
         } catch(e) { callback({}); return; }
-        fetch(url).then(function(r) { return r.json(); }).then(callback).catch(function(){ callback({}); });
+        MAKI.api.get(url).then(callback).catch(function(){ callback({}); });
     }
 
     var prevSpinner = document.getElementById('nav-prev-loading');
@@ -1269,11 +1195,7 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
         btn.disabled = true;
         container.style.display = 'none';
 
-        fetch('/api/asset/' + assetId + '/suggest-tags', { method: 'POST' })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-            return r.json();
-        })
+        MAKI.api.post('/api/asset/' + assetId + '/suggest-tags')
         .then(function(suggestions) {
             btn.textContent = 'Suggest tags';
             btn.disabled = false;
@@ -1385,15 +1307,7 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
         var modelSelect = document.getElementById('vlm-model-select');
         if (modelSelect) payload.model = modelSelect.value;
 
-        fetch('/api/asset/' + assetId + '/vlm-describe', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(payload)
-        })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-            return r.json();
-        })
+        MAKI.api.post('/api/asset/' + assetId + '/vlm-describe', payload)
         .then(function(result) {
             btn.textContent = 'Describe';
             btn.disabled = false;
@@ -1423,11 +1337,7 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
         if (!btn) return;
         btn.textContent = 'Writing...';
         btn.disabled = true;
-        fetch('/api/asset/' + assetId + '/writeback', {method: 'POST'})
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-            return r.json();
-        })
+        MAKI.api.post('/api/asset/' + assetId + '/writeback')
         .then(function() {
             // Fire the same pending-changed event the edit endpoints
             // emit via HX-Trigger. The recipes-block container reloads
@@ -1450,11 +1360,7 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
         if (!btn) return;
         btn.textContent = 'Embedding...';
         btn.disabled = true;
-        fetch('/api/asset/' + assetId + '/embed', { method: 'POST' })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-            return r.json();
-        })
+        MAKI.api.post('/api/asset/' + assetId + '/embed')
         .then(function(data) {
             btn.textContent = 'Embed';
             btn.disabled = false;
@@ -1487,11 +1393,7 @@ document.body.addEventListener('htmx:afterRequest', function(e) {
         btn.disabled = true;
         container.style.display = 'none';
 
-        fetch('/api/asset/' + assetId + '/similar', { method: 'POST' })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-            return r.json();
-        })
+        MAKI.api.post('/api/asset/' + assetId + '/similar')
         .then(function(results) {
             btn.textContent = 'Find similar';
             btn.disabled = false;

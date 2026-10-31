@@ -33,8 +33,8 @@
     var preloadPrev = document.getElementById('lb-preload-prev');
     var preloadNext = document.getElementById('lb-preload-next');
 
-    var labelNumMap = {'1':'Red','2':'Orange','3':'Yellow','4':'Green','5':'Blue','6':'Pink','7':'Purple'};
-    var labelLetterMap = {r:'Red',o:'Orange',y:'Yellow',g:'Green',b:'Blue',p:'Pink',u:'Purple'};
+    var labelNumMap = MAKI.labelNumMap;
+    var labelLetterMap = MAKI.labelLetterMap;
 
     // --- Zoom state ---
     var zoomMode = 'fit';
@@ -372,8 +372,8 @@
 
     function loadSlideshowConfig() {
         if (slideshowConfigLoaded) return Promise.resolve();
-        return fetch('/api/build-info')
-            .then(function(r) { return r.ok ? r.json() : {}; })
+        return MAKI.api.get('/api/build-info')
+            .catch(function() { return {}; })
             .then(function(d) {
                 if (typeof d.slideshow_seconds === 'number' && d.slideshow_seconds > 0) {
                     slideshowSeconds = d.slideshow_seconds;
@@ -517,11 +517,7 @@
         var item = items[currentIndex];
         if (!item) return;
         if (isSlideshowRunning()) stopSlideshow();
-        fetch('/api/asset/' + item.id + '/label', {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({label: label})
-        }).then(function() {
+        MAKI.api.put('/api/asset/' + item.id + '/label', {label: label}).then(function() {
             item.label = label;
             renderLabels(label);
             if (_onLabelChange) _onLabelChange(item.id, label);

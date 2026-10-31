@@ -9,12 +9,11 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
 use super::super::AppState;
-use crate::web::jobs::{Job, JobKind};
+use crate::web::jobs::{Job, JobKind, LaunchOptions};
 use crate::web::ImportJobSummary;
 
 #[derive(Debug, serde::Deserialize)]
@@ -51,7 +50,7 @@ pub async fn start_import_api(
     // hold a catalog handle and traverse the same workflow. The
     // registry keeps completed jobs around for re-attach, so a
     // dry-run finishing doesn't block the next live import.
-    crate::web::jobs::launch_job(&state, JobKind::Import, "An import is already running", move |state, job| {
+    crate::web::jobs::launch_job(&state, JobKind::Import, LaunchOptions::conflict("An import is already running"), move |state, job| {
         run_import_with_progress(state, &req, job)
     })
 }
@@ -106,7 +105,7 @@ fn run_import_with_progress(
     use crate::asset_service::ImportEvent;
 
     let wf_req = build_workflow_request(state, req)?;
-    let config = crate::config::CatalogConfig::load(&state.catalog_root).unwrap_or_default();
+    let config = state.config();
     let service = state.asset_service();
 
     // Per-job atomic counters. The workflow emits events sequentially within
@@ -278,17 +277,9 @@ pub async fn build_info_api(
 pub async fn import_profiles_api(
     State(state): State<Arc<AppState>>,
 ) -> Response {
-    let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let config = crate::config::CatalogConfig::load(&state.catalog_root).unwrap_or_default();
-        let mut profiles: Vec<String> = config.import.profiles.keys().cloned().collect();
-        profiles.sort();
-        Ok::<_, anyhow::Error>(serde_json::json!({"profiles": profiles}))
-    })
-    .await;
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    // Pure config read — nothing blocking, no catalog needed.
+    let config = state.config();
+    let mut profiles: Vec<String> = config.import.profiles.keys().cloned().collect();
+    profiles.sort();
+    Json(serde_json::json!({"profiles": profiles})).into_response()
 }

@@ -33,7 +33,9 @@ pub enum DescribeMode {
 }
 
 impl DescribeMode {
-    pub fn from_str(s: &str) -> Result<Self> {
+    /// Parse a `--mode` / `[vlm] mode` value (case-insensitive). Not
+    /// `FromStr` so callers keep the anyhow error with its hint text.
+    pub fn parse_mode(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
             "describe" => Ok(Self::Describe),
             "tags" => Ok(Self::Tags),
@@ -332,7 +334,7 @@ pub fn call_vlm(
 
     // Try Ollama native endpoint first (properly supports think: false)
     match call_ollama_native(endpoint, model, image_base64, prompt, params, verbosity) {
-        Ok(text) => return Ok(text),
+        Ok(text) => Ok(text),
         Err(e) => {
             let err_str = format!("{e}");
             if err_str.contains("404") || err_str.contains("not found") {
@@ -344,7 +346,7 @@ pub fn call_vlm(
                     endpoint, model, image_base64, prompt, params, verbosity,
                 );
             }
-            return Err(e);
+            Err(e)
         }
     }
 }
@@ -710,7 +712,7 @@ pub fn encode_image_base64(path: &std::path::Path, max_edge: Option<u32>) -> Res
 /// Simple base64 encoder (avoids adding a base64 crate dependency).
 fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
 
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -778,11 +780,11 @@ mod tests {
 
     #[test]
     fn test_describe_mode_from_str() {
-        assert_eq!(DescribeMode::from_str("describe").unwrap(), DescribeMode::Describe);
-        assert_eq!(DescribeMode::from_str("tags").unwrap(), DescribeMode::Tags);
-        assert_eq!(DescribeMode::from_str("both").unwrap(), DescribeMode::Both);
-        assert_eq!(DescribeMode::from_str("TAGS").unwrap(), DescribeMode::Tags);
-        assert!(DescribeMode::from_str("invalid").is_err());
+        assert_eq!(DescribeMode::parse_mode("describe").unwrap(), DescribeMode::Describe);
+        assert_eq!(DescribeMode::parse_mode("tags").unwrap(), DescribeMode::Tags);
+        assert_eq!(DescribeMode::parse_mode("both").unwrap(), DescribeMode::Both);
+        assert_eq!(DescribeMode::parse_mode("TAGS").unwrap(), DescribeMode::Tags);
+        assert!(DescribeMode::parse_mode("invalid").is_err());
     }
 
     #[test]

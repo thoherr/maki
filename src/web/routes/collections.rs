@@ -38,9 +38,9 @@ pub struct CreateCollectionRequest {
 pub async fn create_collection_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateCollectionRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let name = req.name.trim().to_string();
         if name.is_empty() {
             anyhow::bail!("collection name cannot be empty");
@@ -57,21 +57,16 @@ pub async fn create_collection_api(
             "name": collection.name,
             "description": collection.description,
         }))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => (StatusCode::CREATED, Json(json)).into_response(),
-        Ok(Err(e)) => {
-            let msg = format!("{e:#}");
-            if msg.contains("UNIQUE constraint") || msg.contains("already exists") {
-                (StatusCode::CONFLICT, format!("Collection already exists: {msg}")).into_response()
-            } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
-            }
+    }, |e| {
+        let msg = format!("{e:#}");
+        if msg.contains("UNIQUE constraint") || msg.contains("already exists") {
+            (StatusCode::CONFLICT, format!("Collection already exists: {msg}")).into_response()
+        } else {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    })
+    .await?;
+    Ok((StatusCode::CREATED, Json(json)).into_response())
 }
 
 /// GET /api/collections — list all collections as JSON.

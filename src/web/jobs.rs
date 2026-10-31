@@ -23,7 +23,7 @@
 //! dialog, the nav badge) read the fields they care about and ignore the rest.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use serde::Serialize;
 
@@ -127,15 +127,14 @@ impl Job {
     /// Also updates `progress` so polling clients see the same snapshot.
     pub fn emit(&self, event: &serde_json::Value) {
         let s = event.to_string();
-        if let Ok(mut buf) = self.recent_events.lock() {
+        {
+            let mut buf = self.recent_events.lock().unwrap_or_else(PoisonError::into_inner);
             if buf.len() >= RECENT_EVENTS_CAP {
                 buf.pop_front();
             }
             buf.push_back(s.clone());
         }
-        if let Ok(mut p) = self.progress.lock() {
-            *p = event.clone();
-        }
+        *self.progress.lock().unwrap_or_else(PoisonError::into_inner) = event.clone();
         let _ = self.sender.send(s);
     }
 
@@ -143,9 +142,7 @@ impl Job {
     /// background ticks the SSE clients don't need to see (e.g. heartbeats).
     #[allow(dead_code)]
     pub fn update_progress(&self, snapshot: serde_json::Value) {
-        if let Ok(mut p) = self.progress.lock() {
-            *p = snapshot;
-        }
+        *self.progress.lock().unwrap_or_else(PoisonError::into_inner) = snapshot;
     }
 
     /// Mark the job complete and emit a final `done: true` event with the
@@ -170,9 +167,7 @@ impl Job {
     /// `GET /api/jobs/{id}/result`. Call before [`Self::finish`] so the
     /// payload is in place when clients re-attach on the terminal event.
     pub fn set_result(&self, payload: serde_json::Value) {
-        if let Ok(mut slot) = self.result.lock() {
-            *slot = Some(payload);
-        }
+        *self.result.lock().unwrap_or_else(PoisonError::into_inner) = Some(payload);
     }
 }
 
@@ -219,19 +214,19 @@ impl JobRegistry {
             completed: std::sync::atomic::AtomicBool::new(false),
             result: Mutex::new(None),
         });
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         inner.jobs.insert(id, job.clone());
         job
     }
 
     pub fn get(&self, id: &str) -> Option<std::sync::Arc<Job>> {
-        self.inner.lock().unwrap().jobs.get(id).cloned()
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner).jobs.get(id).cloned()
     }
 
     /// All currently-tracked jobs (running + recently completed), most-recently
     /// started first. Used by `GET /api/jobs` and the nav badge poller.
     pub fn list(&self) -> Vec<std::sync::Arc<Job>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let mut v: Vec<_> = inner.jobs.values().cloned().collect();
         // Newest first — tied to wall clock, monotonic enough for UI ordering.
         v.sort_by(|a, b| b.started_at.cmp(&a.started_at));
@@ -242,7 +237,7 @@ impl JobRegistry {
     /// import dialog to find "the import job" without tracking IDs across
     /// page reloads, and by re-attach flows that key on kind rather than ID.
     pub fn latest(&self, kind: JobKind) -> Option<std::sync::Arc<Job>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         inner
             .jobs
             .values()
@@ -256,7 +251,7 @@ impl JobRegistry {
     /// event. Evicts the oldest completed job if `COMPLETED_HISTORY_CAP` is
     /// reached.
     pub fn mark_done(&self, id: &str) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         if !inner.jobs.contains_key(id) {
             return;
         }
@@ -283,9 +278,7 @@ impl JobRegistry {
                     "kind_label": j.kind.label(),
                     "started_at": j.started_at.to_rfc3339(),
                     "completed": j.is_completed(),
-                    "progress": j.progress.lock()
-                        .map(|p| p.clone())
-                        .unwrap_or(serde_json::json!({})),
+                    "progress": j.progress.lock().unwrap_or_else(PoisonError::into_inner).clone(),
                 })
             })
             .collect();
@@ -302,25 +295,68 @@ impl Default for JobRegistry {
     }
 }
 
-/// Launch a background job with the standard lifecycle shared by the
-/// Maintain-dialog and import endpoints:
+/// Per-launch knobs for [`launch_job`]. `Default` is "no conflict gate,
+/// no initial event, bare `{"error"}` terminal" — the shape the batch
+/// auto-tag / describe / embed endpoints use (several may run at once).
+#[derive(Default)]
+pub(crate) struct LaunchOptions {
+    /// Reject with `409 CONFLICT` (this message) while the latest job of
+    /// the same kind is still running. The Maintain-dialog endpoints and
+    /// import are at-most-one; the batch AI endpoints are not.
+    pub conflict_msg: Option<&'static str>,
+    /// Emitted right after registration, before the work is spawned —
+    /// the progress UI sees `0 / total` immediately instead of waiting
+    /// for the first per-item event.
+    pub initial_event: Option<serde_json::Value>,
+    /// Added as `"phase"` to the error terminal event (`{"phase": …,
+    /// "error": …}`), matching the per-item events of jobs whose SSE
+    /// consumer keys on the phase. Success terminals carry whatever the
+    /// closure returns, so they set their own phase.
+    pub error_phase: Option<&'static str>,
+}
+
+impl LaunchOptions {
+    /// At-most-one job of this kind: 409 with `msg` while one runs.
+    pub fn conflict(msg: &'static str) -> Self {
+        Self { conflict_msg: Some(msg), ..Default::default() }
+    }
+
+    /// Emit the standard `{phase, done: false, processed: 0, total,
+    /// status: "starting"}` event before the work starts, and tag error
+    /// terminals with the same phase.
+    pub fn with_starting_event(mut self, phase: &'static str, total: usize) -> Self {
+        self.initial_event = Some(serde_json::json!({
+            "phase": phase,
+            "done": false,
+            "processed": 0,
+            "total": total,
+            "status": "starting",
+        }));
+        self.error_phase = Some(phase);
+        self
+    }
+}
+
+/// Launch a background job with the standard lifecycle shared by every
+/// long-running endpoint (Maintain dialog, import, batch AI):
 ///
-/// 1. Reject with `409 CONFLICT` (`conflict_msg`) if the latest job of
-///    this kind is still running.
-/// 2. Register the job, run `run` on the blocking pool.
+/// 1. Reject with `409 CONFLICT` if `opts.conflict_msg` is set and the
+///    latest job of this kind is still running.
+/// 2. Register the job, emit `opts.initial_event` if any, run `run` on
+///    the blocking pool.
 /// 3. Map the outcome to the terminal event — the closure's JSON on
-///    success, `{"error": …}` on failure — then `finish` + `mark_done`.
+///    success, `{"error": …}` (plus `opts.error_phase`) on failure —
+///    then `finish` + `mark_done`.
 /// 4. Respond immediately with `{"job_id", "status": "started"}`.
 ///
-/// Progress reporting stays with the closure (it gets the `Job` handle).
-/// Endpoints that need a custom launch sequence — a "starting" progress
-/// emit before spawning, non-uniform terminal shapes, or deliberately no
-/// conflict gate (batch auto-tag/describe) — keep their own hand-rolled
-/// flow instead of forcing those differences through this helper.
+/// Progress reporting, `--log` summaries, cache invalidation and
+/// `Job::set_result` stay with the closure (it gets the state and the
+/// `Job` handle). Closures that produce `Result<_, String>` convert with
+/// `anyhow::Error::msg`; `{:#}` of such an error is the bare message.
 pub(crate) fn launch_job<F>(
     state: &std::sync::Arc<super::AppState>,
     kind: JobKind,
-    conflict_msg: &'static str,
+    opts: LaunchOptions,
     run: F,
 ) -> axum::response::Response
 where
@@ -331,14 +367,20 @@ where
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
-    if let Some(latest) = state.jobs.latest(kind) {
-        if !latest.is_completed() {
-            return (StatusCode::CONFLICT, conflict_msg).into_response();
+    if let Some(conflict_msg) = opts.conflict_msg {
+        if let Some(latest) = state.jobs.latest(kind) {
+            if !latest.is_completed() {
+                return (StatusCode::CONFLICT, conflict_msg).into_response();
+            }
         }
     }
 
     let job = state.jobs.start(kind);
     let job_id = job.id.clone();
+    if let Some(ref initial) = opts.initial_event {
+        job.emit(initial);
+    }
+    let error_phase = opts.error_phase;
     let state2 = state.clone();
     let job_for_task = job.clone();
 
@@ -347,10 +389,14 @@ where
         let job_inner = job_for_task.clone();
         let result = tokio::task::spawn_blocking(move || run(&state3, &job_inner)).await;
 
+        let error_terminal = |msg: String| match error_phase {
+            Some(phase) => serde_json::json!({"phase": phase, "error": msg}),
+            None => serde_json::json!({"error": msg}),
+        };
         let terminal = match result {
             Ok(Ok(json)) => json,
-            Ok(Err(e)) => serde_json::json!({"error": format!("{e:#}")}),
-            Err(e) => serde_json::json!({"error": format!("{e}")}),
+            Ok(Err(e)) => error_terminal(format!("{e:#}")),
+            Err(e) => error_terminal(format!("{e}")),
         };
         job_for_task.finish(terminal);
         state2.jobs.mark_done(&job_for_task.id);

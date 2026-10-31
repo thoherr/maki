@@ -355,8 +355,7 @@ function onFilterChange() {
         var apiUrl = '/api/stroll/neighbors?id=' + encodeURIComponent(satId) + '&n=' + (reachMax + satellites.length + 1);
         if (currentQuery) apiUrl += '&q=' + encodeURIComponent(currentQuery);
 
-        fetch(apiUrl)
-            .then(function(r) { return r.json(); })
+        MAKI.api.get(apiUrl)
             .then(function(data) {
                 if (l2FetchingFor !== satId) return; // focus changed, discard
                 var visible = getVisibleIds();
@@ -708,15 +707,14 @@ function onFilterChange() {
     });
 
     function labelColorCss(name) {
-        var map = {Red:'#e74c3c',Orange:'#e67e22',Yellow:'#f1c40f',Green:'#27ae60',Blue:'#2980b9',Pink:'#e84393',Purple:'#8e44ad'};
-        return map[name] || name;
+        return MAKI.labelHex(name) || name;
     }
 
     function buildSatelliteHtml(n) {
-        var html = '<img src="' + escapeAttr(n.preview_url) + '" alt="' + escapeAttr(n.name) + '" loading="lazy">';
+        var html = '<img src="' + MAKI.escAttr(n.preview_url) + '" alt="' + MAKI.escAttr(n.name) + '" loading="lazy">';
         html += '<span class="stroll-sat-score">' + Math.round(n.similarity * 100) + '%</span>';
         html += '<div class="stroll-sat-overlay">';
-        html += '<span class="stroll-sat-name">' + escapeHtml(n.name) + '</span>';
+        html += '<span class="stroll-sat-name">' + MAKI.escHtml(n.name) + '</span>';
         if (n.rating && n.rating > 0) {
             var stars = Math.min(n.rating, 5);
             html += ' <span class="stroll-rating">';
@@ -743,8 +741,7 @@ function onFilterChange() {
         if (currentMode === 'explore' && currentSkip > 0) apiUrl += '&skip=' + currentSkip;
         if (crossSession) apiUrl += '&cross_session=true';
         if (currentQuery) apiUrl += '&q=' + encodeURIComponent(currentQuery);
-        fetch(apiUrl)
-            .then(function(r) { return r.json(); })
+        MAKI.api.get(apiUrl)
             .then(function(data) {
                 if (!skipPush) {
                     history.pushState({ id: newId, n: currentN, mode: currentMode, skip: currentSkip, crossSession: crossSession }, '', strollUrl(newId));
@@ -767,7 +764,7 @@ function onFilterChange() {
 
                 // Update center overlay
                 var overlay = centerEl.querySelector('.stroll-overlay');
-                var nameHtml = '<span class="stroll-name">' + escapeHtml(data.center.name) + '</span>';
+                var nameHtml = '<span class="stroll-name">' + MAKI.escHtml(data.center.name) + '</span>';
                 if (data.center.rating && data.center.rating > 0) {
                     var cStars = Math.min(data.center.rating, 5);
                     nameHtml += ' <span class="stroll-rating">';
@@ -862,15 +859,6 @@ function onFilterChange() {
         }
     }
     loadSmartPreview(centerEl.querySelector('img'));
-
-    function escapeHtml(str) {
-        var d = document.createElement('div');
-        d.textContent = str;
-        return d.innerHTML;
-    }
-    function escapeAttr(str) {
-        return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
 
     // Register keyboard shortcuts for help panel
     if (window.damHelp) {

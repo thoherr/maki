@@ -3173,7 +3173,7 @@ mod tests {
         // must be byte-stable (or at minimum: must NOT introduce
         // `&amp;amp;`).
         let catalog_tag = "person|ensemble|band|Bobby & the BigTones".to_string();
-        let after_first = update_hierarchical_in_string(xmp, &[catalog_tag.clone()], &[]);
+        let after_first = update_hierarchical_in_string(xmp, std::slice::from_ref(&catalog_tag), &[]);
         assert!(
             !after_first.contains("&amp;amp;"),
             "Round 1 must not introduce nested &amp;amp; escapes. Got:\n{after_first}"
@@ -3377,7 +3377,7 @@ mod tests {
 </x:xmpmeta>"#;
 
         let catalog_tag = "person|ensemble|band|Bobby & the BigTones".to_string();
-        let after_first = update_hierarchical_in_string(xmp, &[catalog_tag.clone()], &[]);
+        let after_first = update_hierarchical_in_string(xmp, std::slice::from_ref(&catalog_tag), &[]);
 
         // Strongest assertion: round 1 is byte-stable. Every existing
         // `&amp;amp;…` entry must decode (xml_unescape) and re-encode
@@ -3415,7 +3415,7 @@ mod tests {
 </x:xmpmeta>"#;
 
         let catalog_tag = "Bobby & the BigTones".to_string();
-        let after_first = update_tags_in_string(xmp, &[catalog_tag.clone()], &[]);
+        let after_first = update_tags_in_string(xmp, std::slice::from_ref(&catalog_tag), &[]);
         assert!(
             !after_first.contains("&amp;amp;"),
             "Round 1 must not introduce nested &amp;amp; escapes. Got:\n{after_first}"

@@ -34,24 +34,26 @@ pub struct StrollParams {
 pub async fn stroll_page(
     State(state): State<Arc<AppState>>,
     Query(params): Query<StrollParams>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result: Result<Result<StrollPage, String>, _> =
-        tokio::task::spawn_blocking(move || {
-            let default_n = state.stroll_neighbors;
-            let max_n = state.stroll_neighbors_max;
-            let n = params.n.unwrap_or(default_n).clamp(5, max_n);
-            let mode = params.mode.as_deref().unwrap_or("nearest");
-            let skip = params.skip.unwrap_or(0);
-            let cross_session = params.cross_session.unwrap_or(false);
-            stroll_page_inner(&state, params.id.as_deref(), params.q.as_deref(), n, mode, skip, cross_session)
-        }).await;
+    let page = super::super::spawn_blocking_with(move || {
+        let default_n = state.stroll_neighbors;
+        let max_n = state.stroll_neighbors_max;
+        let n = params.n.unwrap_or(default_n).clamp(5, max_n);
+        let mode = params.mode.as_deref().unwrap_or("nearest");
+        let skip = params.skip.unwrap_or(0);
+        let cross_session = params.cross_session.unwrap_or(false);
+        stroll_page_inner(&state, params.id.as_deref(), params.q.as_deref(), n, mode, skip, cross_session)
+            .map_err(anyhow::Error::msg)
+    }, not_found)
+    .await?;
+    Ok(Html(page.render().unwrap_or_default()).into_response())
+}
 
-    match result {
-        Ok(Ok(page)) => Html(page.render().unwrap_or_default()).into_response(),
-        Ok(Err(msg)) => (StatusCode::NOT_FOUND, msg).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
+/// Both stroll endpoints answer every inner failure (unknown asset, no
+/// embedding, offline volume, …) with `404 <message>`.
+fn not_found(e: anyhow::Error) -> Response {
+    (StatusCode::NOT_FOUND, format!("{e:#}")).into_response()
 }
 
 fn stroll_page_inner(
@@ -145,27 +147,15 @@ fn stroll_page_inner(
     let has_filters = filter_ids.is_some() || exclude_session.is_some();
     let fetch_limit = if has_filters { base_limit * 4 } else { base_limit };
     let neighbors = if let Some(emb) = query_emb {
-        let spec = crate::ai::get_model_spec(model_id)
-            .ok_or_else(|| format!("Unknown model: {model_id}"))?;
+        if crate::ai::get_model_spec(model_id).is_none() {
+            return Err(format!("Unknown model: {model_id}"));
+        }
 
-        {
-            let needs_load = state.ai_embedding_index.read().unwrap().is_none();
-            if needs_load {
-                let index = crate::embedding_store::EmbeddingIndex::load(
-                    catalog.conn(), model_id, spec.embedding_dim,
-                ).map_err(|e| format!("{e:#}"))?;
-                *state.ai_embedding_index.write().unwrap() = Some(index);
-            }
-        }
-        {
-            let mut idx_guard = state.ai_embedding_index.write().unwrap();
-            if let Some(ref mut idx) = *idx_guard {
-                idx.upsert(&center_id, &emb);
-            }
-        }
         let results = {
-            let idx_guard = state.ai_embedding_index.read().unwrap();
-            let idx = idx_guard.as_ref().unwrap();
+            let mut idx = state
+                .embedding_index_mut(&catalog)
+                .map_err(|e| format!("{e:#}"))?;
+            idx.upsert(&center_id, &emb);
             idx.search(&emb, fetch_limit, Some(&center_id))
         };
 
@@ -312,10 +302,10 @@ fn best_smart_preview_for_details(
 pub async fn stroll_neighbors_api(
     State(state): State<Arc<AppState>>,
     Query(params): Query<StrollParams>,
-) -> Response {
+) -> Result<Response, Response> {
     let asset_id = match params.id {
         Some(id) => id,
-        None => return (StatusCode::BAD_REQUEST, "Missing id parameter").into_response(),
+        None => return Ok((StatusCode::BAD_REQUEST, "Missing id parameter").into_response()),
     };
     let state = state.clone();
     let q = params.q;
@@ -325,10 +315,10 @@ pub async fn stroll_neighbors_api(
     let default_n = state.stroll_neighbors;
     let max_n = state.stroll_neighbors_max;
     let n = params.n.unwrap_or(default_n).clamp(5, max_n);
-    let result: Result<Result<serde_json::Value, String>, _> =
-        tokio::task::spawn_blocking(move || {
+    let json = super::super::spawn_blocking_with(move || {
             let m = if mode.is_empty() { "nearest" } else { &mode };
-            let page = stroll_page_inner(&state, Some(&asset_id), q.as_deref(), n, m, skip, cross_session)?;
+            let page = stroll_page_inner(&state, Some(&asset_id), q.as_deref(), n, m, skip, cross_session)
+                .map_err(anyhow::Error::msg)?;
             Ok(serde_json::json!({
                 "center": {
                     "asset_id": page.center.asset_id,
@@ -349,11 +339,6 @@ pub async fn stroll_neighbors_api(
                     "color_label": n.color_label,
                 })).collect::<Vec<_>>(),
             }))
-        }).await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(msg)) => (StatusCode::NOT_FOUND, msg).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
+        }, not_found).await?;
+    Ok(Json(json).into_response())
 }

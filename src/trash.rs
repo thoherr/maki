@@ -81,13 +81,18 @@ impl Trash {
         }
     }
 
-    /// Build from `[trash]` config, AND-ed with the caller's
-    /// `--no-trash` flag.
+    /// Build from an already-loaded `[trash]` section, AND-ed with the
+    /// caller's `--no-trash` flag.
+    pub fn new_with(catalog_root: &Path, cfg: &crate::config::TrashConfig, no_trash: bool) -> Self {
+        Self::new(catalog_root, cfg.enabled && !no_trash)
+    }
+
+    /// [`Self::new_with`] over a freshly loaded `maki.toml`. Thin wrapper
+    /// for callers that have no config at hand; the services pass their
+    /// own config.
     pub fn from_config(catalog_root: &Path, no_trash: bool) -> Self {
-        let enabled = crate::config::CatalogConfig::load(catalog_root)
-            .map(|c| c.trash.enabled)
-            .unwrap_or(true);
-        Self::new(catalog_root, enabled && !no_trash)
+        let cfg = crate::config::CatalogConfig::load(catalog_root).unwrap_or_default();
+        Self::new_with(catalog_root, &cfg.trash, no_trash)
     }
 
     /// Whether disposed files go to the trash (vs. permanent deletion).
@@ -192,11 +197,9 @@ impl Trash {
                     // key format is `<date>/<volume>/<relative-path>` and
                     // `restore` parses it on '/'. (Windows produces
                     // backslashes from strip_prefix otherwise.)
-                    let relative_path = file
-                        .strip_prefix(&vol_path)
-                        .unwrap_or(file)
-                        .to_string_lossy()
-                        .replace('\\', "/");
+                    let relative_path = crate::path_util::forward_slashes(
+                        file.strip_prefix(&vol_path).unwrap_or(file),
+                    );
                     let size = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
                     entries.push(TrashEntry {
                         date: date.clone(),

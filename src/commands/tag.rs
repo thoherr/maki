@@ -31,19 +31,15 @@ pub fn run_tag_command(
     remove: bool,
     tags: Vec<String>,
     subcmd: Option<TagCommands>,
-    json: bool,
-    log: bool,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     match subcmd {
         Some(TagCommands::Rename { old_tag, new_tag, apply }) => {
             let catalog_root = maki::config::find_catalog_root()?;
             let engine = QueryEngine::new(&catalog_root);
             let old_storage = maki::tag_util::tag_input_to_storage(&old_tag);
             let new_storage = maki::tag_util::tag_input_to_storage(&new_tag);
-            let show_log = cli.log;
+            let show_log = ctx.log;
 
             use maki::query::TagRenameAction;
             let result = engine.tag_rename(&old_storage, &new_storage, apply, |name, action| {
@@ -59,7 +55,7 @@ pub fn run_tag_command(
                 }
             })?;
 
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 let old_display = maki::tag_util::tag_storage_to_display(&old_storage);
@@ -98,7 +94,7 @@ pub fn run_tag_command(
             let new_storage: Vec<String> = new_tags.iter()
                 .map(|t| maki::tag_util::tag_input_to_storage(t))
                 .collect();
-            let show_log = cli.log;
+            let show_log = ctx.log;
 
             use maki::query::TagSplitAction;
             let result = engine.tag_split(&old_storage, &new_storage, keep, apply, |name, action| {
@@ -114,7 +110,7 @@ pub fn run_tag_command(
                 }
             })?;
 
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 let old_display = maki::tag_util::tag_storage_to_display(&old_storage);
@@ -151,7 +147,7 @@ pub fn run_tag_command(
             let catalog_root = maki::config::find_catalog_root()?;
             let engine = QueryEngine::new(&catalog_root);
             let storage_tag = maki::tag_util::tag_input_to_storage(&tag);
-            let show_log = cli.log;
+            let show_log = ctx.log;
 
             use maki::query::TagDeleteAction;
             let result = engine.tag_delete(&storage_tag, apply, |name, action| {
@@ -165,12 +161,12 @@ pub fn run_tag_command(
                 }
             })?;
 
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 // Strip markers from the display string for the user-facing message.
                 let display = storage_tag
-                    .trim_start_matches(|c: char| c == '=' || c == '/' || c == '^')
+                    .trim_start_matches(['=', '/', '^'])
                     .to_string();
                 if result.matched == 0 {
                     println!("No assets found with tag \"{}\".", display);
@@ -205,7 +201,7 @@ pub fn run_tag_command(
         Some(TagCommands::FixUnicode { apply }) => {
             let catalog_root = maki::config::find_catalog_root()?;
             let engine = QueryEngine::new(&catalog_root);
-            let show_log = cli.log;
+            let show_log = ctx.log;
 
             let result = engine.tag_fix_unicode(apply, |name, _changed| {
                 if show_log {
@@ -213,7 +209,7 @@ pub fn run_tag_command(
                 }
             })?;
 
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 if !apply && result.fixed > 0 {
@@ -340,8 +336,7 @@ pub fn run_tag_command(
 
             // Load asset to get current tags, then remove the selection
             let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-            let full_id = catalog.resolve_asset_id(&asset_id)?
-                .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id}'"))?;
+            let full_id = catalog.resolve_asset_id_required(&asset_id)?;
             let uuid: uuid::Uuid = full_id.parse()?;
             let metadata_store = maki::metadata_store::MetadataStore::new(&catalog_root);
             let asset = metadata_store.load(uuid)?;
@@ -355,7 +350,7 @@ pub fn run_tag_command(
             };
 
             if tags_to_remove.is_empty() {
-                if cli.json {
+                if ctx.json {
                     println!("{}", serde_json::json!({ "changed": [], "tags": asset.tags }));
                 } else if let Some(src) = source_filter {
                     if asset.tags.is_empty() {
@@ -371,7 +366,7 @@ pub fn run_tag_command(
 
             let result = engine.tag(&asset_id, &tags_to_remove, true)?;
 
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "changed": result.changed,
                     "tags": result.current_tags,
@@ -422,7 +417,7 @@ pub fn run_tag_command(
                     continue;
                 }
 
-                if cli.log {
+                if ctx.log {
                     let id_str = asset_id.to_string();
                     let name = asset_obj.name.as_deref().unwrap_or(&id_str[..8]);
                     if apply {
@@ -443,7 +438,7 @@ pub fn run_tag_command(
                 tags_added += missing.len();
             }
 
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "dry_run": !apply,
                     "checked": checked,
@@ -474,7 +469,7 @@ pub fn run_tag_command(
                 "yaml" | "yml" => (Fmt::Yaml, "vocabulary.yaml"),
                 "text" | "txt" => (Fmt::Text, "vocabulary.txt"),
                 "json"         => (Fmt::Json, "vocabulary.json"),
-                other => anyhow::bail!("unknown --format '{}': expected 'yaml', 'text', or 'json'", other),
+                other => anyhow::bail!("unknown --format '{}': expected 'yaml', 'text', or 'ctx.json'", other),
             };
 
             if default {
@@ -569,7 +564,7 @@ pub fn run_tag_command(
                 .collect();
             let result = engine.tag(&asset_id, &storage_tags, remove)?;
 
-            if cli.json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "changed": result.changed,
                     "tags": result.current_tags,

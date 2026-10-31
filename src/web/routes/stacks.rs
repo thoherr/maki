@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
+#[cfg(feature = "ai")]
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -46,9 +47,9 @@ pub struct BatchStackRequest {
 pub async fn batch_create_stack(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchStackRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let store = crate::stack::StackStore::new(catalog.conn());
         let stack = store.create(&req.asset_ids)?;
@@ -58,14 +59,9 @@ pub async fn batch_create_stack(
             "stack_id": stack.id.to_string(),
             "member_count": stack.asset_ids.len(),
         }))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    }, super::err::bad_request_prefixed)
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// POST /api/asset/{id}/stack-add — add this asset to an existing stack.
@@ -73,9 +69,9 @@ pub async fn add_to_stack(
     State(state): State<Arc<AppState>>,
     Path(reference_id): Path<String>,
     Json(req): Json<BatchStackRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let ref_full = super::resolve_asset_id_or_err(&catalog, &reference_id)?;
         let store = crate::stack::StackStore::new(catalog.conn());
@@ -85,14 +81,9 @@ pub async fn add_to_stack(
         Ok::<_, anyhow::Error>(serde_json::json!({
             "added": added,
         }))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    }, super::err::bad_request_prefixed)
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// DELETE /api/batch/stack — unstack selected assets.
@@ -150,46 +141,36 @@ pub async fn batch_delete(
 pub async fn set_stack_pick(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let store = crate::stack::StackStore::new(catalog.conn());
         store.set_pick(&asset_id)?;
         let yaml = store.export_all()?;
         crate::stack::save_yaml(&state.catalog_root, &yaml)?;
         Ok::<_, anyhow::Error>(serde_json::json!({ "pick": asset_id }))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    }, super::err::bad_request_prefixed)
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// DELETE /api/asset/{id}/stack — dissolve the stack this asset belongs to.
 pub async fn dissolve_stack(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let store = crate::stack::StackStore::new(catalog.conn());
         store.dissolve(&asset_id)?;
         let yaml = store.export_all()?;
         crate::stack::save_yaml(&state.catalog_root, &yaml)?;
         Ok::<_, anyhow::Error>(serde_json::json!({ "status": "dissolved" }))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    }, super::err::bad_request_prefixed)
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 /// POST /api/asset/{id}/stack-similar — stack visually similar assets (AI).
@@ -198,9 +179,9 @@ pub async fn stack_by_similarity(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
     Json(params): Json<StackSimilarRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let full_id = super::resolve_asset_id_or_err(&catalog, &asset_id)?;
 
@@ -210,8 +191,9 @@ pub async fn stack_by_similarity(
         }
 
         let model_id = &state.ai_config.model;
-        let spec = crate::ai::get_model_spec(model_id)
-            .ok_or_else(|| anyhow::anyhow!("aI model not configured"))?;
+        if crate::ai::get_model_spec(model_id).is_none() {
+            anyhow::bail!("aI model not configured");
+        }
 
         let emb_store = crate::embedding_store::EmbeddingStore::new(catalog.conn());
         let query_emb = emb_store
@@ -220,33 +202,18 @@ pub async fn stack_by_similarity(
                 "No embedding for this asset. Run `maki embed --asset {}` first.", &full_id
             ))?;
 
-        let needs_load = state.ai_embedding_index.read().unwrap().is_none();
-        if needs_load {
-            if let Ok(index) = crate::embedding_store::EmbeddingIndex::load(
-                catalog.conn(), model_id, spec.embedding_dim,
-            ) {
-                *state.ai_embedding_index.write().unwrap() = Some(index);
-            }
-        }
-
         let threshold = params.threshold.unwrap_or(85.0).clamp(0.0, 100.0) / 100.0;
         let limit = params.limit.unwrap_or(40);
 
-        let results = {
-            let idx_guard = state.ai_embedding_index.read().unwrap();
-            if let Some(ref idx) = *idx_guard {
-                idx.search(&query_emb, limit, Some(&full_id))
-            } else {
-                return Err(anyhow::anyhow!("embedding index not available"));
-            }
-        };
+        let results = state
+            .embedding_index(&catalog)
+            .map_err(|_| anyhow::anyhow!("embedding index not available"))?
+            .search(&query_emb, limit, Some(&full_id));
 
         let mut stack_ids: Vec<String> = vec![full_id.clone()];
         for (id, sim) in &results {
-            if *sim >= threshold {
-                if store.stack_for_asset(id)?.is_none() {
-                    stack_ids.push(id.clone());
-                }
+            if *sim >= threshold && store.stack_for_asset(id)?.is_none() {
+                stack_ids.push(id.clone());
             }
         }
 
@@ -263,14 +230,9 @@ pub async fn stack_by_similarity(
             "member_count": stack_ids.len(),
             "threshold": (threshold * 100.0) as u32,
         }))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": format!("{e:#}") }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    }, |e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": format!("{e:#}") }))).into_response())
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 #[cfg(feature = "ai")]
@@ -284,9 +246,9 @@ pub struct StackSimilarRequest {
 pub async fn stack_members_api(
     State(state): State<Arc<AppState>>,
     Path(stack_id): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let store = crate::stack::StackStore::new(catalog.conn());
         let member_ids = store.ordered_members(&stack_id)?;
@@ -314,12 +276,7 @@ pub async fn stack_members_api(
             }
         }
         Ok::<_, anyhow::Error>(serde_json::json!(members))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("Error: {e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    }, super::err::bad_request_prefixed)
+    .await?;
+    Ok(Json(json).into_response())
 }

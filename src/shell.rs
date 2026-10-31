@@ -48,11 +48,10 @@ pub fn run(
 /// Subcommand names for completion (sorted).
 ///
 /// Every top-level `maki` command except the ones that make no sense inside
-/// a running shell (`init`, `migrate`, `serve`, `shell`) and the two that
-/// the shell shadows with built-ins of the same name (`export`, `preview` —
-/// see `BUILTINS`). `shell::tests::subcommands_cover_cli_commands` keeps
+/// a running shell (`BLOCKED_COMMANDS`). `shell::tests::subcommands_cover_cli_commands`
+/// and the binary's `tests::shell_completion_subcommands_match_clap` keep
 /// this list in step with the clap command set.
-const SUBCOMMANDS: &[&str] = &[
+pub const SUBCOMMANDS: &[&str] = &[
     "ai",
     "audio",
     "auto-group",
@@ -71,6 +70,7 @@ const SUBCOMMANDS: &[&str] = &[
     "duplicates",
     "edit",
     "embed",
+    "export",
     "faces",
     "fix-dates",
     "fix-recipes",
@@ -80,6 +80,7 @@ const SUBCOMMANDS: &[&str] = &[
     "history",
     "import",
     "licenses",
+    "preview",
     "rebuild-catalog",
     "refresh",
     "relocate",
@@ -104,8 +105,12 @@ const SUBCOMMANDS: &[&str] = &[
 
 /// Shell built-in commands for completion.
 const BUILTINS: &[&str] = &[
-    "exit", "export", "help", "preview", "quit", "reload", "set", "source", "unset", "vars",
+    "exit", "help", "quit", "reload", "set", "source", "unset", "vars",
 ];
+
+/// Top-level commands the shell refuses to run (they manage the catalog
+/// or the session itself).
+pub const BLOCKED_COMMANDS: &[&str] = &["init", "migrate", "serve", "shell"];
 
 /// Common flags for completion (subset — the most universally useful).
 const COMMON_FLAGS: &[&str] = &[
@@ -201,12 +206,12 @@ impl Completer for ShellHelper {
         let before = &line[..pos];
 
         // Find the start of the current word
-        let word_start = before.rfind(|c: char| c == ' ' || c == '\t').map_or(0, |i| i + 1);
+        let word_start = before.rfind([' ', '\t']).map_or(0, |i| i + 1);
         let word = &before[word_start..];
 
         // Variable completion: $...
-        if word.starts_with('$') {
-            let prefix = &word[1..]; // skip $
+        if let Some(prefix) = word.strip_prefix('$') {
+            // skip $
             let matches: Vec<String> = self
                 .variable_names
                 .iter()
@@ -227,8 +232,7 @@ impl Completer for ShellHelper {
         }
 
         // After "tag:" prefix, complete tag names
-        if word.starts_with("tag:") {
-            let prefix = &word[4..];
+        if let Some(prefix) = word.strip_prefix("tag:") {
             let matches: Vec<String> = self
                 .tags
                 .iter()
@@ -239,8 +243,7 @@ impl Completer for ShellHelper {
         }
 
         // After "--volume " or "volume:" prefix, complete volume labels
-        if word.starts_with("volume:") {
-            let prefix = &word[7..];
+        if let Some(prefix) = word.strip_prefix("volume:") {
             let matches: Vec<String> = self
                 .volumes
                 .iter()
@@ -335,8 +338,9 @@ struct SessionDefaults {
     flags: HashSet<String>,
 }
 
-/// Flags that can be set as session defaults.
-const SETTABLE_FLAGS: &[&str] = &["--json", "--log", "--verbose", "--debug", "--time"];
+/// Flags that can be set as session defaults (the global `maki` flags;
+/// the binary's `tests::shell_settable_flags_match_clap_globals` checks).
+pub const SETTABLE_FLAGS: &[&str] = &["--json", "--log", "--verbose", "--debug", "--time"];
 
 impl SessionDefaults {
     fn new() -> Self {
@@ -663,116 +667,6 @@ fn handle_line(
         _ => {}
     }
 
-    // preview <asset_id|$var|_>
-    if line == "preview" || line.starts_with("preview ") {
-        let rest = line.strip_prefix("preview").unwrap_or("").trim();
-        // Accept (and ignore) the legacy --open flag for backward compatibility
-        let args = rest.strip_prefix("--open").map(str::trim).unwrap_or(rest);
-        if args.is_empty() {
-            eprintln!("  Usage: preview <asset_id>");
-            return LineResult::Handled;
-        }
-        // Expand variables and _ in args
-        let tokens = match shell_split(args) {
-            Some(t) => t,
-            None => {
-                eprintln!("  Error: unmatched quotes");
-                return LineResult::Handled;
-            }
-        };
-        let expanded = expand_variables_in_tokens(tokens, vars);
-        let ids: Vec<String> = if expanded.asset_ids.is_empty() {
-            // No variable expansion — treat as literal asset ID(s)
-            expanded.command
-        } else {
-            expanded.asset_ids
-        };
-        // Open previews in the OS default viewer
-        match handle_preview_builtin(catalog_root, &ids) {
-            Ok(displayed_ids) => {
-                if !displayed_ids.is_empty() {
-                    vars.last_ids = displayed_ids;
-                }
-            }
-            Err(e) => eprintln!("  Error: {e:#}"),
-        }
-        return LineResult::Handled;
-    }
-
-    // export <query|$var|_> <target> [--layout flat|mirror] [--all-variants] [--include-sidecars] [--dry-run] [--overwrite] [--symlink] [--zip]
-    if line == "export" || line.starts_with("export ") {
-        let rest = line.strip_prefix("export").unwrap_or("").trim();
-        if rest.is_empty() {
-            eprintln!("  Usage: export <query|$var> <target> [--layout flat|mirror] [--all-variants] [--include-sidecars] [--dry-run] [--overwrite] [--symlink] [--zip]");
-            return LineResult::Handled;
-        }
-        let tokens = match shell_split(rest) {
-            Some(t) => t,
-            None => {
-                eprintln!("  Error: unmatched quotes");
-                return LineResult::Handled;
-            }
-        };
-        let expanded = expand_variables_in_tokens(tokens, vars);
-
-        // Separate flags from positional args
-        let mut flags = Vec::new();
-        let mut positionals = Vec::new();
-        let mut iter = expanded.command.iter();
-        while let Some(tok) = iter.next() {
-            if tok == "--layout" {
-                flags.push(tok.clone());
-                if let Some(val) = iter.next() {
-                    flags.push(val.clone());
-                }
-            } else if tok.starts_with("--") {
-                flags.push(tok.clone());
-            } else {
-                positionals.push(tok.clone());
-            }
-        }
-
-        // Build the query: if variable expansion produced IDs, use id:xxx; otherwise use positionals[0]
-        let (query, target) = if !expanded.asset_ids.is_empty() {
-            // Variable expanded — first positional (if any) is the target dir
-            let id_query = expanded.asset_ids.iter()
-                .map(|id| format!("id:{id}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let target = positionals.first().cloned().unwrap_or_default();
-            (id_query, target)
-        } else if positionals.len() >= 2 {
-            // No variable — first positional is query, second is target
-            (positionals[0].clone(), positionals[1].clone())
-        } else {
-            eprintln!("  Usage: export <query|$var> <target> [--layout flat|mirror] [--all-variants] [--include-sidecars] [--dry-run] [--zip]");
-            return LineResult::Handled;
-        };
-
-        if target.is_empty() {
-            eprintln!("  Error: target is required");
-            return LineResult::Handled;
-        }
-
-        let mut args = vec![
-            "maki".to_string(),
-            "export".to_string(),
-            query,
-            target,
-        ];
-        args.extend(flags);
-        defaults.inject(&mut args);
-        match executor(args) {
-            Ok(ids) => {
-                if !ids.is_empty() {
-                    vars.last_ids = ids;
-                }
-            }
-            Err(e) => eprintln!("  Error: {e:#}"),
-        }
-        return LineResult::Handled;
-    }
-
     // set --flag
     if let Some(rest) = line.strip_prefix("set ") {
         let flag = rest.trim();
@@ -898,9 +792,22 @@ fn parse_variable_assignment(line: &str) -> Option<(String, String)> {
 /// Commands that take a single `asset_id: String` positional.
 /// When a variable expands to multiple IDs, the shell loops the command
 /// over each ID individually instead of appending all IDs at once.
-const SINGLE_ASSET_COMMANDS: &[&str] = &[
-    "tag", "edit", "show", "split", "update-location",
+/// The binary's `tests::shell_single_asset_commands_match_clap` derives
+/// the expected list from clap metadata.
+pub const SINGLE_ASSET_COMMANDS: &[&str] = &[
+    "tag", "edit", "show", "split", "update-location", "preview",
 ];
+
+/// Commands whose first positional is a required search `query`.
+/// When a variable expands to IDs, they become an `id:… id:…` query in
+/// that position (e.g. `export $picks /tmp/out`). Checked against clap
+/// by the binary's `tests::shell_query_positional_commands_match_clap`.
+pub const QUERY_POSITIONAL_COMMANDS: &[&str] = &["contact-sheet", "export"];
+
+/// `id:a id:b …` query selecting exactly the given assets.
+fn id_query(asset_ids: &[String]) -> String {
+    asset_ids.iter().map(|id| format!("id:{id}")).collect::<Vec<_>>().join(" ")
+}
 
 /// Execute a command with expanded variable tokens.
 fn execute_with_ids(
@@ -915,7 +822,7 @@ fn execute_with_ids(
 
     // Block commands that don't make sense in the shell
     let cmd = command_tokens.first().map(|s| s.to_lowercase()).unwrap_or_default();
-    if matches!(cmd.as_str(), "init" | "migrate" | "serve" | "shell") {
+    if BLOCKED_COMMANDS.contains(&cmd.as_str()) {
         return LineResult::Blocked(cmd);
     }
 
@@ -972,6 +879,20 @@ fn execute_with_ids(
         };
     }
 
+    // Query-positional commands: the IDs become the query, inserted right
+    // after the subcommand so the remaining tokens (target, flags) follow.
+    if QUERY_POSITIONAL_COMMANDS.contains(&cmd.as_str()) {
+        let mut args = vec!["maki".to_string()];
+        args.push(command_tokens[0].clone());
+        args.push(id_query(&asset_ids));
+        args.extend(command_tokens[1..].iter().cloned());
+        defaults.inject(&mut args);
+        return match executor(args) {
+            Ok(ids) => LineResult::Ok(ids),
+            Err(e) => LineResult::Err(e),
+        };
+    }
+
     // Batch commands: append IDs at end
     let mut args = vec!["maki".to_string()];
     args.extend(command_tokens);
@@ -981,55 +902,6 @@ fn execute_with_ids(
         Ok(ids) => LineResult::Ok(ids),
         Err(e) => LineResult::Err(e),
     }
-}
-
-/// Handle the `preview` built-in: display preview images for one or more assets.
-fn handle_preview_builtin(
-    catalog_root: &Path,
-    asset_ids: &[String],
-) -> Result<Vec<String>> {
-    let config = crate::config::CatalogConfig::load(catalog_root)?;
-    let catalog = crate::catalog::Catalog::open(catalog_root)?;
-    let preview_gen = crate::preview::PreviewGenerator::new(catalog_root, crate::Verbosity::quiet(), &config.preview);
-    let engine = crate::query::QueryEngine::new(catalog_root);
-
-    let mut displayed = Vec::new();
-    for raw_id in asset_ids {
-        let details = engine.show(raw_id)?;
-        let full_id = &details.id;
-        let name = details.name.as_deref().unwrap_or(full_id);
-
-        // Find best preview (stored override → algorithmic)
-        let best_hash = catalog.get_asset_best_variant_hash(full_id)
-            .unwrap_or(None)
-            .or_else(|| {
-                details.best_variant_index()
-                    .map(|i| details.variants[i].content_hash.clone())
-            });
-
-        let preview_path = best_hash.as_ref().and_then(|h| {
-            let smart = preview_gen.smart_preview_path(h);
-            if smart.exists() { return Some(smart); }
-            let regular = preview_gen.preview_path(h);
-            if regular.exists() { return Some(regular); }
-            None
-        });
-
-        match preview_path {
-            Some(path) => {
-                crate::preview::open_in_viewer(&path)?;
-                eprintln!("  Opened {name}");
-                displayed.push(full_id.to_string());
-            }
-            None => {
-                eprintln!("  {name}: no preview available");
-            }
-        }
-    }
-    if !displayed.is_empty() {
-        eprintln!("  {} asset(s) previewed", displayed.len());
-    }
-    Ok(displayed)
 }
 
 /// Print all defined variables and their asset counts.
@@ -1239,7 +1111,6 @@ Other syntax:
   # comment          Lines starting with # are ignored
 
 Shell commands:
-  preview <id>       Open the asset's preview in the OS default image viewer
   help               Show this help
   quit / exit        End the session (also Ctrl-D)
 
@@ -1277,9 +1148,6 @@ mod tests {
         "rebuild-catalog", "migrate", "doc", "licenses", "shell",
     ];
 
-    /// Commands deliberately absent from completion: pointless inside a
-    /// shell session, or shadowed by a shell built-in of the same name.
-    const NOT_COMPLETED: &[&str] = &["init", "migrate", "serve", "shell", "export", "preview"];
 
     #[test]
     fn subcommands_cover_cli_commands() {
@@ -1290,19 +1158,61 @@ mod tests {
         let mut expected: Vec<&str> = CLI_TOP_LEVEL_COMMANDS
             .iter()
             .copied()
-            .filter(|c| !NOT_COMPLETED.contains(c))
+            .filter(|c| !BLOCKED_COMMANDS.contains(c))
             .collect();
         expected.sort_unstable();
         assert_eq!(
             SUBCOMMANDS, expected.as_slice(),
             "shell completion list drifted from the CLI command set"
         );
-        for b in NOT_COMPLETED {
+        for b in BLOCKED_COMMANDS {
             assert!(!SUBCOMMANDS.contains(b), "{b} is intentionally not completed");
         }
-        for b in ["export", "preview"] {
-            assert!(BUILTINS.contains(&b), "{b} is shadowed by a shell built-in");
+        for b in BUILTINS {
+            assert!(!SUBCOMMANDS.contains(b), "{b} is a shell built-in, not a maki command");
         }
+    }
+
+    /// argv of every executor call, in order.
+    type RecordedCalls = std::rc::Rc<std::cell::RefCell<Vec<Vec<String>>>>;
+
+    /// Records the argv each executor call receives.
+    fn recording_executor() -> (RecordedCalls, impl Fn(Vec<String>) -> Result<Vec<String>>) {
+        let calls: RecordedCalls = Default::default();
+        let sink = calls.clone();
+        (calls, move |args: Vec<String>| {
+            sink.borrow_mut().push(args);
+            Ok(vec![])
+        })
+    }
+
+    #[test]
+    fn export_with_expanded_ids_builds_id_query() {
+        let (calls, executor) = recording_executor();
+        let defaults = SessionDefaults::new();
+        let cmd = vec!["export".to_string(), "/tmp/out".to_string(), "--zip".to_string()];
+        let ids = vec!["a1".to_string(), "b2".to_string()];
+        assert!(matches!(execute_with_ids(cmd, ids, &defaults, &executor), LineResult::Ok(_)));
+        assert_eq!(
+            calls.borrow().as_slice(),
+            &[vec!["maki".to_string(), "export".into(), "id:a1 id:b2".into(), "/tmp/out".into(), "--zip".into()]]
+        );
+    }
+
+    #[test]
+    fn preview_with_expanded_ids_runs_once_per_asset() {
+        let (calls, executor) = recording_executor();
+        let defaults = SessionDefaults::new();
+        let cmd = vec!["preview".to_string()];
+        let ids = vec!["a1".to_string(), "b2".to_string()];
+        assert!(matches!(execute_with_ids(cmd, ids, &defaults, &executor), LineResult::Ok(_)));
+        assert_eq!(
+            calls.borrow().as_slice(),
+            &[
+                vec!["maki".to_string(), "preview".into(), "a1".into()],
+                vec!["maki".to_string(), "preview".into(), "b2".into()],
+            ]
+        );
     }
 
     #[test]

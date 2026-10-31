@@ -125,12 +125,9 @@
         statusEl.textContent = 'Starting…';
         toast.style.display = 'block';
 
-        es = new EventSource('/api/jobs/' + encodeURIComponent(jobId) + '/progress');
-        es.onmessage = function(e) {
-            var evt;
-            try { evt = JSON.parse(e.data); } catch (_) { return; }
-            if (evt.done) {
-                if (es) { es.close(); es = null; }
+        es = MAKI.attachJobStream(jobId, {
+            onDone: function(evt) {
+                es = null;
                 statusEl.textContent = summaryLine(evt);
                 if (typeof options.onDone === 'function') {
                     try { options.onDone(evt); } catch (_) {}
@@ -143,14 +140,15 @@
                 if (window.makiImportStatus && window.makiImportStatus.refresh) {
                     window.makiImportStatus.refresh();
                 }
-                return;
+            },
+            onEvent: function(evt) {
+                statusEl.textContent = progressLine(evt);
+            },
+            onError: function() {
+                es = null;
+                statusEl.textContent = 'Connection lost. Job may still be running on the server.';
             }
-            statusEl.textContent = progressLine(evt);
-        };
-        es.onerror = function() {
-            if (es) { es.close(); es = null; }
-            statusEl.textContent = 'Connection lost. Job may still be running on the server.';
-        };
+        });
 
         // Refresh nav badge so it pulses immediately for this job.
         if (window.makiImportStatus && window.makiImportStatus.refresh) {

@@ -938,7 +938,7 @@ fn truncate_to_width(text: &str, scale: f32, font: &FontRef, max_width: u32) -> 
     let mut lo = 0usize;
     let mut hi = chars.len();
     while lo < hi {
-        let mid = (lo + hi + 1) / 2;
+        let mid = (lo + hi).div_ceil(2);
         let prefix: String = chars[..mid].iter().collect();
         let (pw, _) = text_size(scale, font, &prefix);
         if pw <= target {
@@ -1152,18 +1152,7 @@ pub fn open_in_viewer(path: &Path) -> Result<bool> {
     if !path.exists() {
         return Ok(false);
     }
-    #[cfg(target_os = "macos")]
-    {
-        Command::new("open").arg(path).spawn().context("Failed to open image viewer")?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        Command::new("xdg-open").arg(path).spawn().context("Failed to open image viewer")?;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        Command::new("cmd").args(["/c", "start", ""]).arg(path).spawn().context("Failed to open image viewer")?;
-    }
+    crate::platform::open_path(path).context("Failed to open image viewer")?;
     Ok(true)
 }
 

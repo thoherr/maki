@@ -57,7 +57,7 @@
     }
 
     function close() {
-        overlay.style.display = 'none';
+        MAKI.dialog.close(overlay);
         if (progressEs) { progressEs.close(); progressEs = null; }
         payload = null;
         tags = [];
@@ -79,7 +79,7 @@
         if (e.target === overlay) close();
     });
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && overlay.style.display !== 'none') close();
+        if (e.key === 'Escape' && MAKI.dialog.isOpen(overlay)) close();
     });
 
     // ── Open / load ─────────────────────────────────────────────────────
@@ -91,7 +91,7 @@
     // /api/jobs/{id}/result. We probe /api/jobs/{id} once on open to
     // decide which path; from then on SSE drives the transition.
     function open(jobId) {
-        if (currentJobId === jobId && overlay.style.display !== 'none') return;
+        if (currentJobId === jobId && MAKI.dialog.isOpen(overlay)) return;
         // Reset state from any prior session.
         if (progressEs) { progressEs.close(); progressEs = null; }
         currentJobId = jobId;
@@ -106,15 +106,11 @@
         progressFillEl.style.width = '0%';
         progressTextEl.textContent = 'Starting AI model — this may take 30–60 s on the first request.';
 
-        overlay.style.display = 'flex';
+        MAKI.dialog.open(overlay);
         statsEl.textContent = 'Computing suggestions…';
         showComputingPhase();
 
-        fetch('/api/jobs/' + encodeURIComponent(jobId))
-            .then(function(r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
+        MAKI.api.get('/api/jobs/' + encodeURIComponent(jobId))
             .then(function(meta) {
                 if (meta.completed) {
                     loadResult(jobId);
@@ -128,12 +124,9 @@
     }
 
     function subscribeToProgress(jobId) {
-        progressEs = new EventSource('/api/jobs/' + encodeURIComponent(jobId) + '/progress');
-        progressEs.onmessage = function(e) {
-            var evt;
-            try { evt = JSON.parse(e.data); } catch (_) { return; }
-            if (evt.done) {
-                if (progressEs) { progressEs.close(); progressEs = null; }
+        progressEs = MAKI.attachJobStream(jobId, {
+            onDone: function(evt) {
+                progressEs = null;
                 if (evt.error) {
                     statsEl.textContent = 'Failed: ' + evt.error;
                     progressTextEl.textContent = 'Failed: ' + evt.error;
@@ -144,28 +137,30 @@
                 progressFillEl.style.width = '100%';
                 progressTextEl.textContent = 'Finalising — fetching results…';
                 setTimeout(function() { loadResult(jobId); }, 150);
-                return;
-            }
-            // Per-asset tick: update bar + text. The job emits
-            // {phase, processed, total, asset, status} for each asset.
-            if (typeof evt.processed === 'number' && typeof evt.total === 'number' && evt.total > 0) {
-                var pct = (evt.processed / evt.total) * 100;
-                progressFillEl.style.width = pct.toFixed(1) + '%';
-                var line = 'Computing suggestions: ' + evt.processed + ' / ' + evt.total;
-                if (evt.status && evt.status !== 'starting' && evt.status !== 'ok') {
-                    line += ' (' + evt.status + ')';
+            },
+            onEvent: function(evt) {
+                // Per-asset tick: update bar + text. The job emits
+                // {phase, processed, total, asset, status} for each asset.
+                if (typeof evt.processed === 'number' && typeof evt.total === 'number' && evt.total > 0) {
+                    var pct = (evt.processed / evt.total) * 100;
+                    progressFillEl.style.width = pct.toFixed(1) + '%';
+                    var line = 'Computing suggestions: ' + evt.processed + ' / ' + evt.total;
+                    if (evt.status && evt.status !== 'starting' && evt.status !== 'ok') {
+                        line += ' (' + evt.status + ')';
+                    }
+                    progressTextEl.textContent = line;
+                } else if (evt.status === 'starting') {
+                    progressTextEl.textContent = 'Loading AI model — this may take 30–60 s on the first request.';
                 }
-                progressTextEl.textContent = line;
-            } else if (evt.status === 'starting') {
-                progressTextEl.textContent = 'Loading AI model — this may take 30–60 s on the first request.';
-            }
-        };
-        progressEs.onerror = function() {
+            },
             // Don't tear down — broadcast disconnects do happen mid-job
             // (especially during model load when the server is busy). Show
             // a soft hint; the browser will auto-reconnect.
-            progressTextEl.textContent = 'Reconnecting to job stream…';
-        };
+            closeOnError: false,
+            onError: function() {
+                progressTextEl.textContent = 'Reconnecting to job stream…';
+            }
+        });
     }
 
     function loadResult(jobId) {
@@ -230,7 +225,7 @@
             var displayTag = t.tag.replace(/\|/g, ' › ');
             li.innerHTML =
                 '<div class="tag-review-tag-row-top">' +
-                    '<span class="tag-review-tag-name" title="' + escapeHtml(t.tag) + '">' + escapeHtml(displayTag) + '</span>' +
+                    '<span class="tag-review-tag-name" title="' + MAKI.escHtml(t.tag) + '">' + MAKI.escHtml(displayTag) + '</span>' +
                     '<span class="tag-review-tag-count">' + t.asset_count + '</span>' +
                 '</div>' +
                 '<div class="tag-review-tag-bar"><div class="tag-review-tag-bar-fill" style="width:' + bar + '%"></div></div>';
@@ -285,10 +280,10 @@
             cell.dataset.assetId = c.asset_id;
             var isChecked = checked.has(c.asset_id);
             var thumb = meta.preview_url
-                ? '<img loading="lazy" src="' + escapeAttr(meta.preview_url) + '" alt="">'
+                ? '<img loading="lazy" src="' + MAKI.escAttr(meta.preview_url) + '" alt="">'
                 : '<div class="tag-review-thumb-missing">no preview</div>';
             var sourceHint = (c.source_label && c.source_label !== t.tag.split('|').pop())
-                ? '<span class="tag-review-source" title="SigLIP label that mapped to this tag">' + escapeHtml(c.source_label) + '</span>'
+                ? '<span class="tag-review-source" title="SigLIP label that mapped to this tag">' + MAKI.escHtml(c.source_label) + '</span>'
                 : '';
             var existingHint = c.existing
                 ? '<span class="tag-review-existing-hint" title="Asset already has this tag">already tagged</span>'
@@ -300,7 +295,7 @@
                         thumb +
                     '</a>' +
                     '<span class="tag-review-confidence">' + c.confidence.toFixed(2) + '</span>' +
-                    (meta.name ? '<span class="tag-review-name" title="' + escapeAttr(meta.name) + '">' + escapeHtml(meta.name) + '</span>' : '') +
+                    (meta.name ? '<span class="tag-review-name" title="' + MAKI.escAttr(meta.name) + '">' + MAKI.escHtml(meta.name) + '</span>' : '') +
                     sourceHint +
                     existingHint +
                 '</label>';
@@ -397,15 +392,7 @@
         var assetIds = Array.from(checked);
         applyBtn.disabled = true;
         applyBtn.textContent = 'Applying…';
-        fetch('/api/batch/tags', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({asset_ids: assetIds, tags: [t.tag], remove: false})
-        })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-            return r.json();
-        })
+        MAKI.api.post('/api/batch/tags', {asset_ids: assetIds, tags: [t.tag], remove: false})
         .then(function(_resp) {
             tagState[t.tag] = 'applied';
             // Mark all candidates for this tag as existing now, so the
@@ -445,14 +432,6 @@
         applyBtn.disabled = true;
         applyBtn.textContent = 'Apply';
     }
-
-    // ── Helpers ─────────────────────────────────────────────────────────
-    function escapeHtml(s) {
-        return String(s || '').replace(/[&<>"]/g, function(c) {
-            return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
-        });
-    }
-    function escapeAttr(s) { return escapeHtml(s); }
 
     window.makiTagReview = { open: open, close: close };
 })();

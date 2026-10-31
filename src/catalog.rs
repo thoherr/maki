@@ -24,7 +24,7 @@
 //   8. VARIANT & LOCATION CRUD .......... insert_variant, insert_file_location, etc.
 //   9. RECIPE CRUD ...................... insert_recipe, update_recipe_*, writeback
 //  10. VOLUME OPERATIONS ................ ensure_volume, delete_volume, bulk_move_*
-//  11. ASSET LOOKUPS .................... search_assets, resolve_asset_id, load_asset_details
+//  11. ASSET LOOKUPS .................... search_assets, resolve_asset_id(_required), load_asset_details
 //  12. DUPLICATES ....................... find_duplicates, find_duplicates_filtered
 //  13. LOCATION & RECIPE QUERIES ........ find_variant_by_volume, list_recipes_*, etc.
 //  14. REBUILD .......................... rebuild (drop + recreate)
@@ -468,7 +468,7 @@ pub enum SearchSort {
 }
 
 impl SearchSort {
-    fn to_sql(&self) -> &'static str {
+    fn to_sql(self) -> &'static str {
         match self {
             SearchSort::DateDesc => "a.created_at DESC",
             SearchSort::DateAsc => "a.created_at ASC",
@@ -482,8 +482,9 @@ impl SearchSort {
     }
 
     /// Parse a sort key from its URL/query-param string form (`date_desc`,
-    /// `name_asc`, etc.). Unknown values fall back to `DateDesc`.
-    pub fn from_str(s: &str) -> Self {
+    /// `name_asc`, etc.). Unknown values fall back to `DateDesc`. (Not
+    /// `FromStr`: this never fails.)
+    pub fn parse_key(s: &str) -> Self {
         match s {
             "date_asc" => SearchSort::DateAsc,
             "name_asc" => SearchSort::NameAsc,
@@ -656,12 +657,6 @@ pub struct SearchPage {
 
 // ═══ HELPER FUNCTIONS ═══
 
-/// Convert an inclusive date bound to an exclusive upper bound.
-///
-/// - `"2026-02-25"` → `"2026-02-26"` (next day)
-/// - `"2026-02"` → `"2026-03"` (next month)
-/// - `"2026"` → `"2027"` (next year)
-/// Falls back to appending a high character if parsing fails.
 /// Convert a path pattern (with `*` wildcards) to a SQL LIKE pattern.
 ///
 /// Rules:
@@ -692,6 +687,13 @@ fn path_pattern_to_like(pat: &str) -> String {
     out
 }
 
+/// Convert an inclusive date bound to an exclusive upper bound.
+///
+/// - `"2026-02-25"` → `"2026-02-26"` (next day)
+/// - `"2026-02"` → `"2026-03"` (next month)
+/// - `"2026"` → `"2027"` (next year)
+///
+/// Falls back to appending a high character if parsing fails.
 fn next_date_bound(s: &str) -> String {
     match s.len() {
         // Year: "2026" → "2027"
@@ -785,7 +787,6 @@ impl Catalog {
                 Ok(path.rfind('/').map_or(String::new(), |pos| path[..pos].to_string()))
             } else {
                 // First N segments: find the Nth '/'
-                let mut pos = 0;
                 let mut count = 0;
                 for (i, ch) in path.char_indices() {
                     if ch == '/' {
@@ -794,19 +795,19 @@ impl Catalog {
                             return Ok(path[..i].to_string());
                         }
                     }
-                    pos = i;
                 }
                 // Fewer than N slashes — return the whole path minus the last segment
-                let _ = pos;
                 Ok(path.rfind('/').map_or(path.clone(), |p| path[..p].to_string()))
             }
         })?;
 
-        // Register session_root(path, pattern) — finds the session root for a
-        // file path using the same logic as auto-group's find_session_root().
-        // Walks directory components and returns everything up to and including
-        // the deepest component matching the regex pattern. Falls back to the
-        // parent directory if no component matches.
+        // Register session_root(path, pattern) — the session root of a file
+        // path by the shared rule in `crate::session_root` (the same one
+        // auto-group uses): everything up to and including the deepest
+        // directory component matching the regex pattern. With no match
+        // (or an empty/invalid pattern) the SQL side keeps its own fallback
+        // — the parent directory, or the directory itself when there is
+        // only one component — because it has no import roots to consult.
         //
         // The compiled regex is cached in a RefCell because the pattern is the
         // same for every row within a query — compiling it once instead of per-row
@@ -816,41 +817,26 @@ impl Catalog {
             let path: String = ctx.get(0)?;
             let pattern: String = ctx.get(1)?;
 
-            // Split into directory components (strip filename)
+            // Directory part (strip filename)
             let dir = path.rfind('/').map_or("", |pos| &path[..pos]);
-            let parts: Vec<&str> = dir.split('/').collect();
 
-            if pattern.is_empty() || parts.is_empty() {
+            if pattern.is_empty() {
                 return Ok(dir.to_string());
             }
 
             // Cache the compiled regex — same pattern for every row in a query
             let mut cache = regex_cache.borrow_mut();
-            if cache.as_ref().map_or(true, |(p, _)| p != &pattern) {
-                match regex::Regex::new(&pattern) {
-                    Ok(r) => *cache = Some((pattern.clone(), r)),
-                    Err(_) => return Ok(dir.to_string()),
+            if cache.as_ref().is_none_or(|(p, _)| p != &pattern) {
+                match crate::session_root::compile_pattern(&pattern) {
+                    Some(r) => *cache = Some((pattern.clone(), r)),
+                    None => return Ok(dir.to_string()),
                 }
             }
             let re = &cache.as_ref().expect("regex cache just populated").1;
 
-            // Find deepest matching component
-            let mut session_idx = None;
-            for (i, part) in parts.iter().enumerate() {
-                if re.is_match(part) {
-                    session_idx = Some(i);
-                }
-            }
-
-            match session_idx {
-                Some(idx) => Ok(parts[..=idx].join("/")),
-                None => {
-                    if parts.len() > 1 {
-                        Ok(parts[..parts.len() - 1].join("/"))
-                    } else {
-                        Ok(dir.to_string())
-                    }
-                }
+            match crate::session_root::deepest_matching_prefix(dir, re) {
+                Some(root) => Ok(root),
+                None => Ok(dir.rfind('/').map_or(dir.to_string(), |p| dir[..p].to_string())),
             }
         })?;
 
@@ -1369,7 +1355,7 @@ mod tests {
 
         let variant = crate::models::Variant {
             content_hash: "sha256:search1".to_string(),
-            asset_id: asset.id.clone(),
+            asset_id: asset.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 5000,
@@ -1421,7 +1407,7 @@ mod tests {
         a1.color_label = Some("Red".to_string());
         let v1 = crate::models::Variant {
             content_hash: "sha256:rl1".to_string(),
-            asset_id: a1.id.clone(),
+            asset_id: a1.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -1439,7 +1425,7 @@ mod tests {
         a2.color_label = Some("Blue".to_string());
         let v2 = crate::models::Variant {
             content_hash: "sha256:rl2".to_string(),
-            asset_id: a2.id.clone(),
+            asset_id: a2.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -1457,7 +1443,7 @@ mod tests {
         a3.color_label = None;
         let v3 = crate::models::Variant {
             content_hash: "sha256:rl3".to_string(),
-            asset_id: a3.id.clone(),
+            asset_id: a3.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -1474,7 +1460,7 @@ mod tests {
         a4.rating = Some(3);
         let v4 = crate::models::Variant {
             content_hash: "sha256:rl4".to_string(),
-            asset_id: a4.id.clone(),
+            asset_id: a4.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -1545,7 +1531,7 @@ mod tests {
             let asset = crate::models::Asset::new(crate::models::AssetType::Image, hash);
             let variant = crate::models::Variant {
                 content_hash: hash.to_string(),
-                asset_id: asset.id.clone(),
+                asset_id: asset.id,
                 role: crate::models::VariantRole::Original,
                 format: "jpg".to_string(),
                 file_size: 100,
@@ -1558,7 +1544,7 @@ mod tests {
             catalog.insert_asset(&asset).unwrap();
             catalog.insert_variant(&variant).unwrap();
             let loc = crate::models::FileLocation {
-                volume_id: volume.id.clone(),
+                volume_id: volume.id,
                 relative_path: std::path::PathBuf::from(format!("photos/{name}")),
                 verified_at: verified,
             };
@@ -1805,7 +1791,7 @@ mod tests {
         a1.tags = vec!["landscape".to_string()];
         let v1 = crate::models::Variant {
             content_hash: "sha256:cs1".to_string(),
-            asset_id: a1.id.clone(),
+            asset_id: a1.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -1822,7 +1808,7 @@ mod tests {
         a2.tags = vec!["Landscape".to_string()];
         let v2 = crate::models::Variant {
             content_hash: "sha256:cs2".to_string(),
-            asset_id: a2.id.clone(),
+            asset_id: a2.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -1838,7 +1824,7 @@ mod tests {
         let mut a3 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:cs3");
         let v3 = crate::models::Variant {
             content_hash: "sha256:cs3".to_string(),
-            asset_id: a3.id.clone(),
+            asset_id: a3.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -1897,7 +1883,7 @@ mod tests {
             a.description = desc.map(|s| s.to_string());
             let v = crate::models::Variant {
                 content_hash: hash.to_string(),
-                asset_id: a.id.clone(),
+                asset_id: a.id,
                 role: crate::models::VariantRole::Original,
                 format: "jpg".to_string(),
                 file_size: 100,
@@ -1956,7 +1942,7 @@ mod tests {
             a.tags = tags.iter().map(|s| s.to_string()).collect();
             let v = crate::models::Variant {
                 content_hash: hash.to_string(),
-                asset_id: a.id.clone(),
+                asset_id: a.id,
                 role: crate::models::VariantRole::Original,
                 format: "jpg".to_string(),
                 file_size: 100,
@@ -2008,7 +1994,7 @@ mod tests {
             a.tags = vec![tag.to_string()];
             let v = crate::models::Variant {
                 content_hash: hash.to_string(),
-                asset_id: a.id.clone(),
+                asset_id: a.id,
                 role: crate::models::VariantRole::Original,
                 format: "jpg".to_string(),
                 file_size: 100,
@@ -2079,7 +2065,7 @@ mod tests {
         ];
         let v1 = crate::models::Variant {
             content_hash: "sha256:ae1".to_string(),
-            asset_id: a1.id.clone(),
+            asset_id: a1.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 100,
@@ -2104,7 +2090,7 @@ mod tests {
         ];
         let v2 = crate::models::Variant {
             content_hash: "sha256:ae2".to_string(),
-            asset_id: a2.id.clone(),
+            asset_id: a2.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 100,
@@ -2213,7 +2199,7 @@ mod tests {
         let mut a1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:wp1");
         a1.tags = vec!["Legoland".to_string()];
         let v1 = crate::models::Variant {
-            content_hash: "sha256:wp1".to_string(), asset_id: a1.id.clone(),
+            content_hash: "sha256:wp1".to_string(), asset_id: a1.id,
             role: crate::models::VariantRole::Original, format: "jpg".to_string(),
             file_size: 100, original_filename: "a.jpg".to_string(),
             source_metadata: Default::default(), locations: vec![],
@@ -2226,7 +2212,7 @@ mod tests {
         let mut a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:wp2");
         a2.tags = vec!["location|Denmark|Legoland".to_string()];
         let v2 = crate::models::Variant {
-            content_hash: "sha256:wp2".to_string(), asset_id: a2.id.clone(),
+            content_hash: "sha256:wp2".to_string(), asset_id: a2.id,
             role: crate::models::VariantRole::Original, format: "jpg".to_string(),
             file_size: 100, original_filename: "b.jpg".to_string(),
             source_metadata: Default::default(), locations: vec![],
@@ -2239,7 +2225,7 @@ mod tests {
         let mut a3 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:wp3");
         a3.tags = vec!["location|Germany|Legoland".to_string()];
         let v3 = crate::models::Variant {
-            content_hash: "sha256:wp3".to_string(), asset_id: a3.id.clone(),
+            content_hash: "sha256:wp3".to_string(), asset_id: a3.id,
             role: crate::models::VariantRole::Original, format: "jpg".to_string(),
             file_size: 100, original_filename: "c.jpg".to_string(),
             source_metadata: Default::default(), locations: vec![],
@@ -2287,7 +2273,7 @@ mod tests {
         asset.tags = vec!["animals|birds|eagles".to_string(), "sunset".to_string()];
         let variant = crate::models::Variant {
             content_hash: "sha256:hier1".to_string(),
-            asset_id: asset.id.clone(),
+            asset_id: asset.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -2332,7 +2318,7 @@ mod tests {
         asset2.tags = vec!["animals".to_string()];
         let variant2 = crate::models::Variant {
             content_hash: "sha256:hier2".to_string(),
-            asset_id: asset2.id.clone(),
+            asset_id: asset2.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -2363,7 +2349,7 @@ mod tests {
         asset.tags = vec!["AF Nikkor 85mm f/1.4 D".to_string()];
         let variant = crate::models::Variant {
             content_hash: "sha256:slash1".to_string(),
-            asset_id: asset.id.clone(),
+            asset_id: asset.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -2397,7 +2383,7 @@ mod tests {
         asset.tags = vec!["other-animals".to_string()];
         let variant = crate::models::Variant {
             content_hash: "sha256:fp1".to_string(),
-            asset_id: asset.id.clone(),
+            asset_id: asset.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -2422,7 +2408,7 @@ mod tests {
         asset.tags = tags;
         let variant = crate::models::Variant {
             content_hash: format!("sha256:{hash_suffix}"),
-            asset_id: asset.id.clone(),
+            asset_id: asset.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -2462,7 +2448,7 @@ mod tests {
             }
             let variant = crate::models::Variant {
                 content_hash: format!("sha256:{h}"),
-                asset_id: asset.id.clone(),
+                asset_id: asset.id,
                 role: crate::models::VariantRole::Original,
                 format: fmt.to_string(),
                 file_size: 1,
@@ -2581,7 +2567,7 @@ mod tests {
         asset.tags = vec!["beta".to_string()];
         asset.variants.push(crate::models::Variant {
             content_hash: "sha256:tagsfts1".to_string(),
-            asset_id: asset.id.clone(),
+            asset_id: asset.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -2637,7 +2623,7 @@ mod tests {
             asset.tags = tags.iter().map(|t| t.to_string()).collect();
             let variant = crate::models::Variant {
                 content_hash: format!("sha256:{suffix}"),
-                asset_id: asset.id.clone(),
+                asset_id: asset.id,
                 role: crate::models::VariantRole::Original,
                 format: "jpg".to_string(),
                 file_size: 1,
@@ -3019,7 +3005,7 @@ mod tests {
 
         let store = crate::collection::CollectionStore::new(&catalog.conn);
         store.create("TestCol", None).unwrap();
-        store.add_assets("TestCol", &[asset_id.clone()]).unwrap();
+        store.add_assets("TestCol", std::slice::from_ref(&asset_id)).unwrap();
 
         let removed = catalog.delete_collection_memberships_for_asset(&asset_id).unwrap();
         assert_eq!(removed, 1);
@@ -5127,7 +5113,7 @@ mod tests {
         a1.tags = vec!["Group A".to_string(), "landscape".to_string()];
         let v1 = crate::models::Variant {
             content_hash: "sha256:tag1".to_string(),
-            asset_id: a1.id.clone(),
+            asset_id: a1.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -5144,7 +5130,7 @@ mod tests {
         a2.tags = vec!["Group B".to_string()];
         let v2 = crate::models::Variant {
             content_hash: "sha256:tag2".to_string(),
-            asset_id: a2.id.clone(),
+            asset_id: a2.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,
@@ -5161,7 +5147,7 @@ mod tests {
         a3.tags = vec!["Group A|sub".to_string()];
         let v3 = crate::models::Variant {
             content_hash: "sha256:tag3".to_string(),
-            asset_id: a3.id.clone(),
+            asset_id: a3.id,
             role: crate::models::VariantRole::Original,
             format: "jpg".to_string(),
             file_size: 1000,

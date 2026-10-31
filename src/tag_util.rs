@@ -4,23 +4,23 @@
 //! marker prefixes (`=` whole-path, `/` leaf-only, `^` case-sensitive,
 //! `|` prefix-anchored).
 
-/// Tag utility functions for hierarchical tag support.
-///
-/// Internal storage convention:
-/// - `|` is the hierarchy separator: `animals|birds|eagles`
-/// - `/` is a literal character: `AF Nikkor 85mm f/1.4`
-/// - String content is **NFC-normalised** Unicode. This matters for tags
-///   that carry non-ASCII characters (e.g. `Ö-HA`, `München`): some tools
-///   write NFD (decomposed: `O` + combining diaeresis), others NFC
-///   (precomposed: single `Ö` code point). The two render identically but
-///   compare as different strings — without normalisation a single tag
-///   ends up as two distinct catalog entries that sort to different
-///   places.
-///
-/// User-facing input convention (aligned with Lightroom/CaptureOne):
-/// - `|` means hierarchy: `animals|birds|eagles`
-/// - `>` also means hierarchy: `animals>birds>eagles`
-/// - `/` is a literal character (no escaping needed)
+// Tag utility functions for hierarchical tag support.
+//
+// Internal storage convention:
+// - `|` is the hierarchy separator: `animals|birds|eagles`
+// - `/` is a literal character: `AF Nikkor 85mm f/1.4`
+// - String content is **NFC-normalised** Unicode. This matters for tags
+//   that carry non-ASCII characters (e.g. `Ö-HA`, `München`): some tools
+//   write NFD (decomposed: `O` + combining diaeresis), others NFC
+//   (precomposed: single `Ö` code point). The two render identically but
+//   compare as different strings — without normalisation a single tag
+//   ends up as two distinct catalog entries that sort to different
+//   places.
+//
+// User-facing input convention (aligned with Lightroom/CaptureOne):
+// - `|` means hierarchy: `animals|birds|eagles`
+// - `>` also means hierarchy: `animals>birds>eagles`
+// - `/` is a literal character (no escaping needed)
 
 /// Normalise a string to Unicode NFC (canonical composition). Cheap
 /// no-op for pure ASCII input; precomposes decomposed combining marks
@@ -106,7 +106,7 @@ pub struct TagNormalization {
 pub fn normalize_tag_for_storage(input: &str) -> TagNormalization {
     let initial = tag_input_to_storage(input);
     let mut out = Vec::new();
-    for segment in initial.split(|c| c == ',' || c == ';') {
+    for segment in initial.split([',', ';']) {
         let clean: String = segment
             .chars()
             .map(|c| if c.is_control() { ' ' } else { c })

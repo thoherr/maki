@@ -4,6 +4,83 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ## Unreleased
 
+Phase 0 of the October 2026 architecture audit
+(`doc/qa-report/architecture-audit-2026-10-29.md`): behaviour-preserving
+cleanups that remove duplicated helpers and re-plumbed flags across the
+layers. No schema migration, no user-visible change except where noted.
+
+### Changed (internal)
+
+- **Configuration is loaded once per engine, not per asset.** `QueryEngine`
+  and `AssetService` hold the catalog configuration; the writeback path
+  no longer re-parses `maki.toml` for every asset of a batch, searches no
+  longer load it up to three times, and the web server passes the
+  configuration it was started with instead of re-reading the file per
+  request. The library went from 15 disk reads of the configuration to
+  the two constructors.
+- **One helper where there were copies.** `DeviceRegistry::online_map()`
+  replaces nine hand-built online-volume maps;
+  `Catalog::resolve_asset_id_required` replaces 33 copies of the
+  not-found error; the session-root rule lives in one module that both
+  auto-group and the SQL `session_root()` function use; every
+  volume-relative path string goes through `path_util::forward_slashes`;
+  all OS-specific process spawning (open, reveal, terminal, URL) lives in
+  `platform`; `as_str()` / `FromStr` on the asset, variant-role, recipe
+  and volume enums replace `format!("{:?}").to_lowercase()` at the SQL
+  boundaries.
+- **CLI plumbing.** Every command handler takes one `CliContext` instead
+  of positional json/log/verbosity flags; the 41 dead-code `Ctx` shims
+  are gone; the `search`, `init` and `migrate` bodies moved out of the
+  dispatcher into `commands/`; `maki --help` is generated from the clap
+  metadata and a unit test guarantees every command is listed once; the
+  shell's hand-written `export` and `preview` built-ins now run through
+  the normal executor, so their flags match the CLI (shell `preview`
+  prints the CLI's "Opened preview for …" line; the old `--open` flag is
+  gone).
+- **Web plumbing.** One `ServeOptions` and one `AppState::new` replace
+  the two feature-gated 15-parameter copies; the lazy SigLIP and
+  embedding-index loads live on `AppState` (the similarity path now
+  honours `[ai] execution_provider`); 26 lock `unwrap()`s are
+  poison-tolerant; every background job goes through `launch_job`; 56
+  raw blocking-task sites are now the shared helper with identical status
+  codes and bodies (only a task-panic path now uniformly reports
+  `500 Error: …`).
+- **Front end.** A single embedded `maki-core.js` owns escaping, toasts,
+  JSON fetch, dialogs, path autocomplete, job streams and filter quoting;
+  124 raw `fetch` calls became 12 (forms, blobs, uploads); the colour-label
+  vocabulary has one source, `COLOR_LABELS`, instead of eleven (the stroll
+  page's satellite dots had drifted to different hex values and now match
+  the rest of the UI).
+- **Dead code removed**: unused catalog counters and stats, the
+  `MetadataStore::sync_to_catalog` wrapper, two face-store helpers,
+  `read_embedding_binary`, two never-implemented registry stubs; section
+  files now match their names (stats in `stats.rs`, path queries in
+  `recipe_query.rs`, the GPS backfill with the migrations).
+- **Behaviour notes.** Saving in the web config editor now swaps the
+  running server's configuration, so `[import]` and `[writeback]` edits
+  apply at once as before, but a hand edit of `maki.toml` while the
+  server runs needs a restart or a no-op save. A corrupt `volumes.yaml`
+  now fails a tag operation instead of silently skipping XMP writeback.
+- **`build.rs` links Clang's compiler runtime for `ai` builds on macOS.**
+  The new release profile (`lto = "thin"`) made thin LTO drop std's weak
+  `___isPlatformVersionAtLeast` before the prebuilt CoreML execution
+  provider in `ort-sys` 2.0.0-rc.15 (which, unlike rc.13, no longer links
+  `libclang_rt.osx.a` itself) asked for it, so `cargo build --release
+  --features ai-gpu` failed with "Undefined symbols for architecture
+  arm64". The build script restores the link (`xcrun clang
+  --print-resource-dir`, fallback `$CC --print-search-dirs`); the macOS CI
+  step now builds `ai-gpu` in release mode so the LTO link is exercised.
+- **Build hygiene.** `rust-version = "1.92"` is now enforced for every
+  feature set; release binaries are built with thin LTO, one codegen
+  unit and stripped symbols; CI additionally builds `--features ai-gpu`
+  on macOS; the duplicated `sha2` dev-dependency is gone. **Clippy is a
+  CI gate** (`-D warnings`, default and Pro): the 162 outstanding
+  warnings were fixed, with two lints allowed crate-wide and justified in
+  `Cargo.toml` (`too_many_arguments`, `type_complexity`, both addressed
+  structurally in Phase 2). `rustfmt` is deliberately not gated yet: the
+  tree was never formatted (2,372 hunks), and that is a separate
+  decision.
+
 ### Fixed
 
 - **Clearing a preview override re-scores with the current rule.** The

@@ -21,8 +21,8 @@ use crate::web::AppState;
 pub async fn asset_faces(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
-) -> Response {
-    let result = tokio::task::spawn_blocking(move || {
+) -> Result<Response, Response> {
+    let faces = super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         let faces = face_store.faces_for_asset(&asset_id)?;
@@ -45,30 +45,20 @@ pub async fn asset_faces(
             })
         }).collect();
         Ok::<_, anyhow::Error>(result)
-    }).await;
-
-    match result {
-        Ok(Ok(faces)) => Json(faces).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
+    }, super::super::err::internal).await?;
+    Ok(Json(faces).into_response())
 }
 
 /// POST /api/asset/{id}/detect-faces — detect faces for a single asset.
 pub async fn detect_faces_for_asset(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let state2 = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        detect_faces_inner(&state2, &[asset_id])
-    }).await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": msg}))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e}")}))).into_response(),
-    }
+    let json = super::super::spawn_blocking_with(move || {
+        detect_faces_inner(&state2, &[asset_id]).map_err(anyhow::Error::msg)
+    }, super::super::err::internal_json).await?;
+    Ok(Json(json).into_response())
 }
 
 /// POST /api/batch/detect-faces — start a face-detection job for selected assets.
@@ -79,7 +69,7 @@ pub async fn batch_detect_faces(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    use crate::web::jobs::JobKind;
+    use crate::web::jobs::{launch_job, JobKind, LaunchOptions};
 
     let asset_ids: Vec<String> = body.get("asset_ids")
         .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -95,80 +85,47 @@ pub async fn batch_detect_faces(
             .into_response();
     }
 
-    let job = state.jobs.start(JobKind::DetectFaces);
-    let job_id = job.id.clone();
     let total = asset_ids.len();
-    job.emit(&serde_json::json!({
-        "phase": "detect_faces",
-        "done": false,
-        "processed": 0,
-        "total": total,
-        "status": "starting",
-    }));
-
-    let state2 = state.clone();
-    let job_for_task = job.clone();
-    let exec_provider = state.ai_config.execution_provider.clone();
-    // Config carries f64 (TOML round-trips cleanly that way); detector API takes f32.
-    let min_conf = state.ai_config.face_min_confidence as f32;
-
-    tokio::spawn(async move {
-        let job_inner = job_for_task.clone();
-        let processed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let processed_for_cb = processed.clone();
-        let job_for_cb = job_inner.clone();
-        let state_for_blocking = state2.clone();
-
-        let result = tokio::task::spawn_blocking(move || {
-            let mut detector = match crate::face::FaceDetector::load_with_provider(
-                &face_model_dir,
-                state_for_blocking.verbosity,
-                &exec_provider,
-            ) {
-                Ok(d) => d,
-                Err(e) => return Err(format!("Failed to load face detector: {e:#}")),
-            };
-            let service = state_for_blocking.asset_service();
-            service
-                .detect_faces(
-                    &asset_ids,
-                    &mut detector,
-                    min_conf,
-                    true,
-                    true,
-                    move |aid, faces, _elapsed| {
-                        use std::sync::atomic::Ordering::Relaxed;
-                        let n = processed_for_cb.fetch_add(1, Relaxed) + 1;
-                        let short = &aid[..8.min(aid.len())];
-                        job_for_cb.emit(&serde_json::json!({
-                            "phase": "detect_faces",
-                            "done": false,
-                            "processed": n,
-                            "total": total,
-                            "asset": short,
-                            "faces": faces,
-                        }));
-                    },
-                )
-                .map_err(|e| format!("{e:#}"))
-        })
-        .await;
-
-        let terminal = match result {
-            Ok(Ok(r)) => serde_json::json!({
-                "phase": "detect_faces",
-                "succeeded": r.assets_processed,
-                "faces_detected": r.faces_detected,
-                "errors": r.errors,
-            }),
-            Ok(Err(e)) => serde_json::json!({"phase": "detect_faces", "error": e}),
-            Err(e) => serde_json::json!({"phase": "detect_faces", "error": format!("{e}")}),
-        };
-        job_for_task.finish(terminal);
-        state2.jobs.mark_done(&job_for_task.id);
-    });
-
-    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
+    // No conflict gate: several detect-faces batches may run at once.
+    let opts = LaunchOptions::default().with_starting_event("detect_faces", total);
+    launch_job(&state, JobKind::DetectFaces, opts, move |state, job| {
+        let mut detector = crate::face::FaceDetector::load_with_provider(
+            &face_model_dir,
+            state.verbosity,
+            &state.ai_config.execution_provider,
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to load face detector: {e:#}"))?;
+        // Config carries f64 (TOML round-trips cleanly that way); detector API takes f32.
+        let min_conf = state.ai_config.face_min_confidence as f32;
+        let processed = std::sync::atomic::AtomicUsize::new(0);
+        let job_for_cb = job.clone();
+        let r = state.asset_service().detect_faces(
+            &asset_ids,
+            &mut detector,
+            min_conf,
+            true,
+            true,
+            move |aid, faces, _elapsed| {
+                use std::sync::atomic::Ordering::Relaxed;
+                let n = processed.fetch_add(1, Relaxed) + 1;
+                let short = &aid[..8.min(aid.len())];
+                job_for_cb.emit(&serde_json::json!({
+                    "phase": "detect_faces",
+                    "done": false,
+                    "processed": n,
+                    "total": total,
+                    "asset": short,
+                    "faces": faces,
+                }));
+            },
+        )?;
+        Ok(serde_json::json!({
+            "phase": "detect_faces",
+            "succeeded": r.assets_processed,
+            "faces_detected": r.faces_detected,
+            "errors": r.errors,
+        }))
+    })
 }
 
 fn detect_faces_inner(state: &AppState, asset_ids: &[String]) -> Result<serde_json::Value, String> {
@@ -243,9 +200,9 @@ pub async fn unassign_face_api(
 pub async fn delete_face_api(
     State(state): State<Arc<AppState>>,
     Path(face_id): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let catalog_root = state.catalog_root.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         if let Some(asset_id) = face_store.delete_face(&face_id)? {
@@ -257,20 +214,15 @@ pub async fn delete_face_api(
         }
         let _ = face_store.save_all_yaml(&catalog_root);
         Ok::<_, anyhow::Error>(())
-    }).await;
-
-    match result {
-        Ok(Ok(())) => Json(serde_json::json!({"ok": true})).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e:#}")}))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e}")}))).into_response(),
-    }
+    }, super::super::err::internal_json).await?;
+    Ok(Json(serde_json::json!({"ok": true})).into_response())
 }
 
 /// GET /people — people gallery page.
 pub async fn people_page(
     State(state): State<Arc<AppState>>,
-) -> Response {
-    let result = tokio::task::spawn_blocking(move || {
+) -> Result<Response, Response> {
+    let html = super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         let people_list = face_store.list_people()?;
@@ -297,20 +249,15 @@ pub async fn people_page(
             vlm_enabled: state.vlm_enabled,
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
-    }).await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
+    }, super::super::err::internal).await?;
+    Ok(Html(html).into_response())
 }
 
 /// GET /api/people — JSON list of people (for dropdown).
 pub async fn list_people_api(
     State(state): State<Arc<AppState>>,
-) -> Response {
-    let result = tokio::task::spawn_blocking(move || {
+) -> Result<Response, Response> {
+    let json = super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         let people = face_store.list_people()?;
@@ -323,37 +270,27 @@ pub async fn list_people_api(
             })
         }).collect();
         Ok::<_, anyhow::Error>(json)
-    }).await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
+    }, super::super::err::internal).await?;
+    Ok(Json(json).into_response())
 }
 
 /// POST /api/people — create a new person.
 pub async fn create_person_api(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
-) -> Response {
+) -> Result<Response, Response> {
     let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     if name.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "name is required"}))).into_response();
+        return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "name is required"}))).into_response());
     }
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         let id = face_store.create_person(Some(&name))?;
         let _ = face_store.save_all_yaml(&state.catalog_root);
         Ok::<_, anyhow::Error>(serde_json::json!({"id": id, "name": name}))
-    }).await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e:#}")}))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e}")}))).into_response(),
-    }
+    }, super::super::err::internal_json).await?;
+    Ok(Json(json).into_response())
 }
 
 /// PUT /api/people/{id}/name — rename a person.
@@ -361,26 +298,21 @@ pub async fn name_person_api(
     State(state): State<Arc<AppState>>,
     Path(person_id): Path<String>,
     Json(body): Json<serde_json::Value>,
-) -> Response {
+) -> Result<Response, Response> {
     let name: String = match body.get("name").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
-        None => return (StatusCode::BAD_REQUEST, "Missing name").into_response(),
+        None => return Ok((StatusCode::BAD_REQUEST, "Missing name").into_response()),
     };
 
-    let result = tokio::task::spawn_blocking(move || {
+    super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         face_store.name_person(&person_id, &name)?;
         let _ = face_store.save_all_yaml(&state.catalog_root);
         state.dropdown_cache.invalidate_people();
         Ok::<_, anyhow::Error>(())
-    }).await;
-
-    match result {
-        Ok(Ok(())) => Json(serde_json::json!({"ok": true})).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
+    }, super::super::err::internal).await?;
+    Ok(Json(serde_json::json!({"ok": true})).into_response())
 }
 
 /// POST /api/people/{id}/merge — merge source people into target.
@@ -388,64 +320,54 @@ pub async fn merge_person_api(
     State(state): State<Arc<AppState>>,
     Path(target_id): Path<String>,
     Json(body): Json<serde_json::Value>,
-) -> Response {
+) -> Result<Response, Response> {
     let source_ids: Vec<String> = if let Some(arr) = body.get("source_ids").and_then(|v| v.as_array()) {
         arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
     } else if let Some(s) = body.get("source_id").and_then(|v| v.as_str()) {
         vec![s.to_string()]
     } else {
-        return (StatusCode::BAD_REQUEST, "Missing source_id or source_ids").into_response();
+        return Ok((StatusCode::BAD_REQUEST, "Missing source_id or source_ids").into_response());
     };
     if source_ids.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Empty source_ids").into_response();
+        return Ok((StatusCode::BAD_REQUEST, "Empty source_ids").into_response());
     }
 
-    let result = tokio::task::spawn_blocking(move || {
+    let (moved, n) = super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         let moved = face_store.merge_people_batch(&target_id, &source_ids)?;
         let _ = face_store.save_all_yaml(&state.catalog_root);
         state.dropdown_cache.invalidate_people();
         Ok::<_, anyhow::Error>((moved, source_ids.len()))
-    }).await;
-
-    match result {
-        Ok(Ok((moved, n))) => Json(serde_json::json!({"ok": true, "faces_moved": moved, "people_merged": n})).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
+    }, super::super::err::internal).await?;
+    Ok(Json(serde_json::json!({"ok": true, "faces_moved": moved, "people_merged": n})).into_response())
 }
 
 /// DELETE /api/people/{id} — delete a person.
 pub async fn delete_person_api(
     State(state): State<Arc<AppState>>,
     Path(person_id): Path<String>,
-) -> Response {
-    let result = tokio::task::spawn_blocking(move || {
+) -> Result<Response, Response> {
+    super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         face_store.delete_person(&person_id)?;
         let _ = face_store.save_all_yaml(&state.catalog_root);
         state.dropdown_cache.invalidate_people();
         Ok::<_, anyhow::Error>(())
-    }).await;
-
-    match result {
-        Ok(Ok(())) => Json(serde_json::json!({"ok": true})).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
+    }, super::super::err::internal).await?;
+    Ok(Json(serde_json::json!({"ok": true})).into_response())
 }
 
 /// GET /api/people/merge-suggestions — find pairs likely to be the same person.
 pub async fn merge_suggestions_api(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Response {
+) -> Result<Response, Response> {
     let threshold: f32 = params.get("threshold").and_then(|s| s.parse().ok()).unwrap_or(0.4);
     let limit: usize = params.get("limit").and_then(|s| s.parse().ok()).unwrap_or(20);
 
-    let result = tokio::task::spawn_blocking(move || {
+    let items = super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
         let pairs = face_store.suggest_person_merges(threshold, limit)?;
@@ -484,20 +406,15 @@ pub async fn merge_suggestions_api(
         }).collect();
 
         Ok::<_, anyhow::Error>(items)
-    }).await;
-
-    match result {
-        Ok(Ok(items)) => Json(serde_json::json!({"suggestions": items})).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
+    }, super::super::err::internal).await?;
+    Ok(Json(serde_json::json!({"suggestions": items})).into_response())
 }
 
 /// POST /api/faces/cluster — run auto-clustering.
 pub async fn cluster_faces_api(
     State(state): State<Arc<AppState>>,
-) -> Response {
-    let result = tokio::task::spawn_blocking(move || {
+) -> Result<Response, Response> {
+    let result = super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let _ = crate::face_store::FaceStore::initialize(catalog.conn());
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
@@ -507,15 +424,10 @@ pub async fn cluster_faces_api(
         let _ = face_store.save_all_yaml(&state.catalog_root);
         state.dropdown_cache.invalidate_people();
         Ok::<_, anyhow::Error>(result)
-    }).await;
-
-    match result {
-        Ok(Ok(result)) => Json(serde_json::json!({
-            "people_created": result.people_created,
-            "faces_assigned": result.faces_assigned,
-            "singletons_skipped": result.singletons_skipped,
-        })).into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
+    }, super::super::err::internal).await?;
+    Ok(Json(serde_json::json!({
+        "people_created": result.people_created,
+        "faces_assigned": result.faces_assigned,
+        "singletons_skipped": result.singletons_skipped,
+    })).into_response())
 }

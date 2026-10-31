@@ -75,9 +75,9 @@ pub async fn create_saved_search(
 pub async fn delete_saved_search(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let mut file = crate::saved_search::load(&state.catalog_root)?;
         let before = file.searches.len();
         file.searches.retain(|s| s.name != name);
@@ -86,19 +86,18 @@ pub async fn delete_saved_search(
         }
         crate::saved_search::save(&state.catalog_root, &file)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"status": "deleted", "name": name}))
-    })
-    .await;
+    }, not_found_or_500)
+    .await?;
+    Ok(Json(json).into_response())
+}
 
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => {
-            if format!("{e:#}").contains("no saved search") {
-                (StatusCode::NOT_FOUND, format!("{e:#}")).into_response()
-            } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e:#}")).into_response()
-            }
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+/// `404` for a missing saved search, generic `500` otherwise.
+fn not_found_or_500(e: anyhow::Error) -> Response {
+    let msg = format!("{e:#}");
+    if msg.contains("no saved search") {
+        (StatusCode::NOT_FOUND, msg).into_response()
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
     }
 }
 
@@ -139,9 +138,9 @@ pub async fn toggle_saved_search_favorite(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     Json(req): Json<FavoriteRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let mut file = crate::saved_search::load(&state.catalog_root)?;
         let entry = file
             .searches
@@ -151,21 +150,9 @@ pub async fn toggle_saved_search_favorite(
         entry.favorite = req.favorite;
         crate::saved_search::save(&state.catalog_root, &file)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"status": "updated", "name": name, "favorite": req.favorite}))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => {
-            let msg = format!("{e:#}");
-            if msg.contains("no saved search") {
-                (StatusCode::NOT_FOUND, msg).into_response()
-            } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
-            }
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    }, not_found_or_500)
+    .await?;
+    Ok(Json(json).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -178,9 +165,9 @@ pub async fn rename_saved_search(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     Json(req): Json<RenameRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let new_name = req.new_name.trim().to_string();
         if new_name.is_empty() {
             anyhow::bail!("name cannot be empty");
@@ -197,21 +184,14 @@ pub async fn rename_saved_search(
         entry.name = new_name.clone();
         crate::saved_search::save(&state.catalog_root, &file)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"status": "renamed", "old_name": name, "new_name": new_name}))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(json)) => Json(json).into_response(),
-        Ok(Err(e)) => {
-            let msg = format!("{e:#}");
-            if msg.contains("no saved search") {
-                (StatusCode::NOT_FOUND, msg).into_response()
-            } else if msg.contains("already exists") {
-                (StatusCode::CONFLICT, msg).into_response()
-            } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
-            }
+    }, |e| {
+        let msg = format!("{e:#}");
+        if msg.contains("already exists") {
+            (StatusCode::CONFLICT, msg).into_response()
+        } else {
+            not_found_or_500(e)
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    })
+    .await?;
+    Ok(Json(json).into_response())
 }

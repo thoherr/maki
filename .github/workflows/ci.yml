@@ -65,6 +65,9 @@ jobs:
       - name: Build
         run: cargo build
 
+      - name: Clippy (default features)
+        run: cargo clippy --all-targets -- -D warnings
+
       - name: Run unit tests
         run: cargo test --lib
 
@@ -80,6 +83,14 @@ jobs:
       - name: Build with AI features
         run: cargo build --features ai
 
+      # The CoreML execution provider only exists on macOS; it was previously
+      # exercised by the release workflow alone (audit F27).
+      - name: Build with AI + GPU features (macOS)
+        if: runner.os == 'macOS'
+        # Release profile on purpose: thin LTO is what exposes a missing
+        # compiler-rt link against the prebuilt CoreML objects (see build.rs).
+        run: cargo build --release --features ai-gpu
+
       - name: Run unit tests with AI features
         run: cargo test --lib --features ai
 
@@ -90,6 +101,9 @@ jobs:
       # branding; it has its own cfg-gated code paths and tests.
       - name: Build with Pro features
         run: cargo build --features pro
+
+      - name: Clippy (Pro features)
+        run: cargo clippy --all-targets --features pro -- -D warnings
 
       - name: Run unit tests with Pro features
         run: cargo test --lib --features pro

@@ -159,7 +159,7 @@ Rust, SQLite, clap, axum, askama, htmx. See [`Cargo.toml`](Cargo.toml) for the f
 
 ## Requirements
 
-- Rust 2021 edition, Rust 1.89 or newer (1.92 or newer for `--features ai` / `pro`, required by the ONNX Runtime binding)
+- Rust 2021 edition, Rust 1.92 or newer (enforced via `rust-version`; the ONNX Runtime binding behind `--features ai` / `pro` sets the floor)
 - macOS, Linux, or Windows
 
 ## License

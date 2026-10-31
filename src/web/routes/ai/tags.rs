@@ -12,7 +12,6 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
@@ -102,20 +101,15 @@ impl<'a> SuggestContext<'a> {
         let registry = DeviceRegistry::new(&state.catalog_root);
         let volumes = registry.list().map_err(|e| format!("{e:#}"))?;
 
-        let model_dir = super::resolve_model_dir(&state.ai_config);
-        let model_id = state.ai_config.model.clone();
-        vlog!("acquiring model lock…");
+        vlog!(
+            "acquiring model lock (SigLIP {} loads on first use, provider={})…",
+            state.ai_config.model, state.ai_config.execution_provider
+        );
         let t_lock = std::time::Instant::now();
-        let mut model_guard = state.ai_model.blocking_lock();
+        let mut model_guard = state
+            .siglip()
+            .map_err(|e| format!("Failed to load AI model: {e:#}"))?;
         vlog!("model lock acquired ({:?})", t_lock.elapsed());
-        if model_guard.is_none() {
-            vlog!("loading SigLIP model: {model_id} (provider={})", state.ai_config.execution_provider);
-            let t_load = std::time::Instant::now();
-            let m = ai::SigLipModel::load_with_provider(&model_dir, &model_id, state.verbosity, &state.ai_config.execution_provider)
-                .map_err(|e| format!("Failed to load AI model: {e:#}"))?;
-            vlog!("model loaded ({:?})", t_load.elapsed());
-            *model_guard = Some(m);
-        }
 
         let vocabulary = super::resolve_vocabulary(&state.ai_config)?;
         // Cache hit requires the cached label list to match the currently-
@@ -255,11 +249,7 @@ impl<'a> SuggestContext<'a> {
                 let _ = emb_store.store(asset_id, &image_emb, &model_id);
             }
             let _ = crate::embedding_store::write_embedding_binary(&self.state.catalog_root, &model_id, asset_id, &image_emb);
-            if let Ok(mut idx_guard) = self.state.ai_embedding_index.write() {
-                if let Some(ref mut idx) = *idx_guard {
-                    idx.upsert(asset_id, &image_emb);
-                }
-            }
+            self.state.upsert_embedding_if_loaded(asset_id, &image_emb);
         }
 
         let flat_suggestions = model.classify(&image_emb, &self.label_list, &self.label_embs, self.threshold);
@@ -329,20 +319,17 @@ fn build_card_meta(
 pub async fn suggest_tags(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result: Result<Result<Vec<SuggestTagsResponse>, String>, _> =
-        tokio::task::spawn_blocking(move || -> Result<Vec<SuggestTagsResponse>, String> {
-            let mut ctx = SuggestContext::new(&state)?;
-            ctx.suggestions_for(&asset_id)
-        })
-        .await;
-
-    match result {
-        Ok(Ok(suggestions)) => Json(suggestions).into_response(),
-        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    let suggestions = super::super::spawn_blocking_with(
+        move || -> anyhow::Result<Vec<SuggestTagsResponse>> {
+            let mut ctx = SuggestContext::new(&state).map_err(anyhow::Error::msg)?;
+            ctx.suggestions_for(&asset_id).map_err(anyhow::Error::msg)
+        },
+        super::super::err::internal,
+    )
+    .await?;
+    Ok(Json(suggestions).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -366,57 +353,31 @@ pub async fn batch_auto_tag(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchAutoTagRequest>,
 ) -> Response {
-    use crate::web::jobs::JobKind;
+    use crate::web::jobs::{launch_job, JobKind, LaunchOptions};
 
-    let job = state.jobs.start(JobKind::AutoTag);
-    let job_id = job.id.clone();
     let total = req.asset_ids.len();
-    job.emit(&serde_json::json!({
-        "phase": "auto_tag",
-        "done": false,
-        "processed": 0,
-        "total": total,
-        "status": "starting",
-    }));
-
-    let state2 = state.clone();
-    let job_for_task = job.clone();
-    tokio::spawn(async move {
-        let log = state2.log_requests;
-        let job_inner = job_for_task.clone();
-        let state_for_blocking = state2.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            batch_auto_tag_inner(&state_for_blocking, req.asset_ids, &job_inner, total)
-        })
-        .await;
-
-        let terminal = match result {
-            Ok(Ok(resp)) => {
-                if log {
-                    eprintln!(
-                        "batch_auto_tag: {} assets ({} ok, {} err, {} tags)",
-                        total, resp.succeeded, resp.failed, resp.tags_applied
-                    );
-                }
-                if resp.succeeded > 0 {
-                    state2.dropdown_cache.invalidate_tags();
-                }
-                serde_json::json!({
-                    "phase": "auto_tag",
-                    "succeeded": resp.succeeded,
-                    "failed": resp.failed,
-                    "tags_applied": resp.tags_applied,
-                    "errors": resp.errors,
-                })
-            }
-            Ok(Err(msg)) => serde_json::json!({"phase": "auto_tag", "error": msg}),
-            Err(e) => serde_json::json!({"phase": "auto_tag", "error": format!("{e}")}),
-        };
-        job_for_task.finish(terminal);
-        state2.jobs.mark_done(&job_for_task.id);
-    });
-
-    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
+    // No conflict gate: several auto-tag batches may run at once.
+    let opts = LaunchOptions::default().with_starting_event("auto_tag", total);
+    launch_job(&state, JobKind::AutoTag, opts, move |state, job| {
+        let resp = batch_auto_tag_inner(state, req.asset_ids, job, total)
+            .map_err(anyhow::Error::msg)?;
+        if state.log_requests {
+            eprintln!(
+                "batch_auto_tag: {} assets ({} ok, {} err, {} tags)",
+                total, resp.succeeded, resp.failed, resp.tags_applied
+            );
+        }
+        if resp.succeeded > 0 {
+            state.dropdown_cache.invalidate_tags();
+        }
+        Ok(serde_json::json!({
+            "phase": "auto_tag",
+            "succeeded": resp.succeeded,
+            "failed": resp.failed,
+            "tags_applied": resp.tags_applied,
+            "errors": resp.errors,
+        }))
+    })
 }
 
 fn batch_auto_tag_inner(

@@ -318,7 +318,7 @@ pub fn tokenize_query(query: &str) -> Vec<String> {
 
     while chars.peek().is_some() {
         // Skip whitespace
-        while chars.peek().map_or(false, |c| c.is_whitespace()) {
+        while chars.peek().is_some_and(|c| c.is_whitespace()) {
             chars.next();
         }
         if chars.peek().is_none() {
@@ -771,7 +771,7 @@ pub fn normalize_path_for_search(
         );
         #[cfg(unix)]
         let mount = &v.mount_point;
-        if p.starts_with(&mount) {
+        if p.starts_with(mount) {
             let len = mount.as_os_str().len();
             if len > best_len {
                 best = Some(v);
@@ -789,11 +789,7 @@ pub fn normalize_path_for_search(
             );
             #[cfg(unix)]
             let mount = &vol.mount_point;
-            let relative = p
-                .strip_prefix(&mount)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
+            let relative = crate::path_util::forward_slashes(p.strip_prefix(mount).unwrap());
             (relative, Some(vol.id.to_string()))
         }
         None => (resolved, None),
@@ -815,6 +811,6 @@ fn clean_path(path: &std::path::Path) -> String {
     }
     let result: std::path::PathBuf = parts.iter().collect();
     // Normalize to forward slashes for cross-platform consistency
-    result.to_string_lossy().replace('\\', "/")
+    crate::path_util::forward_slashes(&result)
 }
 

@@ -15,6 +15,28 @@ pub enum RecipeType {
     EmbeddedExport,
 }
 
+impl RecipeType {
+    /// The serde / SQLite spelling (`embedded_export`, not the former
+    /// Debug-derived `embeddedexport`; no such row has ever been written).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RecipeType::Sidecar => "sidecar",
+            RecipeType::EmbeddedExport => "embedded_export",
+        }
+    }
+}
+
+impl std::str::FromStr for RecipeType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "sidecar" => Ok(RecipeType::Sidecar),
+            "embedded_export" => Ok(RecipeType::EmbeddedExport),
+            _ => Err(format!("unknown recipe type '{s}'")),
+        }
+    }
+}
+
 /// Processing instructions associated with a variant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Recipe {

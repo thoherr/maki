@@ -373,13 +373,8 @@ pub fn run_backup_status_command(
         volume: Option<String>,
         format: Option<String>,
         quiet: bool,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     use maki::format::{self, OutputFormat};
 
     let catalog_root = maki::config::find_catalog_root()?;
@@ -440,7 +435,7 @@ pub fn run_backup_status_command(
             OutputFormat::Ids
         } else if let Some(fmt) = &format {
             format::parse_format(fmt).map_err(|e| anyhow::anyhow!(e))?
-        } else if cli.json {
+        } else if ctx.json {
             OutputFormat::Json
         } else {
             OutputFormat::Short
@@ -531,11 +526,7 @@ pub fn run_backup_status_command(
             target_volume_id.as_deref(),
         )?;
 
-        if cli.json {
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        } else {
-            print_backup_status_human(&result);
-        }
+        ctx.emit(&result, || print_backup_status_human(&result))?;
     }
     Ok(())
 }
@@ -544,35 +535,26 @@ pub fn run_backup_status_command(
 /// extraction pattern.
 pub fn run_status_command(
         min_copies: u64,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (catalog_root, config) = maki::config::load_config()?;
     let ai_enabled = cfg!(feature = "ai");
     // The orphan-on-disk scan (cleanup passes 4-7) dominates runtime
     // on real catalogs — easily 30s+ on tens of thousands of files.
     // Emit a one-line "still alive" marker to stderr so the user
     // doesn't wonder whether the command crashed. Suppressed under
-    // --json so scripted output stays clean.
-    if !cli.json {
+    // --ctx.json so scripted output stays clean.
+    if !ctx.json {
         eprintln!("Gathering catalog status (scanning derived files; may take a moment)...");
     }
     let report = maki::status::gather(
         &catalog_root,
-        verbosity,
+        ctx.verbosity,
         &config.preview,
         min_copies,
         ai_enabled,
     )?;
-    if cli.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        print_status_human(&report);
-    }
+    ctx.emit(&report, || print_status_human(&report))?;
     Ok(())
 }
 
@@ -585,13 +567,8 @@ pub fn run_stats_command(
         verified: bool,
         all: bool,
         limit: usize,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let catalog_root = maki::config::find_catalog_root()?;
     let catalog = Catalog::open(&catalog_root)?;
     let registry = DeviceRegistry::new(&catalog_root);
@@ -616,10 +593,6 @@ pub fn run_stats_command(
         limit,
     )?;
 
-    if cli.json {
-        println!("{}", serde_json::to_string_pretty(&stats)?);
-    } else {
-        print_stats_human(&stats);
-    }
+    ctx.emit(&stats, || print_stats_human(&stats))?;
     Ok(())
 }

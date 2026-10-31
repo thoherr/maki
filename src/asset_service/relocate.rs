@@ -27,9 +27,7 @@ impl AssetService {
         let registry = DeviceRegistry::new(&self.catalog_root);
 
         // Resolve asset
-        let full_id = catalog
-            .resolve_asset_id(asset_id)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id}'"))?;
+        let full_id = catalog.resolve_asset_id_required(asset_id)?;
         let asset_uuid: Uuid = full_id.parse()?;
         let asset = metadata_store.load(asset_uuid)?;
 
@@ -224,9 +222,7 @@ impl AssetService {
 
         // Phase 2.5: Create XMP sidecars for variants without recipes (if requested)
         if create_sidecars {
-            let naming = crate::config::CatalogConfig::load(&self.catalog_root)
-                .map(|c| c.writeback.sidecar_naming)
-                .unwrap_or_default();
+            let naming = self.config.writeback.sidecar_naming;
             let online: HashMap<Uuid, PathBuf> =
                 [(target_volume.id, target_volume.mount_point.clone())].into_iter().collect();
             let mut created_here = Vec::new();
@@ -348,7 +344,7 @@ impl AssetService {
                     volume.mount_point.display()
                 )
             })?;
-        let new_relative_str = new_relative.to_string_lossy().replace('\\', "/");
+        let new_relative_str = crate::path_util::forward_slashes(new_relative);
 
         // Convert from_path to volume-relative (strip mount point if absolute)
         let from = Path::new(from_path);
@@ -361,17 +357,14 @@ impl AssetService {
                         volume.label,
                         volume.mount_point.display()
                     )
-                })?
-                .to_string_lossy()
-                .replace('\\', "/")
+                })
+                .map(crate::path_util::forward_slashes)?
         } else {
             from_path.to_string()
         };
 
         // Resolve asset ID
-        let full_id = catalog
-            .resolve_asset_id(asset_id)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id}'"))?;
+        let full_id = catalog.resolve_asset_id_required(asset_id)?;
 
         // Try as variant file location first, then recipe
         if let Some((content_hash, _format)) =

@@ -232,7 +232,7 @@ impl AssetService {
         let prefix_str = if prefix.as_os_str().is_empty() {
             String::new()
         } else {
-            let mut p = prefix.to_string_lossy().to_string();
+            let mut p = crate::path_util::forward_slashes(prefix);
             if !p.ends_with('/') {
                 p.push('/');
             }
@@ -286,7 +286,7 @@ impl AssetService {
                         for loc in &mut variant.locations {
                             if loc.volume_id == source.id {
                                 loc.volume_id = target.id;
-                                let old_path = loc.relative_path.to_string_lossy().to_string();
+                                let old_path = loc.relative_path_str();
                                 loc.relative_path =
                                     PathBuf::from(format!("{prefix_str}{old_path}"));
                                 changed = true;
@@ -298,8 +298,7 @@ impl AssetService {
                     for recipe in &mut asset.recipes {
                         if recipe.location.volume_id == source.id {
                             recipe.location.volume_id = target.id;
-                            let old_path =
-                                recipe.location.relative_path.to_string_lossy().to_string();
+                            let old_path = recipe.location.relative_path_str();
                             recipe.location.relative_path =
                                 PathBuf::from(format!("{prefix_str}{old_path}"));
                             changed = true;
@@ -435,7 +434,7 @@ impl AssetService {
                     for variant in &mut asset.variants {
                         for loc in &mut variant.locations {
                             if loc.volume_id == source.id {
-                                let rel = loc.relative_path.to_string_lossy().to_string();
+                                let rel = loc.relative_path_str();
                                 if let Some(stripped) = rel.strip_prefix(&prefix) {
                                     loc.volume_id = new_volume.id;
                                     loc.relative_path = std::path::PathBuf::from(stripped);
@@ -447,7 +446,7 @@ impl AssetService {
 
                     for recipe in &mut asset.recipes {
                         if recipe.location.volume_id == source.id {
-                            let rel = recipe.location.relative_path.to_string_lossy().to_string();
+                            let rel = recipe.location.relative_path_str();
                             if let Some(stripped) = rel.strip_prefix(&prefix) {
                                 recipe.location.volume_id = new_volume.id;
                                 recipe.location.relative_path = std::path::PathBuf::from(stripped);

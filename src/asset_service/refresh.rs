@@ -61,7 +61,7 @@ impl AssetService {
                 // (strip_prefix yields backslashes), so `maki refresh <path>`
                 // and watch-driven refresh found nothing to refresh.
                 let relative_path = match file_path.strip_prefix(&vol.mount_point) {
-                    Ok(rp) => rp.to_string_lossy().replace('\\', "/"),
+                    Ok(rp) => crate::path_util::forward_slashes(rp),
                     Err(_) => continue,
                 };
                 if let Some((recipe_id, content_hash, variant_hash)) =
@@ -186,7 +186,7 @@ impl AssetService {
                         continue;
                     }
                     let relative_path = match file_path.strip_prefix(&vol.mount_point) {
-                        Ok(rp) => rp.to_string_lossy().replace('\\', "/"),
+                        Ok(rp) => crate::path_util::forward_slashes(rp),
                         Err(_) => continue,
                     };
                     if let Some((content_hash, _format)) =
@@ -483,16 +483,9 @@ impl AssetService {
 
         // Phase 2: Outbound — write pending DAM metadata via writeback
         if !pending_for_writeback.is_empty() {
-            let engine = crate::query::QueryEngine::new(&self.catalog_root);
-            let online: HashMap<uuid::Uuid, PathBuf> = all_volumes
-                .iter()
-                .filter(|v| v.is_online)
-                .map(|v| (v.id, v.mount_point.clone()))
-                .collect();
-            let volume_labels: HashMap<uuid::Uuid, String> = all_volumes
-                .iter()
-                .map(|v| (v.id, v.label.clone()))
-                .collect();
+            let engine = self.query_engine();
+            let online = DeviceRegistry::online_map_of(&all_volumes);
+            let volume_labels = DeviceRegistry::label_map_of(&all_volumes);
 
             let wb_result = engine.writeback_process(
                 pending_for_writeback,

@@ -68,10 +68,10 @@ impl QueryEngine {
         store: &MetadataStore,
         online: &HashMap<uuid::Uuid, PathBuf>,
         content_store: &ContentStore,
+        wb_cfg: &crate::config::WritebackConfig,
         field_label: &str,
         apply: impl Fn(&Path) -> Result<bool>,
     ) {
-        let wb_cfg = self.writeback_config();
         let writeback_active = wb_cfg.enabled;
         let mut sidecar_dirty = false;
 
@@ -180,7 +180,7 @@ impl QueryEngine {
     /// only have catalog + store at hand (the `edit` path): load online
     /// volumes, build the content store, delegate to the shared loop.
     ///
-    /// Note: no `if !writeback_config().enabled return` short-circuit here.
+    /// Note: no `if !config.writeback.enabled return` short-circuit here.
     /// Tracking is always on; the inner loop skips the actual XMP file
     /// write when disabled and marks the recipe pending for later flush
     /// via `maki writeback`. This lets users keep auto-write off as a
@@ -193,8 +193,7 @@ impl QueryEngine {
         field_label: &str,
         apply: impl Fn(&Path) -> Result<bool>,
     ) {
-        let registry = DeviceRegistry::new(&self.catalog_root);
-        let volumes = match registry.list() {
+        let online = match DeviceRegistry::new(&self.catalog_root).online_map() {
             Ok(v) => v,
             Err(e) => {
                 eprintln!(
@@ -203,11 +202,6 @@ impl QueryEngine {
                 return;
             }
         };
-        let online: HashMap<uuid::Uuid, PathBuf> = volumes
-            .iter()
-            .filter(|v| v.is_online)
-            .map(|v| (v.id, v.mount_point.clone()))
-            .collect();
         let content_store = ContentStore::new(&self.catalog_root);
         self.write_back_field_to_xmp_inner(
             asset,
@@ -215,6 +209,7 @@ impl QueryEngine {
             store,
             &online,
             &content_store,
+            &self.config.writeback,
             field_label,
             apply,
         );
@@ -245,7 +240,7 @@ impl QueryEngine {
         online: &HashMap<uuid::Uuid, PathBuf>,
         content_store: &ContentStore,
     ) {
-        self.write_back_field_to_xmp_inner(asset, catalog, store, online, content_store, "rating", |p| {
+        self.write_back_field_to_xmp_inner(asset, catalog, store, online, content_store, &self.config.writeback, "rating", |p| {
             xmp_reader::update_rating(p, rating)
         });
     }
@@ -289,7 +284,7 @@ impl QueryEngine {
         online: &HashMap<uuid::Uuid, PathBuf>,
         content_store: &ContentStore,
     ) {
-        self.write_back_field_to_xmp_inner(asset, catalog, store, online, content_store, "label", |p| {
+        self.write_back_field_to_xmp_inner(asset, catalog, store, online, content_store, &self.config.writeback, "label", |p| {
             xmp_reader::update_label(p, label)
         });
     }
@@ -337,6 +332,7 @@ impl QueryEngine {
             store,
             online,
             content_store,
+            &self.config.writeback,
             "tags",
             |full_path| {
                 let changed_dc = match xmp_reader::update_tags(full_path, &dc_add, &dc_remove) {
@@ -401,18 +397,11 @@ impl QueryEngine {
         let store = MetadataStore::new(&self.catalog_root);
         let registry = DeviceRegistry::new(&self.catalog_root);
         let volumes = registry.list()?;
-        let online: HashMap<uuid::Uuid, PathBuf> = volumes
-            .iter()
-            .filter(|v| v.is_online)
-            .map(|v| (v.id, v.mount_point.clone()))
-            .collect();
+        let online = DeviceRegistry::online_map_of(&volumes);
         // Map of UUID → label for ALL volumes (including offline ones)
         // so the writeback summary can name offline drives the user
         // needs to reconnect.
-        let volume_labels: HashMap<uuid::Uuid, String> = volumes
-            .iter()
-            .map(|v| (v.id, v.label.clone()))
-            .collect();
+        let volume_labels = DeviceRegistry::label_map_of(&volumes);
         let content_store = ContentStore::new(&self.catalog_root);
 
         // Resolve volume filter to volume ID
@@ -492,10 +481,9 @@ impl QueryEngine {
         log: bool,
         callback: Option<&dyn Fn(&str, &str)>,
     ) -> Result<WritebackResult> {
-        // No `writeback_config().enabled` gate: explicit manual flush always
+        // No `config.writeback.enabled` gate: explicit manual flush always
         // runs (see comment on `writeback`).
-        let mut result = WritebackResult::default();
-        result.dry_run = dry_run;
+        let mut result = WritebackResult { dry_run, ..Default::default() };
 
         // Group by asset_id
         let mut by_asset: HashMap<String, Vec<(String, String, String)>> = HashMap::new();

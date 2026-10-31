@@ -102,9 +102,9 @@ pub async fn upload_query_image(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     body: Bytes,
-) -> Response {
+) -> Result<Response, Response> {
     if body.is_empty() {
-        return (StatusCode::BAD_REQUEST, "empty upload").into_response();
+        return Ok((StatusCode::BAD_REQUEST, "empty upload").into_response());
     }
     let filename = headers
         .get(FILENAME_HEADER)
@@ -119,16 +119,12 @@ pub async fn upload_query_image(
         .to_string();
 
     let state2 = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        upload_query_image_inner(&state2, &filename, &content_type, &body)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(resp)) => Json(resp).into_response(),
-        Ok(Err(e)) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    let resp = super::super::spawn_blocking_with(
+        move || upload_query_image_inner(&state2, &filename, &content_type, &body),
+        |e| (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
+    )
+    .await?;
+    Ok(Json(resp).into_response())
 }
 
 fn upload_query_image_inner(
@@ -161,17 +157,7 @@ fn upload_query_image_inner(
             if !mgr.model_exists() {
                 anyhow::bail!("Model '{model_id}' is not downloaded.");
             }
-            let mut guard = state.ai_model.blocking_lock();
-            if guard.is_none() {
-                *guard = Some(crate::ai::SigLipModel::load_with_provider(
-                    &model_dir,
-                    &model_id,
-                    state.verbosity,
-                    &state.ai_config.execution_provider,
-                )?);
-            }
-            let model = guard.as_mut().expect("model loaded above");
-            query_image::encode_query_image(model, &preview_gen, path)
+            state.with_siglip(|model| query_image::encode_query_image(model, &preview_gen, path))?
         })?;
 
         let thumbnail = query_image::thumbnail_data_url(&preview_gen, &file, THUMB_EDGE)

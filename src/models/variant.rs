@@ -21,6 +21,33 @@ pub enum VariantRole {
     Sidecar,
 }
 
+impl VariantRole {
+    /// The serde / SQLite spelling.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            VariantRole::Original => "original",
+            VariantRole::Alternate => "alternate",
+            VariantRole::Processed => "processed",
+            VariantRole::Export => "export",
+            VariantRole::Sidecar => "sidecar",
+        }
+    }
+}
+
+impl std::str::FromStr for VariantRole {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "original" => Ok(VariantRole::Original),
+            "alternate" => Ok(VariantRole::Alternate),
+            "processed" => Ok(VariantRole::Processed),
+            "export" => Ok(VariantRole::Export),
+            "sidecar" => Ok(VariantRole::Sidecar),
+            _ => Err(format!("unknown variant role '{s}'")),
+        }
+    }
+}
+
 /// A concrete file belonging to an asset.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Variant {

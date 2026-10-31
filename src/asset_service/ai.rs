@@ -36,7 +36,7 @@ impl AssetService {
         use crate::preview::PreviewGenerator;
 
         let catalog = Catalog::open(&self.catalog_root)?;
-        let engine = crate::query::QueryEngine::new(&self.catalog_root);
+        let engine = self.query_engine();
         let preview_gen = PreviewGenerator::new(&self.catalog_root, self.verbosity, &self.preview_config);
         let registry = DeviceRegistry::new(&self.catalog_root);
         let volumes = registry.list()?;
@@ -57,9 +57,7 @@ impl AssetService {
 
         // Resolve target assets
         let asset_ids: Vec<String> = if let Some(id) = asset_id {
-            let full_id = catalog
-                .resolve_asset_id(id)?
-                .ok_or_else(|| anyhow::anyhow!("no asset found matching '{id}'"))?;
+            let full_id = catalog.resolve_asset_id_required(id)?;
             vec![full_id]
         } else {
             let q = if let Some(query) = query {
@@ -434,7 +432,7 @@ impl AssetService {
         let catalog = crate::catalog::Catalog::open(&self.catalog_root)?;
         let _ = crate::face_store::FaceStore::initialize(catalog.conn());
         let face_store = crate::face_store::FaceStore::new(catalog.conn());
-        let engine = crate::query::QueryEngine::new(&self.catalog_root);
+        let engine = self.query_engine();
         let metadata_store = crate::metadata_store::MetadataStore::new(&self.catalog_root);
         let preview_gen = crate::preview::PreviewGenerator::new(&self.catalog_root, crate::Verbosity::quiet(), &self.preview_config);
         let registry = crate::device_registry::DeviceRegistry::new(&self.catalog_root);

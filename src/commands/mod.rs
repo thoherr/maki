@@ -3,8 +3,9 @@
 //! Extracted from main.rs (which used to be 9.7 kLOC of CLI parsing +
 //! dispatch + handlers all jumbled together) so main.rs can be a
 //! near-pure dispatcher + CLI entrypoint. Each handler takes the
-//! destructured command fields by value plus `json`, `log`, `verbosity`
-//! for the small set of cross-cutting CLI flags it needs.
+//! destructured command fields by value plus one trailing
+//! `ctx: CliContext` carrying the cross-cutting `--json`, `--log`,
+//! `--verbose`/`--debug` flags.
 //!
 //! Split into one submodule per command family; this `mod.rs` holds the
 //! shared imports (submodules start with `use super::*;`) and the
@@ -15,7 +16,7 @@ use std::path::PathBuf;
 
 use maki::asset_service::AssetService;
 use maki::catalog::Catalog;
-use maki::cli_output::{format_duration, format_size, item_status};
+use maki::cli_output::{format_duration, format_size, item_status, CliContext};
 #[cfg(feature = "ai")]
 use maki::config::CatalogConfig;
 use maki::device_registry::DeviceRegistry;
@@ -53,6 +54,8 @@ mod misc;
 pub use misc::*;
 mod organize;
 pub use organize::*;
+mod search;
+pub use search::*;
 mod status;
 pub use status::*;
 mod sync;

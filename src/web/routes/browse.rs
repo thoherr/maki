@@ -116,7 +116,7 @@ pub(super) fn compute_count_deltas(
                 opts_nd.volume = Some(vid);
             }
         }
-        opts_nd.sort = SearchSort::from_str(ctx.effective_sort);
+        opts_nd.sort = SearchSort::parse_key(ctx.effective_sort);
         opts_nd.page = ctx.page;
         opts_nd.per_page = ctx.per_page;
         opts_nd.collapse_stacks = ctx.collapse_stacks;
@@ -168,7 +168,7 @@ pub async fn browse_page(
 
         let per_page = if has_similarity { u32::MAX } else { state.per_page };
         let effective_sort = params.effective_sort(has_similarity, &sort_str);
-        opts.sort = SearchSort::from_str(effective_sort);
+        opts.sort = SearchSort::parse_key(effective_sort);
         opts.page = if has_similarity { 1 } else { page };
         opts.per_page = per_page;
         opts.collapse_stacks = collapse_stacks;
@@ -388,7 +388,7 @@ pub async fn search_api(
 
         let per_page = if has_similarity { u32::MAX } else { state.per_page };
         let effective_sort = params.effective_sort(has_similarity, &sort_str);
-        opts.sort = SearchSort::from_str(effective_sort);
+        opts.sort = SearchSort::parse_key(effective_sort);
         opts.page = if has_similarity { 1 } else { page };
         opts.per_page = per_page;
         opts.collapse_stacks = collapse_stacks;
@@ -511,7 +511,7 @@ pub async fn all_ids_api(
         resolved.apply(&mut opts);
 
         let per_page = state.per_page;
-        opts.sort = SearchSort::from_str(&sort_str);
+        opts.sort = SearchSort::parse_key(&sort_str);
         opts.collapse_stacks = collapse_stacks;
         // Single virtual page that covers the entire result set. SQLite's
         // LIMIT/OFFSET handles huge values fine; even a 100k-asset catalog
@@ -594,7 +594,7 @@ pub async fn page_ids_api(
         // A similarity view renders as a single page sorted by score —
         // mirror browse_page so navigation order matches the grid.
         let effective_sort = params.effective_sort(has_similarity, &sort_str);
-        opts.sort = SearchSort::from_str(effective_sort);
+        opts.sort = SearchSort::parse_key(effective_sort);
         opts.page = if has_similarity { 1 } else { page };
         opts.per_page = if has_similarity { u32::MAX } else { per_page };
         opts.collapse_stacks = collapse_stacks;
@@ -657,10 +657,10 @@ pub async fn asset_page(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
     Query(nav_params): Query<AssetPageParams>,
-) -> Response {
+) -> Result<Response, Response> {
     let preview_ext = state.preview_ext.clone();
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
 
         let full_id = super::resolve_asset_id_or_err(&catalog, &asset_id)?;
@@ -679,7 +679,7 @@ pub async fn asset_page(
                 None
             }
         });
-        let has_smart_preview = best_hash.as_ref().map_or(false, |h| preview_gen.has_smart_preview(h));
+        let has_smart_preview = best_hash.as_ref().is_some_and(|h| preview_gen.has_smart_preview(h));
         let smart_preview_url = best_hash.as_ref().and_then(|h| {
             if has_smart_preview {
                 Some(crate::web::templates::smart_preview_url(h, &preview_ext))
@@ -694,7 +694,7 @@ pub async fn asset_page(
         let stack_store = crate::stack::StackStore::new(catalog.conn());
         let (stack_members, is_stack_pick) = match stack_store.stack_for_asset(&full_id).unwrap_or(None) {
             Some((_sid, member_ids)) => {
-                let is_pick = member_ids.first().map_or(false, |id| id == &full_id);
+                let is_pick = member_ids.first() == Some(&full_id);
                 let mut cards = Vec::new();
                 for (i, mid) in member_ids.iter().enumerate() {
                     let name = catalog.get_asset_name(mid).unwrap_or(None)
@@ -767,25 +767,20 @@ pub async fn asset_page(
         tmpl.faces = faces;
         tmpl.all_people = all_people_detail;
         Ok::<_, anyhow::Error>(tmpl.render()?)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => {
-            let msg = format!("{e:#}");
-            if msg.contains("no asset found") {
-                (
-                    StatusCode::NOT_FOUND,
-                    Html(format!("<h1>Not Found</h1><p>{msg}</p>")),
-                )
-                    .into_response()
-            } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
-            }
+    }, |e| {
+        let msg = format!("{e:#}");
+        if msg.contains("no asset found") {
+            (
+                StatusCode::NOT_FOUND,
+                Html(format!("<h1>Not Found</h1><p>{msg}</p>")),
+            )
+                .into_response()
+        } else {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    })
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 #[derive(Debug, serde::Deserialize)]

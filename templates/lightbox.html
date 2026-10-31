@@ -17,13 +17,9 @@
             <span class="star-clear" title="Clear rating">&times;</span>
         </span>
         <span class="lb-topbar-labels" id="lb-topbar-labels">
-            <span class="lb-dot" data-label="Red" style="background:#e74c3c;" title="Red"></span>
-            <span class="lb-dot" data-label="Orange" style="background:#e67e22;" title="Orange"></span>
-            <span class="lb-dot" data-label="Yellow" style="background:#f1c40f;" title="Yellow"></span>
-            <span class="lb-dot" data-label="Green" style="background:#27ae60;" title="Green"></span>
-            <span class="lb-dot" data-label="Blue" style="background:#3498db;" title="Blue"></span>
-            <span class="lb-dot" data-label="Pink" style="background:#e91e8e;" title="Pink"></span>
-            <span class="lb-dot" data-label="Purple" style="background:#9b59b6;" title="Purple"></span>
+            {% for l in crate::models::asset::COLOR_LABELS %}
+            <span class="lb-dot" data-label="{{ l.name }}" style="background:{{ l.hex }};" title="{{ l.name }}"></span>
+            {% endfor %}
             <span class="lb-clear" title="Clear label">&times;</span>
         </span>
         <!-- Slideshow play/pause + loop toggle. The play button text and
@@ -66,13 +62,9 @@
         </div>
         <h3>Label</h3>
         <div class="lightbox-labels" id="lb-labels">
-            <span class="lb-dot" data-label="Red" style="background:#e74c3c;" title="Red"></span>
-            <span class="lb-dot" data-label="Orange" style="background:#e67e22;" title="Orange"></span>
-            <span class="lb-dot" data-label="Yellow" style="background:#f1c40f;" title="Yellow"></span>
-            <span class="lb-dot" data-label="Green" style="background:#27ae60;" title="Green"></span>
-            <span class="lb-dot" data-label="Blue" style="background:#3498db;" title="Blue"></span>
-            <span class="lb-dot" data-label="Pink" style="background:#e91e8e;" title="Pink"></span>
-            <span class="lb-dot" data-label="Purple" style="background:#9b59b6;" title="Purple"></span>
+            {% for l in crate::models::asset::COLOR_LABELS %}
+            <span class="lb-dot" data-label="{{ l.name }}" style="background:{{ l.hex }};" title="{{ l.name }}"></span>
+            {% endfor %}
             <span class="lb-name" id="lb-label-name"></span>
             <span class="lb-clear" title="Clear label">&times;</span>
         </div>

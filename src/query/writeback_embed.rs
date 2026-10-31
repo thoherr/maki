@@ -11,13 +11,12 @@
 //! `--volume`/`--all`/`--force` interplay), but the target set is JPEG
 //! variants with online file locations, not `.xmp` recipes:
 //!
-//! - default        — assets owning at least one recipe flagged
-//!                    `pending_writeback` (the same "staged changes"
-//!                    signal the sidecar flush uses)
-//! - `--all`/`--force` — every asset (any caller-supplied scope still
-//!                    applies via the in-memory ID set)
-//! - `--volume`     — restricts which *file locations* are written
-//!                    (only JPEG copies on that volume)
+//! - default: assets owning at least one recipe flagged `pending_writeback`
+//!   (the same "staged changes" signal the sidecar flush uses)
+//! - `--all`/`--force`: every asset (any caller-supplied scope still
+//!   applies via the in-memory ID set)
+//! - `--volume`: restricts which *file locations* are written (only JPEG
+//!   copies on that volume)
 //!
 //! Tag semantics reuse the sidecar writeback's conventions verbatim:
 //! `dc:subject` gets flat components, `lr:hierarchicalSubject` gets
@@ -47,7 +46,7 @@
 //! the existing one — byte-equality counts as `already_in_sync`, no
 //! write, no hash churn.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -94,16 +93,11 @@ impl QueryEngine {
         let store = MetadataStore::new(&self.catalog_root);
         let registry = DeviceRegistry::new(&self.catalog_root);
         let volumes = registry.list()?;
-        let online: HashMap<uuid::Uuid, PathBuf> = volumes
-            .iter()
-            .filter(|v| v.is_online)
-            .map(|v| (v.id, v.mount_point.clone()))
-            .collect();
-        let volume_labels: HashMap<uuid::Uuid, String> =
-            volumes.iter().map(|v| (v.id, v.label.clone())).collect();
+        let online = DeviceRegistry::online_map_of(&volumes);
+        let volume_labels = DeviceRegistry::label_map_of(&volumes);
         let content_store = ContentStore::new(&self.catalog_root);
-        let trash = Trash::from_config(&self.catalog_root, no_trash);
-        let config = crate::config::CatalogConfig::load(&self.catalog_root).unwrap_or_default();
+        let trash = Trash::new_with(&self.catalog_root, &self.config.trash, no_trash);
+        let config = &self.config;
         let previewer = crate::preview::PreviewGenerator::new(
             &self.catalog_root,
             crate::Verbosity::quiet(),

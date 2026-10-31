@@ -17,16 +17,13 @@ use uuid::Uuid;
 /// Preview output format.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum PreviewFormat {
+    #[default]
     Jpeg,
     Webp,
 }
 
-impl Default for PreviewFormat {
-    fn default() -> Self {
-        Self::Jpeg
-    }
-}
 
 impl PreviewFormat {
     /// File extension for this format.
@@ -733,6 +730,7 @@ impl Default for HistoryConfig {
 
 /// XMP writeback configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Default)]
 pub struct WritebackConfig {
     /// Enable *automatic* XMP writeback on every edit. When true, edits
     /// to rating, label, description, and tags write through to the
@@ -792,16 +790,6 @@ pub struct WritebackConfig {
     pub create_sidecars: bool,
 }
 
-impl Default for WritebackConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            mirror_tags: false,
-            sidecar_naming: SidecarNaming::default(),
-            create_sidecars: false,
-        }
-    }
-}
 
 /// How MAKI names the `.xmp` sidecar files it creates next to a variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
@@ -931,6 +919,7 @@ fn is_default_browse(b: &BrowseConfig) -> bool {
 /// state they configured. Optional fields inside a section still skip
 /// when `None` — only top-level sections lost the per-section skip.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Default)]
 pub struct CatalogConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_volume: Option<Uuid>,
@@ -968,29 +957,6 @@ pub struct CatalogConfig {
     pub audio: AudioConfig,
 }
 
-impl Default for CatalogConfig {
-    fn default() -> Self {
-        Self {
-            default_volume: None,
-            preview: PreviewConfig::default(),
-            serve: ServeConfig::default(),
-            import: ImportConfig::default(),
-            dedup: DedupConfig::default(),
-            verify: VerifyConfig::default(),
-            ai: AiConfig::default(),
-            contact_sheet: ContactSheetDefaults::default(),
-            vlm: VlmConfig::default(),
-            browse: BrowseConfig::default(),
-            writeback: WritebackConfig::default(),
-            trash: TrashConfig::default(),
-            history: HistoryConfig::default(),
-            cli: CliDefaults::default(),
-            group: GroupConfig::default(),
-            watch: WatchConfig::default(),
-            audio: AudioConfig::default(),
-        }
-    }
-}
 
 impl CatalogConfig {
     /// Load configuration from a maki.toml file (falls back to legacy dam.toml).

@@ -27,16 +27,17 @@ cargo build --release --features pro
 
 Builds the **Pro** edition with SigLIP-based zero-shot image classification, face detection/recognition, and visual similarity search. The `pro` feature enables `ai` automatically. Adds ONNX Runtime (`ort`), `ndarray`, and `tokenizers` as dependencies. The ONNX Runtime shared library is downloaded automatically during build.
 
-Two layers of commands are feature-gated (see `print_custom_help` in `src/main.rs`):
+Two layers of commands are feature-gated (see `render_help_overview` and `HELP_GROUPS` in `src/main.rs`, which build `maki --help` from the clap metadata and are checked by a unit test):
 
 - `--features ai` compiles the AI commands `auto-tag`, `auto-stack`, `embed`, `faces` and `ai`, plus the `similar:` / text-query search paths, the stroll page and the AI web endpoints.
 - `--features pro` additionally compiles `describe` (VLM descriptions), `writeback` and `sync-metadata`, and switches the branding to "MAKI Pro".
+- `--features ai-gpu` (macOS) adds the CoreML execution provider. `build.rs` then links Clang's `libclang_rt.osx.a` (found via `xcrun clang --print-resource-dir`), which the prebuilt ONNX Runtime needs for its `@available` checks and which the release profile's thin LTO would otherwise leave unresolved. Build it with `--release` after touching `ort` or the release profile.
 
 A standard build (no features) has none of these; `maki --help` lists them under a "download MAKI Pro for ..." note instead.
 
 ### Requirements
 
-- **Rust edition**: 2021; minimum Rust **1.89** for the standard build (std file locking; the bundled-SQLite stack needs 1.88) and **1.92** for `--features ai` / `pro` (the `ort` ONNX Runtime binding, rc.15, declares 1.92). CI tracks stable.
+- **Rust edition**: 2021; minimum Rust **1.92**, enforced by `rust-version` in `Cargo.toml` for every feature set (the `ort` ONNX Runtime binding behind `ai` / `pro` declares 1.92; the standard build would compile on 1.89 but is not supported there). CI tracks stable.
 - **Platforms**: macOS, Linux, Windows
 - **SQLite**: Bundled via `rusqlite` with the `bundled` feature (no system SQLite required)
 

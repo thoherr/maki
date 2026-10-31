@@ -16,8 +16,7 @@
     var initialTagStr = "{{ tag|js_string|safe }}";
 
     function fetchTags() {
-        fetch('/api/tags')
-            .then(function(r) { return r.json(); })
+        MAKI.api.get('/api/tags')
             .then(function(data) {
                 allTags = data.map(function(t) { return t[0]; });
             });
@@ -895,7 +894,9 @@
         };
     }
 
-    // Build a query string from current filter state
+    // Build a query string from current filter state. Values with spaces
+    // are quoted by MAKI.quoteFilterValue (canonical rule: Rust
+    // SavedSearch::to_url_params / requote_token in src/saved_search.rs).
     window.damFilterQuery = function() {
         var parts = [];
         var qEl = document.querySelector('[name=q]');
@@ -913,8 +914,7 @@
                 prefix += rest.charAt(0);
                 rest = rest.substring(1);
             }
-            if (rest.indexOf(' ') !== -1) { parts.push('tag:' + prefix + '"' + rest + '"'); }
-            else { parts.push('tag:' + prefix + rest); }
+            parts.push('tag:' + prefix + MAKI.quoteFilterValue(rest));
         });
         var r = getFilterRating();
         if (r) parts.push('rating:' + r);
@@ -931,40 +931,34 @@
         var colEl = document.querySelector('.filter-row [name=collection]');
         if (colEl && colEl.value) {
             var colName = colEl.options[colEl.selectedIndex].textContent.trim();
-            if (colName.indexOf(' ') !== -1) { parts.push('collection:"' + colName + '"'); }
-            else { parts.push('collection:' + colName); }
+            parts.push('collection:' + MAKI.quoteFilterValue(colName));
         }
         // People: emit one `person:` token per chip. AND'd by the backend,
         // matching how multiple `tag:` tokens compose. Quote names that
         // contain spaces.
         var people = window.getSelectedPeople ? window.getSelectedPeople() : [];
         people.forEach(function(name) {
-            if (name.indexOf(' ') !== -1) { parts.push('person:"' + name + '"'); }
-            else { parts.push('person:' + name); }
+            parts.push('person:' + MAKI.quoteFilterValue(name));
         });
         var pathEl = document.querySelector('.filter-row [name=path]');
         if (pathEl && pathEl.value) {
             var pv = pathEl.value.trim();
-            if (pv.indexOf(' ') !== -1) { parts.push('path:"' + pv + '"'); }
-            else { parts.push('path:' + pv); }
+            parts.push('path:' + MAKI.quoteFilterValue(pv));
         }
         return parts.join(' ');
     };
 
     // ─── Path autocomplete ──────────────────────────────────────────
-    // Hierarchical completion on the path filter. Each accepted segment
-    // ends in `/` so the next keystroke triggers a query for the next
-    // level. Wildcard patterns (`*` anywhere in the value) suppress
-    // autocomplete — the filter already understands wildcards, and
-    // offering completions for a pattern would be noise.
+    // Hierarchical completion on the path filter (shared widget:
+    // MAKI.pathAutocomplete). Each accepted directory ends in `/` so the
+    // next keystroke queries the next level. Wildcard patterns (`*`
+    // anywhere in the value) suppress autocomplete — the filter already
+    // understands wildcards, and offering completions for a pattern
+    // would be noise.
     (function() {
         var pathInput = document.getElementById('path-input');
         var pathAc = document.getElementById('path-autocomplete');
         if (!pathInput || !pathAc) return;
-
-        var pathAcIndex = -1;
-        var debounceTimer = null;
-        var lastQuery = null;
 
         function selectedVolumeId() {
             // The volume dropdown is a <select name="volume"> whose value
@@ -976,137 +970,37 @@
             return volEl && volEl.value ? volEl.value : '';
         }
 
-        function hidePathAc() {
-            pathAc.style.display = 'none';
-            pathAcIndex = -1;
-        }
-
-        function renderPathSuggestions(items) {
-            pathAc.innerHTML = '';
-            pathAcIndex = -1;
-            if (!items || items.length === 0) { hidePathAc(); return; }
-            items.forEach(function(p) {
-                var div = document.createElement('div');
-                div.className = 'tag-suggestion';
-                div.setAttribute('data-path', p);
+        MAKI.pathAutocomplete(pathInput, {
+            container: pathAc,
+            key: function(prefix) { return prefix.indexOf('*') !== -1 ? null : prefix; },
+            fetch: function(prefix) {
+                // limit=100: a yearly/monthly/daily directory tree easily
+                // outgrows 20 (≥30 years × 12 months × 31 days, plus
+                // multi-shoot days). 100 covers every realistic same-level
+                // sibling count without overwhelming the dropdown.
+                var url = '/api/paths?limit=100&q=' + encodeURIComponent(prefix);
+                var vol = selectedVolumeId();
+                if (vol) url += '&volume=' + encodeURIComponent(vol);
+                return MAKI.api.get(url).then(function(items) {
+                    return (items || []).map(function(p) { return { value: p, isDir: p.slice(-1) === '/' }; });
+                });
+            },
+            render: function(item, prefix) {
                 // Dim the prefix part (matches the tag autocomplete pattern)
                 // so the eye lands on the distinguishing suffix.
-                var prefix = pathInput.value;
+                var p = item.value;
                 if (p.indexOf(prefix) === 0 && prefix.length > 0) {
-                    div.innerHTML = '<span class="tag-path-prefix">' +
-                        prefix.replace(/&/g,'&amp;').replace(/</g,'&lt;') +
-                        '</span>' +
-                        p.substring(prefix.length).replace(/&/g,'&amp;').replace(/</g,'&lt;');
-                } else {
-                    div.textContent = p;
+                    return '<span class="tag-path-prefix">' + MAKI.escHtml(prefix) + '</span>' +
+                        MAKI.escHtml(p.substring(prefix.length));
                 }
-                div.onmousedown = function(e) {
-                    e.preventDefault();
-                    acceptPathSuggestion(p);
-                };
-                pathAc.appendChild(div);
-            });
-            pathAc.style.display = 'block';
-        }
-
-        function highlightPathAc(idx) {
-            var items = pathAc.querySelectorAll('.tag-suggestion');
-            items.forEach(function(el, i) { el.classList.toggle('active', i === idx); });
-            if (idx >= 0 && items[idx]) items[idx].scrollIntoView({block: 'nearest'});
-        }
-
-        function acceptPathSuggestion(p) {
-            pathInput.value = p;
-            hidePathAc();
-            // If accepted value ends in `/`, leave the cursor at the end
-            // so the user's next keystroke continues at the next level.
-            // If it's a file leaf (no trailing slash), dismiss and commit.
-            if (p.slice(-1) === '/') {
-                pathInput.focus();
-                // Fire an input event to query the next level immediately.
-                fetchPathSuggestions(p);
-            } else {
-                onFilterChange();
-            }
-        }
-
-        function fetchPathSuggestions(prefix) {
-            // Suppress autocomplete when the user is using a wildcard
-            // pattern — the filter will interpret `*` itself, and
-            // completions for a pattern would be misleading.
-            if (prefix.indexOf('*') !== -1) { hidePathAc(); return; }
-            // Tiny de-dupe: a rapid sequence of the same query (e.g. from
-            // a spurious input event) shouldn't re-fetch.
-            if (prefix === lastQuery) return;
-            lastQuery = prefix;
-            // limit=100: a yearly/monthly/daily directory tree easily
-            // outgrows 20 (≥30 years × 12 months × 31 days, plus
-            // multi-shoot days). 100 covers every realistic same-level
-            // sibling count without overwhelming the dropdown.
-            var url = '/api/paths?limit=100&q=' + encodeURIComponent(prefix);
-            var vol = selectedVolumeId();
-            if (vol) url += '&volume=' + encodeURIComponent(vol);
-            fetch(url)
-                .then(function(r) { return r.ok ? r.json() : []; })
-                .then(function(items) {
-                    // Only render if the input still matches what we asked
-                    // for — avoids late responses overwriting fresher ones.
-                    if (pathInput.value !== prefix) return;
-                    renderPathSuggestions(items);
-                })
-                .catch(function() { hidePathAc(); });
-        }
-
-        function schedulePathFetch(prefix) {
-            if (debounceTimer) clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(function() {
-                fetchPathSuggestions(prefix);
-            }, 120);
-        }
-
-        pathInput.addEventListener('input', function() {
-            schedulePathFetch(this.value);
+                return MAKI.escHtml(p);
+            },
+            // A file leaf (no trailing slash) commits the filter change;
+            // Enter with no open suggestions commits as well.
+            onCommit: function() { onFilterChange(); },
+            onEnter: function() { onFilterChange(); },
+            stopPropagation: true
         });
-
-        pathInput.addEventListener('focus', function() {
-            // Show suggestions immediately on focus (even with an empty
-            // value) so users can browse the path tree from scratch.
-            lastQuery = null;
-            fetchPathSuggestions(this.value);
-        });
-
-        pathInput.addEventListener('blur', function() {
-            // Delay hide so an onmousedown on a suggestion can still fire.
-            setTimeout(hidePathAc, 150);
-        });
-
-        pathInput.addEventListener('keydown', function(e) {
-            var items = pathAc.querySelectorAll('.tag-suggestion');
-            var open = pathAc.style.display === 'block' && items.length > 0;
-            if (e.key === 'ArrowDown' && open) {
-                e.preventDefault();
-                pathAcIndex = Math.min(pathAcIndex + 1, items.length - 1);
-                highlightPathAc(pathAcIndex);
-            } else if (e.key === 'ArrowUp' && open) {
-                e.preventDefault();
-                pathAcIndex = Math.max(pathAcIndex - 1, 0);
-                highlightPathAc(pathAcIndex);
-            } else if ((e.key === 'Tab' || e.key === 'Enter') && open && pathAcIndex >= 0) {
-                // Tab = accept current highlight, stay in field (shell-style).
-                // Enter = accept current highlight too; if it's a directory
-                // completion, the `/` is already in place for the next level.
-                e.preventDefault();
-                acceptPathSuggestion(items[pathAcIndex].getAttribute('data-path'));
-            } else if (e.key === 'Enter' && !open) {
-                // No open suggestions — let Enter commit the filter change.
-                onFilterChange();
-            } else if (e.key === 'Escape' && open) {
-                e.preventDefault();
-                hidePathAc();
-            }
-            e.stopPropagation();
-        });
-        pathInput.addEventListener('keyup', function(e) { e.stopPropagation(); });
     })();
 })();
 </script>

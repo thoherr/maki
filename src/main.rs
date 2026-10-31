@@ -13,10 +13,8 @@ use commands::*;
 
 use clap::{Parser, Subcommand};
 use maki::catalog::Catalog;
-use maki::cli_output::format_duration;
+use maki::cli_output::{format_duration, CliContext};
 use maki::config::CatalogConfig;
-use maki::device_registry::DeviceRegistry;
-use maki::query::QueryEngine;
 
 /// Long help text for the `maki search QUERY` argument. Shown on
 /// `maki search --help` and `maki help search`. Short help (shown on
@@ -1071,6 +1069,7 @@ enum Commands {
         ///      catalog reports as already in sync), and
         ///   2. drops every existing XMP keyword in the target blocks
         ///      before re-adding the catalog's tags fresh.
+        ///
         /// More aggressive than `--mirror-tags`, which only drops
         /// entries the catalog doesn't have. Use this when stale
         /// entries are stuck in a file that mirror-tags didn't catch
@@ -2061,94 +2060,87 @@ enum TrashCommands {
 }
 
 /// Print custom grouped help text through a pager.
-fn print_custom_help() {
+/// Grouping for the `maki --help` overview, rendered from `Cli::command()`
+/// so descriptions and aliases can never drift from clap. Every top-level
+/// command must appear exactly once; `tests::help_groups_cover_every_subcommand`
+/// enforces it. Feature-gated commands that are compiled out are skipped.
+const HELP_GROUPS: &[(&str, &[&str])] = &[
+    ("Setup", &["init", "volume"]),
+    (
+        "Ingest & Edit",
+        &[
+            "import", "watch", "delete", "tag", "edit", "group", "split", "auto-group", "audio",
+            "describe", "auto-tag", "auto-stack", "embed", "faces", "ai",
+        ],
+    ),
+    ("Organize", &["collection", "saved-search", "stack"]),
+    (
+        "Retrieve",
+        &[
+            "search", "show", "preview", "export", "contact-sheet", "duplicates", "stats",
+            "status", "backup-status", "doc", "licenses",
+        ],
+    ),
+    (
+        "Maintain",
+        &[
+            "undo", "history", "doctor", "verify", "sync", "refresh", "sync-metadata",
+            "writeback", "cleanup", "dedup", "trash", "relocate", "update-location",
+            "generate-previews", "fix-roles", "fix-dates", "fix-recipes", "create-sidecars",
+            "rebuild-catalog", "migrate",
+        ],
+    ),
+    ("Interactive", &["serve", "shell"]),
+];
+
+/// Build the grouped `maki --help` overview from clap metadata.
+fn render_help_overview() -> String {
+    use clap::CommandFactory;
+    use std::fmt::Write as _;
+
+    let cmd = Cli::command();
     let version = env!("CARGO_PKG_VERSION");
     let edition = if cfg!(feature = "pro") { " Pro" } else { "" };
     let ai_note = if cfg!(feature = "pro") { "" } else { "  (download MAKI Pro for: describe, auto-tag, auto-stack, embed, faces, writeback, sync-metadata)" };
 
-    let help = format!("\
-maki{edition} {version} — Media Asset Keeper & Indexer{ai_note}
+    let mut help = format!("maki{edition} {version} — Media Asset Keeper & Indexer{ai_note}\n\nUsage: maki [OPTIONS] <COMMAND>\n");
 
-Usage: maki [OPTIONS] <COMMAND>
+    for (heading, names) in HELP_GROUPS {
+        let _ = writeln!(help, "\n{heading}:");
+        for name in *names {
+            // Compiled out in this edition (feature-gated variant).
+            let Some(sub) = cmd.find_subcommand(name) else { continue };
+            let about = sub.get_about().map(|a| a.to_string()).unwrap_or_default();
+            let aliases: Vec<&str> = sub.get_all_aliases().collect();
+            let alias = if aliases.is_empty() {
+                String::new()
+            } else {
+                format!("  [alias: {}]", aliases.join(", "))
+            };
+            let _ = writeln!(help, "  {name:<18} {about}{alias}");
+        }
+    }
 
-Setup:
-  init               Initialize a new catalog in the current directory
-  volume             Manage storage volumes
+    help.push_str("\nOptions:\n");
+    let mut globals: Vec<&clap::Arg> = cmd.get_arguments().filter(|a| a.is_global_set()).collect();
+    globals.sort_by_key(|a| a.get_display_order());
+    for arg in globals {
+        let Some(long) = arg.get_long() else { continue };
+        let flags = match arg.get_short() {
+            Some(short) => format!("-{short}, --{long}"),
+            None => format!("    --{long}"),
+        };
+        let about = arg.get_help().map(|h| h.to_string()).unwrap_or_default();
+        let _ = writeln!(help, "  {flags:<19}{about}");
+    }
+    help.push_str("  -h, --help         Print help (use <command> --help for details)\n");
+    help.push_str("  -V, --version      Print version\n");
+    help.push_str("\n  https://maki-dam.com — docs, downloads, and support\n");
+    help
+}
 
-Ingest & Edit:
-  import             Import files into the catalog
-  watch              Watch directories and auto-import new files (poll-based)
-  delete             Delete assets from the catalog
-  tag                Add, remove, rename, clear, or expand tags (supports subcommands)
-  edit               Edit asset metadata (name, description, rating, label, date)
-  group              Group variants into one asset
-  split              Split variants out of an asset into new standalone assets
-  auto-group         Auto-group assets by filename stem
-  audio              Audio analysis (key / BPM via external analyzers)
-{describe}{auto_tag}{auto_stack}{embed}{faces}{ai}
-
-Organize:
-  collection         Manage collections (static albums)  [alias: col]
-  saved-search       Manage saved searches (smart albums)  [alias: ss]
-  stack              Manage stacks (scene grouping)  [alias: st]
-
-Retrieve:
-  search             Search assets
-  show               Show asset details
-  preview            Open the asset's preview in the OS default image viewer
-  export             Export files matching a search query to a directory
-  contact-sheet      Generate a PDF contact sheet from search results
-  duplicates         Find duplicate files
-  stats              Show catalog statistics
-  status             Show catalog health at a glance (volumes, previews, pending work)
-  backup-status      Check backup coverage and find under-backed-up assets
-  doc                Open documentation in the browser (manual, cheatsheet, filters, tagging)
-  licenses           Show MAKI license and third-party crate licenses
-
-Maintain:
-  undo               Undo the most recent metadata edit
-  history            Show recent metadata edits (optionally for one asset)
-  doctor             Check YAML-sidecar ↔ SQLite-catalog consistency
-  verify             Check file integrity
-  sync               Sync catalog with disk changes (moved/modified/missing files)
-  refresh            Re-read metadata from changed sidecar/recipe files{sync_metadata}{writeback}
-  cleanup            Remove stale file location records (files no longer on disk)
-  dedup              Remove same-volume duplicate file locations
-  trash              Inspect, restore, or empty the catalog trash
-  relocate           Copy or move asset files to another volume
-  update-location    Update a file's catalog path after it was moved on disk
-  generate-previews  Generate or regenerate preview thumbnails
-  fix-roles          Fix variant roles in RAW+non-RAW groups
-  fix-dates          Fix asset dates from EXIF metadata and file timestamps
-  fix-recipes        Re-attach recipe files that were imported as standalone assets
-  create-sidecars    Create missing XMP sidecar files for assets with metadata
-  rebuild-catalog    Rebuild SQLite catalog from sidecar files
-  migrate            Run database schema migrations
-
-Interactive:
-  serve              Start the web UI server
-  shell              Interactive asset management shell (variables, tab completion, scripts)
-
-Options:
-      --json         Output machine-readable JSON
-  -v, --verbose      Show operational details (file counts, volume detection, etc.)
-  -l, --log          Log individual file progress
-  -d, --debug        Show debug output from external tools (implies --verbose)
-  -t, --time         Show elapsed time after command execution
-  -h, --help         Print help (use <command> --help for details)
-  -V, --version      Print version
-
-  https://maki-dam.com — docs, downloads, and support
-",
-        describe = if cfg!(feature = "pro") { "\n  describe           Generate image descriptions using a VLM" } else { "" },
-        auto_tag = if cfg!(feature = "ai") { "\n  auto-tag           Auto-tag assets using AI vision model" } else { "" },
-        auto_stack = if cfg!(feature = "ai") { "\n  auto-stack         Cluster visually similar assets into stacks" } else { "" },
-        embed = if cfg!(feature = "ai") { "\n  embed              Generate embeddings for visual similarity search" } else { "" },
-        faces = if cfg!(feature = "ai") { "\n  faces              Face detection and recognition" } else { "" },
-        ai = if cfg!(feature = "ai") { "\n  ai                 AI vocabulary tools (export-vocabulary)" } else { "" },
-        sync_metadata = if cfg!(feature = "pro") { "\n  sync-metadata      Bidirectional metadata sync: read XMP changes + write back pending edits" } else { "" },
-        writeback = if cfg!(feature = "pro") { "\n  writeback          Write back pending metadata changes to XMP recipe files" } else { "" },
-    );
+fn print_custom_help() {
+    let help = render_help_overview();
 
     // Pipe through pager if stdout is a terminal
     if atty_stdout() {
@@ -2252,77 +2244,14 @@ fn main() {
 
 
 
-/// `  92%` / `  100% exact` suffix for similarity-ranked search rows;
-/// empty for ordinary searches.
-fn similarity_suffix(row: &maki::catalog::SearchRow) -> String {
-    match row.similarity {
-        Some(s) if row.exact_match => format!("  {}% exact", (s * 100.0).round() as u32),
-        Some(s) => format!("  {}%", (s * 100.0).round() as u32),
-        None => String::new(),
-    }
-}
-
 fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
     let verbosity = maki::Verbosity::new(cli.verbose, cli.debug);
+    let ctx = CliContext::new(cli.json, cli.log, verbosity);
     let mut _asset_ids: Vec<String> = Vec::new();
 
     let result: anyhow::Result<()> = (|| match cli.command {
-        Commands::Init => {
-            let catalog_root = std::env::current_dir()?;
-            let config_path = catalog_root.join("maki.toml");
-            if config_path.exists() {
-                anyhow::bail!("a maki catalog already exists in this directory.");
-            }
-
-            // Create directories
-            std::fs::create_dir_all(catalog_root.join("metadata"))?;
-            std::fs::create_dir_all(catalog_root.join("previews"))?;
-            std::fs::create_dir_all(catalog_root.join("smart-previews"))?;
-
-            // Write config
-            CatalogConfig::default().save(&catalog_root)?;
-
-            // Initialize SQLite schema
-            let catalog = Catalog::open(&catalog_root)?;
-            catalog.initialize()?;
-
-            // Write empty volumes registry
-            DeviceRegistry::init(&catalog_root)?;
-
-            // Write .gitignore for optional git-based backup
-            let gitignore_path = catalog_root.join(".gitignore");
-            if !gitignore_path.exists() {
-                std::fs::write(&gitignore_path, "\
-# Derived cache — rebuilt from YAML sidecars via 'maki rebuild-catalog'\n\
-catalog.db*\n\
-\n\
-# Generated thumbnails — regenerated via 'maki generate-previews'\n\
-previews/\n\
-smart-previews/\n\
-\n\
-# AI artifacts — regenerated via 'maki embed' / 'maki faces detect'\n\
-embeddings/\n\
-faces/\n\
-")?;
-            }
-
-            // Write default tag vocabulary
-            let vocab_path = catalog_root.join("vocabulary.yaml");
-            if !vocab_path.exists() {
-                std::fs::write(&vocab_path, maki::vocabulary::default_vocabulary())?;
-            }
-
-            if cli.json {
-                println!("{}", serde_json::json!({
-                    "status": "initialized",
-                    "path": catalog_root.display().to_string()
-                }));
-            } else {
-                println!("Initialized new maki catalog in {}", catalog_root.display());
-            }
-            Ok(())
-        }
-        Commands::Volume(cmd) => run_volume_command(cmd, cli.json, cli.log, verbosity),
+        Commands::Init => run_init_command(ctx),
+        Commands::Volume(cmd) => run_volume_command(cmd, ctx),
         Commands::Import {
             paths,
             volume,
@@ -2351,156 +2280,13 @@ faces/\n\
             embed,
             #[cfg(feature = "pro")]
             describe,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Watch { paths, volume, interval, once } => {
-            run_watch_command(paths, volume, interval, once, cli.json, cli.log, verbosity)
+            run_watch_command(paths, volume, interval, once, ctx)
         }
         Commands::Search { query, format, quiet, image, limit } => {
-            use maki::format::{self, OutputFormat};
-
-            let query = query.unwrap_or_default();
-            let (catalog_root, config) = maki::config::load_config()?;
-            let engine = QueryEngine::with_default_filter(&catalog_root, config.browse.default_filter);
-            let results = if let Some(ref image_path) = image {
-                let (rows, info) = engine.search_with_image(
-                    &query,
-                    maki::query::ImageSearch { path: image_path, limit },
-                )?;
-                if let Some(w) = info.warning {
-                    eprintln!("Warning: {w}");
-                    eprintln!("  (exact copy found by content hash; similar-image ranking skipped)");
-                }
-                match info.exact_asset_id {
-                    Some(ref id) => eprintln!("Exact match: {id}"),
-                    None if verbosity.verbose => {
-                        eprintln!("  No byte-identical copy in catalog ({})", info.content_hash)
-                    }
-                    None => {}
-                }
-                rows
-            } else {
-                engine.search(&query)?
-            };
-
-            if verbosity.verbose {
-                eprintln!("  Search: query=\"{query}\", {} result(s)", results.len());
-            }
-
-            // Capture asset IDs for shell _ variable
-            _asset_ids = results.iter().map(|r| r.asset_id.clone()).collect();
-
-            // Determine output format
-            let output_format = if quiet {
-                OutputFormat::Ids
-            } else if let Some(fmt) = &format {
-                format::parse_format(fmt).map_err(|e| anyhow::anyhow!(e))?
-            } else if cli.json {
-                OutputFormat::Json
-            } else {
-                OutputFormat::Short
-            };
-
-            let explicit_format = quiet || format.is_some();
-
-            if results.is_empty() {
-                match output_format {
-                    OutputFormat::Json => println!("[]"),
-                    _ => {
-                        if !explicit_format {
-                            println!("No results found.");
-                            // Hint: if the query has a filter like tag:X followed by
-                            // unquoted words, the user likely forgot inner quotes.
-                            let parsed = maki::query::parse_search_query(&query);
-                            let has_filter = !parsed.tags.is_empty() || !parsed.cameras.is_empty()
-                                || !parsed.lenses.is_empty() || !parsed.descriptions.is_empty()
-                                || !parsed.collections.is_empty() || !parsed.path_prefixes.is_empty();
-                            if has_filter && parsed.text.is_some() {
-                                eprintln!("Hint: values with spaces need inner quotes, e.g. tag:\"my tag\"");
-                                eprintln!("  Shell example: maki search 'tag:\"my tag\" rating:3+'");
-                            }
-                        }
-                    }
-                }
-            } else {
-                match output_format {
-                    OutputFormat::Ids => {
-                        for row in &results {
-                            println!("{}", row.asset_id);
-                        }
-                    }
-                    OutputFormat::Short => {
-                        for row in &results {
-                            let display_name = row
-                                .name
-                                .as_deref()
-                                .unwrap_or(&row.original_filename);
-                            let short_id = &row.asset_id[..8];
-                            println!(
-                                "{}  {} [{}] ({}) — {}{}",
-                                short_id, display_name, row.asset_type, row.display_format(), row.created_at,
-                                similarity_suffix(row)
-                            );
-                        }
-                        if !explicit_format {
-                            println!("\n{} result(s)", results.len());
-                        }
-                    }
-                    OutputFormat::Full => {
-                        for row in &results {
-                            let display_name = row
-                                .name
-                                .as_deref()
-                                .unwrap_or(&row.original_filename);
-                            let short_id = &row.asset_id[..8];
-                            let tags = if row.tags.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" tags:{}", row.tags.join(","))
-                            };
-                            let desc = row.description.as_deref().unwrap_or("");
-                            println!(
-                                "{}  {} [{}] ({}) — {}{}{} {}",
-                                short_id, display_name, row.asset_type, row.display_format(),
-                                row.created_at, similarity_suffix(row), tags, desc
-                            );
-                        }
-                        if !explicit_format {
-                            println!("\n{} result(s)", results.len());
-                        }
-                    }
-                    OutputFormat::Json => {
-                        println!("{}", serde_json::to_string_pretty(&results)?);
-                    }
-                    OutputFormat::Template(ref tpl) => {
-                        for row in &results {
-                            let tags_str = row.tags.join(", ");
-                            let desc = row.description.as_deref().unwrap_or("");
-                            let label = row.color_label.as_deref().unwrap_or("");
-                            let mut values = format::search_row_values(
-                                &row.asset_id,
-                                row.name.as_deref(),
-                                &row.original_filename,
-                                &row.asset_type,
-                                row.display_format(),
-                                &row.created_at,
-                                &tags_str,
-                                desc,
-                                &row.content_hash,
-                                label,
-                            );
-                            values.insert(
-                                "similarity",
-                                row.similarity.map(|s| format!("{}", (s * 100.0).round() as u32)).unwrap_or_default(),
-                            );
-                            values.insert("exact", if row.exact_match { "exact".to_string() } else { String::new() });
-                            println!("{}", format::render_template(tpl, &values));
-                        }
-                    }
-                }
-            }
+            _asset_ids = run_search_command(query, format, quiet, image, limit, ctx)?;
             Ok(())
         }
         Commands::Show {
@@ -2509,20 +2295,16 @@ faces/\n\
         } => run_show_command(
             asset_id,
             locations,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Preview {
             asset_id,
         } => run_preview_command(
             asset_id,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Tag { asset_id, remove, tags, subcmd } => run_tag_command(
-            asset_id, remove, tags, subcmd, cli.json, cli.log,
+            asset_id, remove, tags, subcmd, ctx,
         ),
         Commands::Edit {
             asset_id,
@@ -2554,17 +2336,13 @@ faces/\n\
             clear_date,
             role,
             variant,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Group {
             variant_hashes,
         } => run_group_command(
             variant_hashes,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Split {
             asset_id,
@@ -2572,9 +2350,7 @@ faces/\n\
         } => run_split_command(
             asset_id,
             variant_hashes,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Delete {
             asset_ids,
@@ -2586,9 +2362,7 @@ faces/\n\
             apply,
             remove_files,
             no_trash,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         #[cfg(feature = "pro")]
         Commands::Describe {
@@ -2631,9 +2405,7 @@ faces/\n\
             dry_run,
             check,
             asset_ids,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         #[cfg(feature = "ai")]
         Commands::AutoTag {
@@ -2664,9 +2436,7 @@ faces/\n\
             list_labels,
             similar,
             asset_ids,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         #[cfg(feature = "ai")]
         Commands::AutoStack {
@@ -2681,9 +2451,7 @@ faces/\n\
             min_size,
             apply,
             asset_ids,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         #[cfg(feature = "ai")]
         Commands::Embed {
@@ -2702,18 +2470,16 @@ faces/\n\
             force,
             export,
             asset_ids,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         #[cfg(feature = "ai")]
         Commands::Faces(cmd) => {
-            run_faces_command(cmd, cli.json, cli.log, verbosity)?;
+            run_faces_command(cmd, ctx)?;
             Ok(())
         }
         #[cfg(feature = "ai")]
         Commands::Ai(cmd) => {
-            run_ai_command(cmd, cli.json)?;
+            run_ai_command(cmd, ctx)?;
             Ok(())
         }
 
@@ -2725,9 +2491,7 @@ faces/\n\
             query,
             apply,
             global,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Relocate {
             asset_ids,
@@ -2743,18 +2507,16 @@ faces/\n\
             remove_source,
             create_sidecars,
             dry_run,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Undo { dry_run, force } => {
-            run_undo_command(dry_run, force, cli.json, cli.log)
+            run_undo_command(dry_run, force, ctx)
         }
         Commands::History { asset, limit } => {
-            run_history_command(asset, limit, cli.json)
+            run_history_command(asset, limit, ctx)
         }
         Commands::Doctor { sample, repair } => {
-            run_doctor_command(sample, repair, cli.json, cli.log)
+            run_doctor_command(sample, repair, ctx)
         }
         Commands::Verify {
             paths,
@@ -2772,9 +2534,7 @@ faces/\n\
             skip,
             max_age,
             force,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Sync {
             paths,
@@ -2786,9 +2546,7 @@ faces/\n\
             volume,
             apply,
             remove_stale,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         #[cfg(feature = "pro")]
         Commands::SyncMetadata {
@@ -2805,9 +2563,7 @@ faces/\n\
             dry_run,
             media,
             asset_ids,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Refresh {
             paths,
@@ -2825,9 +2581,7 @@ faces/\n\
             media,
             reimport,
             exif_only,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         #[cfg(feature = "pro")]
         Commands::Writeback {
@@ -2852,9 +2606,7 @@ faces/\n\
             no_trash,
             dry_run,
             asset_ids,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Cleanup {
             volume,
@@ -2866,9 +2618,7 @@ faces/\n\
             path,
             list,
             apply,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Dedup {
             volume,
@@ -2886,14 +2636,12 @@ faces/\n\
             min_copies,
             apply,
             no_trash,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
-        Commands::Trash { command } => run_trash_command(command, cli.json),
+        Commands::Trash { command } => run_trash_command(command, ctx),
         Commands::Audio { command } => match command {
             AudioCommands::Analyze { query, force, dry_run } => {
-                run_audio_analyze_command(query, force, dry_run, cli.json, cli.log, verbosity)
+                run_audio_analyze_command(query, force, dry_run, ctx)
             }
         },
         Commands::UpdateLocation {
@@ -2906,9 +2654,7 @@ faces/\n\
             from,
             to,
             volume,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Duplicates {
             format,
@@ -2924,9 +2670,7 @@ faces/\n\
             volume,
             filter_format,
             path,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::GeneratePreviews {
             paths,
@@ -2946,9 +2690,7 @@ faces/\n\
             force,
             upgrade,
             smart,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::FixRoles {
             paths,
@@ -2960,9 +2702,7 @@ faces/\n\
             volume,
             asset,
             apply,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::FixDates {
             query,
@@ -2976,9 +2716,7 @@ faces/\n\
             asset,
             apply,
             asset_ids,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::FixRecipes {
             query,
@@ -2992,9 +2730,7 @@ faces/\n\
             asset,
             apply,
             asset_ids,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::CreateSidecars {
             query,
@@ -3008,26 +2744,20 @@ faces/\n\
             asset,
             apply,
             asset_ids,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
-        Commands::RebuildCatalog { asset } => run_rebuild_catalog_command(asset, cli.json, cli.log),
+        Commands::RebuildCatalog { asset } => run_rebuild_catalog_command(asset, ctx),
         Commands::Licenses {
             summary,
         } => run_licenses_command(
             summary,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Doc {
             document,
         } => run_doc_command(
             document,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Serve {
             port,
@@ -3037,9 +2767,7 @@ faces/\n\
             port,
             bind,
             read_only,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::ContactSheet {
             query,
@@ -3077,9 +2805,7 @@ faces/\n\
             quality,
             copyright,
             dry_run,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Export {
             query,
@@ -3105,9 +2831,7 @@ faces/\n\
             dry_run,
             overwrite,
             zip,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Stats {
             types,
@@ -3123,17 +2847,13 @@ faces/\n\
             verified,
             all,
             limit,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::Status {
             min_copies,
         } => run_status_command(
             min_copies,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
         Commands::BackupStatus {
             query,
@@ -3149,55 +2869,12 @@ faces/\n\
             volume,
             format,
             quiet,
-            cli.json,
-            cli.log,
-            verbosity,
+            ctx,
         ),
-        Commands::Collection(cmd) => run_collection_command(cmd, cli.json, cli.log, verbosity),
-        Commands::Stack(cmd) => run_stack_command(cmd, cli.json, cli.log, verbosity),
-        Commands::SavedSearch(cmd) => run_saved_search_command(cmd, cli.json, cli.log, verbosity),
-        Commands::Migrate => {
-            let catalog_root = maki::config::find_catalog_root()?;
-            let catalog = Catalog::open_and_migrate(&catalog_root)?;
-            #[cfg(feature = "ai")]
-            {
-                let _ = maki::face_store::FaceStore::initialize(catalog.conn());
-                let _ = maki::embedding_store::EmbeddingStore::initialize(catalog.conn());
-            }
-            // Fix sidecar YAML files with MicrosoftPhoto:Rating percentage values
-            let store = maki::metadata_store::MetadataStore::new(&catalog_root);
-            let mut fixed_sidecars = 0u32;
-            let mut stmt = catalog.conn().prepare(
-                "SELECT id FROM assets WHERE rating IS NOT NULL",
-            )?;
-            let ids: Vec<String> = stmt.query_map([], |row| row.get(0))?
-                .filter_map(|r| r.ok())
-                .collect();
-            drop(stmt);
-            for id_str in &ids {
-                if let Ok(uuid) = id_str.parse::<uuid::Uuid>() {
-                    if let Ok(mut asset) = store.load_raw(uuid) {
-                        if let Some(r) = asset.rating {
-                            if r > 5 {
-                                asset.rating = Some(maki::asset_service::normalize_rating(r));
-                                let _ = store.save(&asset);
-                                fixed_sidecars += 1;
-                            }
-                        }
-                    }
-                }
-            }
-            let version = catalog.schema_version();
-            if cli.json {
-                println!("{}", serde_json::json!({"status": "ok", "schema_version": version, "fixed_ratings": fixed_sidecars}));
-            } else {
-                println!("Schema migrations applied successfully (schema version {version}).");
-                if fixed_sidecars > 0 {
-                    println!("Fixed {fixed_sidecars} sidecar files with out-of-range rating values.");
-                }
-            }
-            Ok(())
-        }
+        Commands::Collection(cmd) => run_collection_command(cmd, ctx),
+        Commands::Stack(cmd) => run_stack_command(cmd, ctx),
+        Commands::SavedSearch(cmd) => run_saved_search_command(cmd, ctx),
+        Commands::Migrate => run_migrate_command(ctx),
         Commands::Shell { .. } => {
             unreachable!("Shell command is handled before run_command")
         }
@@ -3206,89 +2883,141 @@ faces/\n\
     result.map(|()| _asset_ids)
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// `Cli::command()` for the full-feature build is deep enough to blow
+    /// the 2 MB default test-thread stack in debug builds; run clap-heavy
+    /// checks on a roomier thread.
+    fn with_big_stack(f: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(f)
+            .expect("spawn test thread")
+            .join()
+            .expect("test thread panicked");
+    }
+
+    fn subcommand_names() -> Vec<String> {
+        Cli::command().get_subcommands().map(|c| c.get_name().to_string()).collect()
+    }
+
+    /// Every clap subcommand is listed exactly once in `HELP_GROUPS`, and
+    /// (in the full-feature build) every listed name is a real subcommand.
+    #[test]
+    fn help_groups_cover_every_subcommand() {
+        with_big_stack(|| {
+            let listed: Vec<&str> = HELP_GROUPS.iter().flat_map(|(_, names)| names.iter().copied()).collect();
+            let mut deduped = listed.clone();
+            deduped.sort_unstable();
+            deduped.dedup();
+            assert_eq!(listed.len(), deduped.len(), "HELP_GROUPS lists a command twice");
+
+            for name in subcommand_names() {
+                assert!(listed.contains(&name.as_str()), "`{name}` is missing from HELP_GROUPS");
+            }
+            if cfg!(feature = "pro") {
+                let names = subcommand_names();
+                for name in &listed {
+                    assert!(names.iter().any(|n| n == name), "HELP_GROUPS lists unknown command `{name}`");
+                }
+            }
+
+            let help = render_help_overview();
+            for name in subcommand_names() {
+                assert!(help.contains(&format!("\n  {name:<18} ")), "`{name}` not rendered in --help");
+            }
+            assert!(help.starts_with("maki"));
+            assert!(help.ends_with("  https://maki-dam.com — docs, downloads, and support\n"));
+        });
+    }
+
+    /// First positional of a subcommand, if any.
+    fn first_positional(sub: &clap::Command) -> Option<&clap::Arg> {
+        sub.get_positionals().next()
+    }
+
+    /// `shell::SINGLE_ASSET_COMMANDS` = every command whose first positional
+    /// is a single `asset_id` (`tag` keeps it optional because of its subcommands).
+    #[test]
+    fn shell_single_asset_commands_match_clap() {
+        with_big_stack(|| {
+            let cmd = Cli::command();
+            let mut expected: Vec<&str> = cmd
+                .get_subcommands()
+                .filter(|sub| {
+                    first_positional(sub).is_some_and(|arg| {
+                        arg.get_id() == "asset_id"
+                            && arg.get_num_args().is_none_or(|n| n.max_values() == 1)
+                    })
+                })
+                .map(|sub| sub.get_name())
+                .collect();
+            expected.sort_unstable();
+            let mut actual = maki::shell::SINGLE_ASSET_COMMANDS.to_vec();
+            actual.sort_unstable();
+            assert_eq!(actual, expected, "shell::SINGLE_ASSET_COMMANDS drifted from clap");
+        });
+    }
+
+    /// `shell::QUERY_POSITIONAL_COMMANDS` = every command whose first
+    /// positional is a required `query` string.
+    #[test]
+    fn shell_query_positional_commands_match_clap() {
+        with_big_stack(|| {
+            let cmd = Cli::command();
+            let mut expected: Vec<&str> = cmd
+                .get_subcommands()
+                .filter(|sub| {
+                    first_positional(sub).is_some_and(|arg| arg.get_id() == "query" && arg.is_required_set())
+                })
+                .map(|sub| sub.get_name())
+                .collect();
+            expected.sort_unstable();
+            let mut actual = maki::shell::QUERY_POSITIONAL_COMMANDS.to_vec();
+            actual.sort_unstable();
+            assert_eq!(actual, expected, "shell::QUERY_POSITIONAL_COMMANDS drifted from clap");
+        });
+    }
+
+    /// `shell::SETTABLE_FLAGS` = the global `--long` flags of `Cli`.
+    #[test]
+    fn shell_settable_flags_match_clap_globals() {
+        with_big_stack(|| {
+            let cmd = Cli::command();
+            let mut expected: Vec<String> = cmd
+                .get_arguments()
+                .filter(|a| a.is_global_set())
+                .filter_map(|a| a.get_long().map(|l| format!("--{l}")))
+                .collect();
+            expected.sort_unstable();
+            let mut actual: Vec<String> = maki::shell::SETTABLE_FLAGS.iter().map(|s| s.to_string()).collect();
+            actual.sort_unstable();
+            assert_eq!(actual, expected, "shell::SETTABLE_FLAGS drifted from clap globals");
+        });
+    }
+
+    /// `shell::SUBCOMMANDS` = every clap subcommand except the blocked ones.
+    #[test]
+    fn shell_completion_subcommands_match_clap() {
+        with_big_stack(|| {
+            let mut expected: Vec<String> = subcommand_names()
+                .into_iter()
+                .filter(|n| !maki::shell::BLOCKED_COMMANDS.contains(&n.as_str()))
+                .collect();
+            expected.sort_unstable();
+            let actual: Vec<String> = maki::shell::SUBCOMMANDS.iter().map(|s| s.to_string()).collect();
+            if cfg!(feature = "pro") {
+                assert_eq!(actual, expected, "shell::SUBCOMMANDS drifted from clap");
+            } else {
+                // The shell lives in the library and lists the gated commands
+                // unconditionally; a lean build can only check coverage.
+                for name in &expected {
+                    assert!(actual.contains(name), "`{name}` missing from shell::SUBCOMMANDS");
+                }
+            }
+        });
+    }
+}

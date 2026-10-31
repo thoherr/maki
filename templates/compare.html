@@ -193,13 +193,9 @@
                     {% endfor %}
                 </span>
                 <span class="compare-labels" data-asset-id="{{ asset.asset_id }}">
-                    <span class="label-dot{% if asset.color_label.as_deref() == Some("Red") %} active{% endif %}" data-label="Red" style="background:#e74c3c;" title="Red"></span>
-                    <span class="label-dot{% if asset.color_label.as_deref() == Some("Orange") %} active{% endif %}" data-label="Orange" style="background:#e67e22;" title="Orange"></span>
-                    <span class="label-dot{% if asset.color_label.as_deref() == Some("Yellow") %} active{% endif %}" data-label="Yellow" style="background:#f1c40f;" title="Yellow"></span>
-                    <span class="label-dot{% if asset.color_label.as_deref() == Some("Green") %} active{% endif %}" data-label="Green" style="background:#27ae60;" title="Green"></span>
-                    <span class="label-dot{% if asset.color_label.as_deref() == Some("Blue") %} active{% endif %}" data-label="Blue" style="background:#3498db;" title="Blue"></span>
-                    <span class="label-dot{% if asset.color_label.as_deref() == Some("Pink") %} active{% endif %}" data-label="Pink" style="background:#e91e8e;" title="Pink"></span>
-                    <span class="label-dot{% if asset.color_label.as_deref() == Some("Purple") %} active{% endif %}" data-label="Purple" style="background:#9b59b6;" title="Purple"></span>
+                    {% for l in crate::models::asset::COLOR_LABELS %}
+                    <span class="label-dot{% if asset.color_label.as_deref() == Some(l.name) %} active{% endif %}" data-label="{{ l.name }}" style="background:{{ l.hex }};" title="{{ l.name }}"></span>
+                    {% endfor %}
                 </span>
             </div>
             <div class="compare-exif">
@@ -407,11 +403,7 @@
                 var label = dot.getAttribute('data-label');
                 var isActive = dot.classList.contains('active');
                 var newLabel = isActive ? '' : label;
-                fetch('/api/asset/' + assetId + '/label', {
-                    method: 'PUT',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({label: newLabel})
-                }).then(function() {
+                MAKI.api.put('/api/asset/' + assetId + '/label', {label: newLabel}).then(function() {
                     group.querySelectorAll('.label-dot').forEach(function(d) {
                         d.classList.remove('active');
                     });
@@ -460,8 +452,8 @@
     function zoomFocusedFull() { zoomFocused(transforms[focusedCol].scale === 1 ? 3 : 1); }
 
     // Keyboard shortcuts
-    var labelNumMap = {'1':'Red','2':'Orange','3':'Yellow','4':'Green','5':'Blue','6':'Pink','7':'Purple'};
-    var labelLetterMap = {'r':'Red','o':'Orange','y':'Yellow','g':'Green','b':'Blue','p':'Pink','u':'Purple'};
+    var labelNumMap = MAKI.labelNumMap;
+    var labelLetterMap = MAKI.labelLetterMap;
 
     function getFocusedAssetId() {
         return cols[focusedCol].getAttribute('data-asset-id');
@@ -491,11 +483,7 @@
     function applyLabelKey(label) {
         var assetId = getFocusedAssetId();
         var group = cols[focusedCol].querySelector('.compare-labels');
-        fetch('/api/asset/' + assetId + '/label', {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({label: label})
-        }).then(function() {
+        MAKI.api.put('/api/asset/' + assetId + '/label', {label: label}).then(function() {
             group.querySelectorAll('.label-dot').forEach(function(d) {
                 d.classList.remove('active');
                 if (label && d.getAttribute('data-label') === label) d.classList.add('active');

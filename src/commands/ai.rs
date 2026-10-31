@@ -4,10 +4,10 @@ use super::*;
 
 /// Dispatch `maki ai <subcommand>`.
 #[cfg(feature = "ai")]
-pub fn run_ai_command(cmd: AiCommands, json: bool) -> anyhow::Result<()> {
+pub fn run_ai_command(cmd: AiCommands, ctx: CliContext) -> anyhow::Result<()> {
     match cmd {
         AiCommands::ExportVocabulary { output, default } => {
-            run_ai_export_vocabulary(output, default, json)
+            run_ai_export_vocabulary(output, default, ctx.json)
         }
     }
 }
@@ -138,13 +138,8 @@ pub fn run_auto_tag_command(
     list_labels: bool,
     similar: Option<String>,
     asset_ids: Vec<String>,
-    json: bool,
-    log: bool,
-    #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (query, asset) = merge_trailing_ids(query, asset, &asset_ids);
     use maki::model_manager::ModelManager;
 
@@ -167,7 +162,7 @@ pub fn run_auto_tag_command(
             }
         };
 
-        if cli.json {
+        if ctx.json {
             println!("{}", serde_json::to_string_pretty(&label_list)?);
         } else {
             for label in &label_list {
@@ -212,7 +207,7 @@ pub fn run_auto_tag_command(
             eprintln!("  [{current}/{total}] {file}");
         })?;
         let total = mgr.total_size();
-        if cli.json {
+        if ctx.json {
             println!("{}", serde_json::json!({
                 "status": "downloaded",
                 "model": model_id,
@@ -228,7 +223,7 @@ pub fn run_auto_tag_command(
 
     if remove_model {
         mgr.remove_model()?;
-        if cli.json {
+        if ctx.json {
             println!("{}", serde_json::json!({
                 "status": "removed",
                 "model": model_id,
@@ -246,7 +241,7 @@ pub fn run_auto_tag_command(
         // has no parent (shouldn't happen for normal config).
         let model_base = model_dir.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
         let models = ModelManager::list_available_models(&model_base);
-        if cli.json {
+        if ctx.json {
             let json_models: Vec<serde_json::Value> = models
                 .iter()
                 .map(|(spec, exists, size)| {
@@ -294,22 +289,21 @@ pub fn run_auto_tag_command(
         let emb_store = maki::embedding_store::EmbeddingStore::new(catalog.conn());
 
         let full_id = catalog
-            .resolve_asset_id(similar_id)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{similar_id}'"))?;
+            .resolve_asset_id_required(similar_id)?;
 
         let query_emb = match emb_store.get(&full_id, model_id)? {
             Some(emb) => emb,
             None => {
                 // No stored embedding — encode it now
                 let config_preview = &config.preview;
-                let service = AssetService::new(&catalog_root, verbosity, config_preview);
-                let mut ai_model = maki::ai::SigLipModel::load_with_provider(&model_dir, model_id, verbosity, &config.ai.execution_provider)?;
+                let service = AssetService::new(&catalog_root, ctx.verbosity, config_preview);
+                let mut ai_model = maki::ai::SigLipModel::load_with_provider(&model_dir, model_id, ctx.verbosity, &config.ai.execution_provider)?;
                 let registry = DeviceRegistry::new(&catalog_root);
                 let volumes = registry.list()?;
                 let online_volumes = maki::models::Volume::online_map(&volumes);
                 let preview_gen = maki::preview::PreviewGenerator::new(
                     &catalog_root,
-                    verbosity,
+                    ctx.verbosity,
                     config_preview,
                 );
                 let details = catalog
@@ -328,7 +322,7 @@ pub fn run_auto_tag_command(
 
         let results = emb_store.find_similar(&query_emb, 20, Some(&full_id), model_id)?;
 
-        if cli.json {
+        if ctx.json {
             let json_results: Vec<serde_json::Value> = results
                 .iter()
                 .map(|(id, sim)| {
@@ -390,9 +384,9 @@ pub fn run_auto_tag_command(
     };
 
     let prompt = &config.ai.prompt;
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
-    let show_log = cli.log;
+    let show_log = ctx.log;
     let result = service.auto_tag(
         query.as_deref(),
         asset.as_deref(),
@@ -439,7 +433,7 @@ pub fn run_auto_tag_command(
         },
     )?;
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         for err in &result.errors {
@@ -479,13 +473,8 @@ pub fn run_embed_command(
         force: bool,
         export: bool,
         asset_ids: Vec<String>,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (query, asset) = merge_trailing_ids(query, asset, &asset_ids);
     use maki::model_manager::ModelManager;
 
@@ -510,7 +499,7 @@ pub fn run_embed_command(
                 eprintln!("  {}: {} embeddings", m, embeddings.len());
             }
         }
-        if cli.json {
+        if ctx.json {
             println!("{}", serde_json::json!({"exported": total, "models": models}));
         } else {
             println!("Exported {total} embedding binaries");
@@ -551,8 +540,7 @@ pub fn run_embed_command(
     // Resolve target assets
     let asset_ids: Vec<String> = if let Some(ref id) = asset {
         let full_id = catalog
-            .resolve_asset_id(id)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{id}'"))?;
+            .resolve_asset_id_required(id)?;
         vec![full_id]
     } else {
         let q = if let Some(ref query) = query {
@@ -567,8 +555,7 @@ pub fn run_embed_command(
         results.into_iter().map(|r| r.asset_id).collect()
     };
 
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
-    let log = cli.log;
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
     let result = service.embed_assets(
         &asset_ids,
         &model_dir,
@@ -576,7 +563,7 @@ pub fn run_embed_command(
         &config.ai.execution_provider,
         force,
         |aid, status, elapsed| {
-            if !log { return; }
+            if !ctx.log { return; }
             let short = &aid[..8.min(aid.len())];
             match status {
                 maki::asset_service::EmbedStatus::Embedded => {
@@ -592,7 +579,7 @@ pub fn run_embed_command(
         },
     )?;
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::json!({
             "embedded": result.embedded,
             "skipped": result.skipped,
@@ -625,13 +612,8 @@ pub fn run_auto_stack_command(
     min_size: Option<usize>,
     apply: bool,
     asset_ids: Vec<String>,
-    json: bool,
-    log: bool,
-    verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (query, asset) = merge_trailing_ids(query, None, &asset_ids);
 
     let (catalog_root, config) = maki::config::load_config()?;
@@ -639,12 +621,12 @@ pub fn run_auto_stack_command(
     let min_size = min_size.unwrap_or(2);
     let model_id = &config.ai.model;
 
-    if verbosity.verbose {
+    if ctx.verbosity.verbose {
         eprintln!("  Auto-stack: model={model_id}, threshold={threshold}%, min-size={min_size}");
     }
 
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
-    let show_log = cli.log;
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let show_log = ctx.log;
     let result = service.auto_stack(
         query.as_deref(),
         asset.as_deref(),
@@ -671,7 +653,7 @@ pub fn run_auto_stack_command(
         eprintln!("Warning: {w}");
     }
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
     }
@@ -735,20 +717,15 @@ pub fn run_describe_command(
         dry_run: bool,
         check: bool,
         asset_ids: Vec<String>,
-        json: bool,
-        log: bool,
-        #[allow(unused_variables)] verbosity: maki::Verbosity,
+    ctx: CliContext,
 ) -> anyhow::Result<()> {
-    #[allow(dead_code)]
-    struct Ctx { json: bool, log: bool }
-    let cli = Ctx { json, log };
     let (catalog_root, config) = maki::config::load_config()?;
 
     let endpoint = endpoint.as_deref().unwrap_or(&config.vlm.endpoint);
     let model = model.as_deref().unwrap_or(&config.vlm.model);
     // CLI --mode > [vlm] mode > describe
     let mode = mode.as_deref().unwrap_or(&config.vlm.mode);
-    let vlm_mode = maki::vlm::DescribeMode::from_str(mode)?;
+    let vlm_mode = maki::vlm::DescribeMode::parse_mode(mode)?;
 
     // Build params: per-model config merged with CLI overrides
     let mut vlm_params = config.vlm.params_for_model(model);
@@ -762,7 +739,7 @@ pub fn run_describe_command(
     if let Some(ref p) = prompt { vlm_params.prompt = Some(p.clone()); }
 
     if check {
-        match maki::vlm::check_endpoint_status(endpoint, vlm_params.timeout, verbosity) {
+        match maki::vlm::check_endpoint_status(endpoint, vlm_params.timeout, ctx.verbosity) {
             Ok(status) => {
                 let model_status = if status.available_models.is_empty() {
                     format!("Configured model: {model}")
@@ -781,7 +758,7 @@ pub fn run_describe_command(
                         }
                     }
                 };
-                if cli.json {
+                if ctx.json {
                     let model_ok = status.available_models.is_empty()
                         || maki::vlm::find_matching_model(model, &status.available_models).is_some();
                     println!("{}", serde_json::json!({
@@ -798,7 +775,7 @@ pub fn run_describe_command(
                 }
             }
             Err(e) => {
-                if cli.json {
+                if ctx.json {
                     println!("{}", serde_json::json!({
                         "status": "error",
                         "endpoint": endpoint,
@@ -827,14 +804,14 @@ pub fn run_describe_command(
         );
     }
 
-    if verbosity.verbose {
+    if ctx.verbosity.verbose {
         eprintln!("  VLM: endpoint={endpoint}, model={model}, mode={mode}");
         eprintln!("  VLM: max_tokens={}, timeout={}s, temperature={}, concurrency={}", vlm_params.max_tokens, vlm_params.timeout, vlm_params.temperature, config.vlm.concurrency);
     }
 
-    let service = AssetService::new(&catalog_root, verbosity, &config.preview);
+    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
 
-    let show_log = cli.log;
+    let show_log = ctx.log;
     let result = service.describe(
         query.as_deref(),
         asset.as_deref(),
@@ -868,7 +845,7 @@ pub fn run_describe_command(
         },
     )?;
 
-    if cli.json {
+    if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         // Print each result
@@ -884,12 +861,12 @@ pub fn run_describe_command(
                     }
                 }
                 maki::vlm::DescribeStatus::Skipped(msg) => {
-                    if !cli.log {
+                    if !ctx.log {
                         eprintln!("{short_id}: skipped — {msg}");
                     }
                 }
                 maki::vlm::DescribeStatus::Error(msg) => {
-                    if !cli.log {
+                    if !ctx.log {
                         eprintln!("{short_id}: error — {msg}");
                     }
                 }

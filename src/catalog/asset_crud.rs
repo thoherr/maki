@@ -114,7 +114,7 @@ impl Catalog {
                 asset.id.to_string(),
                 asset.name,
                 asset.created_at.to_rfc3339(),
-                format!("{:?}", asset.asset_type).to_lowercase(),
+                asset.asset_type.as_str(),
                 tags_json,
                 asset.description,
                 asset.rating.map(|r| r as i64),
@@ -264,15 +264,6 @@ impl Catalog {
         self.conn.execute(
             "UPDATE assets SET created_at = ?1 WHERE id = ?2",
             rusqlite::params![created_at.to_rfc3339(), asset_id],
-        )?;
-        Ok(())
-    }
-
-    /// Update denormalized variant columns for an asset.
-    pub fn update_best_variant_hash(&self, asset_id: &str, hash: Option<&str>) -> Result<()> {
-        self.conn.execute(
-            "UPDATE assets SET best_variant_hash = ?1 WHERE id = ?2",
-            rusqlite::params![hash, asset_id],
         )?;
         Ok(())
     }

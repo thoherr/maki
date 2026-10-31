@@ -59,7 +59,7 @@ pub async fn start_writeback_api(
         return (StatusCode::BAD_REQUEST, "--mirror-tags requires --all").into_response();
     }
 
-    crate::web::jobs::launch_job(&state, JobKind::Writeback, "A writeback is already running", move |state, job| {
+    crate::web::jobs::launch_job(&state, JobKind::Writeback, crate::web::jobs::LaunchOptions::conflict("A writeback is already running"), move |state, job| {
         run_writeback(state, &req, job)
     })
 }
@@ -88,8 +88,7 @@ fn run_writeback(
     // `[writeback] mirror_tags` in maki.toml turns mirror-tags on by
     // default for every writeback. The dialog's `--mirror-tags`
     // checkbox still takes effect on top (OR semantics).
-    let cfg = crate::config::CatalogConfig::load(&state.catalog_root).unwrap_or_default();
-    let effective_mirror_tags = req.mirror_tags || cfg.writeback.mirror_tags;
+    let effective_mirror_tags = req.mirror_tags || state.config().writeback.mirror_tags;
 
     let result = engine.writeback(
         req.volume.as_deref(),
@@ -140,7 +139,7 @@ pub async fn start_sync_metadata_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<StartSyncMetadataRequest>,
 ) -> Response {
-    crate::web::jobs::launch_job(&state, JobKind::SyncMetadata, "A sync-metadata job is already running", move |state, job| {
+    crate::web::jobs::launch_job(&state, JobKind::SyncMetadata, crate::web::jobs::LaunchOptions::conflict("A sync-metadata job is already running"), move |state, job| {
         run_sync_metadata(state, &req, job)
     })
 }
@@ -226,7 +225,7 @@ pub async fn start_verify_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<StartVerifyRequest>,
 ) -> Response {
-    crate::web::jobs::launch_job(&state, JobKind::Verify, "A verify job is already running", move |state, job| {
+    crate::web::jobs::launch_job(&state, JobKind::Verify, crate::web::jobs::LaunchOptions::conflict("A verify job is already running"), move |state, job| {
         run_verify(state, &req, job)
     })
 }
@@ -308,7 +307,7 @@ pub async fn start_generate_previews_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<StartGeneratePreviewsRequest>,
 ) -> Response {
-    crate::web::jobs::launch_job(&state, JobKind::GeneratePreviews, "A generate-previews job is already running", move |state, job| {
+    crate::web::jobs::launch_job(&state, JobKind::GeneratePreviews, crate::web::jobs::LaunchOptions::conflict("A generate-previews job is already running"), move |state, job| {
         run_generate_previews(state, &req, job)
     })
 }
@@ -475,7 +474,7 @@ pub async fn start_sync_api(
         return (StatusCode::BAD_REQUEST, "remove_stale requires apply").into_response();
     }
 
-    crate::web::jobs::launch_job(&state, JobKind::Sync, "A sync job is already running", move |state, job| {
+    crate::web::jobs::launch_job(&state, JobKind::Sync, crate::web::jobs::LaunchOptions::conflict("A sync job is already running"), move |state, job| {
         run_sync(state, &req, job)
     })
 }
@@ -568,7 +567,7 @@ pub async fn start_refresh_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<StartRefreshRequest>,
 ) -> Response {
-    crate::web::jobs::launch_job(&state, JobKind::Refresh, "A refresh job is already running", move |state, job| {
+    crate::web::jobs::launch_job(&state, JobKind::Refresh, crate::web::jobs::LaunchOptions::conflict("A refresh job is already running"), move |state, job| {
         run_refresh(state, &req, job)
     })
 }
@@ -651,7 +650,7 @@ pub async fn start_cleanup_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<StartCleanupRequest>,
 ) -> Response {
-    crate::web::jobs::launch_job(&state, JobKind::Cleanup, "A cleanup job is already running", move |state, job| {
+    crate::web::jobs::launch_job(&state, JobKind::Cleanup, crate::web::jobs::LaunchOptions::conflict("A cleanup job is already running"), move |state, job| {
         run_cleanup(state, &req, job)
     })
 }

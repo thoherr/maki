@@ -276,7 +276,7 @@ impl AssetService {
         overwrite: bool,
         on_file: impl Fn(&Path, &ExportStatus, Duration),
     ) -> Result<ExportResult> {
-        let engine = crate::query::QueryEngine::new(&self.catalog_root);
+        let engine = self.query_engine();
         let content_store = ContentStore::new(&self.catalog_root);
 
         // Phase 1: Search
@@ -448,7 +448,7 @@ impl AssetService {
         source: ExportSource,
         on_file: impl Fn(&Path, &ExportStatus, Duration),
     ) -> Result<ExportResult> {
-        let engine = crate::query::QueryEngine::new(&self.catalog_root);
+        let engine = self.query_engine();
 
         let search_results = engine.search(query)?;
         let assets_matched = search_results.len();
@@ -513,7 +513,7 @@ impl AssetService {
 
         for entry in &plan {
             let file_start = Instant::now();
-            let entry_name = entry.target_path.to_string_lossy().replace('\\', "/");
+            let entry_name = crate::path_util::forward_slashes(&entry.target_path);
             let entry_name = entry_name.trim_start_matches('/').trim_start_matches("./");
 
             if let Err(e) = zip.start_file(entry_name, options) {

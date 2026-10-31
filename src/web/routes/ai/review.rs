@@ -12,11 +12,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::Json;
 
-use crate::web::jobs::JobKind;
+use crate::web::jobs::{launch_job, JobKind, LaunchOptions};
 use crate::web::AppState;
 
 use super::tags::{AssetCardMeta, SuggestContext};
@@ -41,60 +40,29 @@ pub async fn start_suggest_tags_review_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SuggestTagsReviewRequest>,
 ) -> Response {
-    if let Some(latest) = state.jobs.latest(JobKind::SuggestTagsReview) {
-        if !latest.is_completed() {
-            return (StatusCode::CONFLICT, "A suggest-tags-review job is already running").into_response();
-        }
-    }
-
-    let job = state.jobs.start(JobKind::SuggestTagsReview);
-    let job_id = job.id.clone();
     let total = req.asset_ids.len();
-    job.emit(&serde_json::json!({
-        "phase": "suggest_tags_review",
-        "done": false,
-        "processed": 0,
-        "total": total,
-        "status": "starting",
-    }));
-
-    let state2 = state.clone();
-    let job_for_task = job.clone();
-    tokio::spawn(async move {
-        let log = state2.log_requests;
-        let job_inner = job_for_task.clone();
-        let state_for_blocking = state2.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            run_review(&state_for_blocking, req, &job_inner, total)
-        })
-        .await;
-
-        let terminal = match result {
-            Ok(Ok(payload)) => {
-                let summary = serde_json::json!({
-                    "phase": "suggest_tags_review",
-                    "processed": total,
-                    "total": total,
-                    "tag_count": payload.get("tags").and_then(|t| t.as_array()).map(|a| a.len()).unwrap_or(0),
-                });
-                if log {
-                    eprintln!(
-                        "suggest_tags_review: {} assets, {} distinct tags",
-                        total,
-                        summary["tag_count"].as_u64().unwrap_or(0)
-                    );
-                }
-                job_for_task.set_result(payload);
-                summary
-            }
-            Ok(Err(msg)) => serde_json::json!({"phase": "suggest_tags_review", "error": msg}),
-            Err(e) => serde_json::json!({"phase": "suggest_tags_review", "error": format!("{e}")}),
-        };
-        job_for_task.finish(terminal);
-        state2.jobs.mark_done(&job_for_task.id);
-    });
-
-    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
+    let opts = LaunchOptions::conflict("A suggest-tags-review job is already running")
+        .with_starting_event("suggest_tags_review", total);
+    launch_job(&state, JobKind::SuggestTagsReview, opts, move |state, job| {
+        let payload = run_review(state, req, job, total).map_err(anyhow::Error::msg)?;
+        let summary = serde_json::json!({
+            "phase": "suggest_tags_review",
+            "processed": total,
+            "total": total,
+            "tag_count": payload.get("tags").and_then(|t| t.as_array()).map(|a| a.len()).unwrap_or(0),
+        });
+        if state.log_requests {
+            eprintln!(
+                "suggest_tags_review: {} assets, {} distinct tags",
+                total,
+                summary["tag_count"].as_u64().unwrap_or(0)
+            );
+        }
+        // Stash the inverted index before the terminal event so a client
+        // re-attaching on `done` can fetch it right away.
+        job.set_result(payload);
+        Ok(summary)
+    })
 }
 
 fn run_review(
@@ -174,7 +142,7 @@ fn run_review(
     // Sort tags by descending asset_count, ties broken by mean_confidence.
     let mut tag_rows: Vec<serde_json::Value> = tag_index
         .into_iter()
-        .map(|(tag, bucket)| bucket.to_json(tag))
+        .map(|(tag, bucket)| bucket.into_json(tag))
         .collect();
     tag_rows.sort_by(|a, b| {
         let ac = a["asset_count"].as_u64().unwrap_or(0);
@@ -229,7 +197,7 @@ impl TagBucket {
         }));
     }
 
-    fn to_json(self, tag: String) -> serde_json::Value {
+    fn into_json(self, tag: String) -> serde_json::Value {
         let n = self.candidates.len();
         let mean = if n > 0 { self.confidence_sum / n as f64 } else { 0.0 };
         serde_json::json!({
@@ -252,7 +220,7 @@ mod tests {
         b.push("a1", 0.4, Some("car"), false);
         b.push("a2", 0.8, None, true);
         b.push("a3", 0.6, None, false);
-        let json = b.to_json("subject|vehicle|car".to_string());
+        let json = b.into_json("subject|vehicle|car".to_string());
         assert_eq!(json["asset_count"], 3);
         // Mean = (0.4 + 0.8 + 0.6) / 3 = 0.6 ± float noise.
         let mean = json["mean_confidence"].as_f64().unwrap();
@@ -270,7 +238,7 @@ mod tests {
     #[test]
     fn tag_bucket_empty_renders_zero_mean() {
         let b = TagBucket::default();
-        let json = b.to_json("empty".to_string());
+        let json = b.into_json("empty".to_string());
         assert_eq!(json["asset_count"], 0);
         assert_eq!(json["mean_confidence"], 0.0);
         assert_eq!(json["max_confidence"], 0.0);

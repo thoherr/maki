@@ -49,9 +49,9 @@ impl Catalog {
             NumericFilter::Exact(v) => *v == 0.0,
             NumericFilter::Min(v) => *v <= 0.0,
             NumericFilter::Range(lo, hi) => *lo <= 0.0 && *hi >= 0.0,
-            NumericFilter::Values(vs) => vs.iter().any(|v| *v == 0.0),
+            NumericFilter::Values(vs) => vs.contains(&0.0),
             NumericFilter::ValuesOrMin { values, min } => {
-                values.iter().any(|v| *v == 0.0) || *min <= 0.0
+                values.contains(&0.0) || *min <= 0.0
             }
         };
 
@@ -458,6 +458,7 @@ impl Catalog {
     /// Tags containing `"` may be stored in JSON two ways:
     /// - Unescaped: `"\"Sir\" Oliver Mally"` (serde_json proper)
     /// - Raw: `""Sir" Oliver Mally"` (legacy/malformed JSON)
+    ///
     /// We match both forms.
     ///
     /// Note: prior to v4.4.4 the `=` and `/` markers were swapped — `=` meant

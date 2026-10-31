@@ -22,22 +22,22 @@ pub struct CompareParams {
 pub async fn compare_page(
     State(state): State<Arc<AppState>>,
     Query(params): Query<CompareParams>,
-) -> Response {
+) -> Result<Response, Response> {
     let ids_str = params.ids.unwrap_or_default();
     let ids: Vec<&str> = ids_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
 
     if ids.len() < 2 || ids.len() > 4 {
-        return (
+        return Ok((
             StatusCode::BAD_REQUEST,
             Html("<h1>Compare</h1><p>Select 2\u{2013}4 assets to compare.</p><p><a href=\"/\">Back to browse</a></p>".to_string()),
         )
-            .into_response();
+            .into_response());
     }
 
     let preview_ext = state.preview_ext.clone();
     let ids_owned: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let html = super::spawn_blocking_with(move || {
         let engine = state.query_engine();
         let preview_gen = state.preview_generator();
         let mut assets = Vec::new();
@@ -61,25 +61,20 @@ pub async fn compare_page(
 
         let tmpl = ComparePage { assets, ai_enabled: state.ai_enabled, vlm_enabled: state.vlm_enabled };
         Ok::<_, anyhow::Error>(tmpl.render()?)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(html)) => Html(html).into_response(),
-        Ok(Err(e)) => {
-            let msg = format!("{e:#}");
-            if msg.contains("no asset found") {
-                (
-                    StatusCode::NOT_FOUND,
-                    Html(format!("<h1>Not Found</h1><p>{msg}</p><p><a href=\"/\">Back to browse</a></p>")),
-                )
-                    .into_response()
-            } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
-            }
+    }, |e| {
+        let msg = format!("{e:#}");
+        if msg.contains("no asset found") {
+            (
+                StatusCode::NOT_FOUND,
+                Html(format!("<h1>Not Found</h1><p>{msg}</p><p><a href=\"/\">Back to browse</a></p>")),
+            )
+                .into_response()
+        } else {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    })
+    .await?;
+    Ok(Html(html).into_response())
 }
 
 /// GET /smart-preview/{prefix}/{file} — serve smart preview, generating on-demand if configured.
@@ -107,7 +102,8 @@ pub async fn serve_smart_preview(
     let state = state.clone();
     let file_path_clone = file_path.clone();
     let file_name = file.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    // Every failure — including a panicked task — is a plain 404 here.
+    let result = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
 
         let format = catalog
@@ -142,7 +138,7 @@ pub async fn serve_smart_preview(
     .await;
 
     match result {
-        Ok(Ok(())) if file_path_clone.exists() => {
+        Ok(()) if file_path_clone.exists() => {
             serve_smart_file(&file_path_clone, &file_name).await
         }
         _ => StatusCode::NOT_FOUND.into_response(),
@@ -161,7 +157,8 @@ pub async fn serve_video(
     let content_hash = format!("sha256:{hash}");
 
     let state2 = state.clone();
-    let resolved = tokio::task::spawn_blocking(move || {
+    // Every failure — including a panicked task — is a plain 404 here.
+    let resolved = super::spawn_catalog_blocking(move || {
         let catalog = state2.catalog()?;
         let locations = catalog.get_variant_file_locations(&content_hash)?;
         let format = catalog.get_variant_format(&content_hash)?;
@@ -182,7 +179,7 @@ pub async fn serve_video(
     .await;
 
     let (source_path, format) = match resolved {
-        Ok(Ok((Some(path), format))) => (path, format),
+        Ok((Some(path), format)) => (path, format),
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
 
@@ -310,85 +307,53 @@ pub struct OpenLocationRequest {
 pub async fn open_location(
     State(state): State<Arc<AppState>>,
     Json(req): Json<OpenLocationRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let registry = DeviceRegistry::new(&state.catalog_root);
-        let volumes = registry.list()?;
-        let vol = volumes
-            .iter()
-            .find(|v| v.id.to_string() == req.volume_id)
-            .ok_or_else(|| anyhow::anyhow!("volume not found"))?;
-
-        if !vol.is_online {
-            anyhow::bail!("volume '{}' is offline", vol.label);
-        }
-
-        let full_path = vol.mount_point.join(&req.relative_path);
+    super::spawn_blocking_with(move || {
+        let full_path = resolve_online_path(&state, &req)?;
         if !full_path.exists() {
             anyhow::bail!("file not found on disk: {}", full_path.display());
         }
+        crate::platform::reveal_path(&full_path)
+            .map_err(|e| anyhow::anyhow!("failed to open file manager: {e}"))
+    }, open_error)
+    .await?;
+    Ok(Json(serde_json::json!({"ok": true})).into_response())
+}
 
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open")
-                .arg("-R")
-                .arg(&full_path)
-                .spawn()
-                .map_err(|e| anyhow::anyhow!("failed to open Finder: {e}"))?;
-        }
-        #[cfg(target_os = "linux")]
-        {
-            if let Some(parent) = full_path.parent() {
-                std::process::Command::new("xdg-open")
-                    .arg(parent)
-                    .spawn()
-                    .map_err(|e| anyhow::anyhow!("failed to open file manager: {e}"))?;
-            }
-        }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("explorer")
-                .arg("/select,")
-                .arg(&full_path)
-                .spawn()
-                .map_err(|e| anyhow::anyhow!("failed to open Explorer: {e}"))?;
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-        {
-            anyhow::bail!("reveal in file manager is not supported on this platform");
-        }
+/// `400 <top-level message>` — the opener endpoints report the reason
+/// (offline volume, missing file, no terminal emulator) without the
+/// cause chain.
+fn open_error(e: anyhow::Error) -> Response {
+    (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+}
 
-        Ok::<_, anyhow::Error>(())
-    })
-    .await;
-
-    match result {
-        Ok(Ok(())) => Json(serde_json::json!({"ok": true})).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
+/// Resolve `volume_id` + `relative_path` to an absolute path on an
+/// online volume (shared by the reveal / terminal endpoints).
+fn resolve_online_path(
+    state: &AppState,
+    req: &OpenLocationRequest,
+) -> anyhow::Result<std::path::PathBuf> {
+    let registry = DeviceRegistry::new(&state.catalog_root);
+    let volumes = registry.list()?;
+    let vol = volumes
+        .iter()
+        .find(|v| v.id.to_string() == req.volume_id)
+        .ok_or_else(|| anyhow::anyhow!("volume not found"))?;
+    if !vol.is_online {
+        anyhow::bail!("volume '{}' is offline", vol.label);
     }
+    Ok(vol.mount_point.join(&req.relative_path))
 }
 
 /// POST /api/open-terminal — open a terminal in the file's parent directory.
 pub async fn open_terminal(
     State(state): State<Arc<AppState>>,
     Json(req): Json<OpenLocationRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let registry = DeviceRegistry::new(&state.catalog_root);
-        let volumes = registry.list()?;
-        let vol = volumes
-            .iter()
-            .find(|v| v.id.to_string() == req.volume_id)
-            .ok_or_else(|| anyhow::anyhow!("volume not found"))?;
-
-        if !vol.is_online {
-            anyhow::bail!("volume '{}' is offline", vol.label);
-        }
-
-        let full_path = vol.mount_point.join(&req.relative_path);
+    super::spawn_blocking_with(move || {
+        let full_path = resolve_online_path(&state, &req)?;
         let dir = if full_path.is_dir() {
             full_path
         } else {
@@ -399,56 +364,11 @@ pub async fn open_terminal(
         if !dir.exists() {
             anyhow::bail!("directory not found on disk: {}", dir.display());
         }
-
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open")
-                .arg("-a")
-                .arg("Terminal")
-                .arg(&dir)
-                .spawn()
-                .map_err(|e| anyhow::anyhow!("failed to open Terminal: {e}"))?;
-        }
-        #[cfg(target_os = "linux")]
-        {
-            let terminals = ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"];
-            let mut launched = false;
-            for term in &terminals {
-                let res = std::process::Command::new(term)
-                    .arg("--working-directory")
-                    .arg(&dir)
-                    .spawn();
-                if res.is_ok() {
-                    launched = true;
-                    break;
-                }
-            }
-            if !launched {
-                anyhow::bail!("no terminal emulator found");
-            }
-        }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("cmd")
-                .args(["/c", "start", "cmd"])
-                .current_dir(&dir)
-                .spawn()
-                .map_err(|e| anyhow::anyhow!("failed to open command prompt: {e}"))?;
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-        {
-            anyhow::bail!("open terminal is not supported on this platform");
-        }
-
-        Ok::<_, anyhow::Error>(())
-    })
-    .await;
-
-    match result {
-        Ok(Ok(())) => Json(serde_json::json!({"ok": true})).into_response(),
-        Ok(Err(e)) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+        crate::platform::open_terminal(&dir)
+            .map_err(|e| anyhow::anyhow!("failed to open terminal: {e}"))
+    }, open_error)
+    .await?;
+    Ok(Json(serde_json::json!({"ok": true})).into_response())
 }
 
 // --- Writeback ---
@@ -527,9 +447,9 @@ fn vlm_describe_asset_inner(
 
     let vlm = &state.vlm_config;
     let mode = mode_str
-        .map(|s| DescribeMode::from_str(s).map_err(|e| e.to_string()))
+        .map(|s| DescribeMode::parse_mode(s).map_err(|e| e.to_string()))
         .transpose()?
-        .unwrap_or_else(|| DescribeMode::from_str(&vlm.mode).unwrap_or(DescribeMode::Describe));
+        .unwrap_or_else(|| DescribeMode::parse_mode(&vlm.mode).unwrap_or(DescribeMode::Describe));
     let model = model_override.unwrap_or(&vlm.model);
     let params = vlm.params_for_model(model);
     let prompt = params.prompt.as_deref()
@@ -634,59 +554,33 @@ pub async fn batch_vlm_describe(
     State(state): State<Arc<AppState>>,
     Json(body): Json<BatchVlmDescribeRequest>,
 ) -> Response {
-    use crate::web::jobs::JobKind;
+    use crate::web::jobs::{launch_job, JobKind, LaunchOptions};
 
-    let job = state.jobs.start(JobKind::Describe);
-    let job_id = job.id.clone();
     let total = body.asset_ids.len();
-    job.emit(&serde_json::json!({
-        "phase": "describe",
-        "done": false,
-        "processed": 0,
-        "total": total,
-        "status": "starting",
-    }));
-
-    let state2 = state.clone();
-    let job_for_task = job.clone();
-    tokio::spawn(async move {
-        let job_inner = job_for_task.clone();
-        let state_for_blocking = state2.clone();
-        let result: Result<Result<BatchVlmDescribeResponse, String>, _> =
-            tokio::task::spawn_blocking(move || {
-                batch_vlm_describe_inner(
-                    &state_for_blocking,
-                    &body.asset_ids,
-                    body.mode.as_deref(),
-                    body.model.as_deref(),
-                    &job_inner,
-                    total,
-                )
-            })
-            .await;
-
-        let terminal = match result {
-            Ok(Ok(resp)) => {
-                if resp.tags_applied > 0 {
-                    state2.dropdown_cache.invalidate_tags();
-                }
-                serde_json::json!({
-                    "phase": "describe",
-                    "succeeded": resp.succeeded,
-                    "failed": resp.failed,
-                    "descriptions_set": resp.descriptions_set,
-                    "tags_applied": resp.tags_applied,
-                    "errors": resp.errors,
-                })
-            }
-            Ok(Err(msg)) => serde_json::json!({"phase": "describe", "error": msg}),
-            Err(e) => serde_json::json!({"phase": "describe", "error": format!("{e}")}),
-        };
-        job_for_task.finish(terminal);
-        state2.jobs.mark_done(&job_for_task.id);
-    });
-
-    Json(serde_json::json!({"job_id": job_id, "status": "started"})).into_response()
+    // No conflict gate: several describe batches may run at once.
+    let opts = LaunchOptions::default().with_starting_event("describe", total);
+    launch_job(&state, JobKind::Describe, opts, move |state, job| {
+        let resp = batch_vlm_describe_inner(
+            state,
+            &body.asset_ids,
+            body.mode.as_deref(),
+            body.model.as_deref(),
+            job,
+            total,
+        )
+        .map_err(anyhow::Error::msg)?;
+        if resp.tags_applied > 0 {
+            state.dropdown_cache.invalidate_tags();
+        }
+        Ok(serde_json::json!({
+            "phase": "describe",
+            "succeeded": resp.succeeded,
+            "failed": resp.failed,
+            "descriptions_set": resp.descriptions_set,
+            "tags_applied": resp.tags_applied,
+            "errors": resp.errors,
+        }))
+    })
 }
 
 fn batch_vlm_describe_inner(
@@ -701,9 +595,9 @@ fn batch_vlm_describe_inner(
 
     let vlm = &state.vlm_config;
     let mode = mode_str
-        .map(|s| DescribeMode::from_str(s).map_err(|e| e.to_string()))
+        .map(|s| DescribeMode::parse_mode(s).map_err(|e| e.to_string()))
         .transpose()?
-        .unwrap_or_else(|| DescribeMode::from_str(&vlm.mode).unwrap_or(DescribeMode::Describe));
+        .unwrap_or_else(|| DescribeMode::parse_mode(&vlm.mode).unwrap_or(DescribeMode::Describe));
     let vlm_model = model_override.unwrap_or(&vlm.model);
     let params = vlm.params_for_model(vlm_model);
     let prompt = params.prompt.as_deref()
@@ -958,7 +852,7 @@ fn default_layout() -> String {
 pub async fn export_zip(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ExportZipRequest>,
-) -> Response {
+) -> Result<Response, Response> {
     use axum::body::Body;
     use axum::http::header;
     use crate::asset_service::{AssetService, ExportLayout, ExportSource};
@@ -971,7 +865,7 @@ pub async fn export_zip(
     } else {
         let state2 = state.clone();
         let params = req.filters.unwrap_or_default();
-        match tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<crate::catalog::SearchRow>> {
+        let rows = super::spawn_blocking_with(move || -> anyhow::Result<Vec<crate::catalog::SearchRow>> {
             let catalog = state2.catalog()?;
 
             // Same pipeline as browse_page / search_api, so "Export all"
@@ -1000,19 +894,13 @@ pub async fn export_zip(
             opts.per_page = u32::MAX;
             opts.page = 1;
             catalog.search_paginated(&opts)
-        }).await {
-            Ok(Ok(rows)) => rows.into_iter().map(|r| r.asset_id).collect(),
-            Ok(Err(e)) => {
-                return (StatusCode::BAD_REQUEST, format!("Search failed: {e}")).into_response();
-            }
-            Err(e) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {e}")).into_response();
-            }
-        }
+        }, |e| (StatusCode::BAD_REQUEST, format!("Search failed: {e}")).into_response())
+        .await?;
+        rows.into_iter().map(|r| r.asset_id).collect()
     };
 
     if asset_ids.is_empty() {
-        return (StatusCode::BAD_REQUEST, "No assets matched").into_response();
+        return Ok((StatusCode::BAD_REQUEST, "No assets matched").into_response());
     }
 
     let layout = if req.layout == "mirror" { ExportLayout::Mirror } else { ExportLayout::Flat };
@@ -1030,31 +918,22 @@ pub async fn export_zip(
     let pc = preview_config.clone();
     let tmp = std::env::temp_dir().join(format!("maki-export-{}.zip", std::process::id()));
     let tmp2 = tmp.clone();
-    let zip_result = tokio::task::spawn_blocking(move || -> Result<(std::path::PathBuf, usize, usize, usize), String> {
+    let (zip_path, exported, skipped, skipped_offline) = super::spawn_blocking_with(move || {
         let service = AssetService::new(&root, state.verbosity, &pc);
         let result = service.export_zip_for_ids(&ids, &tmp2, layout, all_variants, include_sidecars, source, |_, _, _| {})
-            .map_err(|e| format!("Export failed: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("Export failed: {e}"))?;
         if result.files_exported == 0 && result.sidecars_exported == 0 {
             let _ = std::fs::remove_file(&tmp2);
-            return Err(if source == ExportSource::Originals {
-                "No exportable files found (volumes may be offline)".to_string()
+            anyhow::bail!(if source == ExportSource::Originals {
+                "No exportable files found (volumes may be offline)"
             } else {
-                "No exportable files found (previews not generated yet — run maki generate-previews)".to_string()
+                "No exportable files found (previews not generated yet — run maki generate-previews)"
             });
         }
         let offline = result.errors.iter().filter(|e| e.contains("offline")).count();
         Ok((tmp2, result.files_exported + result.sidecars_exported, result.errors.len(), offline))
-    }).await;
-
-    let (zip_path, exported, skipped, skipped_offline) = match zip_result {
-        Ok(Ok(p)) => p,
-        Ok(Err(e)) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
-        }
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {e}")).into_response();
-        }
-    };
+    }, |e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response())
+    .await?;
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(32);
     let zip_path_clone = zip_path.clone();
@@ -1089,7 +968,7 @@ pub async fn export_zip(
     // were left out (offline volumes, unreadable files) — the ZIP itself
     // downloads fine either way, which used to make partial exports look
     // like complete ones.
-    Response::builder()
+    Ok(Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/zip")
         .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\""))
@@ -1097,5 +976,5 @@ pub async fn export_zip(
         .header("X-Maki-Skipped", skipped.to_string())
         .header("X-Maki-Skipped-Offline", skipped_offline.to_string())
         .body(body)
-        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response").into_response())
+        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response").into_response()))
 }

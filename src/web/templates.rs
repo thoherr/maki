@@ -576,7 +576,7 @@ impl AssetPage {
 
         // Check if the best variant has any online file location
         let best_idx = details.best_variant_index();
-        let has_online_source = best_idx.map_or(false, |idx| {
+        let has_online_source = best_idx.is_some_and(|idx| {
             details.variants[idx].locations.iter().any(|loc| {
                 volume_online.get(&loc.volume_id).copied().unwrap_or(false)
             })
@@ -1097,18 +1097,52 @@ mod filters {
         Ok(format!("hsl({hue}, 60%, 50%)"))
     }
 
+    /// Swatch colour for a colour-label name; `#999` for anything outside
+    /// `models::asset::COLOR_LABELS`.
     #[askama::filter_fn]
     pub fn label_color(name: &str, _: &dyn askama::Values) -> ::askama::Result<String> {
-        Ok(match name {
-            "Red" => "#e74c3c",
-            "Orange" => "#e67e22",
-            "Yellow" => "#f1c40f",
-            "Green" => "#27ae60",
-            "Blue" => "#3498db",
-            "Pink" => "#e91e8e",
-            "Purple" => "#9b59b6",
-            _ => "#999",
-        }
-        .to_string())
+        Ok(crate::models::asset::color_label_hex(name).unwrap_or("#999").to_string())
+    }
+
+    /// The colour-label vocabulary as a JSON array literal for the
+    /// `window.MAKI.setLabels(...)` data island in base.html. Static ASCII
+    /// only, so it is safe to emit with `|safe` inside a `<script>` block.
+    #[askama::filter_fn]
+    pub fn color_labels_json(_s: &str, _: &dyn askama::Values) -> ::askama::Result<String> {
+        Ok(serde_json::to_string(crate::models::asset::COLOR_LABELS).unwrap_or_else(|_| "[]".to_string()))
+    }
+
+    /// The shared browser helpers (`src/web/static/maki-core.js`), embedded
+    /// at compile time like every other static asset. base.html emits it
+    /// inline in `<head>` so it runs before any page script; the file has
+    /// no `</script>` sequence (checked by `maki_core_js_is_script_safe`).
+    #[askama::filter_fn]
+    pub fn maki_core_js(_s: &str, _: &dyn askama::Values) -> ::askama::Result<String> {
+        Ok(super::MAKI_CORE_JS.to_string())
+    }
+}
+
+/// Shared browser helpers, one global `window.MAKI` (see the file header).
+pub const MAKI_CORE_JS: &str = include_str!("static/maki-core.js");
+
+#[cfg(test)]
+mod core_js_tests {
+    #[test]
+    fn maki_core_js_is_script_safe() {
+        // Emitted verbatim inside an inline <script> block.
+        assert!(!super::MAKI_CORE_JS.to_ascii_lowercase().contains("</script"));
+        assert!(super::MAKI_CORE_JS.contains("global.MAKI = MAKI"));
+    }
+
+    #[test]
+    fn color_labels_json_round_trips() {
+        let json = serde_json::to_string(crate::models::asset::COLOR_LABELS).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), crate::models::asset::COLOR_LABELS.len());
+        assert_eq!(arr[0]["name"], "Red");
+        assert_eq!(arr[0]["key"], "r");
+        assert_eq!(arr[0]["number"], 1);
+        assert!(!json.contains('<'));
     }
 }

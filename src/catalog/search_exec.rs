@@ -154,7 +154,7 @@ impl Catalog {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             data_params.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&data_sql)?;
-        let rows = stmt.query_map(param_refs.as_slice(), |row| map_search_row(row))?;
+        let rows = stmt.query_map(param_refs.as_slice(), map_search_row)?;
 
         let mut results = Vec::new();
         for row in rows {
@@ -188,7 +188,7 @@ impl Catalog {
         );
         let result = self
             .conn
-            .query_row(&sql, rusqlite::params![asset_id], |row| map_search_row(row));
+            .query_row(&sql, rusqlite::params![asset_id], map_search_row);
         match result {
             Ok(row) => Ok(Some(row)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),

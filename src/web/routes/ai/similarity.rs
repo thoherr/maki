@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
@@ -26,17 +25,14 @@ pub struct SimilarAssetResponse {
 pub async fn find_similar(
     State(state): State<Arc<AppState>>,
     Path(asset_id): Path<String>,
-) -> Response {
+) -> Result<Response, Response> {
     let state = state.clone();
-    let result: Result<Result<Vec<SimilarAssetResponse>, String>, _> =
-        tokio::task::spawn_blocking(move || find_similar_inner(&state, &asset_id))
-            .await;
-
-    match result {
-        Ok(Ok(results)) => Json(results).into_response(),
-        Ok(Err(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}")).into_response(),
-    }
+    let results = super::super::spawn_blocking_with(
+        move || find_similar_inner(&state, &asset_id).map_err(anyhow::Error::msg),
+        super::super::err::internal,
+    )
+    .await?;
+    Ok(Json(results).into_response())
 }
 
 fn find_similar_inner(
@@ -48,8 +44,9 @@ fn find_similar_inner(
     use crate::embedding_store::EmbeddingStore;
 
     let model_id = &state.ai_config.model;
-    let spec = crate::ai::get_model_spec(model_id)
-        .ok_or_else(|| format!("Unknown model: {model_id}"))?;
+    if crate::ai::get_model_spec(model_id).is_none() {
+        return Err(format!("Unknown model: {model_id}"));
+    }
 
     let catalog = state.catalog().map_err(|e| format!("{e:#}"))?;
     let _ = EmbeddingStore::initialize(catalog.conn());
@@ -85,20 +82,10 @@ fn find_similar_inner(
             return Err(format!("Unsupported image format: {ext}"));
         }
 
-        let model_dir = super::resolve_model_dir(&state.ai_config);
-        let mut model_guard = state.ai_model.blocking_lock();
-        if model_guard.is_none() {
-            let m = ai::SigLipModel::load(&model_dir, model_id)
-                .map_err(|e| format!("Failed to load AI model: {e:#}"))?;
-            *model_guard = Some(m);
-        }
-        let model = model_guard.as_mut().unwrap();
-
-        let emb = model
-            .encode_image(&image_path)
+        let emb = state
+            .with_siglip(|model| model.encode_image(&image_path))
+            .map_err(|e| format!("Failed to load AI model: {e:#}"))?
             .map_err(|e| format!("Failed to encode image: {e:#}"))?;
-
-        drop(model_guard);
 
         emb_store
             .store(asset_id, &emb, model_id)
@@ -107,28 +94,11 @@ fn find_similar_inner(
         emb
     };
 
-    {
-        let needs_load = state.ai_embedding_index.read().unwrap().is_none();
-        if needs_load {
-            let index = crate::embedding_store::EmbeddingIndex::load(
-                catalog.conn(),
-                model_id,
-                spec.embedding_dim,
-            ).map_err(|e| format!("Failed to load embedding index: {e:#}"))?;
-            *state.ai_embedding_index.write().unwrap() = Some(index);
-        }
-    }
-
-    {
-        let mut idx_guard = state.ai_embedding_index.write().unwrap();
-        if let Some(ref mut idx) = *idx_guard {
-            idx.upsert(asset_id, &query_emb);
-        }
-    }
-
     let results = {
-        let idx_guard = state.ai_embedding_index.read().unwrap();
-        let idx = idx_guard.as_ref().unwrap();
+        let mut idx = state
+            .embedding_index_mut(&catalog)
+            .map_err(|e| format!("Failed to load embedding index: {e:#}"))?;
+        idx.upsert(asset_id, &query_emb);
         idx.search(&query_emb, 20, Some(asset_id))
     };
 

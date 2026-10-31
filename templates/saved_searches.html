@@ -63,15 +63,7 @@
             var name = this.getAttribute('data-name');
             var current = this.getAttribute('data-fav') === 'true';
             var newVal = !current;
-            fetch('/api/saved-searches/' + encodeURIComponent(name) + '/favorite', {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({favorite: newVal})
-            })
-            .then(function(r) {
-                if (!r.ok) throw new Error('Failed');
-                return r.json();
-            })
+            MAKI.api.put('/api/saved-searches/' + encodeURIComponent(name) + '/favorite', {favorite: newVal})
             .then(function() { window.location.reload(); })
             .catch(function(err) { alert('Error toggling favorite: ' + err.message); });
         });
@@ -82,11 +74,7 @@
         btn.addEventListener('click', function() {
             var name = this.getAttribute('data-name');
             if (!confirm('Delete saved search "' + name + '"?')) return;
-            fetch('/api/saved-searches/' + encodeURIComponent(name), {method: 'DELETE'})
-                .then(function(r) {
-                    if (!r.ok) throw new Error('Failed');
-                    return r.json();
-                })
+            MAKI.api.del('/api/saved-searches/' + encodeURIComponent(name))
                 .then(function() { window.location.reload(); })
                 .catch(function(err) { alert('Error deleting: ' + err.message); });
         });
@@ -99,15 +87,7 @@
             var newName = prompt('Rename "' + oldName + '" to:', oldName);
             if (!newName || !newName.trim() || newName.trim() === oldName) return;
             newName = newName.trim();
-            fetch('/api/saved-searches/' + encodeURIComponent(oldName) + '/rename', {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({new_name: newName})
-            })
-            .then(function(r) {
-                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-                return r.json();
-            })
+            MAKI.api.put('/api/saved-searches/' + encodeURIComponent(oldName) + '/rename', {new_name: newName})
             .then(function() { window.location.reload(); })
             .catch(function(err) { alert('Error renaming: ' + err.message); });
         });

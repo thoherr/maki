@@ -112,8 +112,7 @@
             if (!confirm('Auto-cluster unassigned faces into groups? This will create unnamed people from similar face embeddings.')) return;
             this.disabled = true;
             this.textContent = 'Clustering...';
-            fetch('/api/faces/cluster', {method: 'POST'})
-                .then(function(r) { return r.json(); })
+            MAKI.api.post('/api/faces/cluster')
                 .then(function(data) {
                     alert(data.people_created + ' people created, ' + data.faces_assigned + ' faces assigned, ' + data.singletons_skipped + ' singletons skipped.');
                     window.location.reload();
@@ -132,12 +131,7 @@
             var nameEl = this.closest('.person-card').querySelector('.person-name');
             var newName = prompt('Enter new name:', nameEl.textContent);
             if (!newName || newName === nameEl.textContent) return;
-            fetch('/api/people/' + id + '/name', {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({name: newName})
-            })
-            .then(function(r) { return r.json(); })
+            MAKI.api.put('/api/people/' + id + '/name', {name: newName})
             .then(function() {
                 nameEl.textContent = newName;
                 nameEl.closest('.person-card').dataset.name = newName;
@@ -153,8 +147,7 @@
             var card = this.closest('.person-card');
             var name = card.querySelector('.person-name').textContent;
             if (!confirm('Delete person "' + name + '"? Their faces will be unassigned.')) return;
-            fetch('/api/people/' + id, {method: 'DELETE'})
-                .then(function(r) { return r.json(); })
+            MAKI.api.del('/api/people/' + id)
                 .then(function() { card.remove(); })
                 .catch(function(err) { alert('Delete failed: ' + err.message); });
         });
@@ -201,7 +194,7 @@
                 : '<div class="person-thumb person-thumb-placeholder">&#128100;</div>';
             return '<a class="merge-suggestion-person" href="/?person=' + encodeURIComponent(side.id) + '">' +
                    thumb +
-                   '<div class="person-name">' + escapeHtml(side.name) + '</div>' +
+                   '<div class="person-name">' + MAKI.escHtml(side.name) + '</div>' +
                    '<div class="person-count">' + side.face_count + ' face' + (side.face_count === 1 ? '' : 's') + '</div>' +
                    '</a>';
         }
@@ -246,15 +239,7 @@
             var btn = this;
             btn.disabled = true;
             btn.textContent = 'Merging…';
-            fetch('/api/people/' + target + '/merge', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({source_ids: [source]})
-            })
-            .then(function(r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
+            MAKI.api.post('/api/people/' + target + '/merge', {source_ids: [source]})
             .then(function() { window.location.reload(); })
             .catch(function(err) {
                 alert('Merge failed: ' + err.message);
@@ -264,12 +249,6 @@
         });
 
         return card;
-    }
-
-    function escapeHtml(s) {
-        return String(s).replace(/[&<>"']/g, function(c) {
-            return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
-        });
     }
 
     function updateSuggestionCount() {
@@ -284,8 +263,7 @@
     function loadSuggestions() {
         suggestionsList.innerHTML = '<div class="merge-suggestions-loading">Scanning for similar clusters…</div>';
         suggestionsWrap.hidden = false;
-        fetch('/api/people/merge-suggestions?threshold=0.4&limit=20')
-            .then(function(r) { return r.json(); })
+        MAKI.api.get('/api/people/merge-suggestions?threshold=0.4&limit=20')
             .then(function(data) {
                 suggestionsList.innerHTML = '';
                 var kept = (data.suggestions || []).filter(function(s) {
@@ -446,15 +424,7 @@
         var sources = Array.from(selected).filter(function(id) { return id !== targetId; });
         confirmBtn.disabled = true;
         confirmBtn.textContent = 'Merging…';
-        fetch('/api/people/' + targetId + '/merge', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({source_ids: sources})
-        })
-        .then(function(r) {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            return r.json();
-        })
+        MAKI.api.post('/api/people/' + targetId + '/merge', {source_ids: sources})
         .then(function(data) {
             // Easy path: reload to show updated people list and counts.
             window.location.reload();

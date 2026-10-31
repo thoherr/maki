@@ -77,7 +77,7 @@ impl AssetService {
                 if let Some(days) = max_age_days {
                     let verified_at = catalog.get_location_verified_at(
                         &volume.id.to_string(),
-                        &relative_path.to_string_lossy(),
+                        &crate::path_util::forward_slashes(relative_path),
                     )?;
                     if is_recently_verified(verified_at.as_deref(), days) {
                         result.skipped_recent += 1;
@@ -109,7 +109,7 @@ impl AssetService {
                         catalog.update_verified_at(
                             &hash,
                             &volume.id.to_string(),
-                            &relative_path.to_string_lossy(),
+                            &crate::path_util::forward_slashes(relative_path),
                         )?;
                         // Also update sidecar verified_at
                         self.update_sidecar_verified_at(
@@ -128,13 +128,13 @@ impl AssetService {
                             catalog.update_recipe_verified_at(
                                 &hash,
                                 &volume.id.to_string(),
-                                &relative_path.to_string_lossy(),
+                                &crate::path_util::forward_slashes(relative_path),
                             )?;
                             on_file(file_path, VerifyStatus::Ok, file_start.elapsed());
                         } else if let Some((recipe_id, _old_hash, variant_hash)) =
                             catalog.find_recipe_by_volume_and_path(
                                 &volume.id.to_string(),
-                                &relative_path.to_string_lossy(),
+                                &crate::path_util::forward_slashes(relative_path),
                             )?
                         {
                             // Recipe at this location has a different hash — modified
@@ -189,9 +189,7 @@ impl AssetService {
             let volumes = registry.list()?;
 
             let assets = if let Some(asset_id) = asset_filter {
-                let full_id = catalog
-                    .resolve_asset_id(asset_id)?
-                    .ok_or_else(|| anyhow::anyhow!("no asset found matching '{asset_id}'"))?;
+                let full_id = catalog.resolve_asset_id_required(asset_id)?;
                 let uuid: Uuid = full_id.parse()?;
                 vec![metadata_store.load(uuid)?]
             } else if let Some(days) = max_age_days {
@@ -361,7 +359,7 @@ impl AssetService {
                     catalog.update_recipe_verified_at(
                         variant_hash,
                         &volume.id.to_string(),
-                        &loc.relative_path.to_string_lossy(),
+                        &loc.relative_path_str(),
                     )?;
                     self.update_sidecar_recipe_verified_at(
                         metadata_store,
@@ -374,7 +372,7 @@ impl AssetService {
                     catalog.update_verified_at(
                         content_hash,
                         &volume.id.to_string(),
-                        &loc.relative_path.to_string_lossy(),
+                        &loc.relative_path_str(),
                     )?;
                     self.update_sidecar_verified_at(
                         metadata_store,
@@ -394,7 +392,7 @@ impl AssetService {
                     // Update the recipe's stored hash in the catalog
                     if let Some((recipe_id, _, _)) = catalog.find_recipe_by_volume_and_path(
                         &volume.id.to_string(),
-                        &loc.relative_path.to_string_lossy(),
+                        &loc.relative_path_str(),
                     )? {
                         catalog.update_recipe_content_hash(&recipe_id, &new_hash)?;
                     }

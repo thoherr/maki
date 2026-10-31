@@ -83,8 +83,8 @@ impl FaceDetector {
     /// Load with a specific execution provider ("auto", "cpu", "coreml").
     pub fn load_with_provider(model_dir: &Path, verbosity: crate::Verbosity, provider: &str) -> Result<Self> {
         let debug = verbosity.debug;
-        let detect_path = model_dir.join(&DETECTION_MODEL.filename);
-        let recog_path = model_dir.join(&RECOGNITION_MODEL.filename);
+        let detect_path = model_dir.join(DETECTION_MODEL.filename);
+        let recog_path = model_dir.join(RECOGNITION_MODEL.filename);
 
         if !detect_path.exists() {
             anyhow::bail!(
@@ -294,8 +294,8 @@ impl FaceDetector {
 
     /// Check if face models are downloaded.
     pub fn models_exist(model_dir: &Path) -> bool {
-        model_dir.join(&DETECTION_MODEL.filename).exists()
-            && model_dir.join(&RECOGNITION_MODEL.filename).exists()
+        model_dir.join(DETECTION_MODEL.filename).exists()
+            && model_dir.join(RECOGNITION_MODEL.filename).exists()
     }
 
     /// Download face models from HuggingFace via curl.
@@ -447,6 +447,9 @@ fn parse_yunet_2d(
             (row[12] / input_w, row[13] / input_h),
         ];
 
+        // `max(0).min(1)` rather than `clamp`: a NaN coordinate from the model
+        // must become 0, not propagate (clamp keeps NaN).
+        #[allow(clippy::manual_clamp)]
         faces.push(DetectedFace {
             bbox_x: x.max(0.0).min(1.0),
             bbox_y: y.max(0.0).min(1.0),
@@ -544,10 +547,10 @@ fn parse_yunet_multi_stride(
 
                 let k = idx * 10;
                 let mut landmarks = [(0.0f32, 0.0f32); 5];
-                for lm in 0..5 {
+                for (lm, slot) in landmarks.iter_mut().enumerate() {
                     let lx = (c as f32 + kps_flat.get(k + lm * 2).copied().unwrap_or(0.0)) * stride as f32;
                     let ly = (r as f32 + kps_flat.get(k + lm * 2 + 1).copied().unwrap_or(0.0)) * stride as f32;
-                    landmarks[lm] = (lx / input_w, ly / input_h);
+                    *slot = (lx / input_w, ly / input_h);
                 }
 
                 candidates.push((x, y, w, h, score, landmarks, score));
@@ -697,6 +700,9 @@ fn parse_multi_output_detections(
             ]
         };
 
+        // `max(0).min(1)` rather than `clamp`: a NaN coordinate from the model
+        // must become 0, not propagate (clamp keeps NaN).
+        #[allow(clippy::manual_clamp)]
         faces.push(DetectedFace {
             bbox_x: x.max(0.0).min(1.0),
             bbox_y: y.max(0.0).min(1.0),
@@ -926,11 +932,11 @@ pub fn default_face_model_dir() -> Result<std::path::PathBuf> {
 /// Resolve face model directory from AiConfig.
 pub fn resolve_face_model_dir(config: &crate::config::AiConfig) -> std::path::PathBuf {
     let model_dir_str = &config.model_dir;
-    let model_base = if model_dir_str.starts_with("~/") {
+    let model_base = if let Some(rest) = model_dir_str.strip_prefix("~/") {
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_else(|_| ".".to_string());
-        std::path::PathBuf::from(home).join(&model_dir_str[2..])
+        std::path::PathBuf::from(home).join(rest)
     } else {
         std::path::PathBuf::from(model_dir_str)
     };

@@ -323,7 +323,7 @@
     // "To" field and by every split-modal target row via attachTagAutocomplete).
     // /api/tags returns [[name, count], ...] tuples.
     var allTagNames = [];
-    fetch('/api/tags').then(function(r) { return r.json(); }).then(function(data) {
+    MAKI.api.get('/api/tags').then(function(data) {
         allTagNames = data.map(function(t) { return Array.isArray(t) ? t[0] : (t.name || t); });
     });
 
@@ -353,14 +353,14 @@
             renameNewEl.value = tag;
             renameResultEl.textContent = '';
             renameApplyBtn.disabled = true;
-            renameOverlay.style.display = 'flex';
+            MAKI.dialog.open(renameOverlay);
             renameNewEl.focus();
             renameNewEl.select();
         });
     });
 
     function closeRenameModal() {
-        renameOverlay.style.display = 'none';
+        MAKI.dialog.close(renameOverlay);
     }
 
     document.getElementById('rename-cancel').addEventListener('click', closeRenameModal);
@@ -368,7 +368,7 @@
         if (e.target === renameOverlay) closeRenameModal();
     });
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && renameOverlay.style.display !== 'none') closeRenameModal();
+        if (e.key === 'Escape' && MAKI.dialog.isOpen(renameOverlay)) closeRenameModal();
     });
 
     function doRename(apply) {
@@ -381,15 +381,7 @@
         btn.disabled = true;
         btn.textContent = apply ? 'Applying...' : 'Checking...';
 
-        fetch('/api/tag/rename', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ old_tag: oldTag, new_tag: newTag, apply: apply })
-        })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-            return r.json();
-        })
+        MAKI.api.post('/api/tag/rename', { old_tag: oldTag, new_tag: newTag, apply: apply })
         .then(function(data) {
             var parts = [];
             if (data.renamed > 0) parts.push(data.renamed + ' renamed');
@@ -533,7 +525,7 @@
             deleteApplyBtn.disabled = true;
             deletePreviewBtn.textContent = 'Preview';
             deleteApplyBtn.textContent = 'Delete';
-            deleteOverlay.style.display = 'flex';
+            MAKI.dialog.open(deleteOverlay);
             // Focus Preview so Enter advances the workflow (Enter again
             // commits once Preview unlocks the Apply button). Defocuses the
             // tag-row trash button so a stray Enter doesn't reopen the modal.
@@ -542,7 +534,7 @@
     });
 
     function closeDeleteModal() {
-        deleteOverlay.style.display = 'none';
+        MAKI.dialog.close(deleteOverlay);
     }
 
     document.getElementById('delete-cancel').addEventListener('click', closeDeleteModal);
@@ -550,7 +542,7 @@
         if (e.target === deleteOverlay) closeDeleteModal();
     });
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && deleteOverlay.style.display !== 'none') closeDeleteModal();
+        if (e.key === 'Escape' && MAKI.dialog.isOpen(deleteOverlay)) closeDeleteModal();
     });
 
     function doDelete(apply) {
@@ -561,15 +553,7 @@
         btn.disabled = true;
         btn.textContent = apply ? 'Deleting…' : 'Checking…';
 
-        fetch('/api/tag/delete', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ tag: tag, apply: apply })
-        })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-            return r.json();
-        })
+        MAKI.api.post('/api/tag/delete', { tag: tag, apply: apply })
         .then(function(data) {
             var parts = [];
             if (data.removed > 0) parts.push(data.removed + (apply ? ' deleted' : ' would delete'));
@@ -710,13 +694,13 @@
             splitModalTitle.textContent = 'Replace Tag with Multiple';
             splitResultEl.textContent = '';
             splitApplyBtn.disabled = true;
-            splitOverlay.style.display = 'flex';
+            MAKI.dialog.open(splitOverlay);
             splitTargetsEl.firstChild.querySelector('input').focus();
         });
     });
 
     function closeSplitModal() {
-        splitOverlay.style.display = 'none';
+        MAKI.dialog.close(splitOverlay);
     }
 
     splitCancelBtn.addEventListener('click', closeSplitModal);
@@ -724,7 +708,7 @@
         if (e.target === splitOverlay) closeSplitModal();
     });
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && splitOverlay.style.display !== 'none') closeSplitModal();
+        if (e.key === 'Escape' && MAKI.dialog.isOpen(splitOverlay)) closeSplitModal();
     });
 
     function collectSplitTargets() {
@@ -749,20 +733,12 @@
         btn.disabled = true;
         btn.textContent = apply ? 'Applying...' : 'Checking...';
 
-        fetch('/api/tag/split', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
+        MAKI.api.post('/api/tag/split', {
                 old_tag: oldTag,
                 new_tags: targets,
                 keep: splitKeepEl.checked,
                 apply: apply,
             })
-        })
-        .then(function(r) {
-            if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
-            return r.json();
-        })
         .then(function(data) {
             var parts = [];
             var verb = splitKeepEl.checked ? 'augmented' : 'split';
