@@ -82,8 +82,6 @@ impl AssetService {
             suggestions: Vec::new(),
         };
 
-        // Initialize embedding store
-        let _ = EmbeddingStore::initialize(catalog.conn());
         let emb_store = EmbeddingStore::new(catalog.conn());
 
         for aid in &asset_ids {
@@ -146,11 +144,15 @@ impl AssetService {
                 }
             };
 
-            // Store embedding (SQLite + binary file)
+            // Store embedding (SQLite row + .bin file, the latter being what
+            // rebuild-catalog restores from). Tagging goes on either way; the
+            // failure is reported with the run's other errors.
             if let Err(e) = emb_store.store(aid, &image_emb, model_id) {
-                eprintln!("Warning: failed to store embedding for {}: {e}", &aid[..8.min(aid.len())]);
+                result.errors.push(format!("{}: storing embedding: {e:#}", &aid[..8.min(aid.len())]));
             }
-            let _ = crate::embedding_store::write_embedding_binary(&self.catalog_root, model_id, aid, &image_emb);
+            if let Err(e) = crate::embedding_store::write_embedding_binary(&self.catalog_root, model_id, aid, &image_emb) {
+                result.errors.push(format!("{}: writing embedding file: {e:#}", &aid[..8.min(aid.len())]));
+            }
 
             // Classify (against the flat labels), then apply the
             // hierarchical mapping. Suggestions returned to the rest
@@ -247,7 +249,6 @@ impl AssetService {
         use crate::preview::PreviewGenerator;
 
         let catalog = Catalog::open(&self.catalog_root)?;
-        let _ = EmbeddingStore::initialize(catalog.conn());
         let emb_store = EmbeddingStore::new(catalog.conn());
         let preview_gen = PreviewGenerator::new(&self.catalog_root, self.verbosity, &self.preview_config);
         let registry = DeviceRegistry::new(&self.catalog_root);
@@ -310,12 +311,19 @@ impl AssetService {
                         on_asset(aid, &EmbedStatus::Error(msg), asset_start.elapsed());
                         continue;
                     }
-                    let _ = crate::embedding_store::write_embedding_binary(
+                    // The .bin file is what rebuild-catalog restores from:
+                    // a failed write is a lost embedding, not a warning.
+                    if let Err(e) = crate::embedding_store::write_embedding_binary(
                         &self.catalog_root,
                         model_id,
                         aid,
                         &emb,
-                    );
+                    ) {
+                        let msg = format!("failed to write embedding file: {e:#}");
+                        result.errors.push(format!("{}: {msg}", &aid[..8.min(aid.len())]));
+                        on_asset(aid, &EmbedStatus::Error(msg), asset_start.elapsed());
+                        continue;
+                    }
                     result.embedded += 1;
                     on_asset(aid, &EmbedStatus::Embedded, asset_start.elapsed());
                 }
@@ -430,8 +438,7 @@ impl AssetService {
         on_asset: impl Fn(&str, u32, std::time::Duration),
     ) -> Result<DetectFacesResult> {
         let catalog = crate::catalog::Catalog::open(&self.catalog_root)?;
-        let _ = crate::face_store::FaceStore::initialize(catalog.conn());
-        let face_store = crate::face_store::FaceStore::new(catalog.conn());
+        let face_store = crate::face_store::FaceStore::open(catalog.conn(), &self.catalog_root);
         let engine = self.query_engine();
         let metadata_store = crate::metadata_store::MetadataStore::new(&self.catalog_root);
         let preview_gen = crate::preview::PreviewGenerator::new(&self.catalog_root, crate::Verbosity::quiet(), &self.preview_config);
@@ -488,7 +495,10 @@ impl AssetService {
                     let n = face_results.len() as u32;
                     if apply {
                         if force {
-                            let _ = face_store.delete_faces_for_asset(aid);
+                            if let Err(e) = face_store.delete_faces_for_asset(aid) {
+                                result.errors.push(format!("{short_id}: clearing previous faces: {e:#}"));
+                                continue;
+                            }
                         }
                         for (face, embedding) in &face_results {
                             let face_id = uuid::Uuid::new_v4().to_string();
@@ -498,12 +508,22 @@ impl AssetService {
                                 crate::face::RECOGNITION_MODEL.id,
                             ) {
                                 result.errors.push(format!("{short_id}: store error: {e:#}"));
-                            } else {
-                                let _ = crate::face::save_face_crop(&image_path, face, &face_id, &self.catalog_root);
-                                let _ = crate::face_store::write_arcface_binary(&self.catalog_root, &face_id, embedding);
+                                continue;
+                            }
+                            // The .bin file is the embedding's durable copy
+                            // (rebuild-catalog restores from it); the crop is a
+                            // derived preview. Both failures are reported, neither
+                            // stops the run.
+                            if let Err(e) = crate::face_store::write_arcface_binary(&self.catalog_root, &face_id, embedding) {
+                                result.errors.push(format!("{short_id}: writing face embedding file: {e:#}"));
+                            }
+                            if let Err(e) = crate::face::save_face_crop(&image_path, face, &face_id, &self.catalog_root) {
+                                result.errors.push(format!("{short_id}: saving face crop: {e:#}"));
                             }
                         }
-                        let _ = catalog.update_face_count(aid);
+                        if let Err(e) = catalog.update_face_count(aid) {
+                            result.errors.push(format!("{short_id}: updating face count: {e:#}"));
+                        }
                         // Mark the asset as scanned regardless of whether any faces
                         // were found. This is the key optimization: without it, a
                         // 100k-asset catalog with mostly landscapes gets re-scanned
@@ -514,14 +534,11 @@ impl AssetService {
                         // a rebuild would lose the "scanned, no face" knowledge and the
                         // whole catalog would need re-scanning on the first detect run
                         // post-rebuild.
-                        let _ = catalog.mark_face_scan_done(aid);
-                        if let Ok(uid) = aid.parse::<uuid::Uuid>() {
-                            if let Ok(mut asset) = metadata_store.load(uid) {
-                                if asset.face_scan_status.as_deref() != Some("done") {
-                                    asset.face_scan_status = Some("done".to_string());
-                                    let _ = metadata_store.save(&asset);
-                                }
-                            }
+                        if let Err(e) = catalog.mark_face_scan_done(aid) {
+                            result.errors.push(format!("{short_id}: marking face scan done: {e:#}"));
+                        }
+                        if let Err(e) = Self::mark_sidecar_face_scan_done(&metadata_store, aid) {
+                            result.errors.push(format!("{short_id}: sidecar face_scan_status: {e:#}"));
                         }
                     }
                     result.faces_detected += n;
@@ -536,9 +553,12 @@ impl AssetService {
             }
         }
 
-        // Persist faces/people YAML after all detections
-        if apply && result.faces_detected > 0 {
-            if let Err(e) = face_store.save_all_yaml(&self.catalog_root) {
+        // One YAML export for the whole batch (store_face is a batch
+        // primitive). `assets_processed`, not `faces_detected`: a forced
+        // re-scan that now finds no face has removed rows that the YAML
+        // must drop too.
+        if apply && result.assets_processed > 0 {
+            if let Err(e) = face_store.persist() {
                 result.errors.push(format!("Failed to save faces/people YAML: {e:#}"));
             }
         }
@@ -546,4 +566,19 @@ impl AssetService {
         Ok(result)
     }
 
+    /// Set `face_scan_status = done` on the asset's sidecar (source of
+    /// truth for `rebuild-catalog`), if it is not already.
+    #[cfg(feature = "ai")]
+    fn mark_sidecar_face_scan_done(
+        metadata_store: &crate::metadata_store::MetadataStore,
+        asset_id: &str,
+    ) -> Result<()> {
+        let uid: uuid::Uuid = asset_id.parse()?;
+        let mut asset = metadata_store.load(uid)?;
+        if asset.face_scan_status.as_deref() != Some("done") {
+            asset.face_scan_status = Some("done".to_string());
+            metadata_store.save(&asset)?;
+        }
+        Ok(())
+    }
 }

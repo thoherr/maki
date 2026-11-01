@@ -30,18 +30,18 @@ See `doc/specification.md` for detailed command behavior, flags, and search filt
 ## Key Patterns
 
 ### Dual Storage
-YAML sidecars are the source of truth; SQLite catalog is a derived cache rebuilt via `maki rebuild-catalog`. All write paths must update both stores.
+YAML sidecars are the source of truth; SQLite catalog is a derived cache rebuilt via `maki rebuild-catalog`. All write paths must update both stores, sidecar first, SQLite rows in one `Catalog::with_tx`. Never `let _ =` a store write: propagate it, or push it into the operation's `errors` vector; only best-effort removal of derived files (previews, crops, `.bin`) may be ignored, with a comment.
 
 ### Tag Provenance
 `Asset.tag_sources: BTreeMap<String, TagSource>` maps tag value → source (`user`/`xmp-import`/`auto-tag`/`vlm`); a tag absent from the map is `user`. Mutate tags only via `Asset::add_tags_with_source`/`remove_tags`/`rename_tag_value` (keeps the map consistent; `MetadataStore::save` self-heals stale entries). Mirrored in SQLite `assets.tag_sources` (schema v10), checked by doctor.
 
 ### Schema Migrations
-- **Version-guarded**: `run_migrations()` reads the stored version once and only executes blocks where `current < N`. On an up-to-date catalog, startup is a single SELECT query.
-- Idempotent: `let _ = conn.execute_batch("ALTER TABLE ... ADD COLUMN ...")` — silently ignores if column exists
+- **Version-guarded, per-version transactions**: `run_migrations() -> Result<()>` reads the stored version once and runs one `migrate_vN()` per version `> current`, each inside `with_tx` with the `schema_version` stamp written in the same transaction. A failing step rolls that version back and the error names it (`schema migration v12: backfill assets_tags_fts`); `maki migrate` prints it. On an up-to-date catalog, startup is a single SELECT query.
+- Idempotent by construction: `add_column_if_missing(table, column, decl)` (via `pragma_table_info`), `table_exists`, `has_column`, and `CREATE … IF NOT EXISTS`. No `let _ =` in migrations — a statement that may legitimately fail needs a guard, not a swallowed error.
 - Backfill only rows that will actually change: `WHERE column IS NULL` at minimum, narrower when possible (v11: `asset_type='audio' AND EXISTS(... instr(...))`) — every row an `UPDATE assets` touches re-tokenises its FTS rows through the v9 and v12 triggers, even when the value does not change
-- `schema_version` table with `SCHEMA_VERSION` constant in `catalog.rs`. All commands (except `init`/`migrate`) check version at startup; exit with error if outdated
+- All DDL lives in `schema.rs`, feature-independent (v13 added faces/people/embeddings and the stack/collection tables; there are no lazy `*Store::initialize` calls any more). `schema_version` table with `SCHEMA_VERSION` constant in `catalog.rs`. All commands (except `init`/`migrate`) check version at startup; exit with error if outdated
 - `initialize()` creates base tables then delegates to `run_migrations()` for all columns, indexes, backfills, and version stamping
-- Bump `SCHEMA_VERSION` whenever `run_migrations()` changes; add a new `if current < N` block
+- Bump `SCHEMA_VERSION` whenever a migration is added; add a new `migrate_vN` and register it in `run_migrations()`
 
 ### Denormalized Columns on `assets` Table
 `best_variant_hash`, `primary_variant_format`, `variant_count`, `face_count`, `face_scan_status`, `leaf_tag_count`, `stack_id`, `stack_position`, `latitude`, `longitude`, `preview_rotation`, `preview_variant`, `tag_sources`, `duration_seconds` (audio+video), `video_codec`, `audio_sample_rate`/`audio_channels`/`audio_bitrate`/`audio_key`/`audio_bpm` — computed at write time, must be updated in all write paths (`insert_asset`, `update_denormalized_variant_columns`, `fix_roles`, `StackStore` operations, `FaceStore::update_face_count`).
@@ -75,6 +75,9 @@ Rating, tag, description, and label changes are written back to `.xmp` recipe fi
 ### Shared Helpers (use these, do not re-implement)
 - `CliContext { json, log, verbosity }` (`cli_output.rs`) is the single trailing parameter of every `run_*_command`; `ctx.emit(&value, || human)` for plain JSON-or-human output. `maki --help` is rendered from clap metadata via `HELP_GROUPS` (unit-tested against `Cli::command()`).
 - `QueryEngine` / `AssetService` hold `Arc<CatalogConfig>` (loaded once in `new`; `with_config` when the caller already has one); `BatchContext.config`; `HistoryStore::new_with` / `Trash::new_with`. Never call `CatalogConfig::load` inside a loop or per request.
+- `Catalog::with_tx(|c| …)` around every write that touches more than one row (commit on `Ok`, rollback on `Err`, nests). Writer order: compute the new `Asset` in memory → save the sidecar → all SQLite rows in one `with_tx` → non-transactional side effects (files, previews, history). `Catalog::resync_asset_from_sidecar(&asset)` rebuilds every derived row set of one asset (doctor, reimport, undo, per-asset rebuild all use it); `Catalog::delete_asset_rows(id)` is the one FK-ordered full removal.
+- `error::MakiError` (`NotFound{kind,key,hint}`, `Offline`, `Conflict`, `InvalidInput`, `CheckFailed`) is raised at the engine for outcomes callers act on; `anyhow` stays the carrier. `error::classify` walks the context chain; `exit_code_for` gives the CLI exit code (3 not found, 4 offline), `http_status_for` the web status — never match on error text.
+- `yaml_file::{load_or_default, save_atomic}` for every catalog-level YAML file; stores own their persistence: `FaceStore::open(conn, root)` / `StackStore::open` / `CollectionStore::open` are the mutating handles (SQLite + YAML export in one transaction per mutator; batch primitives end with one `persist()`), `::new(conn)` is read-only.
 - `DeviceRegistry::online_map()` / `label_map()`; `Catalog::resolve_asset_id_required(prefix)` (one error text); `session_root::find_session_root` (also behind the SQL `session_root()` function); `path_util::forward_slashes` (every volume-relative path string); `platform::{open_path, reveal_path, open_terminal, open_url}` (all OS-specific process spawning).
 - Web: one `ServeOptions` → `AppState::new` / `web::serve`; `AppState::config()` (swapped on config-editor save), `embedding_index()`, `with_siglip()`; `jobs::launch_job(state, kind, LaunchOptions, run)` for every background job; `routes::spawn_catalog_blocking` / `spawn_blocking_with` for every blocking handler body.
 - Front end: `src/web/static/maki-core.js` (embedded by `base.html`) owns `MAKI.escHtml/escAttr/toast/api/dialog/pathAutocomplete/attachJobStream/quoteFilterValue` and the colour-label maps; the vocabulary itself is `models::asset::COLOR_LABELS`.

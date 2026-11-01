@@ -123,7 +123,7 @@ impl QueryEngine {
         let mut asset_ids: Vec<String> = if all || force {
             let mut stmt = catalog.conn().prepare("SELECT id FROM assets")?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-            rows.filter_map(|r| r.ok()).collect()
+            rows.collect::<Result<Vec<_>, _>>()?
         } else {
             let mut stmt = catalog.conn().prepare(
                 "SELECT DISTINCT v.asset_id FROM recipes r \
@@ -131,7 +131,7 @@ impl QueryEngine {
                  WHERE r.pending_writeback = 1",
             )?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-            rows.filter_map(|r| r.ok()).collect()
+            rows.collect::<Result<Vec<_>, _>>()?
         };
         if let Some(set) = asset_id_set {
             asset_ids.retain(|id| set.contains(id));
@@ -488,6 +488,8 @@ fn embed_one_jpeg(
         .unwrap_or_else(|| "file".to_string());
     let temp = full_path.with_file_name(format!(".{file_name}.maki-embed-tmp.jpg"));
     if let Err(e) = std::fs::write(&temp, &new_data) {
+        // Best-effort cleanup of a partial temp file; the write error is
+        // what gets reported.
         let _ = std::fs::remove_file(&temp);
         return FileOutcome::Failed(format!("{rel_path}: could not write temp file: {e}"));
     }
@@ -520,6 +522,8 @@ fn rename_preview_files(
     ];
     for (old_p, new_p) in pairs {
         if old_p.exists() {
+            // Best effort: a preview that fails to move is simply
+            // regenerated on demand under the new hash.
             if let Some(parent) = new_p.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }

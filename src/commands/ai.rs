@@ -285,7 +285,6 @@ pub fn run_auto_tag_command(
         }
 
         let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-        let _ = maki::embedding_store::EmbeddingStore::initialize(catalog.conn());
         let emb_store = maki::embedding_store::EmbeddingStore::new(catalog.conn());
 
         let full_id = catalog
@@ -481,7 +480,6 @@ pub fn run_embed_command(
     if export {
         let catalog_root = maki::config::find_catalog_root()?;
         let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-        let _ = maki::embedding_store::EmbeddingStore::initialize(catalog.conn());
         let emb_store = maki::embedding_store::EmbeddingStore::new(catalog.conn());
 
         let mut total = 0u32;

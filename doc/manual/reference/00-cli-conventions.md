@@ -123,9 +123,12 @@ This applies to both command arguments and filter values where asset IDs are exp
 | Code | Meaning |
 |------|---------|
 | **0** | Success. Command completed without errors. |
-| **1** | Failure. Examples: `verify` found hash mismatches, a referenced asset/volume was not found, a required argument was missing, or any other command error. |
+| **1** | General failure: I/O or database errors, `verify` found hash mismatches, `doctor` found issues that were not repaired, or any other command error. |
+| **2** | Usage error: invalid arguments, missing subcommand, unknown flag (clap prints usage help to stderr). |
+| **3** | Not found: a referenced asset, volume, stack, collection or person does not exist (`no asset found matching '…'`). |
+| **4** | Volume offline: the operation needs a volume whose mount point is not present. |
 
-Standard Rust/clap error handling applies for invalid arguments, missing subcommands, and unknown flags -- these also exit with a non-zero code and print usage help to stderr.
+`doctor` exits 0 when the catalog is consistent and after a `--repair` that fixed everything it found; `--json` output keeps the same exit status, so scripts can check either.
 
 
 ## Output Conventions

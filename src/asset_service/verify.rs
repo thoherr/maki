@@ -137,10 +137,10 @@ impl AssetService {
                                 &crate::path_util::forward_slashes(relative_path),
                             )?
                         {
-                            // Recipe at this location has a different hash — modified
-                            catalog.update_recipe_content_hash(&recipe_id, &hash)?;
-
-                            // Update the sidecar via the variant's owning asset
+                            // Recipe at this location has a different hash — modified.
+                            // Sidecar (via the variant's owning asset) first, then
+                            // the catalog rows in one transaction.
+                            let mut xmp_asset: Option<Asset> = None;
                             if let Some(asset_id_str) = catalog.find_asset_id_by_variant(&variant_hash)? {
                                 let asset_uuid: Uuid = asset_id_str.parse()?;
                                 let mut asset = metadata_store.load(asset_uuid)?;
@@ -153,18 +153,28 @@ impl AssetService {
                                     let ext = relative_path.extension()
                                         .and_then(|e| e.to_str())
                                         .unwrap_or("");
-                                    if ext.eq_ignore_ascii_case("xmp") {
+                                    let is_xmp = ext.eq_ignore_ascii_case("xmp");
+                                    if is_xmp {
                                         let xmp = crate::xmp_reader::extract(file_path);
                                         reapply_xmp_data(&xmp, &mut asset, &variant_hash);
-                                        catalog.insert_asset(&asset)?;
-                                        if let Some(v) = asset.variants.iter().find(|v| v.content_hash == variant_hash) {
-                                            catalog.insert_variant(v)?;
-                                        }
                                     }
 
                                     metadata_store.save(&asset)?;
+                                    if is_xmp {
+                                        xmp_asset = Some(asset);
+                                    }
                                 }
                             }
+                            catalog.with_tx(|c| {
+                                c.update_recipe_content_hash(&recipe_id, &hash)?;
+                                if let Some(asset) = &xmp_asset {
+                                    c.insert_asset(asset)?;
+                                    if let Some(v) = asset.variants.iter().find(|v| v.content_hash == variant_hash) {
+                                        c.insert_variant(v)?;
+                                    }
+                                }
+                                Ok(())
+                            })?;
 
                             result.modified += 1;
                             on_file(file_path, VerifyStatus::Modified, file_start.elapsed());
@@ -389,15 +399,9 @@ impl AssetService {
                     // Recipe files are expected to change — report as modified, not failed
                     let new_hash = content_store.hash_file(&full_path)?;
 
-                    // Update the recipe's stored hash in the catalog
-                    if let Some((recipe_id, _, _)) = catalog.find_recipe_by_volume_and_path(
-                        &volume.id.to_string(),
-                        &loc.relative_path_str(),
-                    )? {
-                        catalog.update_recipe_content_hash(&recipe_id, &new_hash)?;
-                    }
-
-                    // Update the sidecar file
+                    // Sidecar (source of truth) first, then the catalog
+                    // rows in one transaction.
+                    let mut xmp_asset: Option<Asset> = None;
                     if let Some(asset_id) = catalog.find_asset_id_by_variant(variant_hash)? {
                         let uuid: Uuid = asset_id.parse()?;
                         let mut asset = metadata_store.load(uuid)?;
@@ -411,18 +415,35 @@ impl AssetService {
                             let ext = loc.relative_path.extension()
                                 .and_then(|e| e.to_str())
                                 .unwrap_or("");
-                            if ext.eq_ignore_ascii_case("xmp") {
+                            let is_xmp = ext.eq_ignore_ascii_case("xmp");
+                            if is_xmp {
                                 let xmp = crate::xmp_reader::extract(&full_path);
                                 reapply_xmp_data(&xmp, &mut asset, variant_hash);
-                                catalog.insert_asset(&asset)?;
-                                if let Some(v) = asset.variants.iter().find(|v| v.content_hash == variant_hash) {
-                                    catalog.insert_variant(v)?;
-                                }
                             }
 
                             metadata_store.save(&asset)?;
+                            if is_xmp {
+                                xmp_asset = Some(asset);
+                            }
                         }
                     }
+
+                    let recipe_row = catalog.find_recipe_by_volume_and_path(
+                        &volume.id.to_string(),
+                        &loc.relative_path_str(),
+                    )?;
+                    catalog.with_tx(|c| {
+                        if let Some((recipe_id, _, _)) = &recipe_row {
+                            c.update_recipe_content_hash(recipe_id, &new_hash)?;
+                        }
+                        if let Some(asset) = &xmp_asset {
+                            c.insert_asset(asset)?;
+                            if let Some(v) = asset.variants.iter().find(|v| v.content_hash == variant_hash) {
+                                c.insert_variant(v)?;
+                            }
+                        }
+                        Ok(())
+                    })?;
 
                     result.modified += 1;
                     on_file(&full_path, VerifyStatus::Modified, file_start.elapsed());

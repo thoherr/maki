@@ -604,8 +604,7 @@ async fn all_ids_honors_person_filters_including_exclude() {
     let srv = TestServer::new();
     {
         let catalog = Catalog::open_fast(&srv.root).unwrap();
-        crate::face_store::FaceStore::initialize(catalog.conn()).unwrap();
-        let fs = crate::face_store::FaceStore::new(catalog.conn());
+        let fs = crate::face_store::FaceStore::open(catalog.conn(), &srv.root);
         fs.store_face("face-1", &srv.asset_id, 0.1, 0.1, 0.2, 0.2, &[0.5; 4], 0.9, "arcface")
             .unwrap();
         let pid = fs.create_person(Some("Alice")).unwrap();

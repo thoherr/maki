@@ -2775,11 +2775,12 @@ fn sync_remove_stale() {
     // Get asset id before deleting
     let search_output = maki()
         .current_dir(&root)
-        .args(["search", "--format", "ids", "*"])
+        .args(["search", "--format", "ids", "stale"])
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&search_output.get_output().stdout);
     let asset_id = stdout.trim().to_string();
+    assert!(!asset_id.is_empty(), "search returned the imported asset id");
 
     std::fs::remove_file(&file).unwrap();
 
@@ -2799,16 +2800,28 @@ fn sync_remove_stale() {
         .success()
         .stdout(predicate::str::contains("stale removed"));
 
-    // Show should still work but location should be gone
-    let show_output = maki()
+    // The asset lost its only location, so sync purged it completely —
+    // sidecar and every catalog row (formerly the sidecar went and a
+    // phantom asset row stayed behind, which `doctor` then flagged).
+    maki()
         .current_dir(&root)
         .args(["--json", "show", &asset_id])
         .assert()
-        .success();
-    let show_stdout = String::from_utf8_lossy(&show_output.get_output().stdout);
-    let show_json: serde_json::Value = serde_json::from_str(&show_stdout).expect("valid JSON");
-    let locations = &show_json["variants"][0]["locations"];
-    assert_eq!(locations.as_array().unwrap().len(), 0, "location should be removed");
+        .failure()
+        .code(3)
+        .stderr(predicate::str::contains("no asset found"));
+    maki()
+        .current_dir(&root)
+        .args(["stats"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Assets:    0"));
+    maki()
+        .current_dir(&root)
+        .args(["doctor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no issues found"));
 }
 
 #[test]
@@ -4113,7 +4126,7 @@ fn saved_search_run_not_found() {
         .args(["ss", "run", "nonexistent"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("no saved search named"));
+        .stderr(predicate::str::contains("no saved search found matching"));
 }
 
 #[test]
@@ -4153,7 +4166,7 @@ fn saved_search_delete_not_found() {
         .args(["ss", "delete", "nonexistent"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("no saved search named"));
+        .stderr(predicate::str::contains("no saved search found matching"));
 }
 
 #[test]
@@ -12495,11 +12508,12 @@ fn doctor_detects_phantom_row_and_repairs_it() {
     // now a phantom.
     std::fs::remove_file(sidecar_path(&root, &ids[0])).unwrap();
 
+    // Unresolved issues drive the exit status (1, like `verify`).
     maki()
         .current_dir(&root)
         .arg("doctor")
         .assert()
-        .success()
+        .code(1)
         .stdout(
             predicate::str::contains("Doctor: 1 issue(s) found")
                 .and(predicate::str::contains("1 catalog row(s) without a sidecar"))
@@ -12511,6 +12525,7 @@ fn doctor_detects_phantom_row_and_repairs_it() {
         .args(["--json", "doctor"])
         .output()
         .unwrap();
+    assert_eq!(out.status.code(), Some(1), "--json doctor keeps the exit status");
     let parsed: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(parsed["missing_sidecar"].as_array().unwrap().len(), 1);
     assert_eq!(parsed["missing_sidecar"][0].as_str(), Some(ids[0].as_str()));

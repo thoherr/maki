@@ -45,6 +45,7 @@ use chrono::{DateTime, Utc};
 use crate::catalog::{AssetDetails, Catalog, SearchOptions, SearchRow};
 use crate::content_store::ContentStore;
 use crate::device_registry::DeviceRegistry;
+use crate::error::MakiError;
 use crate::metadata_store::MetadataStore;
 use crate::models::volume::Volume;
 
@@ -140,6 +141,10 @@ pub struct FromTagResult {
     pub tags_removed: u32,
     pub dry_run: bool,
     pub details: Vec<FromTagDetail>,
+    /// Per-asset failures while removing the source tag (`--remove-tags`);
+    /// the stacks themselves were still created.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
 }
 
 /// One matched tag in a `stack_from_tag` operation.
@@ -785,7 +790,7 @@ impl QueryEngine {
     /// merges tags, and deletes donor assets.
     pub fn group(&self, variant_hashes: &[String]) -> Result<GroupResult> {
         if variant_hashes.is_empty() {
-            anyhow::bail!("no variant hashes provided");
+            return Err(MakiError::InvalidInput("no variant hashes provided".into()).into());
         }
 
         let catalog = Catalog::open(&self.catalog_root)?;
@@ -796,7 +801,7 @@ impl QueryEngine {
         for hash in variant_hashes {
             let asset_id = catalog
                 .find_asset_id_by_variant(hash)?
-                .ok_or_else(|| anyhow::anyhow!("no variant found with hash '{hash}'"))?;
+                .ok_or_else(|| MakiError::not_found("variant", hash.as_str()))?;
             asset_ids.push(asset_id);
         }
 
@@ -828,19 +833,44 @@ impl QueryEngine {
             .collect::<Result<_>>()?;
 
         assets.sort_by_key(|a| a.created_at);
-        let target_id = assets[0].id;
-        let mut target = assets.remove(0);
+        let target = assets.remove(0);
         let donors = assets; // remaining are donors
 
-        // Step 4: Merge variants and tags from donors into target
-        let mut variants_moved = 0;
-        let existing_tags: HashSet<String> = target.tags.iter().cloned().collect();
-        let mut all_tags = existing_tags;
+        self.merge_assets(&catalog, &store, target, donors)
+    }
+
+    /// Shared tail of [`Self::group`] and [`Self::group_by_asset_ids`]:
+    /// fold `donors` into `target` in memory (variants, tags with their
+    /// provenance, recipes, best rating, first label / description), then
+    /// persist in the documented order — sidecars first (save the target,
+    /// delete the donors), then every SQLite row in ONE transaction.
+    ///
+    /// Sidecars first is what makes a failure recoverable: if the
+    /// transaction fails, the sidecars already describe the merged state
+    /// and `maki doctor --repair` converges SQLite to it (the target's rows
+    /// are rebuilt from its sidecar, the donors' rows are phantoms and
+    /// removed). With the reverse order a committed catalog would face
+    /// still-existing donor sidecars, and doctor would move the variants
+    /// back and forth between target and donors.
+    fn merge_assets(
+        &self,
+        catalog: &Catalog,
+        store: &MetadataStore,
+        mut target: crate::models::Asset,
+        donors: Vec<crate::models::Asset>,
+    ) -> Result<GroupResult> {
+        let target_id = target.id;
+        let mut all_tags: HashSet<String> = target.tags.iter().cloned().collect();
 
         // Check if the target asset has RAW variants (for smart role assignment)
         let target_has_raw = target.variants.iter().any(|v| {
             crate::asset_service::is_raw_extension(&v.format)
         });
+
+        // (content_hash, new role) of every variant that changes owner —
+        // the catalog rows are updated from this list so SQLite carries
+        // the same role as the sidecar.
+        let mut moved: Vec<(String, crate::models::VariantRole)> = Vec::new();
 
         for donor in &donors {
             for variant in &donor.variants {
@@ -855,8 +885,8 @@ impl QueryEngine {
                         moved_variant.role = crate::models::VariantRole::Alternate;
                     }
                 }
+                moved.push((moved_variant.content_hash.clone(), moved_variant.role.clone()));
                 target.variants.push(moved_variant);
-                variants_moved += 1;
             }
             for tag in &donor.tags {
                 if all_tags.insert(tag.clone()) {
@@ -884,47 +914,32 @@ impl QueryEngine {
             }
         }
 
-        // Step 5: Save target sidecar and update catalog
+        // Sidecars (source of truth) first.
         store.save(&target)?;
-        catalog.insert_asset(&target)?;
-
-        // Step 6: Update variant rows in catalog and clean up donors
         for donor in &donors {
-            let donor_id = donor.id.to_string();
-
-            for variant in &donor.variants {
-                catalog.update_variant_asset_id(
-                    &variant.content_hash,
-                    &target_id.to_string(),
-                )?;
-                // Re-role originals to exports in the catalog too
-                if variant.role == crate::models::VariantRole::Original {
-                    catalog.update_variant_role(&variant.content_hash, "alternate")?;
-                }
-            }
-
-            // Clean up FK-referencing rows before deleting the donor asset.
-            // variants, collection_assets, and faces reference assets(id).
-            let _ = catalog.delete_collection_memberships_for_asset(&donor_id);
-            let _ = catalog.delete_recipes_for_asset(&donor_id);
-            let _ = catalog.delete_file_locations_for_asset(&donor_id);
-            let _ = catalog.delete_variants_for_asset(&donor_id);
-            // faces table references assets(id) via FK
-            let _ = catalog.conn().execute(
-                "DELETE FROM faces WHERE asset_id = ?1",
-                rusqlite::params![donor_id],
-            );
-
             store.delete(donor.id)?;
-            catalog.delete_asset(&donor_id)?;
         }
 
-        let donors_removed = donors.len();
+        // Then every catalog row, atomically. Reassigning the variants
+        // before the donors' rows go means the donors' recipes and
+        // locations (which hang off the variants) survive the merge.
+        let target_id_str = target_id.to_string();
+        catalog.with_tx(|c| {
+            c.insert_asset(&target)?;
+            for (hash, role) in &moved {
+                c.update_variant_asset_id(hash, &target_id_str)?;
+                c.update_variant_role(hash, role.as_str())?;
+            }
+            for donor in &donors {
+                c.delete_asset_rows(&donor.id.to_string())?;
+            }
+            Ok(())
+        })?;
 
         Ok(GroupResult {
-            target_id: target_id.to_string(),
-            variants_moved,
-            donors_removed,
+            target_id: target_id_str,
+            variants_moved: moved.len(),
+            donors_removed: donors.len(),
         })
     }
 
@@ -938,12 +953,15 @@ impl QueryEngine {
         target_id: Option<&str>,
     ) -> Result<GroupResult> {
         if asset_ids.len() < 2 {
-            anyhow::bail!("need at least 2 assets to group");
+            return Err(MakiError::InvalidInput("need at least 2 assets to group".into()).into());
         }
 
         if let Some(tid) = target_id {
             if !asset_ids.iter().any(|id| id == tid) {
-                anyhow::bail!("target asset '{}' is not in the selected assets", tid);
+                return Err(MakiError::InvalidInput(format!(
+                    "target asset '{tid}' is not in the selected assets"
+                ))
+                .into());
             }
         }
 
@@ -988,93 +1006,10 @@ impl QueryEngine {
             0
         };
 
-        let mut target = assets.remove(target_idx);
-        let target_uuid = target.id;
+        let target = assets.remove(target_idx);
         let donors = assets;
 
-        // Merge variants, tags, recipes from donors into target
-        let mut variants_moved = 0;
-        let mut all_tags: HashSet<String> = target.tags.iter().cloned().collect();
-
-        let target_has_raw = target.variants.iter().any(|v| {
-            crate::asset_service::is_raw_extension(&v.format)
-        });
-
-        for donor in &donors {
-            for variant in &donor.variants {
-                let mut moved_variant = variant.clone();
-                moved_variant.asset_id = target_uuid;
-                if moved_variant.role == crate::models::VariantRole::Original {
-                    if target_has_raw && !crate::asset_service::is_raw_extension(&moved_variant.format) {
-                        moved_variant.role = crate::models::VariantRole::Export;
-                    } else {
-                        moved_variant.role = crate::models::VariantRole::Alternate;
-                    }
-                }
-                target.variants.push(moved_variant);
-                variants_moved += 1;
-            }
-            for tag in &donor.tags {
-                if all_tags.insert(tag.clone()) {
-                    // Carry the donor's provenance for tags new to the target.
-                    target.add_tags_with_source(
-                        std::slice::from_ref(tag),
-                        donor.tag_source(tag),
-                    );
-                }
-            }
-            for recipe in &donor.recipes {
-                target.recipes.push(recipe.clone());
-            }
-            // Keep the highest rating across target and donors
-            if let Some(donor_rating) = donor.rating {
-                target.rating = Some(target.rating.map_or(donor_rating, |r| r.max(donor_rating)));
-            }
-            // Keep first non-None color label
-            if target.color_label.is_none() && donor.color_label.is_some() {
-                target.color_label.clone_from(&donor.color_label);
-            }
-            // Keep first non-None description
-            if target.description.is_none() && donor.description.is_some() {
-                target.description.clone_from(&donor.description);
-            }
-        }
-
-        // Save target and update catalog
-        store.save(&target)?;
-        catalog.insert_asset(&target)?;
-
-        for donor in &donors {
-            let donor_id = donor.id.to_string();
-
-            for variant in &donor.variants {
-                catalog.update_variant_asset_id(
-                    &variant.content_hash,
-                    &target_uuid.to_string(),
-                )?;
-                if variant.role == crate::models::VariantRole::Original {
-                    catalog.update_variant_role(&variant.content_hash, "alternate")?;
-                }
-            }
-
-            let _ = catalog.delete_collection_memberships_for_asset(&donor_id);
-            let _ = catalog.delete_recipes_for_asset(&donor_id);
-            let _ = catalog.delete_file_locations_for_asset(&donor_id);
-            let _ = catalog.delete_variants_for_asset(&donor_id);
-            let _ = catalog.conn().execute(
-                "DELETE FROM faces WHERE asset_id = ?1",
-                rusqlite::params![donor_id],
-            );
-
-            store.delete(donor.id)?;
-            catalog.delete_asset(&donor_id)?;
-        }
-
-        Ok(GroupResult {
-            target_id: target_uuid.to_string(),
-            variants_moved,
-            donors_removed: donors.len(),
-        })
+        self.merge_assets(&catalog, &store, target, donors)
     }
 
     /// Split variants out of an asset into new standalone assets.
@@ -1084,7 +1019,7 @@ impl QueryEngine {
     /// Recipes attached to extracted variants move with them.
     pub fn split(&self, asset_id: &str, variant_hashes: &[String]) -> Result<SplitResult> {
         if variant_hashes.is_empty() {
-            anyhow::bail!("no variant hashes provided");
+            return Err(MakiError::InvalidInput("no variant hashes provided".into()).into());
         }
 
         let catalog = Catalog::open(&self.catalog_root)?;
@@ -1100,18 +1035,22 @@ impl QueryEngine {
             source.variants.iter().map(|v| v.content_hash.as_str()).collect();
         for hash in variant_hashes {
             if !source_hashes.contains(hash.as_str()) {
-                anyhow::bail!(
+                return Err(MakiError::InvalidInput(format!(
                     "Variant '{}' does not belong to asset '{}'",
                     hash,
                     &full_id[..8]
-                );
+                ))
+                .into());
             }
         }
 
         // Refuse to extract all variants — at least one must remain
         let extract_set: HashSet<&str> = variant_hashes.iter().map(|h| h.as_str()).collect();
         if extract_set.len() >= source.variants.len() {
-            anyhow::bail!("cannot extract all variants — at least one must remain in the source asset");
+            return Err(MakiError::InvalidInput(
+                "cannot extract all variants — at least one must remain in the source asset".into(),
+            )
+            .into());
         }
 
         // Check if the identity variant (the one that generated the asset UUID) is being split off
@@ -1120,24 +1059,24 @@ impl QueryEngine {
             .map(|v| v.content_hash.clone());
         if let Some(ref ih) = identity_hash {
             if extract_set.contains(ih.as_str()) {
-                anyhow::bail!(
+                return Err(MakiError::InvalidInput(format!(
                     "Cannot split off variant '{}' — it is the identity variant that generated this asset's ID. \
                      Split the other variants instead, or use 'maki group' to reorganize.",
                     &ih[..20.min(ih.len())]
-                );
+                ))
+                .into());
             }
         }
 
-        let mut new_assets_info = Vec::new();
-
-        // For each variant to extract, create a new asset
+        // Phase 1: compute every new asset and the trimmed source in memory.
+        let mut new_assets: Vec<crate::models::Asset> = Vec::new();
         for hash in variant_hashes {
             // Find and remove the variant from source
             let idx = source
                 .variants
                 .iter()
                 .position(|v| v.content_hash == *hash)
-                .ok_or_else(|| anyhow::anyhow!("variant '{}' not found", hash))?;
+                .ok_or_else(|| MakiError::not_found("variant", hash.as_str()))?;
             let mut variant = source.variants.remove(idx);
 
             // Create new asset ID deterministically from variant hash (using the same
@@ -1160,9 +1099,7 @@ impl QueryEngine {
             // Determine asset type from the variant's format
             let asset_type = crate::asset_service::determine_asset_type(&variant.format);
 
-            let original_filename = variant.original_filename.clone();
-
-            let new_asset = crate::models::Asset {
+            new_assets.push(crate::models::Asset {
                 id: new_uuid,
                 name: None,
                 created_at: source.created_at,
@@ -1178,29 +1115,41 @@ impl QueryEngine {
                 face_scan_status: None,
                 preview_rotation: None,
                 preview_variant: None,
-                variants: vec![variant.clone()],
+                variants: vec![variant],
                 recipes: moved_recipes,
-            };
-
-            // Save new asset sidecar and insert into catalog
-            store.save(&new_asset)?;
-            catalog.insert_asset(&new_asset)?;
-
-            // Update variant's asset_id and role in catalog
-            catalog.update_variant_asset_id(&variant.content_hash, &new_uuid.to_string())?;
-            catalog.update_variant_role(&variant.content_hash, "original")?;
-
-            new_assets_info.push(NewSplitAsset {
-                asset_id: new_uuid.to_string(),
-                variant_hash: variant.content_hash.clone(),
-                original_filename,
             });
         }
 
-        // Save updated source asset (with extracted variants removed)
+        // Phase 2: sidecars (source of truth) first — the new assets, then
+        // the trimmed source.
+        for new_asset in &new_assets {
+            store.save(new_asset)?;
+        }
         store.save(&source)?;
-        catalog.insert_asset(&source)?;
-        catalog.update_denormalized_variant_columns(&source)?;
+
+        // Phase 3: every catalog row in one transaction. The extracted
+        // variants change owner and role; `insert_asset` derives the new
+        // assets' denormalized columns, the source's are recomputed.
+        catalog.with_tx(|c| {
+            for new_asset in &new_assets {
+                c.insert_asset(new_asset)?;
+                let variant = &new_asset.variants[0];
+                c.update_variant_asset_id(&variant.content_hash, &new_asset.id.to_string())?;
+                c.update_variant_role(&variant.content_hash, "original")?;
+            }
+            c.insert_asset(&source)?;
+            c.update_denormalized_variant_columns(&source)?;
+            Ok(())
+        })?;
+
+        let new_assets_info = new_assets
+            .iter()
+            .map(|a| NewSplitAsset {
+                asset_id: a.id.to_string(),
+                variant_hash: a.variants[0].content_hash.clone(),
+                original_filename: a.variants[0].original_filename.clone(),
+            })
+            .collect();
 
         Ok(SplitResult {
             source_id: full_id,
@@ -2402,66 +2351,11 @@ impl QueryEngine {
             });
         }
 
+        // Sidecar first (source of truth), then every derived SQLite row
+        // in one transaction — stale variants / locations / recipes go,
+        // the sidecar's come back, denormalized columns are recomputed.
         store.save(&asset)?;
-        catalog.insert_asset(&asset)?;
-
-        // Re-sync SQLite with sidecar: the sidecar YAML is the source of truth.
-        // Temporarily disable FK checks for the delete-and-reinsert cycle.
-        let _ = catalog.conn().execute_batch("PRAGMA foreign_keys = OFF");
-        let resync_result = (|| -> anyhow::Result<()> {
-        let full_id_str = full_id.to_string();
-
-        // Find all variant hashes currently in SQLite for this asset (may include stale ones)
-        let sqlite_hashes: Vec<String> = catalog.conn()
-            .prepare("SELECT content_hash FROM variants WHERE asset_id = ?1")?
-            .query_map(rusqlite::params![&full_id_str], |r| r.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        // Delete order: recipes → file_locations → variants (respects FK constraints)
-        // 1. Delete all recipes for this asset's variants
-        for hash in &sqlite_hashes {
-            catalog.conn().execute(
-                "DELETE FROM recipes WHERE variant_hash = ?1",
-                rusqlite::params![hash],
-            )?;
-        }
-        // 2. Delete file locations for ALL variants
-        for hash in &sqlite_hashes {
-            catalog.conn().execute(
-                "DELETE FROM file_locations WHERE content_hash = ?1",
-                rusqlite::params![hash],
-            )?;
-        }
-        // 3. Delete stale variant rows not in sidecar
-        let sidecar_hashes: std::collections::HashSet<&str> = asset.variants.iter()
-            .map(|v| v.content_hash.as_str())
-            .collect();
-        for hash in &sqlite_hashes {
-            if !sidecar_hashes.contains(hash.as_str()) {
-                catalog.conn().execute(
-                    "DELETE FROM variants WHERE content_hash = ?1",
-                    rusqlite::params![hash],
-                )?;
-            }
-        }
-
-        // Re-insert from sidecar (source of truth)
-        for variant in &asset.variants {
-            catalog.insert_variant(variant)?;
-            for loc in &variant.locations {
-                catalog.insert_file_location(&variant.content_hash, loc)?;
-            }
-        }
-        for recipe in &asset.recipes {
-            catalog.insert_recipe(recipe)?;
-        }
-        Ok(())
-        })();
-        let _ = catalog.conn().execute_batch("PRAGMA foreign_keys = ON");
-        resync_result?;
-
-        catalog.update_denormalized_variant_columns(&asset)?;
+        catalog.resync_asset_from_sidecar(&asset)?;
 
         Ok(asset.tags.clone())
     }
@@ -2746,9 +2640,11 @@ impl QueryEngine {
 
         asset.preview_variant = content_hash.map(|s| s.to_string());
         store.save(&asset)?;
-        catalog.update_asset_preview_variant(&full_id, content_hash)?;
-        // best_variant_hash follows the override (or the rule when cleared).
-        catalog.update_denormalized_variant_columns(&asset)?;
+        catalog.with_tx(|c| {
+            c.update_asset_preview_variant(&full_id, content_hash)?;
+            // best_variant_hash follows the override (or the rule when cleared).
+            c.update_denormalized_variant_columns(&asset)
+        })?;
 
         Ok(())
     }
@@ -2796,9 +2692,10 @@ impl QueryEngine {
 
         // Update catalog — the role feeds the preview rule, so refresh the
         // denormalized best_variant_hash too (the grid reads it directly).
-        catalog.update_variant_role(variant_hash, &role_lower)?;
-        catalog.update_denormalized_variant_columns(&asset)?;
-        catalog.update_denormalized_variant_columns(&asset)?;
+        catalog.with_tx(|c| {
+            c.update_variant_role(variant_hash, &role_lower)?;
+            c.update_denormalized_variant_columns(&asset)
+        })?;
 
         Ok(())
     }
@@ -2876,9 +2773,11 @@ impl QueryEngine {
             tags_removed: 0,
             dry_run: !apply,
             details: Vec::new(),
+            errors: Vec::new(),
         };
 
-        let store = crate::stack::StackStore::new(catalog.conn());
+        // `create` persists stacks.yaml itself (StackStore::open).
+        let store = crate::stack::StackStore::open(catalog.conn(), &self.catalog_root);
 
         for tag in &matching_tags {
             let assets = catalog.assets_with_exact_tag(tag)?;
@@ -2898,8 +2797,13 @@ impl QueryEngine {
             let remove_all_tags = |ids: &[String], result: &mut FromTagResult| {
                 if remove_tags && apply {
                     for id in ids {
-                        let _ = self.tag(id, std::slice::from_ref(tag), true);
-                        result.tags_removed += 1;
+                        match self.tag(id, std::slice::from_ref(tag), true) {
+                            Ok(_) => result.tags_removed += 1,
+                            Err(e) => result.errors.push(format!(
+                                "{}: could not remove tag '{tag}': {e:#}",
+                                &id[..8.min(id.len())]
+                            )),
+                        }
                     }
                 }
             };
@@ -2962,11 +2866,6 @@ impl QueryEngine {
                 assets_skipped: skipped,
                 stack_id: stack_id_str,
             });
-        }
-
-        if apply {
-            let yaml = store.export_all()?;
-            crate::stack::save_yaml(&self.catalog_root, &yaml)?;
         }
 
         Ok(result)
@@ -3057,12 +2956,13 @@ impl QueryEngine {
     }
 
     /// Restore an asset to a prior full state (undo). Writes the YAML
-    /// sidecar, re-inserts the asset + recipes into the catalog, refreshes
-    /// denormalized columns, and flags every `.xmp` recipe
-    /// `pending_writeback` so a later `maki writeback` reconciles the files
-    /// on disk. Does NOT touch `.xmp` files live — undo restores
-    /// catalog+sidecar state only (the documented default; most catalogs
-    /// run with auto-writeback off).
+    /// sidecar, then resyncs every derived catalog row from it (asset,
+    /// variants, file locations, recipes, denormalized columns — via
+    /// [`Catalog::resync_asset_from_sidecar`], one transaction), and flags
+    /// every `.xmp` recipe `pending_writeback` so a later `maki writeback`
+    /// reconciles the files on disk. Does NOT touch `.xmp` files live —
+    /// undo restores catalog+sidecar state only (the documented default;
+    /// most catalogs run with auto-writeback off).
     ///
     /// Keeps SQLite recipe pending flags equal to the YAML it writes, so
     /// `maki doctor` stays clean after an undo.
@@ -3087,12 +2987,7 @@ impl QueryEngine {
         }
 
         store.save(&asset)?;
-        catalog.insert_asset(&asset)?;
-        for recipe in &asset.recipes {
-            catalog.insert_recipe(recipe)?;
-        }
-        catalog.update_denormalized_variant_columns(&asset)?;
-        Ok(())
+        catalog.resync_asset_from_sidecar(&asset)
     }
 
     /// Like [`Self::batch_context_fast`] but with an edit-history recorder
@@ -3295,11 +3190,17 @@ mod tests {
         let details = engine.show(&id1).unwrap();
         assert_eq!(details.variants.len(), 2);
 
-        // Original variant keeps its role, donor variant becomes alternate
+        // Original variant keeps its role; the JPEG donor joining a RAW
+        // target becomes an export. The catalog row carries the same role
+        // as the sidecar (until the F2 refactor the row said "alternate"
+        // while the sidecar said "export").
         let original = details.variants.iter().find(|v| v.content_hash == "sha256:hash1").unwrap();
         assert_eq!(original.role, "original");
         let moved = details.variants.iter().find(|v| v.content_hash == "sha256:hash2").unwrap();
-        assert_eq!(moved.role, "alternate");
+        assert_eq!(moved.role, "export");
+        let sidecar = MetadataStore::new(dir.path()).load(id1.parse().unwrap()).unwrap();
+        let moved_in_sidecar = sidecar.variants.iter().find(|v| v.content_hash == "sha256:hash2").unwrap();
+        assert_eq!(moved_in_sidecar.role.as_str(), "export");
 
         // Donor should be gone
         assert!(engine.show(&id2).is_err());
@@ -3325,6 +3226,161 @@ mod tests {
         let result = engine.group(&["sha256:bogus".to_string()]);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("no variant found"));
+    }
+
+    fn count(catalog: &Catalog, sql: &str, id: &str) -> i64 {
+        catalog
+            .conn()
+            .query_row(sql, rusqlite::params![id], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// A statement failing mid-merge (here: the donor's variant row is
+    /// missing from SQLite, so the ownership update affects no row) must
+    /// roll back every catalog write of the merge — the target keeps its
+    /// old tags, the donor's asset row is still there.
+    #[test]
+    fn group_rolls_back_catalog_rows_when_a_statement_fails() {
+        let (dir, _hash1, hash2, id1, id2) = setup_group_env();
+        let catalog = Catalog::open(dir.path()).unwrap();
+        catalog
+            .conn()
+            .execute("DELETE FROM variants WHERE content_hash = ?1", rusqlite::params![hash2])
+            .unwrap();
+
+        let engine = QueryEngine::new(dir.path());
+        let err = engine
+            .group_by_asset_ids(&[id1.clone(), id2.clone()], None)
+            .unwrap_err();
+        assert!(err.to_string().contains("no variant found"), "{err}");
+
+        let asset_row = "SELECT COUNT(*) FROM assets WHERE id = ?1";
+        assert_eq!(count(&catalog, asset_row, &id2), 1, "donor row survives the rollback");
+        let tags: String = catalog
+            .conn()
+            .query_row("SELECT tags FROM assets WHERE id = ?1", rusqlite::params![id1], |r| r.get(0))
+            .unwrap();
+        assert_eq!(tags, r#"["landscape"]"#, "target row untouched");
+        assert_eq!(count(&catalog, "SELECT COUNT(*) FROM variants WHERE asset_id = ?1", &id1), 1);
+        // The sidecars were written first (source of truth): the target
+        // describes the merged state, the donor sidecar is gone — exactly
+        // the state `doctor --repair` converges the catalog to.
+        let store = MetadataStore::new(dir.path());
+        assert!(store.load(id2.parse().unwrap()).is_err());
+        assert_eq!(store.load(id1.parse().unwrap()).unwrap().variants.len(), 2);
+    }
+
+    /// Same contract for split: when the extracted variant's row is
+    /// missing from SQLite, no new asset row and no change to the source
+    /// row may remain.
+    #[test]
+    fn split_rolls_back_catalog_rows_when_a_statement_fails() {
+        let (dir, hash1, hash2, id1, _id2) = setup_group_env();
+        let engine = QueryEngine::new(dir.path());
+        engine.group(&[hash1.clone(), hash2.clone()]).unwrap();
+
+        let catalog = Catalog::open(dir.path()).unwrap();
+        catalog
+            .conn()
+            .execute("DELETE FROM variants WHERE content_hash = ?1", rusqlite::params![hash2])
+            .unwrap();
+        let before: (i64, String) = catalog
+            .conn()
+            .query_row(
+                "SELECT variant_count, best_variant_hash FROM assets WHERE id = ?1",
+                rusqlite::params![id1],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+
+        let err = engine.split(&id1, std::slice::from_ref(&hash2)).unwrap_err();
+        assert!(err.to_string().contains("no variant found"), "{err}");
+
+        let new_id = Asset::id_for_hash(&hash2).to_string();
+        assert_eq!(count(&catalog, "SELECT COUNT(*) FROM assets WHERE id = ?1", &new_id), 0);
+        let after: (i64, String) = catalog
+            .conn()
+            .query_row(
+                "SELECT variant_count, best_variant_hash FROM assets WHERE id = ?1",
+                rusqlite::params![id1],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(after, before, "source row untouched");
+    }
+
+    /// Undo must bring variants and file locations back too, not only the
+    /// asset row and recipes (the pre-F7 `restore_asset` left the rows of a
+    /// variant added after the recorded state in place).
+    #[test]
+    fn restore_asset_resyncs_variants_and_locations() {
+        use crate::models::volume::FileLocation;
+
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = Catalog::open(dir.path()).unwrap();
+        catalog.initialize().unwrap();
+        let store = MetadataStore::new(dir.path());
+        let volume = Volume::new(
+            "Vol".to_string(),
+            std::path::PathBuf::from("/tmp/vol"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+        let loc = |path: &str| FileLocation {
+            volume_id: volume.id,
+            relative_path: std::path::PathBuf::from(path),
+            verified_at: None,
+        };
+        let variant = |hash: &str, asset_id: uuid::Uuid, name: &str| Variant {
+            content_hash: hash.to_string(),
+            asset_id,
+            role: VariantRole::Original,
+            format: "jpg".to_string(),
+            file_size: 10,
+            original_filename: name.to_string(),
+            source_metadata: Default::default(),
+            locations: vec![loc(name)],
+        };
+
+        let mut asset = Asset::new(AssetType::Image, "sha256:undo1");
+        asset.variants.push(variant("sha256:undo1", asset.id, "one.jpg"));
+        asset.rating = Some(2);
+        store.save(&asset).unwrap();
+        catalog.resync_asset_from_sidecar(&asset).unwrap();
+        let before = asset.clone();
+
+        // Later state: a second variant with its own location, and a rating.
+        let mut v2 = variant("sha256:undo2", asset.id, "two.jpg");
+        v2.role = VariantRole::Alternate;
+        asset.variants.push(v2);
+        asset.rating = Some(5);
+        store.save(&asset).unwrap();
+        catalog.resync_asset_from_sidecar(&asset).unwrap();
+        let id = asset.id.to_string();
+        assert_eq!(count(&catalog, "SELECT COUNT(*) FROM variants WHERE asset_id = ?1", &id), 2);
+
+        QueryEngine::new(dir.path()).restore_asset(&before).unwrap();
+
+        assert_eq!(count(&catalog, "SELECT COUNT(*) FROM variants WHERE asset_id = ?1", &id), 1);
+        assert_eq!(
+            count(
+                &catalog,
+                "SELECT COUNT(*) FROM file_locations WHERE content_hash IN (SELECT content_hash FROM variants WHERE asset_id = ?1)",
+                &id
+            ),
+            1
+        );
+        let (rating, variant_count): (Option<i64>, i64) = catalog
+            .conn()
+            .query_row(
+                "SELECT rating, variant_count FROM assets WHERE id = ?1",
+                rusqlite::params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(rating, Some(2));
+        assert_eq!(variant_count, 1);
+        assert_eq!(store.load(before.id).unwrap().variants.len(), 1);
     }
 
     #[test]

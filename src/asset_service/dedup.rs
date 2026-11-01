@@ -206,17 +206,8 @@ impl AssetService {
                             }
                         }
 
-                        // Remove from catalog
-                        if let Err(e) = catalog.delete_file_location(
-                            &entry.content_hash,
-                            &vol_id,
-                            &loc.relative_path,
-                        ) {
-                            result.errors.push(format!(
-                                "Failed to remove catalog location {}: {e}",
-                                loc.relative_path
-                            ));
-                        } else if let Err(e) = self.remove_sidecar_file_location(
+                        // Sidecar (source of truth) first, then the catalog row
+                        if let Err(e) = self.remove_sidecar_file_location(
                             &metadata_store,
                             &catalog,
                             &entry.content_hash,
@@ -225,6 +216,15 @@ impl AssetService {
                         ) {
                             result.errors.push(format!(
                                 "Failed to update sidecar for {}: {e}",
+                                loc.relative_path
+                            ));
+                        } else if let Err(e) = catalog.delete_file_location(
+                            &entry.content_hash,
+                            &vol_id,
+                            &loc.relative_path,
+                        ) {
+                            result.errors.push(format!(
+                                "Failed to remove catalog location {}: {e}",
                                 loc.relative_path
                             ));
                         } else {
@@ -245,11 +245,7 @@ impl AssetService {
                                     }
                                 }
                             }
-                            if let Err(e) = catalog.delete_recipe(recipe_id) {
-                                result.errors.push(format!(
-                                    "Failed to remove recipe {recipe_path}: {e}"
-                                ));
-                            } else if let Err(e) = self.remove_sidecar_recipe(
+                            if let Err(e) = self.remove_sidecar_recipe(
                                 &metadata_store,
                                 &catalog,
                                 &entry.content_hash,
@@ -258,6 +254,10 @@ impl AssetService {
                             ) {
                                 result.errors.push(format!(
                                     "Failed to update sidecar for recipe {recipe_path}: {e}"
+                                ));
+                            } else if let Err(e) = catalog.delete_recipe(recipe_id) {
+                                result.errors.push(format!(
+                                    "Failed to remove recipe {recipe_path}: {e}"
                                 ));
                             } else {
                                 result.recipes_removed += 1;

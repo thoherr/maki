@@ -279,7 +279,7 @@ pub async fn generate_preview(
         if let Some(ref msg) = smart_err {
             eprintln!("[preview] asset={asset_id}: {msg}");
         }
-        let regen_error = match (regen_err, smart_err) {
+        let mut regen_error = match (regen_err, smart_err) {
             (Some(a), Some(b)) if a == b => Some(a),
             (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
             (Some(a), None) | (None, Some(a)) => Some(a),
@@ -293,7 +293,11 @@ pub async fn generate_preview(
                 .unwrap_or(false);
             if !has_duration {
                 let service = state.asset_service();
-                service.backfill_video_metadata(&details.id, content_hash, &source_path);
+                if let Err(e) = service.backfill_video_metadata(&details.id, content_hash, &source_path) {
+                    let msg = format!("Video metadata backfill failed: {e:#}");
+                    eprintln!("[preview] asset={asset_id}: {msg}");
+                    regen_error = Some(regen_error.map_or(msg.clone(), |prev| format!("{prev}\n{msg}")));
+                }
             }
         } else if details.asset_type == "audio" {
             let has_duration = details.variants.get(best_idx)
@@ -301,7 +305,11 @@ pub async fn generate_preview(
                 .unwrap_or(false);
             if !has_duration {
                 let service = state.asset_service();
-                service.backfill_audio_metadata(&details.id, content_hash, &source_path);
+                if let Err(e) = service.backfill_audio_metadata(&details.id, content_hash, &source_path) {
+                    let msg = format!("Audio metadata backfill failed: {e:#}");
+                    eprintln!("[preview] asset={asset_id}: {msg}");
+                    regen_error = Some(regen_error.map_or(msg.clone(), |prev| format!("{prev}\n{msg}")));
+                }
             }
         }
 

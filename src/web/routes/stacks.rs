@@ -51,10 +51,8 @@ pub async fn batch_create_stack(
     let state = state.clone();
     let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let store = crate::stack::StackStore::new(catalog.conn());
+        let store = crate::stack::StackStore::open(catalog.conn(), &state.catalog_root);
         let stack = store.create(&req.asset_ids)?;
-        let yaml = store.export_all()?;
-        crate::stack::save_yaml(&state.catalog_root, &yaml)?;
         Ok::<_, anyhow::Error>(serde_json::json!({
             "stack_id": stack.id.to_string(),
             "member_count": stack.asset_ids.len(),
@@ -74,10 +72,8 @@ pub async fn add_to_stack(
     let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
         let ref_full = super::resolve_asset_id_or_err(&catalog, &reference_id)?;
-        let store = crate::stack::StackStore::new(catalog.conn());
+        let store = crate::stack::StackStore::open(catalog.conn(), &state.catalog_root);
         let added = store.add(&ref_full, &req.asset_ids)?;
-        let yaml = store.export_all()?;
-        crate::stack::save_yaml(&state.catalog_root, &yaml)?;
         Ok::<_, anyhow::Error>(serde_json::json!({
             "added": added,
         }))
@@ -94,10 +90,8 @@ pub async fn batch_unstack(
     let state = state.clone();
     let json = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
-        let store = crate::stack::StackStore::new(catalog.conn());
+        let store = crate::stack::StackStore::open(catalog.conn(), &state.catalog_root);
         let removed = store.remove(&req.asset_ids)?;
-        let yaml = store.export_all()?;
-        crate::stack::save_yaml(&state.catalog_root, &yaml)?;
         Ok::<_, anyhow::Error>(serde_json::json!({
             "removed": removed,
         }))
@@ -145,10 +139,8 @@ pub async fn set_stack_pick(
     let state = state.clone();
     let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let store = crate::stack::StackStore::new(catalog.conn());
+        let store = crate::stack::StackStore::open(catalog.conn(), &state.catalog_root);
         store.set_pick(&asset_id)?;
-        let yaml = store.export_all()?;
-        crate::stack::save_yaml(&state.catalog_root, &yaml)?;
         Ok::<_, anyhow::Error>(serde_json::json!({ "pick": asset_id }))
     }, super::err::bad_request_prefixed)
     .await?;
@@ -163,10 +155,8 @@ pub async fn dissolve_stack(
     let state = state.clone();
     let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let store = crate::stack::StackStore::new(catalog.conn());
+        let store = crate::stack::StackStore::open(catalog.conn(), &state.catalog_root);
         store.dissolve(&asset_id)?;
-        let yaml = store.export_all()?;
-        crate::stack::save_yaml(&state.catalog_root, &yaml)?;
         Ok::<_, anyhow::Error>(serde_json::json!({ "status": "dissolved" }))
     }, super::err::bad_request_prefixed)
     .await?;
@@ -185,7 +175,7 @@ pub async fn stack_by_similarity(
         let catalog = state.catalog()?;
         let full_id = super::resolve_asset_id_or_err(&catalog, &asset_id)?;
 
-        let store = crate::stack::StackStore::new(catalog.conn());
+        let store = crate::stack::StackStore::open(catalog.conn(), &state.catalog_root);
         if store.stack_for_asset(&full_id)?.is_some() {
             anyhow::bail!("asset is already in a stack. Dissolve it first.");
         }
@@ -222,8 +212,6 @@ pub async fn stack_by_similarity(
         }
 
         let stack = store.create(&stack_ids)?;
-        let yaml = store.export_all()?;
-        crate::stack::save_yaml(&state.catalog_root, &yaml)?;
 
         Ok(serde_json::json!({
             "stack_id": stack.id.to_string(),

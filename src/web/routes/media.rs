@@ -61,18 +61,7 @@ pub async fn compare_page(
 
         let tmpl = ComparePage { assets, ai_enabled: state.ai_enabled, vlm_enabled: state.vlm_enabled };
         Ok::<_, anyhow::Error>(tmpl.render()?)
-    }, |e| {
-        let msg = format!("{e:#}");
-        if msg.contains("no asset found") {
-            (
-                StatusCode::NOT_FOUND,
-                Html(format!("<h1>Not Found</h1><p>{msg}</p><p><a href=\"/\">Back to browse</a></p>")),
-            )
-                .into_response()
-        } else {
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
-        }
-    })
+    }, super::err::mapped_html)
     .await?;
     Ok(Html(html).into_response())
 }

@@ -10,6 +10,18 @@ impl AssetService {
 
     /// Remove a volume and all its associated data (locations, recipes, orphaned assets/previews).
     /// Report-only by default; `--apply` executes removal.
+    ///
+    /// Dual-store order in apply mode (architecture audit F2):
+    /// 1. the sidecars (source of truth) drop every location and recipe on
+    ///    the volume — idempotent, so a re-run after a failure is safe;
+    /// 2. every catalog row change (locations, recipes, the rows of assets
+    ///    that became orphaned, the volume row) runs in one transaction;
+    /// 3. only after that commit are derived files removed and the volume
+    ///    taken out of `volumes.yaml`.
+    ///
+    /// The registry entry goes last on purpose: if anything before it fails,
+    /// the volume stays registered and `volume remove --apply` can simply be
+    /// re-run to finish the job.
     pub fn remove_volume(
         &self,
         label: &str,
@@ -44,103 +56,110 @@ impl AssetService {
         result.locations = locations.len();
         result.recipes = recipes.len();
 
-        // Build stale list for report-mode orphan prediction
-        let stale_locations: Vec<(String, String, String)> = locations
-            .iter()
-            .map(|(hash, path)| (hash.clone(), vol_id_str.clone(), path.clone()))
-            .collect();
-
         if apply {
-            // Remove all file locations on this volume
-            for (content_hash, relative_path) in &locations {
+            // 1. Sidecars first. Only entries whose sidecar update succeeded
+            //    have their catalog row removed, so both stores keep agreeing.
+            let mut location_rows: Vec<(&(String, String), Duration)> = Vec::new();
+            for loc in &locations {
+                let (content_hash, relative_path) = loc;
                 let file_start = Instant::now();
-                if let Err(e) = catalog.delete_file_location(
-                    content_hash,
-                    &vol_id_str,
-                    relative_path,
-                ) {
-                    result.errors.push(format!(
-                        "Failed to remove location {}: {e}", relative_path
-                    ));
-                } else if let Err(e) = self.remove_sidecar_file_location(
+                match self.remove_sidecar_file_location(
                     &metadata_store,
                     &catalog,
                     content_hash,
                     volume.id,
                     relative_path,
                 ) {
-                    result.errors.push(format!(
-                        "Failed to update sidecar for {}: {e}", relative_path
-                    ));
-                } else {
-                    result.locations_removed += 1;
-                    on_file(
-                        &PathBuf::from(relative_path),
-                        CleanupStatus::Stale,
-                        file_start.elapsed(),
-                    );
+                    Ok(()) => location_rows.push((loc, file_start.elapsed())),
+                    Err(e) => result.errors.push(format!(
+                        "Failed to update sidecar for {relative_path}: {e}"
+                    )),
                 }
             }
-
-            // Remove all recipes on this volume
-            for (recipe_id, _content_hash, variant_hash, relative_path) in &recipes {
+            let mut recipe_rows: Vec<(&(String, String, String, String), Duration)> = Vec::new();
+            for rec in &recipes {
+                let (_recipe_id, _content_hash, variant_hash, relative_path) = rec;
                 let file_start = Instant::now();
-                if let Err(e) = catalog.delete_recipe(recipe_id) {
-                    result.errors.push(format!(
-                        "Failed to remove recipe {}: {e}", relative_path
-                    ));
-                } else if let Err(e) = self.remove_sidecar_recipe(
+                match self.remove_sidecar_recipe(
                     &metadata_store,
                     &catalog,
                     variant_hash,
                     volume.id,
                     relative_path,
                 ) {
-                    result.errors.push(format!(
-                        "Failed to update sidecar for recipe {}: {e}", relative_path
-                    ));
-                } else {
-                    result.recipes_removed += 1;
-                    on_file(
-                        &PathBuf::from(relative_path),
-                        CleanupStatus::Stale,
-                        file_start.elapsed(),
-                    );
+                    Ok(()) => recipe_rows.push((rec, file_start.elapsed())),
+                    Err(e) => result.errors.push(format!(
+                        "Failed to update sidecar for recipe {relative_path}: {e}"
+                    )),
                 }
             }
-        }
 
-        // Orphaned assets
-        let orphaned_ids = if apply {
-            catalog.list_orphaned_asset_ids()?
-        } else {
-            catalog.list_would_be_orphaned_asset_ids(&stale_locations)?
-        };
-        result.orphaned_assets = orphaned_ids.len();
+            // 2. Catalog rows in one transaction.
+            let purged = catalog.with_tx(|c| {
+                for ((content_hash, relative_path), _) in &location_rows {
+                    c.delete_file_location(content_hash, &vol_id_str, relative_path)?;
+                }
+                for ((recipe_id, _, _, _), _) in &recipe_rows {
+                    c.delete_recipe(recipe_id)?;
+                }
+                let orphaned_ids = c.list_orphaned_asset_ids()?;
+                let mut purged = Vec::with_capacity(orphaned_ids.len());
+                for asset_id in &orphaned_ids {
+                    purged.push(self.purge_orphaned_asset_rows(c, asset_id)?);
+                }
+                c.delete_volume(&vol_id_str)?;
+                Ok(purged)
+            });
+            let purged = match purged {
+                Ok(p) => p,
+                Err(e) => {
+                    result.errors.push(format!(
+                        "Catalog update failed and was rolled back; the volume stays \
+                         registered, re-run `volume remove --apply` to retry: {e:#}"
+                    ));
+                    return Ok(result);
+                }
+            };
 
-        if apply {
-            let stack_store = crate::stack::StackStore::new(catalog.conn());
+            // 3. Post-commit: progress callbacks, orphan side effects.
+            for ((_, relative_path), elapsed) in &location_rows {
+                result.locations_removed += 1;
+                on_file(&PathBuf::from(relative_path), CleanupStatus::Stale, *elapsed);
+            }
+            for ((_, _, _, relative_path), elapsed) in &recipe_rows {
+                result.recipes_removed += 1;
+                on_file(&PathBuf::from(relative_path), CleanupStatus::Stale, *elapsed);
+            }
+            result.orphaned_assets = purged.len();
             let preview_gen = crate::preview::PreviewGenerator::new(
                 &self.catalog_root,
                 self.verbosity,
                 &self.preview_config,
             );
-            for asset_id in &orphaned_ids {
+            for asset in &purged {
                 let file_start = Instant::now();
-                let asset_id_path = PathBuf::from(asset_id);
-                if !self.purge_orphaned_asset(
-                    &catalog,
+                self.purge_orphaned_asset_files(
                     &metadata_store,
-                    &stack_store,
                     &preview_gen,
-                    asset_id,
+                    asset,
                     &mut result.errors,
-                ) {
-                    continue;
-                }
+                );
                 result.removed_assets += 1;
-                on_file(&asset_id_path, CleanupStatus::OrphanedAsset, file_start.elapsed());
+                on_file(
+                    &PathBuf::from(&asset.asset_id),
+                    CleanupStatus::OrphanedAsset,
+                    file_start.elapsed(),
+                );
             }
+        } else {
+            // Report mode: predict which assets would become orphaned.
+            let stale_locations: Vec<(String, String, String)> = locations
+                .iter()
+                .map(|(hash, path)| (hash.clone(), vol_id_str.clone(), path.clone()))
+                .collect();
+            result.orphaned_assets = catalog
+                .list_would_be_orphaned_asset_ids(&stale_locations)?
+                .len();
         }
 
         // Orphaned previews and smart previews
@@ -170,11 +189,8 @@ impl AssetService {
             &on_file,
         );
 
-        // Finally, remove the volume itself
+        // Finally, take the volume out of volumes.yaml (see the order note above).
         if apply {
-            if let Err(e) = catalog.delete_volume(&vol_id_str) {
-                result.errors.push(format!("Failed to delete volume from catalog: {e}"));
-            }
             if let Err(e) = registry.remove(label) {
                 result.errors.push(format!("Failed to remove volume from registry: {e}"));
             }
@@ -322,27 +338,33 @@ impl AssetService {
             }
         }
 
-        // 2. Ensure target volume exists in catalog (it may not if nothing was imported onto it)
-        catalog.ensure_volume(&target)?;
+        // 2. Catalog rows in one transaction: make sure the target volume row
+        //    exists (it may not if nothing was imported onto it), move the
+        //    locations and recipes, drop the source volume row.
+        let moved = catalog.with_tx(|c| {
+            c.ensure_volume(&target)?;
+            let locations = c.bulk_move_file_locations(&source_id, &target_id, &prefix_str)?;
+            let recipes = c.bulk_move_recipes(&source_id, &target_id, &prefix_str)?;
+            c.delete_volume(&source_id)?;
+            Ok((locations, recipes))
+        });
+        match moved {
+            Ok((locations, recipes)) => {
+                result.locations_moved = locations;
+                result.recipes_moved = recipes;
+            }
+            Err(e) => {
+                // Rolled back; the source stays registered so the command can
+                // be re-run (the sidecar rewrites above are idempotent).
+                result.errors.push(format!(
+                    "Catalog update failed and was rolled back; re-run to retry: {e:#}"
+                ));
+                return Ok(result);
+            }
+        }
 
-        // 3. Bulk SQL update
-        match catalog.bulk_move_file_locations(&source_id, &target_id, &prefix_str) {
-            Ok(n) => result.locations_moved = n,
-            Err(e) => result
-                .errors
-                .push(format!("Failed to move file locations: {e}")),
-        }
-        match catalog.bulk_move_recipes(&source_id, &target_id, &prefix_str) {
-            Ok(n) => result.recipes_moved = n,
-            Err(e) => result.errors.push(format!("Failed to move recipes: {e}")),
-        }
-
-        // 4. Remove source volume
-        if let Err(e) = catalog.delete_volume(&source_id) {
-            result
-                .errors
-                .push(format!("Failed to delete volume from catalog: {e}"));
-        }
+        // 3. Remove the source from volumes.yaml last (same order rule as
+        //    `remove_volume`: a registered volume can always be retried).
         if let Err(e) = registry.remove(source_label) {
             result
                 .errors
@@ -468,17 +490,23 @@ impl AssetService {
             }
         }
 
-        // 3. Ensure new volume exists in catalog
-        catalog.ensure_volume(&new_volume)?;
-
-        // 4. Bulk SQL update: move matching locations and strip prefix
-        match catalog.bulk_split_file_locations(&source_id, &new_id, &prefix) {
-            Ok(n) => result.locations_moved = n,
-            Err(e) => result.errors.push(format!("Failed to move file locations: {e}")),
-        }
-        match catalog.bulk_split_recipes(&source_id, &new_id, &prefix) {
-            Ok(n) => result.recipes_moved = n,
-            Err(e) => result.errors.push(format!("Failed to move recipes: {e}")),
+        // 3. Catalog rows in one transaction: register the new volume row,
+        //    move matching locations and recipes with the prefix stripped.
+        let moved = catalog.with_tx(|c| {
+            c.ensure_volume(&new_volume)?;
+            let locations = c.bulk_split_file_locations(&source_id, &new_id, &prefix)?;
+            let recipes = c.bulk_split_recipes(&source_id, &new_id, &prefix)?;
+            Ok((locations, recipes))
+        });
+        match moved {
+            Ok((locations, recipes)) => {
+                result.locations_moved = locations;
+                result.recipes_moved = recipes;
+            }
+            Err(e) => result.errors.push(format!(
+                "Catalog update failed and was rolled back; run `rebuild-catalog` \
+                 or re-run the split to retry: {e:#}"
+            )),
         }
 
         Ok(result)

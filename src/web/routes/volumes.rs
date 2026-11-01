@@ -104,15 +104,7 @@ pub async fn register_volume_api(
             "id": volume.id.to_string(),
             "label": volume.label,
         }))
-    }, |e| {
-        let msg = format!("{e:#}");
-        let status = if msg.contains("already") {
-            StatusCode::CONFLICT
-        } else {
-            StatusCode::BAD_REQUEST
-        };
-        (status, msg).into_response()
-    })
+    }, |e| super::err::mapped_or(e, StatusCode::BAD_REQUEST))
     .await?;
     Ok((StatusCode::CREATED, Json(json)).into_response())
 }
@@ -262,17 +254,7 @@ pub async fn browse_volume_api(
             "prefix": prefix,
             "entries": entries,
         }))
-    }, |e| {
-        let msg = format!("{e:#}");
-        let status = if msg.contains("escapes") {
-            StatusCode::FORBIDDEN
-        } else if msg.contains("not accessible") || msg.contains("not a directory") {
-            StatusCode::NOT_FOUND
-        } else {
-            StatusCode::BAD_REQUEST
-        };
-        (status, msg).into_response()
-    })
+    }, |e| super::err::mapped_or(e, StatusCode::BAD_REQUEST))
     .await?;
     Ok(Json(json).into_response())
 }
@@ -294,10 +276,12 @@ fn resolve_browse_target(
         }
         p.push(segment);
     }
-    let canon = std::fs::canonicalize(&p)
-        .map_err(|e| anyhow::anyhow!("path not accessible: {e}"))?;
+    // Typed (audit F19): not-found → 404, forbidden → 403.
+    let canon = std::fs::canonicalize(&p).map_err(|e| {
+        crate::error::MakiError::not_found_with_hint("directory", prefix, format!("path not accessible: {e}"))
+    })?;
     if !canon.starts_with(mount_canon) {
-        anyhow::bail!("path escapes volume mount point");
+        return Err(crate::error::MakiError::Forbidden("path escapes volume mount point".into()).into());
     }
     Ok(canon)
 }

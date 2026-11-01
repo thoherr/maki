@@ -176,7 +176,11 @@ impl AssetService {
             };
 
             if !meta.is_empty() {
-                self.merge_variant_metadata(&row.asset_id, &variant.content_hash, meta);
+                if let Err(e) =
+                    self.merge_variant_metadata(&row.asset_id, &variant.content_hash, meta)
+                {
+                    tool_errors.push(format!("store: {e:#}"));
+                }
             }
             if key.is_some() {
                 result.keys_set += 1;

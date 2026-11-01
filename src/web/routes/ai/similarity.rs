@@ -29,7 +29,7 @@ pub async fn find_similar(
     let state = state.clone();
     let results = super::super::spawn_blocking_with(
         move || find_similar_inner(&state, &asset_id).map_err(anyhow::Error::msg),
-        super::super::err::internal,
+        super::super::err::mapped,
     )
     .await?;
     Ok(Json(results).into_response())
@@ -49,7 +49,6 @@ fn find_similar_inner(
     }
 
     let catalog = state.catalog().map_err(|e| format!("{e:#}"))?;
-    let _ = EmbeddingStore::initialize(catalog.conn());
     let emb_store = EmbeddingStore::new(catalog.conn());
 
     let stored_emb = emb_store.get(asset_id, model_id).map_err(|e| format!("{e:#}"))?;
@@ -90,7 +89,10 @@ fn find_similar_inner(
         emb_store
             .store(asset_id, &emb, model_id)
             .map_err(|e| format!("Failed to store embedding: {e:#}"))?;
-        let _ = crate::embedding_store::write_embedding_binary(&state.catalog_root, model_id, asset_id, &emb);
+        // The .bin file is what rebuild-catalog restores from: a failed
+        // write is a lost embedding, so it fails the request like the row.
+        crate::embedding_store::write_embedding_binary(&state.catalog_root, model_id, asset_id, &emb)
+            .map_err(|e| format!("Failed to write embedding file: {e:#}"))?;
         emb
     };
 

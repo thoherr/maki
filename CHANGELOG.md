@@ -4,12 +4,118 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ## Unreleased
 
+Phase 1 of the October 2026 architecture audit
+(`doc/qa-report/architecture-audit-2026-10-29.md`, "correctness"): the
+catalog's multi-row writers become transactional, migrations stop
+swallowing failures, the four copies of "rebuild an asset's rows" become
+one, the YAML side files are written atomically and owned by their
+stores, and the first typed errors drive exit codes and HTTP statuses.
+Schema v13.
+
+### Phase 1 — correctness
+
+#### Changed (behaviour)
+
+- **Exit codes mean something.** `3` = a referenced asset/volume/stack/
+  collection/person was not found, `4` = the operation needs an offline
+  volume, `2` = usage error (clap), `1` = everything else. Scripts that
+  tested `$? -ne 0` are unaffected; scripts that tested `-eq 1` for a
+  missing asset must use `-ne 0` or `3`. (`doc/manual/reference/00-cli-conventions.md`)
+- **`doctor` exits 1 when issues remain.** The component specification
+  always said the report drives the exit status; it now does, including
+  with `--json`. `doctor --repair` exits 0 when it repaired everything it
+  found.
+- **`maki migrate` reports the failing step and leaves the version
+  unstamped.** Every migration version runs in its own transaction and
+  stamps `schema_version` inside it; a failure (e.g. `schema migration
+  v12: backfill assets_tags_fts`) rolls that version back instead of
+  recording a half-migrated catalog as current. Schema **v13** moves the
+  face, people and embedding tables (and the embeddings primary-key
+  conversion that `embedding_store` used to do by sniffing the table)
+  into the versioned schema, feature-independent: a catalog created by a
+  standard build now has them, so a later Pro build finds them.
+- **Multi-row writers are transactional.** `group`, `split`, `relocate`,
+  `delete`, `volume remove/combine/split`, `sync`, `fix-*`, `refresh`,
+  `verify`, `cleanup`, `import`, reimport, undo and the per-asset
+  `rebuild-catalog` path save the sidecar first and apply all SQLite rows
+  in one transaction; a failure mid-sequence leaves the catalog rows as
+  they were (and `doctor --repair` converges to the sidecar). Visible
+  fixes that fell out: undo after a variant change now restores variants
+  and locations (before, stale rows stayed); `sync --apply --remove-stale`
+  no longer leaves phantom asset rows; the per-asset rebuild no longer
+  deletes collection membership, stack columns or (standard build) faces
+  and embeddings; grouping writes the same variant role to SQLite as to
+  the sidecar.
+- **Silently dropped writes now fail or are reported.** 60-odd `let _ =`
+  on catalog/sidecar/YAML writes are gone: embedding `.bin` write
+  failures count as errors in `embed`/`auto-tag`, face-detection
+  bookkeeping failures land in the result's errors, `rebuild-catalog`
+  fails on a corrupt `stacks.yaml`/`collections.yaml`/`faces.yaml`
+  instead of dropping their contents, stack/collection membership import
+  errors propagate, `stack from-tag --remove-tags` reports per-asset
+  failures. Unknown person/face ids in `faces` commands now error
+  (`no person found matching '…'`, exit 3) instead of succeeding with
+  zero rows affected.
+- **Web statuses come from typed errors, not message text.** The five
+  substring checks are gone; `err::mapped*` in the routes module turns
+  `NotFound`/`Conflict`/`Offline`/`InvalidInput`/`Forbidden` into
+  404/409/409/400/403. Changed statuses: `POST|DELETE /api/batch/collection`
+  with an unknown collection or asset 500 → 404; `DELETE /api/dedup/location`
+  last copy and offline volume 400 → 409, unknown volume 500 → 404; the
+  AI routes (faces, people, embed, similarity, tags) answer 404/409 where
+  they always answered 500. `POST /api/collections` keeps 409, body
+  `a collection named 'X' already exists`.
+- **Stacks and collections persist themselves.** `StackStore::open` /
+  `CollectionStore::open` mutators write SQLite and `stacks.yaml` /
+  `collections.yaml` atomically in one transaction (19 explicit
+  save-after-mutate pairs deleted); unknown assets error (`no asset found
+  matching …`) instead of being skipped with a stderr line; a duplicate
+  collection name is a typed conflict. Their table DDL moved into schema
+  v13 (no lazy `initialize` left anywhere). `rebuild-catalog` now also
+  drops and rebuilds `stacks` (it dropped `collections` but not `stacks`).
+- **Offline / not-found wording unified.** `no saved search found
+  matching 'x'`, `no collection found matching 'x'`, `no stack found
+  matching 'X' (asset is not in a stack)` replace the per-command phrasings; Offline volumes read
+  `volume 'X' is offline (mount point P not found)` everywhere
+  (relocate used to prefix `source`/`target`); unknown volumes read
+  `no volume found matching 'X' (known volumes: …)`.
+
+#### Changed (internal)
+
+- **`Catalog::with_tx`.** One transaction helper (commit on `Ok`, rollback
+  on `Err`, joins an enclosing transaction) for every writer that touches
+  more than one row.
+- **`MakiError`** (`src/error.rs`, `thiserror`): `NotFound`, `Offline`,
+  `Conflict`, `InvalidInput`, `CheckFailed`, raised at the engine and
+  classified through the `anyhow` chain (`exit_code_for`,
+  `http_status_for`). `Catalog::resolve_asset_id_required` raises the
+  typed not-found with the historical wording.
+- **`yaml_file::{load_or_default, save_atomic}`**: temp-file + rename for
+  the catalog-level YAML files; a corrupt file is an error, never a
+  silent default.
+- **Stores own their persistence.** `FaceStore::open(conn, catalog_root)`
+  is the mutating handle: each single-entity mutator writes SQLite and
+  exports `faces.yaml`/`people.yaml` atomically in one transaction; batch
+  primitives are SQLite-only and end with one `persist()`.
+  `FaceStore::initialize`, `EmbeddingStore::initialize` and
+  `save_all_yaml` are gone (35 lazy initialiser calls deleted).
+  `volumes.yaml` is written atomically.
+- **One resync routine.** `Catalog::resync_asset_from_sidecar` replaces
+  the four copies in doctor, reimport, undo and rebuild;
+  `Catalog::delete_asset_rows` is the one FK-ordered full removal.
+  `group`/`group_by_asset_ids` share one `merge_assets`.
+- **No panics on read paths.** `lookup.rs` returns errors instead of
+  `panic!`/`unwrap`, and malformed rows are errors instead of being
+  dropped by `filter_map(|r| r.ok())` (also in doctor, rebuild, writeback).
+
+### Phase 0 — quick wins (committed a1192c6)
+
 Phase 0 of the October 2026 architecture audit
 (`doc/qa-report/architecture-audit-2026-10-29.md`): behaviour-preserving
 cleanups that remove duplicated helpers and re-plumbed flags across the
 layers. No schema migration, no user-visible change except where noted.
 
-### Changed (internal)
+#### Changed (internal)
 
 - **Configuration is loaded once per engine, not per asset.** `QueryEngine`
   and `AssetService` hold the catalog configuration; the writeback path
@@ -81,7 +187,7 @@ layers. No schema migration, no user-visible change except where noted.
   tree was never formatted (2,372 hunks), and that is a separate
   decision.
 
-### Fixed
+#### Fixed
 
 - **Clearing a preview override re-scores with the current rule.** The
   override-clearing path carried its own SQL copy of the preview scoring

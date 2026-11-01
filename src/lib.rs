@@ -57,6 +57,7 @@ pub mod device_registry;
 pub mod doctor;
 pub mod embedded_xmp;
 pub mod embedded_xmp_write;
+pub mod error;
 pub mod exif_reader;
 pub mod format;
 pub mod history;
@@ -77,6 +78,7 @@ pub mod vlm;
 pub mod vocabulary;
 pub mod web;
 pub mod xmp_reader;
+pub mod yaml_file;
 
 #[cfg(feature = "ai")]
 pub mod ai;

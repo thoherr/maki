@@ -238,17 +238,26 @@ impl<'a> SuggestContext<'a> {
             .map_err(|e| format!("Failed to encode image: {e:#}"))?;
         vlog!(asset_id, "image encoded ({:?})", t_img.elapsed());
 
-        // Persist the embedding everywhere downstream consumers expect it.
-        // Best-effort: failures here don't fail the suggestion request.
+        // Cache the embedding everywhere downstream consumers expect it.
+        // Deliberately best-effort: the user asked for tag suggestions, which
+        // are already computed; the embedding is a by-product that `maki
+        // embed` / the embed phase will (re)write authoritatively. A failure
+        // is logged, never turned into a failed suggestion request.
         let model_id = self.state.ai_config.model.clone();
         {
-            let catalog = crate::catalog::Catalog::open_fast(&self.state.catalog_root);
-            if let Ok(catalog) = catalog {
-                let _ = crate::embedding_store::EmbeddingStore::initialize(catalog.conn());
-                let emb_store = crate::embedding_store::EmbeddingStore::new(catalog.conn());
-                let _ = emb_store.store(asset_id, &image_emb, &model_id);
+            let short = &asset_id[..8.min(asset_id.len())];
+            match crate::catalog::Catalog::open_fast(&self.state.catalog_root) {
+                Ok(catalog) => {
+                    let emb_store = crate::embedding_store::EmbeddingStore::new(catalog.conn());
+                    if let Err(e) = emb_store.store(asset_id, &image_emb, &model_id) {
+                        eprintln!("Warning: {short}: caching embedding row: {e:#}");
+                    }
+                }
+                Err(e) => eprintln!("Warning: {short}: opening catalog to cache embedding: {e:#}"),
             }
-            let _ = crate::embedding_store::write_embedding_binary(&self.state.catalog_root, &model_id, asset_id, &image_emb);
+            if let Err(e) = crate::embedding_store::write_embedding_binary(&self.state.catalog_root, &model_id, asset_id, &image_emb) {
+                eprintln!("Warning: {short}: caching embedding file: {e:#}");
+            }
             self.state.upsert_embedding_if_loaded(asset_id, &image_emb);
         }
 
@@ -326,7 +335,7 @@ pub async fn suggest_tags(
             let mut ctx = SuggestContext::new(&state).map_err(anyhow::Error::msg)?;
             ctx.suggestions_for(&asset_id).map_err(anyhow::Error::msg)
         },
-        super::super::err::internal,
+        super::super::err::mapped,
     )
     .await?;
     Ok(Json(suggestions).into_response())

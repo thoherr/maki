@@ -3,13 +3,46 @@
 //! Stores detected faces (bounding boxes, embeddings) and named people
 //! for face recognition across assets.
 //! Only compiled when the `ai` feature is enabled.
+//!
+//! # Persistence rule (architecture audit F6)
+//!
+//! `faces.yaml` and `people.yaml` in the catalog root are the source of
+//! truth; the `faces` / `people` SQLite tables (schema v13) are the
+//! derived cache. The store owns the dual write:
+//!
+//! * **Single-entity mutators** (`create_person`, `name_person`,
+//!   `assign_face_to_person`, `unassign_face`, `delete_face`,
+//!   `delete_person`, `merge_people`, `merge_people_batch`,
+//!   `delete_unassigned_faces`, `set_representative_face`, `auto_cluster`)
+//!   run their SQLite change and the YAML export in one transaction and
+//!   return the error if either side fails. Callers never save YAML after
+//!   them.
+//! * **Batch primitives** (`store_face`, `delete_faces_for_asset`,
+//!   `import_faces_from_yaml`, `import_people_from_yaml`,
+//!   `import_face_embedding`) touch SQLite only, so a detection run over
+//!   thousands of assets does not rewrite the YAML per face. A batch ends
+//!   with one explicit [`FaceStore::persist`].
+//!
+//! Both need a store opened with [`FaceStore::open`] (bound to the catalog
+//! root). [`FaceStore::new`] gives a handle without a root for queries and
+//! for the batch primitives when the YAML is the input, not the output
+//! (`rebuild-catalog`); `persist()` and the single-entity mutators return
+//! an error on such a handle.
 
-use anyhow::{Context, Result};
-use rusqlite::Connection;
+use std::path::{Path, PathBuf};
 
-/// Store and query face detections and people in SQLite.
+use anyhow::{anyhow, Context, Result};
+use rusqlite::{Connection, OptionalExtension};
+
+use crate::error::MakiError;
+
+/// Store and query face detections and people in SQLite, persisting the
+/// YAML source of truth (see the module docs for the rule).
 pub struct FaceStore<'a> {
     conn: &'a Connection,
+    /// Catalog root holding `faces.yaml` / `people.yaml`; `None` for a
+    /// query-only handle from [`FaceStore::new`].
+    catalog_root: Option<PathBuf>,
 }
 
 /// A detected face stored in the database.
@@ -44,9 +77,19 @@ pub struct AutoClusterResult {
 }
 
 impl<'a> FaceStore<'a> {
-    /// Create a new FaceStore backed by the given connection.
+    /// Handle without a catalog root: queries and the batch primitives
+    /// work, `persist()` and the single-entity mutators return an error.
+    /// Use [`FaceStore::open`] wherever a user operation changes faces or
+    /// people. The tables themselves are created by the schema migrations
+    /// (v13), never here.
     pub fn new(conn: &'a Connection) -> Self {
-        Self { conn }
+        Self { conn, catalog_root: None }
+    }
+
+    /// Full handle bound to the catalog root that holds `faces.yaml` and
+    /// `people.yaml`; mutators persist to it (see the module docs).
+    pub fn open(conn: &'a Connection, catalog_root: &Path) -> Self {
+        Self { conn, catalog_root: Some(catalog_root.to_path_buf()) }
     }
 
     /// Access the underlying database connection.
@@ -54,40 +97,73 @@ impl<'a> FaceStore<'a> {
         self.conn
     }
 
-    /// Initialize the faces and people tables (idempotent).
-    pub fn initialize(conn: &Connection) -> Result<()> {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS people (
-                id TEXT PRIMARY KEY,
-                name TEXT,
-                representative_face_id TEXT,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS faces (
-                id TEXT PRIMARY KEY,
-                asset_id TEXT NOT NULL,
-                person_id TEXT,
-                bbox_x REAL NOT NULL,
-                bbox_y REAL NOT NULL,
-                bbox_w REAL NOT NULL,
-                bbox_h REAL NOT NULL,
-                embedding BLOB NOT NULL,
-                confidence REAL NOT NULL,
-                created_at TEXT NOT NULL,
-                recognition_model TEXT,
-                FOREIGN KEY (asset_id) REFERENCES assets(id),
-                FOREIGN KEY (person_id) REFERENCES people(id)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_faces_asset ON faces(asset_id);
-            CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);",
-        )
-        .context("Failed to create faces/people tables")?;
+    /// Write `faces.yaml` and `people.yaml` from the current SQLite rows
+    /// (atomic temp-file + rename). Call once at the end of a batch of
+    /// `store_face` / `delete_faces_for_asset` / import calls; the
+    /// single-entity mutators call it themselves.
+    pub fn persist(&self) -> Result<()> {
+        let root = self.catalog_root.as_deref().ok_or_else(|| {
+            anyhow!("FaceStore opened without a catalog root (FaceStore::new); use FaceStore::open to persist faces.yaml / people.yaml")
+        })?;
+        let faces = self.export_all_faces()?;
+        save_faces_yaml(root, &faces)?;
+        let people = self.export_all_people()?;
+        save_people_yaml(root, &people)?;
         Ok(())
     }
 
-    /// Store a detected face with its embedding.
+    /// Run `f` inside one SQLite transaction (joining an enclosing one),
+    /// committing on `Ok` and rolling back on `Err` — the same contract as
+    /// `Catalog::with_tx`, for a store that only holds the connection.
+    fn with_tx<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        if !self.conn.is_autocommit() {
+            return f();
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let out = f()?;
+        tx.commit()?;
+        Ok(out)
+    }
+
+    /// A single-entity mutation: SQLite rows via `f`, then the YAML
+    /// export, all inside one transaction so a failed YAML write rolls the
+    /// rows back and neither store is left ahead of the other.
+    fn mutate<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        self.with_tx(|| {
+            let out = f()?;
+            self.persist()?;
+            Ok(out)
+        })
+    }
+
+    /// `Ok` when `people.id = person_id` exists.
+    fn require_person(&self, person_id: &str) -> Result<()> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM people WHERE id = ?1",
+            rusqlite::params![person_id],
+            |row| row.get(0),
+        )?;
+        if n == 0 {
+            return Err(MakiError::not_found("person", person_id).into());
+        }
+        Ok(())
+    }
+
+    /// `Ok` when `faces.id = face_id` exists.
+    fn require_face(&self, face_id: &str) -> Result<()> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM faces WHERE id = ?1",
+            rusqlite::params![face_id],
+            |row| row.get(0),
+        )?;
+        if n == 0 {
+            return Err(MakiError::not_found("face", face_id).into());
+        }
+        Ok(())
+    }
+
+    /// Store a detected face with its embedding. Batch primitive: SQLite
+    /// only, finish the batch with [`FaceStore::persist`].
     ///
     /// `recognition_model` stamps which ArcFace variant produced the embedding,
     /// so clustering can avoid mixing embeddings from incompatible models when
@@ -188,7 +264,17 @@ impl<'a> FaceStore<'a> {
     }
 
     /// Assign a face to a person. Auto-sets representative if the person has none.
+    /// Persists; `NotFound` when either id does not exist.
     pub fn assign_face_to_person(&self, face_id: &str, person_id: &str) -> Result<()> {
+        self.mutate(|| {
+            self.require_face(face_id)?;
+            self.require_person(person_id)?;
+            self.assign_face_row(face_id, person_id)
+        })
+    }
+
+    /// Row-level assignment shared by the public mutator and `auto_cluster`.
+    fn assign_face_row(&self, face_id: &str, person_id: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE faces SET person_id = ?1 WHERE id = ?2",
             rusqlite::params![person_id, face_id],
@@ -198,7 +284,7 @@ impl<'a> FaceStore<'a> {
     }
 
     /// Ensure a person has a representative face. If NULL, picks the highest-confidence face.
-    pub fn ensure_representative(&self, person_id: &str) -> Result<()> {
+    fn ensure_representative(&self, person_id: &str) -> Result<()> {
         let has_rep: bool = self.conn.query_row(
             "SELECT representative_face_id IS NOT NULL FROM people WHERE id = ?1",
             rusqlite::params![person_id],
@@ -211,14 +297,19 @@ impl<'a> FaceStore<'a> {
                 |row| row.get(0),
             ).ok();
             if let Some(face_id) = best {
-                self.set_representative_face(person_id, &face_id)?;
+                self.set_representative_row(person_id, &face_id)?;
             }
         }
         Ok(())
     }
 
-    /// Create a new person. Returns the person ID.
+    /// Create a new person. Returns the person ID. Persists.
     pub fn create_person(&self, name: Option<&str>) -> Result<String> {
+        self.mutate(|| self.create_person_row(name))
+    }
+
+    /// Row-level insert shared by the public mutator and `auto_cluster`.
+    fn create_person_row(&self, name: Option<&str>) -> Result<String> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
@@ -229,17 +320,28 @@ impl<'a> FaceStore<'a> {
         Ok(id)
     }
 
-    /// Name (or rename) a person.
+    /// Name (or rename) a person. Persists; `NotFound` for an unknown id.
     pub fn name_person(&self, person_id: &str, name: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE people SET name = ?1 WHERE id = ?2",
-            rusqlite::params![name, person_id],
-        )?;
-        Ok(())
+        self.mutate(|| {
+            self.require_person(person_id)?;
+            self.conn.execute(
+                "UPDATE people SET name = ?1 WHERE id = ?2",
+                rusqlite::params![name, person_id],
+            )?;
+            Ok(())
+        })
     }
 
-    /// Set the representative face for a person.
+    /// Set the representative face for a person. Persists.
     pub fn set_representative_face(&self, person_id: &str, face_id: &str) -> Result<()> {
+        self.mutate(|| {
+            self.require_person(person_id)?;
+            self.require_face(face_id)?;
+            self.set_representative_row(person_id, face_id)
+        })
+    }
+
+    fn set_representative_row(&self, person_id: &str, face_id: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE people SET representative_face_id = ?1 WHERE id = ?2",
             rusqlite::params![face_id, person_id],
@@ -296,8 +398,16 @@ impl<'a> FaceStore<'a> {
             .context("Failed to list people")
     }
 
-    /// Merge two people: reassign all faces from source to target, delete source.
+    /// Merge two people: reassign all faces from source to target, delete
+    /// source. Persists; `NotFound` for an unknown id.
     pub fn merge_people(&self, target_id: &str, source_id: &str) -> Result<u32> {
+        self.mutate(|| self.merge_people_rows(target_id, source_id))
+    }
+
+    /// Row-level merge shared by `merge_people` and `merge_people_batch`.
+    fn merge_people_rows(&self, target_id: &str, source_id: &str) -> Result<u32> {
+        self.require_person(target_id)?;
+        self.require_person(source_id)?;
         let count: u32 = self.conn.query_row(
             "SELECT COUNT(*) FROM faces WHERE person_id = ?1",
             rusqlite::params![source_id],
@@ -383,24 +493,24 @@ impl<'a> FaceStore<'a> {
         Ok(out)
     }
 
-    /// Merge multiple source people into a single target in one transaction.
+    /// Merge multiple source people into a single target in one
+    /// transaction (all merges and the YAML export, or none).
     ///
     /// Any `source_ids` entry equal to `target_id` is skipped (a person can't
     /// merge into itself). Returns the total number of faces reassigned.
     pub fn merge_people_batch(&self, target_id: &str, source_ids: &[String]) -> Result<u32> {
-        let mut total = 0u32;
-        // Rusqlite's savepoint-style transactions require &mut Connection, which
-        // we don't have here (stored as &Connection). The operations per source
-        // are idempotent on failure (faces end up either all-moved or not), so
-        // looping merges sequentially is safe even without a wrapping txn.
-        for src in source_ids {
-            if src == target_id { continue; }
-            total += self.merge_people(target_id, src)?;
-        }
-        Ok(total)
+        self.mutate(|| {
+            let mut total = 0u32;
+            for src in source_ids {
+                if src == target_id { continue; }
+                total += self.merge_people_rows(target_id, src)?;
+            }
+            Ok(total)
+        })
     }
 
-    /// Delete all faces for an asset (e.g., before re-detection).
+    /// Delete all faces for an asset (e.g., before re-detection). Batch
+    /// primitive: SQLite only, finish the batch with [`FaceStore::persist`].
     pub fn delete_faces_for_asset(&self, asset_id: &str) -> Result<u32> {
         let count = self.conn.execute(
             "DELETE FROM faces WHERE asset_id = ?1",
@@ -409,33 +519,38 @@ impl<'a> FaceStore<'a> {
         Ok(count as u32)
     }
 
-    /// Delete a single face by ID. Returns the asset_id if the face existed.
+    /// Delete a single face by ID. Returns the asset_id if the face existed
+    /// (`None` is not an error: the caller decides). Persists.
     pub fn delete_face(&self, face_id: &str) -> Result<Option<String>> {
-        let asset_id: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT asset_id FROM faces WHERE id = ?1",
-                rusqlite::params![face_id],
-                |row| row.get(0),
-            )
-            .ok();
-        if asset_id.is_some() {
-            self.conn.execute(
-                "DELETE FROM faces WHERE id = ?1",
-                rusqlite::params![face_id],
-            )?;
-        }
-        Ok(asset_id)
+        self.mutate(|| {
+            let asset_id: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT asset_id FROM faces WHERE id = ?1",
+                    rusqlite::params![face_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if asset_id.is_some() {
+                self.conn.execute(
+                    "DELETE FROM faces WHERE id = ?1",
+                    rusqlite::params![face_id],
+                )?;
+            }
+            Ok(asset_id)
+        })
     }
 
     /// Delete all faces that have no person assigned (`person_id IS NULL`).
-    /// Returns the number of faces deleted.
+    /// Returns the number of faces deleted. Persists.
     pub fn delete_unassigned_faces(&self) -> Result<u32> {
-        let count = self.conn.execute(
-            "DELETE FROM faces WHERE person_id IS NULL",
-            [],
-        )?;
-        Ok(count as u32)
+        self.mutate(|| {
+            let count = self.conn.execute(
+                "DELETE FROM faces WHERE person_id IS NULL",
+                [],
+            )?;
+            Ok(count as u32)
+        })
     }
 
     /// Count faces that have no person assigned (`person_id IS NULL`).
@@ -463,17 +578,21 @@ impl<'a> FaceStore<'a> {
         rows.collect::<std::result::Result<Vec<_>, _>>().context("Failed to group faces by model")
     }
 
-    /// Delete a person and unassign their faces.
+    /// Delete a person and unassign their faces. Persists; `NotFound` for
+    /// an unknown id.
     pub fn delete_person(&self, person_id: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE faces SET person_id = NULL WHERE person_id = ?1",
-            rusqlite::params![person_id],
-        )?;
-        self.conn.execute(
-            "DELETE FROM people WHERE id = ?1",
-            rusqlite::params![person_id],
-        )?;
-        Ok(())
+        self.mutate(|| {
+            self.require_person(person_id)?;
+            self.conn.execute(
+                "UPDATE faces SET person_id = NULL WHERE person_id = ?1",
+                rusqlite::params![person_id],
+            )?;
+            self.conn.execute(
+                "DELETE FROM people WHERE id = ?1",
+                rusqlite::params![person_id],
+            )?;
+            Ok(())
+        })
     }
 
     /// Get face embeddings, optionally scoped to specific asset IDs.
@@ -515,13 +634,17 @@ impl<'a> FaceStore<'a> {
         Ok(result)
     }
 
-    /// Unassign a face from its person (set person_id = NULL).
+    /// Unassign a face from its person (set person_id = NULL). Persists;
+    /// `NotFound` for an unknown face id.
     pub fn unassign_face(&self, face_id: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE faces SET person_id = NULL WHERE id = ?1",
-            rusqlite::params![face_id],
-        )?;
-        Ok(())
+        self.mutate(|| {
+            self.require_face(face_id)?;
+            self.conn.execute(
+                "UPDATE faces SET person_id = NULL WHERE id = ?1",
+                rusqlite::params![face_id],
+            )?;
+            Ok(())
+        })
     }
 
     /// Get a single face by ID (without embedding).
@@ -692,6 +815,7 @@ impl<'a> FaceStore<'a> {
     }
 
     /// Auto-cluster unassigned faces and create people for each cluster.
+    /// One transaction and one YAML export for the whole run.
     ///
     /// - `threshold`: similarity cut-off for average-linkage clustering
     /// - `min_confidence`: ignore faces below this detection confidence
@@ -704,46 +828,48 @@ impl<'a> FaceStore<'a> {
     ) -> Result<AutoClusterResult> {
         let (clusters, total_unassigned) = self.cluster_faces(threshold, min_confidence, asset_ids)?;
 
-        let mut people_created = 0u32;
-        let mut faces_assigned = 0u32;
-
         let clustered_count: usize = clusters.iter().map(|c| c.len()).sum();
         let singletons_skipped = (total_unassigned - clustered_count) as u32;
 
-        for face_ids in &clusters {
-            let person_id = self.create_person(None)?;
+        self.mutate(|| {
+            let mut people_created = 0u32;
+            let mut faces_assigned = 0u32;
 
-            // Find the highest-confidence face for representative
-            let mut best_face_id = &face_ids[0];
-            let mut best_confidence = 0.0f32;
+            for face_ids in &clusters {
+                let person_id = self.create_person_row(None)?;
 
-            for fid in face_ids {
-                self.assign_face_to_person(fid, &person_id)?;
-                faces_assigned += 1;
+                // Find the highest-confidence face for representative
+                let mut best_face_id = &face_ids[0];
+                let mut best_confidence = 0.0f32;
 
-                // Get confidence for representative selection
-                let conf: f32 = self
-                    .conn
-                    .query_row(
-                        "SELECT confidence FROM faces WHERE id = ?1",
-                        rusqlite::params![fid],
-                        |row| row.get(0),
-                    )
-                    .unwrap_or(0.0);
-                if conf > best_confidence {
-                    best_confidence = conf;
-                    best_face_id = fid;
+                for fid in face_ids {
+                    self.assign_face_row(fid, &person_id)?;
+                    faces_assigned += 1;
+
+                    // Get confidence for representative selection
+                    let conf: f32 = self
+                        .conn
+                        .query_row(
+                            "SELECT confidence FROM faces WHERE id = ?1",
+                            rusqlite::params![fid],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or(0.0);
+                    if conf > best_confidence {
+                        best_confidence = conf;
+                        best_face_id = fid;
+                    }
                 }
+
+                self.set_representative_row(&person_id, best_face_id)?;
+                people_created += 1;
             }
 
-            self.set_representative_face(&person_id, best_face_id)?;
-            people_created += 1;
-        }
-
-        Ok(AutoClusterResult {
-            people_created,
-            faces_assigned,
-            singletons_skipped,
+            Ok(AutoClusterResult {
+                people_created,
+                faces_assigned,
+                singletons_skipped,
+            })
         })
     }
 }
@@ -803,44 +929,26 @@ pub struct PeopleFile {
     pub people: Vec<PersonRecord>,
 }
 
-/// Load faces from the YAML file. Returns empty list if file doesn't exist.
-pub fn load_faces_yaml(catalog_root: &std::path::Path) -> Result<FacesFile> {
-    let path = catalog_root.join("faces.yaml");
-    if path.exists() {
-        let contents = std::fs::read_to_string(&path)?;
-        let file: FacesFile = serde_norway::from_str(&contents)?;
-        Ok(file)
-    } else {
-        Ok(FacesFile::default())
-    }
+/// Load `faces.yaml`. A missing file is an empty list; a file that does
+/// not parse is an error (it is the source of truth, never defaulted).
+pub fn load_faces_yaml(catalog_root: &Path) -> Result<FacesFile> {
+    crate::yaml_file::load_or_default(&catalog_root.join("faces.yaml"))
 }
 
-/// Save faces to the YAML file.
-pub fn save_faces_yaml(catalog_root: &std::path::Path, file: &FacesFile) -> Result<()> {
-    let path = catalog_root.join("faces.yaml");
-    let contents = serde_norway::to_string(file)?;
-    std::fs::write(&path, contents)?;
-    Ok(())
+/// Save `faces.yaml` atomically (temp file + rename).
+pub fn save_faces_yaml(catalog_root: &Path, file: &FacesFile) -> Result<()> {
+    crate::yaml_file::save_atomic(&catalog_root.join("faces.yaml"), file)
 }
 
-/// Load people from the YAML file. Returns empty list if file doesn't exist.
-pub fn load_people_yaml(catalog_root: &std::path::Path) -> Result<PeopleFile> {
-    let path = catalog_root.join("people.yaml");
-    if path.exists() {
-        let contents = std::fs::read_to_string(&path)?;
-        let file: PeopleFile = serde_norway::from_str(&contents)?;
-        Ok(file)
-    } else {
-        Ok(PeopleFile::default())
-    }
+/// Load `people.yaml`. A missing file is an empty list; a file that does
+/// not parse is an error.
+pub fn load_people_yaml(catalog_root: &Path) -> Result<PeopleFile> {
+    crate::yaml_file::load_or_default(&catalog_root.join("people.yaml"))
 }
 
-/// Save people to the YAML file.
-pub fn save_people_yaml(catalog_root: &std::path::Path, file: &PeopleFile) -> Result<()> {
-    let path = catalog_root.join("people.yaml");
-    let contents = serde_norway::to_string(file)?;
-    std::fs::write(&path, contents)?;
-    Ok(())
+/// Save `people.yaml` atomically (temp file + rename).
+pub fn save_people_yaml(catalog_root: &Path, file: &PeopleFile) -> Result<()> {
+    crate::yaml_file::save_atomic(&catalog_root.join("people.yaml"), file)
 }
 
 // ── ArcFace binary embedding I/O ────────────────────────────────────
@@ -875,8 +983,10 @@ pub fn write_arcface_binary(
 }
 
 /// Delete an ArcFace embedding binary file (if it exists).
-pub fn delete_arcface_binary(catalog_root: &std::path::Path, face_id: &str) {
+pub fn delete_arcface_binary(catalog_root: &Path, face_id: &str) {
     let path = arcface_binary_path(catalog_root, face_id);
+    // A missing file is the desired end state; the face row deletion that
+    // precedes this call is what the caller checks.
     let _ = std::fs::remove_file(path);
 }
 
@@ -962,7 +1072,8 @@ impl<'a> FaceStore<'a> {
     }
 
     /// Import faces from a FacesFile into SQLite (INSERT OR REPLACE).
-    /// Inserts with an empty embedding blob placeholder.
+    /// Inserts with an empty embedding blob placeholder. Batch primitive
+    /// (`rebuild-catalog`): SQLite only, the YAML is the input here.
     pub fn import_faces_from_yaml(&self, file: &FacesFile) -> Result<u32> {
         let empty_blob = embedding_to_blob(&[]);
         let mut count = 0u32;
@@ -981,6 +1092,7 @@ impl<'a> FaceStore<'a> {
     }
 
     /// Import people from a PeopleFile into SQLite (INSERT OR REPLACE).
+    /// Batch primitive (`rebuild-catalog`): SQLite only.
     pub fn import_people_from_yaml(&self, file: &PeopleFile) -> Result<u32> {
         let mut count = 0u32;
         for p in &file.people {
@@ -995,6 +1107,7 @@ impl<'a> FaceStore<'a> {
     }
 
     /// Update the embedding blob for a face by ID (used during rebuild-catalog).
+    /// Batch primitive: SQLite only (the embedding is not part of the YAML).
     pub fn import_face_embedding(&self, face_id: &str, embedding: &[f32]) -> Result<()> {
         let blob = embedding_to_blob(embedding);
         self.conn.execute(
@@ -1003,53 +1116,65 @@ impl<'a> FaceStore<'a> {
         )?;
         Ok(())
     }
-
-    /// Convenience: export all faces+people from SQLite and save both YAML files.
-    pub fn save_all_yaml(&self, catalog_root: &std::path::Path) -> Result<()> {
-        let faces_file = self.export_all_faces()?;
-        save_faces_yaml(catalog_root, &faces_file)?;
-        let people_file = self.export_all_people()?;
-        save_people_yaml(catalog_root, &people_file)?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn setup_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        // Create minimal assets table for foreign key
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, asset_type TEXT)",
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO assets (id, name, created_at, asset_type) VALUES ('asset-1', 'Test', '2024-01-01', 'image')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO assets (id, name, created_at, asset_type) VALUES ('asset-2', 'Test2', '2024-01-02', 'image')",
-            [],
-        )
-        .unwrap();
-        FaceStore::initialize(&conn).unwrap();
-        conn
+    /// A real in-memory catalog (so the v13 tables exist) plus a temp dir
+    /// standing in for the catalog root that receives the YAML files.
+    fn setup_db() -> (crate::catalog::Catalog, tempfile::TempDir) {
+        let catalog = crate::catalog::Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        catalog
+            .conn()
+            .execute(
+                "INSERT INTO assets (id, name, created_at, asset_type) VALUES ('asset-1', 'Test', '2024-01-01', 'image')",
+                [],
+            )
+            .unwrap();
+        catalog
+            .conn()
+            .execute(
+                "INSERT INTO assets (id, name, created_at, asset_type) VALUES ('asset-2', 'Test2', '2024-01-02', 'image')",
+                [],
+            )
+            .unwrap();
+        (catalog, tempfile::tempdir().unwrap())
     }
 
     #[test]
-    fn initialize_idempotent() {
-        let conn = Connection::open_in_memory().unwrap();
-        FaceStore::initialize(&conn).unwrap();
-        FaceStore::initialize(&conn).unwrap();
+    fn mutators_persist_yaml_and_handle_without_root_refuses() {
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
+        let pid = store.create_person(Some("Alice")).unwrap();
+        let people = load_people_yaml(dir.path()).unwrap();
+        assert_eq!(people.people.len(), 1, "create_person must write people.yaml");
+        store.name_person(&pid, "Alicia").unwrap();
+        assert_eq!(load_people_yaml(dir.path()).unwrap().people[0].name.as_deref(), Some("Alicia"));
+
+        let readonly = FaceStore::new(catalog.conn());
+        let err = readonly.name_person(&pid, "Nope").unwrap_err();
+        assert!(format!("{err:#}").contains("FaceStore::open"), "{err:#}");
+        // The refused mutation was rolled back with the failed persist.
+        assert_eq!(store.get_person(&pid).unwrap().unwrap().name.as_deref(), Some("Alicia"));
+    }
+
+    #[test]
+    fn mutators_report_not_found() {
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
+        let err = store.name_person("missing", "x").unwrap_err();
+        assert!(matches!(crate::error::classify(&err), Some(MakiError::NotFound { kind: "person", .. })), "{err:#}");
+        let err = store.unassign_face("missing").unwrap_err();
+        assert!(matches!(crate::error::classify(&err), Some(MakiError::NotFound { kind: "face", .. })), "{err:#}");
     }
 
     #[test]
     fn store_and_retrieve_face() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         let emb = vec![0.1f32; 512];
         store
@@ -1065,8 +1190,8 @@ mod tests {
 
     #[test]
     fn has_faces_true_false() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         assert!(!store.has_faces("asset-1"));
 
@@ -1080,8 +1205,8 @@ mod tests {
 
     #[test]
     fn face_count() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         assert_eq!(store.face_count("asset-1"), 0);
 
@@ -1097,8 +1222,8 @@ mod tests {
 
     #[test]
     fn get_face_embedding() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         let emb = vec![0.5f32; 512];
         store
@@ -1112,15 +1237,15 @@ mod tests {
 
     #[test]
     fn get_face_embedding_nonexistent() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
         assert!(store.get_face_embedding("nonexistent").unwrap().is_none());
     }
 
     #[test]
     fn create_and_get_person() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         let pid = store.create_person(Some("Alice")).unwrap();
         let person = store.get_person(&pid).unwrap().unwrap();
@@ -1130,8 +1255,8 @@ mod tests {
 
     #[test]
     fn name_person() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         let pid = store.create_person(None).unwrap();
         assert!(store.get_person(&pid).unwrap().unwrap().name.is_none());
@@ -1145,8 +1270,8 @@ mod tests {
 
     #[test]
     fn assign_face_to_person() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         store
             .store_face("f1", "asset-1", 0.0, 0.0, 0.5, 0.5, &vec![0.0; 512], 0.9, crate::face::RECOGNITION_MODEL.id)
@@ -1160,8 +1285,8 @@ mod tests {
 
     #[test]
     fn list_people() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         store.create_person(Some("Alice")).unwrap();
         store.create_person(Some("Bob")).unwrap();
@@ -1174,8 +1299,8 @@ mod tests {
 
     #[test]
     fn merge_people() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         let pid1 = store.create_person(Some("Alice")).unwrap();
         let pid2 = store.create_person(Some("Also Alice")).unwrap();
@@ -1202,8 +1327,8 @@ mod tests {
 
     #[test]
     fn delete_faces_for_asset() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         store
             .store_face("f1", "asset-1", 0.0, 0.0, 0.3, 0.3, &vec![0.0; 512], 0.9, crate::face::RECOGNITION_MODEL.id)
@@ -1219,8 +1344,8 @@ mod tests {
 
     #[test]
     fn delete_person_unassigns_faces() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         let pid = store.create_person(Some("Alice")).unwrap();
         store
@@ -1237,8 +1362,8 @@ mod tests {
 
     #[test]
     fn total_counts() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         assert_eq!(store.total_faces(), 0);
         assert_eq!(store.total_people(), 0);
@@ -1334,8 +1459,8 @@ mod tests {
 
     #[test]
     fn export_import_round_trip() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         // Create test data
         let emb = vec![0.5f32; 512];
@@ -1352,7 +1477,7 @@ mod tests {
         assert_eq!(people_file.people[0].name, Some("Alice".into()));
 
         // Clear and reimport
-        conn.execute_batch("DELETE FROM faces; DELETE FROM people;").unwrap();
+        catalog.conn().execute_batch("DELETE FROM faces; DELETE FROM people;").unwrap();
         assert_eq!(store.total_faces(), 0);
         assert_eq!(store.total_people(), 0);
 
@@ -1397,16 +1522,17 @@ mod tests {
     }
 
     #[test]
-    fn save_all_yaml_convenience() {
-        let dir = tempfile::tempdir().unwrap();
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+    fn persist_writes_both_yaml_files() {
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         let emb = vec![0.5f32; 512];
+        // Batch primitive: not persisted until persist().
         store.store_face("face-1", "asset-1", 0.1, 0.2, 0.3, 0.4, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
+        assert!(!dir.path().join("faces.yaml").exists());
         store.create_person(Some("Bob")).unwrap();
 
-        store.save_all_yaml(dir.path()).unwrap();
+        store.persist().unwrap();
 
         // Verify both files written
         assert!(dir.path().join("faces.yaml").exists());
@@ -1439,8 +1565,8 @@ mod tests {
 
     #[test]
     fn cluster_groups_similar_faces_into_distinct_clusters() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         // Three distinct "people" along different embedding axes — each with
         // three near-duplicate faces (small variation).
@@ -1471,8 +1597,8 @@ mod tests {
 
     #[test]
     fn cluster_respects_min_confidence_filter() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         // Two high-confidence faces (cluster candidates) and one low-confidence face.
         let emb_a = synth_embedding(0, 0.01);
@@ -1488,8 +1614,8 @@ mod tests {
 
     #[test]
     fn cluster_ignores_already_assigned_faces() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         let emb = synth_embedding(0, 0.0);
         store.store_face("f1", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
@@ -1504,8 +1630,8 @@ mod tests {
 
     #[test]
     fn suggest_merges_surfaces_similar_clusters() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         // Person A: two tightly-clustered faces.
         let emb_a1 = synth_embedding(0, 0.01);
@@ -1544,8 +1670,8 @@ mod tests {
 
     #[test]
     fn suggest_merges_skips_pairs_below_threshold() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         let emb_a = synth_embedding(0, 0.0);
         let emb_b = synth_embedding(200, 0.0);
@@ -1564,8 +1690,8 @@ mod tests {
 
     #[test]
     fn delete_unassigned_faces_only_removes_unassigned() {
-        let conn = setup_db();
-        let store = FaceStore::new(&conn);
+        let (catalog, dir) = setup_db();
+        let store = FaceStore::open(catalog.conn(), dir.path());
 
         let emb = vec![0.1f32; 512];
         store.store_face("kept", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();

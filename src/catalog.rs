@@ -729,7 +729,7 @@ fn next_date_bound(s: &str) -> String {
 }
 
 /// Current schema version. Bump this whenever `run_migrations()` changes.
-pub const SCHEMA_VERSION: u32 = 12;
+pub const SCHEMA_VERSION: u32 = 13;
 
 pub use search_builder::TAG_INDEX_MAX_MATCHES;
 
@@ -858,8 +858,8 @@ impl Catalog {
     pub fn open_and_migrate(catalog_root: &Path) -> Result<Self> {
         let catalog = Self::open(catalog_root)?;
         let before = catalog.schema_version();
-        catalog.run_migrations();
-        catalog.post_migration_sync(catalog_root, before);
+        catalog.run_migrations()?;
+        catalog.post_migration_sync(catalog_root, before)?;
         Ok(catalog)
     }
 
@@ -868,15 +868,17 @@ impl Catalog {
     ///
     /// `previous_version` is the schema version *before* migration ran, so
     /// we know which migrations just happened.
-    fn post_migration_sync(&self, catalog_root: &Path, previous_version: u32) {
+    fn post_migration_sync(&self, catalog_root: &Path, previous_version: u32) -> Result<()> {
         // v5 → v6: `faces.recognition_model` added and backfilled. Re-export
         // faces.yaml so the tag propagates to the source-of-truth sidecar.
         // Cheap relative to the migration itself (one small file write per
         // thousand faces), and runs exactly once per catalog.
         #[cfg(feature = "ai")]
         if previous_version < 6 {
-            let store = crate::face_store::FaceStore::new(&self.conn);
-            let _ = store.save_all_yaml(catalog_root);
+            use anyhow::Context as _;
+            crate::face_store::FaceStore::open(&self.conn, catalog_root)
+                .persist()
+                .context("re-exporting faces.yaml / people.yaml after the v6 migration")?;
         }
         // v6 → v7: `assets.face_scan_status` added — this lives on the Asset
         // YAML sidecar, which is per-file. Re-writing every sidecar during
@@ -888,6 +890,7 @@ impl Catalog {
         // branch above is gated out.
         let _ = previous_version;
         let _ = catalog_root;
+        Ok(())
     }
 
     /// Read the stored schema version (0 if table doesn't exist yet).
@@ -916,6 +919,26 @@ impl Catalog {
     /// Access the underlying SQLite connection.
     pub fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Run `f` inside one SQLite transaction: committed when it returns
+    /// `Ok`, rolled back when it returns `Err` (or panics). Every writer
+    /// that touches more than one row goes through here (audit F2).
+    ///
+    /// Nests: when the connection is already inside a transaction the
+    /// closure simply joins it, so a transactional helper can call other
+    /// transactional helpers. Foreign-key checks that must pass through a
+    /// temporarily inconsistent state can defer them to COMMIT with
+    /// `catalog.conn().execute_batch("PRAGMA defer_foreign_keys = ON")`
+    /// inside the closure (see `migrate_variant_hash`).
+    pub fn with_tx<T>(&self, f: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
+        if !self.conn.is_autocommit() {
+            return f(self);
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let out = f(self)?;
+        tx.commit()?;
+        Ok(out)
     }
 
 }
@@ -965,14 +988,12 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
 
-        // With --features ai, face detection adds 'faces' and 'people' tables.
-        // The assets_fts FTS5 virtual table and its shadow tables are
-        // filtered out above (their internal layout is SQLite's business);
-        // its presence is asserted separately.
-        #[cfg(feature = "ai")]
+        // The face and embedding tables are part of the versioned schema
+        // (v13) on every build, so a catalog created by a standard build is
+        // ready for a Pro build. The assets_fts FTS5 virtual table and its
+        // shadow tables are filtered out above (their internal layout is
+        // SQLite's business); its presence is asserted separately.
         let expected = vec!["assets", "collection_assets", "collections", "embeddings", "faces", "file_locations", "people", "recipes", "schema_version", "stacks", "variants", "volumes"];
-        #[cfg(not(feature = "ai"))]
-        let expected = vec!["assets", "collection_assets", "collections", "embeddings", "file_locations", "recipes", "schema_version", "stacks", "variants", "volumes"];
         assert_eq!(tables, expected);
 
         let fts_exists: i64 = catalog
@@ -1002,12 +1023,106 @@ mod tests {
         catalog.initialize().unwrap(); // should not error
     }
 
+    /// A failing migration step must roll back and leave the stored
+    /// version at the previous value, with the error naming the step.
     #[test]
-    fn initialize_stamps_schema_version_12_with_audio_columns() {
+    fn failed_migration_step_is_not_stamped() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        // Simulate a v11 catalog whose tag index was replaced by a plain
+        // table with the wrong shape: v12's CREATE IF NOT EXISTS passes,
+        // the backfill INSERT fails.
+        catalog
+            .conn
+            .execute_batch(
+                "DROP TRIGGER assets_tags_fts_insert; DROP TRIGGER assets_tags_fts_update; \
+                 DROP TRIGGER assets_tags_fts_delete; DROP TABLE assets_tags_fts; \
+                 CREATE TABLE assets_tags_fts (wrong TEXT); \
+                 DELETE FROM schema_version; INSERT INTO schema_version VALUES (11);",
+            )
+            .unwrap();
+        let err = catalog.run_migrations().unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("schema migration v12"), "{text}");
+        assert_eq!(catalog.schema_version(), 11, "a failed step must not advance the version");
+        assert!(catalog.conn.is_autocommit(), "the failed transaction must be rolled back");
+    }
+
+    /// Migration steps are self-contained: a catalog stuck at any older
+    /// version reaches the current one, and a second run is a no-op.
+    #[test]
+    fn migrations_resume_from_every_version() {
+        for start in 0..SCHEMA_VERSION {
+            let catalog = Catalog::open_in_memory().unwrap();
+            catalog.initialize().unwrap();
+            catalog
+                .conn
+                .execute(
+                    "UPDATE schema_version SET version = ?1",
+                    rusqlite::params![start],
+                )
+                .unwrap();
+            catalog.run_migrations().unwrap_or_else(|e| panic!("resuming from v{start}: {e:#}"));
+            assert_eq!(catalog.schema_version(), SCHEMA_VERSION, "from v{start}");
+        }
+    }
+
+    /// v13 adopts the face/embedding tables. A catalog that never ran the
+    /// lazy AI initialisers gets them; one that carries the original
+    /// single-primary-key `embeddings` table is rebuilt with its rows kept
+    /// and gains the composite key.
+    #[test]
+    fn migration_v13_converts_single_pk_embeddings_table() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        catalog
+            .conn
+            .execute_batch(
+                "DROP TABLE embeddings; DROP TABLE faces; DROP TABLE people;
+                 CREATE TABLE embeddings (
+                     asset_id TEXT PRIMARY KEY,
+                     embedding BLOB NOT NULL,
+                     model TEXT NOT NULL DEFAULT 'siglip-vit-b16-256'
+                 );
+                 INSERT INTO embeddings (asset_id, embedding) VALUES ('a1', x'0000003f');
+                 DELETE FROM schema_version; INSERT INTO schema_version VALUES (12);",
+            )
+            .unwrap();
+        catalog.run_migrations().unwrap();
+        assert_eq!(catalog.schema_version(), SCHEMA_VERSION);
+        assert!(catalog.table_exists("faces").unwrap());
+        assert!(catalog.table_exists("people").unwrap());
+        assert!(catalog.has_column("faces", "recognition_model").unwrap());
+        // Row survived with the default model.
+        let (model, blob): (String, Vec<u8>) = catalog
+            .conn
+            .query_row("SELECT model, embedding FROM embeddings WHERE asset_id = 'a1'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(model, "siglip-vit-b16-256");
+        assert_eq!(blob, vec![0, 0, 0, 0x3f]);
+        // Composite key: a second model for the same asset is allowed.
+        catalog
+            .conn
+            .execute(
+                "INSERT INTO embeddings (asset_id, model, embedding) VALUES ('a1', 'other', x'00')",
+                [],
+            )
+            .unwrap();
+        let pk_cols: i64 = catalog
+            .conn
+            .query_row("SELECT COUNT(*) FROM pragma_table_info('embeddings') WHERE pk > 0", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(pk_cols, 2);
+    }
+
+    #[test]
+    fn initialize_stamps_schema_version_13_with_audio_columns() {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
         assert_eq!(catalog.schema_version(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 12);
+        assert_eq!(SCHEMA_VERSION, 13);
         // v11: shared duration column (renamed from video_duration) and
         // typed audio columns exist.
         let cols: Vec<String> = {
@@ -1093,7 +1208,7 @@ mod tests {
              BEGIN INSERT INTO touched VALUES (new.id); END;",
         ).unwrap();
 
-        catalog.run_migrations();
+        catalog.run_migrations().unwrap();
 
         let touched: Vec<String> = {
             let mut stmt = catalog.conn.prepare("SELECT id FROM touched").unwrap();
@@ -2595,7 +2710,7 @@ mod tests {
         catalog.conn.execute_batch(
             "DELETE FROM assets_tags_fts; DELETE FROM schema_version; INSERT INTO schema_version VALUES (11);",
         ).unwrap();
-        catalog.run_migrations();
+        catalog.run_migrations().unwrap();
         assert_eq!(catalog.schema_version(), SCHEMA_VERSION);
         let n: i64 = catalog.conn.query_row("SELECT COUNT(*) FROM assets_tags_fts", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
@@ -2997,13 +3112,13 @@ mod tests {
     fn delete_collection_memberships_for_asset_removes_rows() {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
-        crate::collection::CollectionStore::initialize(&catalog.conn).unwrap();
+        let root = tempfile::tempdir().unwrap();
 
         let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:colmem1");
         let asset_id = asset.id.to_string();
         catalog.insert_asset(&asset).unwrap();
 
-        let store = crate::collection::CollectionStore::new(&catalog.conn);
+        let store = crate::collection::CollectionStore::open(&catalog.conn, root.path());
         store.create("TestCol", None).unwrap();
         store.add_assets("TestCol", std::slice::from_ref(&asset_id)).unwrap();
 
@@ -3023,7 +3138,6 @@ mod tests {
     fn delete_collection_memberships_noop_for_no_memberships() {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
-        crate::collection::CollectionStore::initialize(&catalog.conn).unwrap();
 
         let removed = catalog.delete_collection_memberships_for_asset("nonexistent").unwrap();
         assert_eq!(removed, 0);

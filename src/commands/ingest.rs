@@ -808,7 +808,6 @@ pub fn run_delete_command(
     #[cfg(feature = "ai")]
     let ai_cleanup_info: Vec<(String, Vec<String>)> = if apply {
         let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-        let _ = maki::face_store::FaceStore::initialize(catalog.conn());
         let face_store = maki::face_store::FaceStore::new(catalog.conn());
         ids.iter().filter_map(|id| {
             let full_id = catalog.resolve_asset_id(id).ok().flatten()?;
@@ -821,7 +820,8 @@ pub fn run_delete_command(
     };
 
     let show_log = ctx.log;
-    let result = service.delete_assets(
+    #[cfg_attr(not(feature = "ai"), allow(unused_mut))]
+    let mut result = service.delete_assets(
         &ids,
         apply,
         remove_files,
@@ -866,11 +866,14 @@ pub fn run_delete_command(
                 }
             }
         }
-        // Update faces/people YAML
+        // Re-export faces/people YAML without the deleted assets' faces
+        // (the face rows went with the assets). The YAML is the source of
+        // truth, so a failed write is reported with the other errors.
         let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-        let _ = maki::face_store::FaceStore::initialize(catalog.conn());
-        let face_store = maki::face_store::FaceStore::new(catalog.conn());
-        let _ = face_store.save_all_yaml(&catalog_root);
+        let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
+        if let Err(e) = face_store.persist() {
+            result.errors.push(format!("faces/people YAML: {e:#}"));
+        }
     }
 
     if ctx.json {

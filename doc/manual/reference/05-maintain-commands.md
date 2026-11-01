@@ -193,6 +193,10 @@ presence checks always cover everything.
 With `--log`, each finding is printed per asset; the default summary
 aggregates mismatches by field. `--json` emits the full report.
 
+**Exit code**: 0 when the catalog is consistent, and after a `--repair`
+that fixed everything it found; 1 when issues remain (also with
+`--json`, so scripts can check either the status or the report).
+
 ### NOTES
 
 Doctor checks **store consistency**, not disk integrity — verifying
@@ -1691,6 +1695,8 @@ maki [GLOBAL FLAGS] migrate
 Runs all pending database schema migrations. Migrations are idempotent (safe to run repeatedly) and add new columns, indexes, and tables needed by newer versions of maki.
 
 A `schema_version` table tracks the current schema version. On startup, MAKI performs a single-query fast-check against this version number and skips migration logic entirely when the schema is already up to date, avoiding the overhead of running dozens of idempotent `ALTER TABLE` statements on every launch.
+
+Each schema version migrates in its own transaction and records its version number inside that transaction. If a step fails, `maki migrate` prints which one (for example `schema migration v12: backfill assets_tags_fts`), the catalog stays at the previous version, and the command can simply be re-run after the cause is fixed.
 
 Migrations also run automatically once at program startup for all commands, so this command is primarily useful for:
 

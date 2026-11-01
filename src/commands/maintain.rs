@@ -2,6 +2,8 @@
 
 use super::*;
 
+use anyhow::Context as _;
+
 /// Extracted body of `Commands::RebuildCatalog`.
 pub fn run_rebuild_catalog_command(
     asset: Option<String>,
@@ -27,103 +29,54 @@ pub fn run_rebuild_catalog_command(
         let asset_obj = store.load(uuid)?;
         let id_str = uuid.to_string();
 
-        // Delete all existing rows for this asset (FK checks off for safety)
-        let _ = catalog.conn().execute_batch("PRAGMA foreign_keys = OFF");
-
-        // Get all variant hashes (from SQLite, may differ from sidecar)
-        let sqlite_hashes: Vec<String> = catalog.conn()
-            .prepare("SELECT content_hash FROM variants WHERE asset_id = ?1")?
-            .query_map(rusqlite::params![&id_str], |r| r.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        for hash in &sqlite_hashes {
-            let _ = catalog.conn().execute("DELETE FROM recipes WHERE variant_hash = ?1", rusqlite::params![hash]);
-            let _ = catalog.conn().execute("DELETE FROM file_locations WHERE content_hash = ?1", rusqlite::params![hash]);
-        }
-        let _ = catalog.conn().execute("DELETE FROM variants WHERE asset_id = ?1", rusqlite::params![&id_str]);
-        let _ = catalog.conn().execute("DELETE FROM faces WHERE asset_id = ?1", rusqlite::params![&id_str]);
-        let _ = catalog.conn().execute("DELETE FROM embeddings WHERE asset_id = ?1", rusqlite::params![&id_str]);
-        let _ = catalog.conn().execute("DELETE FROM collection_assets WHERE asset_id = ?1", rusqlite::params![&id_str]);
-        let _ = catalog.conn().execute("DELETE FROM assets WHERE id = ?1", rusqlite::params![&id_str]);
-
-        let _ = catalog.conn().execute_batch("PRAGMA foreign_keys = ON");
-
-        // Re-insert from sidecar
+        // Volume rows must exist before file locations can reference them.
         let registry = DeviceRegistry::new(&catalog_root);
         for volume in registry.list()? {
             catalog.ensure_volume(&volume)?;
         }
 
-        catalog.insert_asset(&asset_obj)?;
-        for variant in &asset_obj.variants {
-            catalog.insert_variant(variant)?;
-            for loc in &variant.locations {
-                catalog.insert_file_location(&variant.content_hash, loc)?;
-            }
-        }
-        for recipe in &asset_obj.recipes {
-            catalog.insert_recipe(recipe)?;
-        }
-        catalog.update_denormalized_variant_columns(&asset_obj)?;
+        // Asset row, variants, file locations, recipes and the denormalized
+        // columns — the one shared resync routine (also behind `doctor
+        // --repair`, `refresh --reimport` and `undo`), one transaction.
+        // Stack / collection membership is not derived from the sidecar
+        // and survives untouched.
+        catalog.resync_asset_from_sidecar(&asset_obj)?;
 
-        // Restore embedding from binary file if it exists
+        // Faces and embeddings have their own sources of truth (faces.yaml,
+        // embeddings/<model>/<shard>/<id>.bin): drop this asset's rows and
+        // restore them from the files, atomically with the face columns.
         #[cfg(feature = "ai")]
         {
-            let emb_store = maki::embedding_store::EmbeddingStore::new(catalog.conn());
             let emb_base = catalog_root.join("embeddings");
-            if emb_base.exists() {
-                if let Ok(entries) = std::fs::read_dir(&emb_base) {
-                    for entry in entries.flatten() {
-                        let name = entry.file_name().to_string_lossy().to_string();
-                        if name == "arcface" || !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                            continue;
-                        }
-                        let prefix = &id_str[..2];
-                        let bin_path = emb_base.join(&name).join(prefix).join(format!("{id_str}.bin"));
-                        if bin_path.exists() {
-                            if let Ok(data) = std::fs::read(&bin_path) {
-                                let embedding: Vec<f32> = data.chunks_exact(4)
-                                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                                    .collect();
-                                let _ = emb_store.store(&id_str, &embedding, &name);
-                            }
-                        }
-                    }
-                }
-            }
+            let faces_file = maki::face_store::load_faces_yaml(&catalog_root)
+                .context("could not read faces.yaml")?;
+            let asset_faces = maki::face_store::FacesFile {
+                faces: faces_file.faces.into_iter().filter(|f| f.asset_id == id_str).collect(),
+            };
+            let embeddings = load_asset_embedding_binaries(&emb_base, &id_str)?;
+            let face_embeddings = load_face_embedding_binaries(&emb_base, &asset_faces)?;
 
-            // Restore faces for this asset
-            let face_store = maki::face_store::FaceStore::new(catalog.conn());
-            let faces_file = maki::face_store::load_faces_yaml(&catalog_root).unwrap_or_default();
-            let asset_face_ids: Vec<String> = faces_file.faces.iter()
-                .filter(|f| f.asset_id == id_str)
-                .map(|f| f.id.clone())
-                .collect();
-            if !asset_face_ids.is_empty() {
-                let filtered = maki::face_store::FacesFile {
-                    faces: faces_file.faces.into_iter().filter(|f| f.asset_id == id_str).collect(),
-                };
-                let _ = face_store.import_faces_from_yaml(&filtered);
-            }
-            // Restore ArcFace embeddings for this asset's faces
-            let asset_faces = face_store.faces_for_asset(&id_str).unwrap_or_default();
-            for face in &asset_faces {
-                let prefix = &face.id[..2.min(face.id.len())];
-                let bin_path = emb_base.join("arcface").join(prefix).join(format!("{}.bin", face.id));
-                if bin_path.exists() {
-                    if let Ok(data) = std::fs::read(&bin_path) {
-                        let embedding: Vec<f32> = data.chunks_exact(4)
-                            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                            .collect();
-                        let _ = face_store.import_face_embedding(&face.id, &embedding);
-                    }
+            catalog.with_tx(|c| {
+                let emb_store = maki::embedding_store::EmbeddingStore::new(c.conn());
+                c.delete_embeddings_for_asset(&id_str)?;
+                for (model, embedding) in &embeddings {
+                    emb_store.store(&id_str, embedding, model)
+                        .with_context(|| format!("could not restore {model} embedding"))?;
                 }
-            }
 
-            // Update denormalized face columns (count + legacy scan-status backfill)
-            let _ = catalog.update_face_count(&id_str);
-            let _ = catalog.backfill_face_scan_status(&id_str);
+                let face_store = maki::face_store::FaceStore::new(c.conn());
+                c.delete_faces_for_asset(&id_str)?;
+                face_store.import_faces_from_yaml(&asset_faces)
+                    .context("could not restore faces from faces.yaml")?;
+                for (face_id, embedding) in &face_embeddings {
+                    face_store.import_face_embedding(face_id, embedding)
+                        .with_context(|| format!("could not restore embedding of face {face_id}"))?;
+                }
+                // Denormalized face columns (count + legacy scan-status backfill)
+                c.update_face_count(&id_str)?;
+                c.backfill_face_scan_status(&id_str)?;
+                Ok(())
+            })?;
         }
 
         if ctx.json {
@@ -155,57 +108,75 @@ pub fn run_rebuild_catalog_command(
     let store = MetadataStore::new(&catalog_root);
     let result = store.sync_to_catalog_with_log(&catalog, ctx.log)?;
 
-    // Restore collections from YAML
+    // Restore collections from YAML. A file that cannot be read or
+    // imported fails the rebuild: silently finishing without the
+    // collections would be data loss dressed up as success.
     let collections_restored = {
-        let col_file = maki::collection::load_yaml(&catalog_root).unwrap_or_default();
+        let col_file = maki::collection::load_yaml(&catalog_root)
+            .context("could not read collections.yaml")?;
         if !col_file.collections.is_empty() {
             let col_store = maki::collection::CollectionStore::new(catalog.conn());
-            col_store.import_from_yaml(&col_file).unwrap_or(0)
+            col_store.import_from_yaml(&col_file)
+                .context("could not restore collections from collections.yaml")?
         } else {
             0
         }
     };
 
-    // Restore stacks from YAML
+    // Restore stacks from YAML (same contract as collections above).
     let stacks_restored = {
-        let stacks_file = maki::stack::load_yaml(&catalog_root).unwrap_or_default();
+        let stacks_file = maki::stack::load_yaml(&catalog_root)
+            .context("could not read stacks.yaml")?;
         if !stacks_file.stacks.is_empty() {
             let stack_store = maki::stack::StackStore::new(catalog.conn());
-            stack_store.import_from_yaml(&stacks_file).unwrap_or(0)
+            stack_store.import_from_yaml(&stacks_file)
+                .context("could not restore stacks from stacks.yaml")?
         } else {
             0
         }
     };
 
-    // Restore faces, people, and embeddings from files
+    // Restore faces, people, and embeddings from files. The YAML files are
+    // whole-file sources of truth (a read/import failure fails the
+    // rebuild); a single unreadable or unstorable embedding binary is
+    // counted in `ai_restore_errors` and reported, not fatal.
     #[cfg(feature = "ai")]
-    let (people_restored, faces_restored, face_embeddings_restored, embeddings_restored) = {
-        let _ = maki::face_store::FaceStore::initialize(catalog.conn());
-        let _ = maki::embedding_store::EmbeddingStore::initialize(catalog.conn());
+    let (people_restored, faces_restored, face_embeddings_restored, embeddings_restored, ai_restore_errors) = {
         let face_store = maki::face_store::FaceStore::new(catalog.conn());
+        let mut ai_restore_errors = 0u64;
 
         // Import people first (faces reference people via FK)
-        let people_file = maki::face_store::load_people_yaml(&catalog_root).unwrap_or_default();
+        let people_file = maki::face_store::load_people_yaml(&catalog_root)
+            .context("could not read people.yaml")?;
         let people_restored = if !people_file.people.is_empty() {
-            face_store.import_people_from_yaml(&people_file).unwrap_or(0)
+            face_store.import_people_from_yaml(&people_file)
+                .context("could not restore people from people.yaml")?
         } else {
             0
         };
 
         // Import faces (with empty embedding placeholder)
-        let faces_file = maki::face_store::load_faces_yaml(&catalog_root).unwrap_or_default();
+        let faces_file = maki::face_store::load_faces_yaml(&catalog_root)
+            .context("could not read faces.yaml")?;
         let faces_restored = if !faces_file.faces.is_empty() {
-            face_store.import_faces_from_yaml(&faces_file).unwrap_or(0)
+            face_store.import_faces_from_yaml(&faces_file)
+                .context("could not restore faces from faces.yaml")?
         } else {
             0
         };
 
         // Restore ArcFace embeddings from binary files
         let mut face_embeddings_restored = 0u32;
-        if let Ok(arcface_entries) = maki::face_store::scan_arcface_binaries(&catalog_root) {
-            for (face_id, embedding) in &arcface_entries {
-                if face_store.import_face_embedding(face_id, embedding).is_ok() {
-                    face_embeddings_restored += 1;
+        let arcface_entries = maki::face_store::scan_arcface_binaries(&catalog_root)
+            .context("could not scan embeddings/arcface")?;
+        for (face_id, embedding) in &arcface_entries {
+            match face_store.import_face_embedding(face_id, embedding) {
+                Ok(()) => face_embeddings_restored += 1,
+                Err(e) => {
+                    ai_restore_errors += 1;
+                    if ctx.log {
+                        eprintln!("Error restoring embedding of face {face_id}: {e}");
+                    }
                 }
             }
         }
@@ -216,16 +187,21 @@ pub fn run_rebuild_catalog_command(
         // Scan all model directories under embeddings/ (skip "arcface")
         let emb_base = catalog_root.join("embeddings");
         if emb_base.exists() {
-            if let Ok(entries) = std::fs::read_dir(&emb_base) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if name == "arcface" || !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                        continue;
-                    }
-                    if let Ok(model_entries) = maki::embedding_store::scan_embedding_binaries(&catalog_root, &name) {
-                        for (asset_id, embedding) in &model_entries {
-                            if emb_store.store(asset_id, embedding, &name).is_ok() {
-                                embeddings_restored += 1;
+            for entry in std::fs::read_dir(&emb_base).context("could not read embeddings/")? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name == "arcface" || !entry.file_type()?.is_dir() {
+                    continue;
+                }
+                let model_entries = maki::embedding_store::scan_embedding_binaries(&catalog_root, &name)
+                    .with_context(|| format!("could not scan embeddings/{name}"))?;
+                for (asset_id, embedding) in &model_entries {
+                    match emb_store.store(asset_id, embedding, &name) {
+                        Ok(()) => embeddings_restored += 1,
+                        Err(e) => {
+                            ai_restore_errors += 1;
+                            if ctx.log {
+                                eprintln!("Error restoring {name} embedding of asset {asset_id}: {e}");
                             }
                         }
                     }
@@ -238,10 +214,10 @@ pub fn run_rebuild_catalog_command(
         // newer writes always put face_scan_status in the sidecar, so it's
         // a no-op for fresh catalogs.
         if faces_restored > 0 {
-            let _ = catalog.backfill_face_denormalization();
+            catalog.backfill_face_denormalization()?;
         }
 
-        (people_restored, faces_restored, face_embeddings_restored, embeddings_restored)
+        (people_restored, faces_restored, face_embeddings_restored, embeddings_restored, ai_restore_errors)
     };
 
     if ctx.json {
@@ -258,6 +234,7 @@ pub fn run_rebuild_catalog_command(
             json["faces_restored"] = serde_json::json!(faces_restored);
             json["face_embeddings_restored"] = serde_json::json!(face_embeddings_restored);
             json["embeddings_restored"] = serde_json::json!(embeddings_restored);
+            json["ai_restore_errors"] = serde_json::json!(ai_restore_errors);
         }
         println!("{}", json);
     } else {
@@ -278,6 +255,9 @@ pub fn run_rebuild_catalog_command(
             }
             if embeddings_restored > 0 {
                 println!("  {} embedding(s) restored", embeddings_restored);
+            }
+            if ai_restore_errors > 0 {
+                println!("  {} embedding(s) could not be restored (run with --log for details)", ai_restore_errors);
             }
         }
         if result.errors > 0 {
@@ -321,6 +301,48 @@ pub fn run_rebuild_catalog_command(
         }
     }
     Ok(())
+}
+
+/// Read every `<emb_base>/<model>/<shard>/<asset_id>.bin` (all model
+/// directories except `arcface`) as `(model, embedding)`. A missing
+/// directory yields nothing; an unreadable one is an error.
+#[cfg(feature = "ai")]
+fn load_asset_embedding_binaries(emb_base: &std::path::Path, asset_id: &str) -> anyhow::Result<Vec<(String, Vec<f32>)>> {
+    let mut out = Vec::new();
+    if !emb_base.exists() {
+        return Ok(out);
+    }
+    for entry in std::fs::read_dir(emb_base).context("could not read embeddings/")? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == "arcface" || !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let bin_path = emb_base.join(&name).join(&asset_id[..2]).join(format!("{asset_id}.bin"));
+        if bin_path.exists() {
+            let data = std::fs::read(&bin_path)
+                .with_context(|| format!("could not read {}", bin_path.display()))?;
+            out.push((name, maki::embedding_store::blob_to_embedding(&data)));
+        }
+    }
+    Ok(out)
+}
+
+/// Read the ArcFace binary of every face in `faces` that has one, as
+/// `(face_id, embedding)`.
+#[cfg(feature = "ai")]
+fn load_face_embedding_binaries(emb_base: &std::path::Path, faces: &maki::face_store::FacesFile) -> anyhow::Result<Vec<(String, Vec<f32>)>> {
+    let mut out = Vec::new();
+    for face in &faces.faces {
+        let prefix = &face.id[..2.min(face.id.len())];
+        let bin_path = emb_base.join("arcface").join(prefix).join(format!("{}.bin", face.id));
+        if bin_path.exists() {
+            let data = std::fs::read(&bin_path)
+                .with_context(|| format!("could not read {}", bin_path.display()))?;
+            out.push((face.id.clone(), maki::embedding_store::blob_to_embedding(&data)));
+        }
+    }
+    Ok(out)
 }
 
 /// Extracted body of `Commands::FixRecipes`. See `run_import_command` for the
@@ -685,14 +707,17 @@ pub fn run_generate_previews_command(
                     preview_gen.generate(&content_hash, file_path, &format)
                 };
                 // Also generate smart preview when --smart is set
-                if smart {
-                    let _ = if force { preview_gen.regenerate_smart(&content_hash, file_path, &format) }
-                    else { preview_gen.generate_smart(&content_hash, file_path, &format) };
-                }
+                let smart_result = if smart {
+                    Some(if force { preview_gen.regenerate_smart(&content_hash, file_path, &format) }
+                    else { preview_gen.generate_smart(&content_hash, file_path, &format) })
+                } else {
+                    None
+                };
                 let file_elapsed = file_start.elapsed();
                 let name = file_path.file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or_else(|| file_path.to_str().unwrap_or("?"));
+                let regular_ok = result.is_ok();
                 match result {
                     Ok(Some(_)) => {
                         generated += 1;
@@ -706,6 +731,12 @@ pub fn run_generate_previews_command(
                         eprintln!("  Failed for {}: {e:#} ({})", file_path.display(), format_duration(file_elapsed));
                         failed += 1;
                     }
+                }
+                // A failed smart preview counts the file as failed once
+                // (not twice when the regular preview already failed).
+                if let Some(Err(e)) = smart_result {
+                    eprintln!("  Smart preview failed for {}: {e:#}", file_path.display());
+                    if regular_ok { failed += 1; }
                 }
             }
         }
@@ -787,12 +818,18 @@ pub fn run_generate_previews_command(
                         && !variant.source_metadata.contains_key("video_duration")
                     {
                         let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
-                        service.backfill_video_metadata(&asset_data.id.to_string(), &variant.content_hash, &path);
+                        if let Err(e) = service.backfill_video_metadata(&asset_data.id.to_string(), &variant.content_hash, &path) {
+                            eprintln!("  Video metadata backfill failed for {}: {e:#}", asset_data.id);
+                            failed += 1;
+                        }
                     } else if variant_type == maki::models::AssetType::Audio
                         && !variant.source_metadata.contains_key("audio_duration")
                     {
                         let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
-                        service.backfill_audio_metadata(&asset_data.id.to_string(), &variant.content_hash, &path);
+                        if let Err(e) = service.backfill_audio_metadata(&asset_data.id.to_string(), &variant.content_hash, &path) {
+                            eprintln!("  Audio metadata backfill failed for {}: {e:#}", asset_data.id);
+                            failed += 1;
+                        }
                     }
 
                     let file_start = std::time::Instant::now();
@@ -804,17 +841,20 @@ pub fn run_generate_previews_command(
                         preview_gen.generate(&variant.content_hash, &path, &variant.format)
                     };
                     // Also generate smart preview when --smart is set
-                    if smart {
-                        let _ = if force || upgrade {
+                    let smart_result = if smart {
+                        Some(if force || upgrade {
                             preview_gen.regenerate_smart_with_rotation(&variant.content_hash, &path, &variant.format, rotation)
                         } else {
                             preview_gen.generate_smart(&variant.content_hash, &path, &variant.format)
-                        };
-                    }
+                        })
+                    } else {
+                        None
+                    };
                     let file_elapsed = file_start.elapsed();
                     let name = path.file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or_else(|| path.to_str().unwrap_or("?"));
+                    let regular_ok = result.is_ok();
                     match result {
                         Ok(Some(_)) => {
                             generated += 1;
@@ -829,6 +869,12 @@ pub fn run_generate_previews_command(
                             eprintln!("  Failed for {}: {e:#} ({})", asset_data.id, format_duration(file_elapsed));
                             failed += 1;
                         }
+                    }
+                    // A failed smart preview counts the asset as failed once
+                    // (not twice when the regular preview already failed).
+                    if let Some(Err(e)) = smart_result {
+                        eprintln!("  Smart preview failed for {}: {e:#}", asset_data.id);
+                        if regular_ok { failed += 1; }
                     }
                 } else {
                     skipped += 1;
@@ -1504,9 +1550,21 @@ pub fn run_doctor_command(
         }
     })?;
 
+    // The report drives the exit status: unresolved issues → exit 1
+    // (`MakiError::CheckFailed`), like `verify` on hash mismatches.
+    let outcome = if report.unresolved() > 0 {
+        Err(maki::error::MakiError::CheckFailed {
+            command: "doctor",
+            count: report.unresolved(),
+        }
+        .into())
+    } else {
+        Ok(())
+    };
+
     if ctx.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
-        return Ok(());
+        return outcome;
     }
 
     let scope = if report.sampled {
@@ -1566,7 +1624,7 @@ pub fn run_doctor_command(
     } else {
         println!("Run `maki doctor --repair` to rebuild the SQLite side from the YAML sidecars.");
     }
-    Ok(())
+    outcome
 }
 
 /// Render the timestamp portion of a history line compactly
@@ -1816,21 +1874,24 @@ pub fn run_history_command(
 /// and repair sidecar ratings left as MicrosoftPhoto percentages.
 pub fn run_migrate_command(ctx: CliContext) -> anyhow::Result<()> {
     let catalog_root = maki::config::find_catalog_root()?;
-    let catalog = Catalog::open_and_migrate(&catalog_root)?;
-    #[cfg(feature = "ai")]
-    {
-        let _ = maki::face_store::FaceStore::initialize(catalog.conn());
-        let _ = maki::embedding_store::EmbeddingStore::initialize(catalog.conn());
-    }
+    // `open_and_migrate` = `open` + `run_migrations()?` + the post-migration
+    // YAML sync. Each version block runs in its own transaction and the
+    // version is stamped only on success, so the propagated error names
+    // the failing step and the catalog stays at the last completed version.
+    let catalog = Catalog::open_and_migrate(&catalog_root).with_context(|| {
+        format!(
+            "schema migration failed (target schema version {})",
+            maki::catalog::SCHEMA_VERSION
+        )
+    })?;
     // Fix sidecar YAML files with MicrosoftPhoto:Rating percentage values
     let store = maki::metadata_store::MetadataStore::new(&catalog_root);
     let mut fixed_sidecars = 0u32;
     let mut stmt = catalog.conn().prepare(
         "SELECT id FROM assets WHERE rating IS NOT NULL",
     )?;
-    let ids: Vec<String> = stmt.query_map([], |row| row.get(0))?
-        .filter_map(|r| r.ok())
-        .collect();
+    let ids: Vec<String> = stmt.query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<_, _>>()?;
     drop(stmt);
     for id_str in &ids {
         if let Ok(uuid) = id_str.parse::<uuid::Uuid>() {
@@ -1838,7 +1899,8 @@ pub fn run_migrate_command(ctx: CliContext) -> anyhow::Result<()> {
                 if let Some(r) = asset.rating {
                     if r > 5 {
                         asset.rating = Some(maki::asset_service::normalize_rating(r));
-                        let _ = store.save(&asset);
+                        store.save(&asset)
+                            .with_context(|| format!("could not save sidecar of {id_str}"))?;
                         fixed_sidecars += 1;
                     }
                 }

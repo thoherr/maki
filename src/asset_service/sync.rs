@@ -236,18 +236,18 @@ impl AssetService {
                     // File was moved
                     result.moved += 1;
                     if apply {
-                        catalog.update_file_location_path(
-                            content_hash,
-                            &vol_id,
-                            cat_path,
-                            &new_path,
-                        )?;
-                        // Update sidecar
+                        // Sidecar (source of truth) first, then the catalog row.
                         self.update_sidecar_file_location_path(
                             &metadata_store,
                             &catalog,
                             content_hash,
                             volume.id,
+                            cat_path,
+                            &new_path,
+                        )?;
+                        catalog.update_file_location_path(
+                            content_hash,
+                            &vol_id,
                             cat_path,
                             &new_path,
                         )?;
@@ -258,7 +258,6 @@ impl AssetService {
                     result.missing += 1;
                     let full_path = volume.mount_point.join(cat_path);
                     if apply && remove_stale {
-                        catalog.delete_file_location(content_hash, &vol_id, cat_path)?;
                         self.remove_sidecar_file_location(
                             &metadata_store,
                             &catalog,
@@ -266,6 +265,7 @@ impl AssetService {
                             volume.id,
                             cat_path,
                         )?;
+                        catalog.delete_file_location(content_hash, &vol_id, cat_path)?;
                         result.stale_removed += 1;
                     }
                     on_file(&full_path, SyncStatus::Missing, file_start.elapsed());
@@ -289,8 +289,6 @@ impl AssetService {
                     // Recipe was moved
                     result.moved += 1;
                     if apply {
-                        catalog.update_recipe_relative_path(recipe_id, &new_path)?;
-                        // Update sidecar
                         self.update_sidecar_recipe_path(
                             &metadata_store,
                             &catalog,
@@ -299,6 +297,7 @@ impl AssetService {
                             cat_path,
                             &new_path,
                         )?;
+                        catalog.update_recipe_relative_path(recipe_id, &new_path)?;
                     }
                     on_file(&full_path, SyncStatus::Moved, file_start.elapsed());
                 } else {
@@ -306,11 +305,7 @@ impl AssetService {
                     result.missing += 1;
                     let full_path = volume.mount_point.join(cat_path);
                     if apply && remove_stale {
-                        if let Err(e) = catalog.delete_recipe(recipe_id) {
-                            result.errors.push(format!(
-                                "Failed to delete stale recipe {cat_path}: {e}"
-                            ));
-                        } else if let Err(e) = self.remove_sidecar_recipe(
+                        if let Err(e) = self.remove_sidecar_recipe(
                             &metadata_store,
                             &catalog,
                             variant_hash,
@@ -319,6 +314,10 @@ impl AssetService {
                         ) {
                             result.errors.push(format!(
                                 "Failed to remove recipe from sidecar for {cat_path}: {e}"
+                            ));
+                        } else if let Err(e) = catalog.delete_recipe(recipe_id) {
+                            result.errors.push(format!(
+                                "Failed to delete stale recipe {cat_path}: {e}"
                             ));
                         } else {
                             result.stale_removed += 1;
@@ -345,13 +344,22 @@ impl AssetService {
         // Clean up assets that became locationless after stale removal
         if apply && remove_stale && result.stale_removed > 0 {
             let orphaned = catalog.list_orphaned_asset_ids()?;
+            let preview_gen = crate::preview::PreviewGenerator::new(
+                &self.catalog_root,
+                self.verbosity,
+                &self.preview_config,
+            );
             for asset_id in &orphaned {
-                if let Ok(uuid) = asset_id.parse::<uuid::Uuid>() {
-                    // Delete sidecar
-                    let _ = metadata_store.delete(uuid);
-                    // Delete from catalog (variants, recipes, etc.)
-                    let _ = catalog.delete_recipes_for_asset(asset_id);
-                    let _ = catalog.delete_asset(asset_id);
+                // Same purge as `cleanup`: all rows in one transaction, then
+                // sidecar and derived files; failures land in `errors`
+                // (formerly three swallowed `let _ =` writes).
+                if self.purge_orphaned_asset(
+                    &catalog,
+                    &metadata_store,
+                    &preview_gen,
+                    asset_id,
+                    &mut result.errors,
+                ) {
                     result.orphaned_cleaned += 1;
                 }
             }
@@ -384,8 +392,9 @@ impl AssetService {
         file_path: &Path,
         relative_path: &str,
     ) -> Result<()> {
-        catalog.update_recipe_content_hash(recipe_id, new_hash)?;
-
+        // Compute the new asset state, save the sidecar (source of truth),
+        // then apply every catalog row in one transaction.
+        let mut xmp_asset: Option<Asset> = None;
         if let Some(asset_id_str) = catalog.find_asset_id_by_variant(variant_hash)? {
             let asset_uuid: Uuid = asset_id_str.parse()?;
             let mut asset = metadata_store.load(asset_uuid)?;
@@ -399,20 +408,29 @@ impl AssetService {
                     .extension()
                     .and_then(|e| e.to_str())
                     .unwrap_or("");
-                if ext.eq_ignore_ascii_case("xmp") {
+                let is_xmp = ext.eq_ignore_ascii_case("xmp");
+                if is_xmp {
                     let xmp = crate::xmp_reader::extract(file_path);
                     reapply_xmp_data(&xmp, &mut asset, variant_hash);
-                    catalog.insert_asset(&asset)?;
-                    if let Some(v) = asset.variants.iter().find(|v| v.content_hash == variant_hash)
-                    {
-                        catalog.insert_variant(v)?;
-                    }
                 }
 
                 metadata_store.save(&asset)?;
+                if is_xmp {
+                    xmp_asset = Some(asset);
+                }
             }
         }
-        Ok(())
+
+        catalog.with_tx(|c| {
+            c.update_recipe_content_hash(recipe_id, new_hash)?;
+            if let Some(asset) = &xmp_asset {
+                c.insert_asset(asset)?;
+                if let Some(v) = asset.variants.iter().find(|v| v.content_hash == variant_hash) {
+                    c.insert_variant(v)?;
+                }
+            }
+            Ok(())
+        })
     }
 
     /// Apply a "media file at same path, different content" change.
@@ -442,16 +460,16 @@ impl AssetService {
     ) -> Result<()> {
         let vol_id_str = volume.id.to_string();
 
-        // Drop the old file_location row at this path.
-        catalog.delete_file_location(old_hash, &vol_id_str, relative_path)?;
-
         // Find the asset that owned the old variant. If no owning asset
         // is found (edge case: the old variant was already orphaned),
         // we still drop the stale location and return; the user can
         // re-import to pick up the new file.
         let asset_id_str = match catalog.find_asset_id_by_variant(old_hash)? {
             Some(id) => id,
-            None => return Ok(()),
+            None => {
+                catalog.delete_file_location(old_hash, &vol_id_str, relative_path)?;
+                return Ok(());
+            }
         };
         let asset_uuid: Uuid = asset_id_str.parse()?;
         let mut asset = metadata_store.load(asset_uuid)?;
@@ -505,10 +523,6 @@ impl AssetService {
             locations: vec![new_location.clone()],
         };
 
-        // SQLite side: insert variant + file_location for the new hash.
-        catalog.insert_variant(&new_variant)?;
-        catalog.insert_file_location(new_hash, &new_location)?;
-
         // Sidecar side: drop the old variant's location at this path,
         // add the new variant. We preserve the old variant entry in the
         // sidecar even if its location list becomes empty — that
@@ -525,7 +539,7 @@ impl AssetService {
             }
         }
         if !asset.variants.iter().any(|v| v.content_hash == new_hash) {
-            asset.variants.push(new_variant);
+            asset.variants.push(new_variant.clone());
         }
 
         // Embedded XMP (JPEG/TIFF) often carries keyword/description
@@ -543,13 +557,23 @@ impl AssetService {
             );
         }
 
+        // Sidecar (source of truth) first, then every catalog row in one
+        // transaction: drop the old location, add the new variant and its
+        // location, refresh the asset row and denormalized columns.
         metadata_store.save(&asset)?;
-        catalog.insert_asset(&asset)?;
+        catalog.with_tx(|c| {
+            c.delete_file_location(old_hash, &vol_id_str, relative_path)?;
+            c.insert_variant(&new_variant)?;
+            c.insert_file_location(new_hash, &new_location)?;
+            c.insert_asset(&asset)?;
+            Ok(())
+        })?;
 
         // Regenerate previews for the new hash. The preview-by-hash
         // path means an old preview keyed by old_hash stays on disk
         // until cleanup; the new preview is what MAKI now serves for
-        // this asset.
+        // this asset. Previews are a regenerable cache (also produced
+        // on demand), so a generation failure is not an error here.
         let preview_gen = crate::preview::PreviewGenerator::new(
             &self.catalog_root,
             self.verbosity,

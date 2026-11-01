@@ -200,6 +200,8 @@ impl HistoryStore {
         }
         let drop_count = files.len() - self.max_operations;
         for path in files.iter().take(drop_count) {
+            // Best effort: the journal is non-authoritative and a file that
+            // survives pruning is retried on the next record().
             let _ = std::fs::remove_file(path);
             if let Some(name) = path.file_name() {
                 let undone = self.undone_dir().join(name);
@@ -264,17 +266,12 @@ impl HistoryStore {
     pub fn mark_undone(&self, op_id: &str) -> Result<()> {
         let suffix = format!("-{op_id}.json");
         for path in self.active_files()? {
-            let matches = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.ends_with(&suffix))
-                .unwrap_or(false);
-            if matches {
-                std::fs::create_dir_all(self.undone_dir())?;
-                let name = path.file_name().unwrap();
-                std::fs::rename(&path, self.undone_dir().join(name))?;
-                return Ok(());
-            }
+            let Some(name) = path.file_name().filter(|n| n.to_string_lossy().ends_with(&suffix)) else {
+                continue;
+            };
+            std::fs::create_dir_all(self.undone_dir())?;
+            std::fs::rename(&path, self.undone_dir().join(name))?;
+            return Ok(());
         }
         Ok(())
     }

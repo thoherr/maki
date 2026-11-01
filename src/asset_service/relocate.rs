@@ -4,6 +4,7 @@
 //! Free functions and result types live in the parent `asset_service` module.
 
 use super::*;
+use crate::error::MakiError;
 
 impl AssetService {
     // ═══ RELOCATE & UPDATE LOCATION ═══
@@ -13,6 +14,13 @@ impl AssetService {
     /// Copies variant files and recipe files, verifies integrity, updates metadata.
     /// With `remove_source`, deletes source files after successful copy.
     /// With `dry_run`, only reports what would happen.
+    ///
+    /// Dual-store order (architecture audit F2): files are copied first, then
+    /// the new locations are applied to the in-memory `Asset`, the sidecar is
+    /// saved (source of truth), and finally every catalog row change runs in
+    /// one transaction. A failure in the catalog step leaves the sidecar ahead
+    /// of the catalog, which `maki doctor` / `rebuild-catalog` reconcile; a
+    /// failure never leaves half of an asset's rows updated.
     pub fn relocate(
         &self,
         asset_id: &str,
@@ -29,13 +37,12 @@ impl AssetService {
         // Resolve asset
         let full_id = catalog.resolve_asset_id_required(asset_id)?;
         let asset_uuid: Uuid = full_id.parse()?;
-        let asset = metadata_store.load(asset_uuid)?;
+        let mut asset = metadata_store.load(asset_uuid)?;
 
         // Resolve target volume
         let target_volume = registry.resolve_volume(target_volume_label)?;
         if !target_volume.mount_point.exists() {
-            bail!("target volume '{}' is offline (mount point {} not found)",
-                target_volume.label, target_volume.mount_point.display());
+            return Err(offline_mount_point(&target_volume).into());
         }
 
         // Get all volumes for resolving source paths
@@ -58,8 +65,7 @@ impl AssetService {
                         "Source volume {} not found in registry", loc.volume_id
                     ))?;
                 if !source_vol.mount_point.exists() {
-                    bail!("source volume '{}' is offline (mount point {} not found)",
-                        source_vol.label, source_vol.mount_point.display());
+                    return Err(offline_mount_point(&source_vol).into());
                 }
 
                 let source_path = source_vol.mount_point.join(&loc.relative_path);
@@ -86,8 +92,7 @@ impl AssetService {
                     "Source volume {} not found in registry", recipe.location.volume_id
                 ))?;
             if !source_vol.mount_point.exists() {
-                bail!("source volume '{}' is offline (mount point {} not found)",
-                    source_vol.label, source_vol.mount_point.display());
+                return Err(offline_mount_point(&source_vol).into());
             }
 
             let source_path = source_vol.mount_point.join(&recipe.location.relative_path);
@@ -181,14 +186,14 @@ impl AssetService {
             copied += 1;
         }
 
-        // Phase 2: Update metadata
-        let mut asset = metadata_store.load(asset_uuid)?;
-        catalog.ensure_volume(&target_volume)?;
+        // Phase 2: Apply the new locations to the in-memory asset and collect
+        // the catalog row changes they imply (applied together below).
+        let mut new_locations: Vec<(String, FileLocation)> = Vec::new();
+        let mut recipe_moves: Vec<(Uuid, PathBuf)> = Vec::new();
 
         for entry in &plan {
             match &entry.kind {
                 FileCopyKind::Variant => {
-                    // Add new location to the variant
                     let new_loc = FileLocation {
                         volume_id: target_volume.id,
                         relative_path: entry.source_relative_path.clone(),
@@ -201,98 +206,125 @@ impl AssetService {
                         });
                         if !already_has {
                             variant.locations.push(new_loc.clone());
-                            catalog.insert_file_location(&entry.content_hash, &new_loc)?;
+                            new_locations.push((entry.content_hash.clone(), new_loc));
                         }
                     }
                 }
                 FileCopyKind::Recipe { recipe_id } => {
-                    // Update recipe location to target volume
                     if let Some(recipe) = asset.recipes.iter_mut().find(|r| r.id == *recipe_id) {
                         recipe.location.volume_id = target_volume.id;
                         recipe.location.relative_path = entry.source_relative_path.clone();
                     }
-                    catalog.update_recipe_location(
-                        &recipe_id.to_string(),
-                        &target_volume.id.to_string(),
-                        &entry.source_relative_path.to_string_lossy(),
-                    )?;
+                    recipe_moves.push((*recipe_id, entry.source_relative_path.clone()));
                 }
             }
         }
 
-        // Phase 2.5: Create XMP sidecars for variants without recipes (if requested)
-        if create_sidecars {
-            let naming = self.config.writeback.sidecar_naming;
-            let online: HashMap<Uuid, PathBuf> =
-                [(target_volume.id, target_volume.mount_point.clone())].into_iter().collect();
-            let mut created_here = Vec::new();
-            create_missing_sidecars(
-                &mut asset,
-                &catalog,
-                &content_store,
-                &online,
-                Some(target_volume.id),
-                naming,
-                true,
-                |path, status| {
-                    let rel = path
-                        .strip_prefix(&target_volume.mount_point)
-                        .unwrap_or(path)
-                        .display()
-                        .to_string();
-                    match status {
-                        SidecarStatus::Created => created_here.push(format!("Created sidecar {rel}")),
-                        SidecarStatus::ExistsUnregistered => created_here.push(format!(
-                            "Skipped sidecar {rel} (file exists on disk, not imported)"
-                        )),
-                        SidecarStatus::WouldCreate => {}
-                    }
-                },
-            )?;
-            copied += created_here.iter().filter(|a| a.starts_with("Created")).count();
-            actions.extend(created_here);
-        }
+        // Phase 2.5 + persist. `create_missing_sidecars` writes XMP files and
+        // inserts their recipe rows itself, so it runs inside the transaction;
+        // the sidecar save (source of truth) precedes the location/recipe rows,
+        // and any row failure rolls every row change back.
+        let mut created_here = Vec::new();
+        catalog.with_tx(|c| {
+            c.ensure_volume(&target_volume)?;
 
-        metadata_store.save(&asset)?;
+            if create_sidecars {
+                let naming = self.config.writeback.sidecar_naming;
+                let online: HashMap<Uuid, PathBuf> =
+                    [(target_volume.id, target_volume.mount_point.clone())].into_iter().collect();
+                create_missing_sidecars(
+                    &mut asset,
+                    c,
+                    &content_store,
+                    &online,
+                    Some(target_volume.id),
+                    naming,
+                    true,
+                    |path, status| {
+                        let rel = path
+                            .strip_prefix(&target_volume.mount_point)
+                            .unwrap_or(path)
+                            .display()
+                            .to_string();
+                        match status {
+                            SidecarStatus::Created => created_here.push(format!("Created sidecar {rel}")),
+                            SidecarStatus::ExistsUnregistered => created_here.push(format!(
+                                "Skipped sidecar {rel} (file exists on disk, not imported)"
+                            )),
+                            SidecarStatus::WouldCreate => {}
+                        }
+                    },
+                )?;
+            }
 
-        // Phase 3: Remove sources (only if --remove-source)
+            metadata_store.save(&asset)?;
+
+            for (content_hash, loc) in &new_locations {
+                c.insert_file_location(content_hash, loc)?;
+            }
+            for (recipe_id, relative_path) in &recipe_moves {
+                c.update_recipe_location(
+                    &recipe_id.to_string(),
+                    &target_volume.id.to_string(),
+                    &relative_path.to_string_lossy(),
+                )?;
+            }
+            Ok(())
+        })?;
+        copied += created_here.iter().filter(|a| a.starts_with("Created")).count();
+        actions.extend(created_here);
+
+        // Phase 3: Remove sources (only if --remove-source). Files are removed
+        // one by one; whatever was removed before a failure is reflected in
+        // the sidecar and the catalog (one transaction) before the error is
+        // returned, so the stores never claim a file that is gone.
         let mut removed = 0usize;
         if remove_source {
+            let mut removed_entries: Vec<&FileCopyPlan> = Vec::new();
+            let mut removal_error: Option<anyhow::Error> = None;
             for entry in &plan {
-                // Delete source file
                 if entry.source_path.exists() {
-                    std::fs::remove_file(&entry.source_path)
-                        .with_context(|| format!(
+                    if let Err(e) = std::fs::remove_file(&entry.source_path) {
+                        removal_error = Some(anyhow::Error::new(e).context(format!(
                             "Failed to remove source file {}",
                             entry.source_path.display()
-                        ))?;
+                        )));
+                        break;
+                    }
                 }
+                removed_entries.push(entry);
+            }
 
-                match &entry.kind {
-                    FileCopyKind::Variant => {
-                        // Remove old location from variant
-                        if let Some(variant) = asset.variants.iter_mut().find(|v| v.content_hash == entry.content_hash) {
-                            variant.locations.retain(|l| {
-                                !(l.volume_id == entry.source_volume_id
-                                    && l.relative_path == entry.source_relative_path)
-                            });
-                        }
-                        catalog.delete_file_location(
+            for entry in &removed_entries {
+                if let FileCopyKind::Variant = entry.kind {
+                    if let Some(variant) = asset.variants.iter_mut().find(|v| v.content_hash == entry.content_hash) {
+                        variant.locations.retain(|l| {
+                            !(l.volume_id == entry.source_volume_id
+                                && l.relative_path == entry.source_relative_path)
+                        });
+                    }
+                }
+                // Recipe locations were already moved to the target in Phase 2.
+            }
+
+            metadata_store.save(&asset)?;
+            catalog.with_tx(|c| {
+                for entry in &removed_entries {
+                    if let FileCopyKind::Variant = entry.kind {
+                        c.delete_file_location(
                             &entry.content_hash,
                             &entry.source_volume_id.to_string(),
                             &entry.source_relative_path.to_string_lossy(),
                         )?;
                     }
-                    FileCopyKind::Recipe { .. } => {
-                        // Recipe location already updated to target in Phase 2
-                    }
                 }
+                Ok(())
+            })?;
 
-                removed += 1;
+            if let Some(e) = removal_error {
+                return Err(e);
             }
-
-            // Save again after removals
-            metadata_store.save(&asset)?;
+            removed = removed_entries.len();
 
             // Update action messages
             actions = actions
@@ -483,4 +515,13 @@ impl AssetService {
         }
     }
 
+}
+
+/// The typed error for a volume whose mount point is not present
+/// (`volume '<label>' is offline (mount point <path> not found)`).
+fn offline_mount_point(volume: &Volume) -> MakiError {
+    MakiError::offline(
+        volume.label.clone(),
+        Some(format!("mount point {} not found", volume.mount_point.display())),
+    )
 }

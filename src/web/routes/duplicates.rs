@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use askama::Template;
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 
 use crate::device_registry::DeviceRegistry;
+use crate::error::MakiError;
 
 use super::super::templates::{DuplicatesPage, FormatOption, VolumeOption};
 use super::super::AppState;
@@ -164,7 +164,7 @@ pub async fn dedup_remove_location_api(
             |row| row.get(0),
         )?;
         if location_count <= 1 {
-            anyhow::bail!("cannot remove the last copy of a file");
+            return Err(MakiError::Conflict("cannot remove the last copy of a file".into()).into());
         }
 
         let registry = DeviceRegistry::new(&state.catalog_root);
@@ -172,9 +172,9 @@ pub async fn dedup_remove_location_api(
         let vol = volumes
             .iter()
             .find(|v| v.id.to_string() == req.volume_id)
-            .ok_or_else(|| anyhow::anyhow!("volume not found: {}", req.volume_id))?;
+            .ok_or_else(|| MakiError::not_found("volume", &req.volume_id))?;
         if !vol.is_online {
-            anyhow::bail!("volume '{}' is offline", vol.label);
+            return Err(MakiError::offline(&vol.label, None).into());
         }
 
         let trash = crate::trash::Trash::from_config(&state.catalog_root, false);
@@ -239,15 +239,7 @@ pub async fn dedup_remove_location_api(
         }
 
         Ok::<_, anyhow::Error>(serde_json::json!({"removed": true, "recipes_removed": recipes_removed}))
-    }, |e| {
-        let msg = format!("{e:#}");
-        let status = if msg.contains("cannot remove") || msg.contains("offline") {
-            StatusCode::BAD_REQUEST
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
-        (status, msg).into_response()
-    })
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }

@@ -17,6 +17,22 @@ nits that clippy already reports are excluded.
 One finding was a defect and is fixed in the same change as this report
 (see F1). Everything else is a proposal; nothing else was changed.
 
+## Status
+
+- Phase 0 (quick wins, clippy gate): done, commit `a1192c6` (2026-10-31).
+- Phase 1 (correctness): done 2026-11-01 — `Catalog::with_tx` around every
+  multi-row writer, `run_migrations() -> Result` with per-version
+  transactions, schema v13 (faces/people/embeddings/stacks/collections
+  DDL feature-independent), `resync_asset_from_sidecar`, store-owned
+  atomic YAML persistence (`FaceStore`/`StackStore`/`CollectionStore::open`),
+  `MakiError` with exit codes 3/4 and HTTP mapping, doctor exit status.
+  Residue carried to Phase 2: `Catalog::delete_asset_rows` removes
+  collection memberships SQLite-only (`Catalog` has no root to persist
+  `collections.yaml`); a store mutator that joins an enclosing
+  transaction writes its YAML before the outer COMMIT; the stack web
+  routes still answer 400 for "already stacked" (web test fixes it).
+- Phases 2–3: open.
+
 ## Verdict in one paragraph
 
 The intended three-layer picture (interface, core library, storage) is

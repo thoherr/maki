@@ -19,6 +19,7 @@ impl Catalog {
              DROP TABLE IF EXISTS embeddings;
              DROP TABLE IF EXISTS collection_assets;
              DROP TABLE IF EXISTS collections;
+             DROP TABLE IF EXISTS stacks;
              DROP TABLE IF EXISTS file_locations;
              DROP TABLE IF EXISTS recipes;
              DROP TABLE IF EXISTS variants;

@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use askama::Template;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 
+use crate::error::MakiError;
 use crate::web::templates::{SavedSearchEntry, SavedSearchesPage};
 use crate::web::AppState;
 
@@ -82,23 +82,13 @@ pub async fn delete_saved_search(
         let before = file.searches.len();
         file.searches.retain(|s| s.name != name);
         if file.searches.len() == before {
-            anyhow::bail!("no saved search named '{name}'");
+            return Err(MakiError::not_found("saved search", &name).into());
         }
         crate::saved_search::save(&state.catalog_root, &file)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"status": "deleted", "name": name}))
-    }, not_found_or_500)
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
-}
-
-/// `404` for a missing saved search, generic `500` otherwise.
-fn not_found_or_500(e: anyhow::Error) -> Response {
-    let msg = format!("{e:#}");
-    if msg.contains("no saved search") {
-        (StatusCode::NOT_FOUND, msg).into_response()
-    } else {
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
-    }
 }
 
 /// GET /saved-searches — saved searches management page.
@@ -146,11 +136,11 @@ pub async fn toggle_saved_search_favorite(
             .searches
             .iter_mut()
             .find(|s| s.name == name)
-            .ok_or_else(|| anyhow::anyhow!("no saved search named '{name}'"))?;
+            .ok_or_else(|| MakiError::not_found("saved search", &name))?;
         entry.favorite = req.favorite;
         crate::saved_search::save(&state.catalog_root, &file)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"status": "updated", "name": name, "favorite": req.favorite}))
-    }, not_found_or_500)
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }
@@ -174,24 +164,17 @@ pub async fn rename_saved_search(
         }
         let mut file = crate::saved_search::load(&state.catalog_root)?;
         if file.searches.iter().any(|s| s.name == new_name) {
-            anyhow::bail!("a saved search named '{new_name}' already exists");
+            return Err(MakiError::Conflict(format!("a saved search named '{new_name}' already exists")).into());
         }
         let entry = file
             .searches
             .iter_mut()
             .find(|s| s.name == name)
-            .ok_or_else(|| anyhow::anyhow!("no saved search named '{name}'"))?;
+            .ok_or_else(|| MakiError::not_found("saved search", &name))?;
         entry.name = new_name.clone();
         crate::saved_search::save(&state.catalog_root, &file)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"status": "renamed", "old_name": name, "new_name": new_name}))
-    }, |e| {
-        let msg = format!("{e:#}");
-        if msg.contains("already exists") {
-            (StatusCode::CONFLICT, msg).into_response()
-        } else {
-            not_found_or_500(e)
-        }
-    })
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }

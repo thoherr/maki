@@ -184,6 +184,8 @@ fn upload_query_image_inner(
             thumbnail,
         })
     })();
+    // Scratch directory for the uploaded query image: best-effort cleanup,
+    // the outcome does not depend on it.
     let _ = std::fs::remove_dir_all(&scratch);
     outcome
 }

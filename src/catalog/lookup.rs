@@ -61,13 +61,13 @@ impl Catalog {
         let mut stmt = self.conn.prepare(
             "SELECT id FROM assets WHERE id LIKE ?1",
         )?;
-        let ids: Vec<String> = stmt
+        let mut ids: Vec<String> = stmt
             .query_map(rusqlite::params![pattern], |row| row.get(0))?
             .collect::<std::result::Result<_, _>>()?;
 
         match ids.len() {
             0 => Ok(None),
-            1 => Ok(Some(ids.into_iter().next().unwrap())),
+            1 => Ok(ids.pop()),
             n => anyhow::bail!(
                 "Ambiguous asset ID prefix '{prefix}': matches {n} assets"
             ),
@@ -79,7 +79,7 @@ impl Catalog {
     /// ambiguous-prefix error passes through unchanged).
     pub fn resolve_asset_id_required(&self, prefix: &str) -> Result<String> {
         self.resolve_asset_id(prefix)?
-            .ok_or_else(|| anyhow::anyhow!("no asset found matching '{prefix}'"))
+            .ok_or_else(|| crate::error::MakiError::not_found("asset", prefix).into())
     }
 
     /// Load full asset details from the catalog (variants + locations).
@@ -140,29 +140,10 @@ impl Catalog {
              WHERE fl.content_hash = ?1",
         )?;
 
-        let variants: Vec<VariantDetails> = variants
-            .into_iter()
-            .map(|mut v| {
-                let locs: Vec<LocationDetails> = lstmt
-                    .query_map(rusqlite::params![v.content_hash], |lrow| {
-                        Ok(LocationDetails {
-                            relative_path: lrow.get(0)?,
-                            volume_label: lrow.get(1)?,
-                            volume_id: lrow.get(2)?,
-                            volume_purpose: lrow.get(3)?,
-                            verified_at: lrow.get(4)?,
-                        })
-                    })
-                    .unwrap_or_else(|_| {
-                        // Return an empty iterator wrapper on error
-                        panic!("failed to query locations")
-                    })
-                    .filter_map(|r| r.ok())
-                    .collect();
-                v.locations = locs;
-                v
-            })
-            .collect();
+        let mut variants = variants;
+        for v in &mut variants {
+            v.locations = Self::load_locations_for_hash_checked(&mut lstmt, &v.content_hash)?;
+        }
 
         // Load recipes linked to any variant of this asset
         let mut rstmt = self.conn.prepare(
@@ -186,8 +167,7 @@ impl Catalog {
                     pending_writeback: rrow.get::<_, i32>(7).unwrap_or(0) != 0,
                 })
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<std::result::Result<_, _>>()?;
 
         Ok(Some(AssetDetails {
             id,
@@ -276,12 +256,16 @@ impl Catalog {
         Ok(())
     }
 
-    /// Load enriched location details for a variant hash.
-    pub(super) fn load_locations_for_hash(
+    /// Load enriched location details for a variant hash. `lstmt` is the
+    /// prepared `SELECT fl.relative_path, vol.label, vol.id, vol.purpose,
+    /// fl.verified_at … WHERE fl.content_hash = ?1` statement. Query and
+    /// row-decoding errors propagate — a malformed row is a catalog
+    /// problem to report, not a location to drop silently.
+    pub(super) fn load_locations_for_hash_checked(
         lstmt: &mut rusqlite::Statement,
         content_hash: &str,
-    ) -> Vec<LocationDetails> {
-        lstmt
+    ) -> Result<Vec<LocationDetails>> {
+        let locs = lstmt
             .query_map(rusqlite::params![content_hash], |lrow| {
                 Ok(LocationDetails {
                     relative_path: lrow.get(0)?,
@@ -290,10 +274,9 @@ impl Catalog {
                     volume_purpose: lrow.get(3)?,
                     verified_at: lrow.get(4)?,
                 })
-            })
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(locs)
     }
 
     /// Compute `volume_count` and `same_volume_groups` from locations.

@@ -47,24 +47,15 @@ pub async fn create_collection_api(
         }
         let description = req.description.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
         let catalog = state.catalog()?;
-        let col_store = crate::collection::CollectionStore::new(catalog.conn());
+        let col_store = crate::collection::CollectionStore::open(catalog.conn(), &state.catalog_root);
         let collection = col_store.create(&name, description)?;
-        let yaml = col_store.export_all()?;
-        crate::collection::save_yaml(&state.catalog_root, &yaml)?;
         state.dropdown_cache.invalidate_collections();
         Ok::<_, anyhow::Error>(serde_json::json!({
             "id": collection.id.to_string(),
             "name": collection.name,
             "description": collection.description,
         }))
-    }, |e| {
-        let msg = format!("{e:#}");
-        if msg.contains("UNIQUE constraint") || msg.contains("already exists") {
-            (StatusCode::CONFLICT, format!("Collection already exists: {msg}")).into_response()
-        } else {
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
-        }
-    })
+    }, super::err::mapped)
     .await?;
     Ok((StatusCode::CREATED, Json(json)).into_response())
 }
@@ -94,18 +85,16 @@ pub async fn batch_remove_from_collection(
     Json(req): Json<BatchCollectionRequest>,
 ) -> Result<Response, Response> {
     let state = state.clone();
-    let json = super::spawn_catalog_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let col_store = crate::collection::CollectionStore::new(catalog.conn());
+        let col_store = crate::collection::CollectionStore::open(catalog.conn(), &state.catalog_root);
         let removed = col_store.remove_assets(&req.collection, &req.asset_ids)?;
-        let yaml = col_store.export_all()?;
-        crate::collection::save_yaml(&state.catalog_root, &yaml)?;
         state.dropdown_cache.invalidate_collections();
         Ok::<_, anyhow::Error>(serde_json::json!({
             "removed": removed,
             "collection": req.collection,
         }))
-    })
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }
@@ -116,18 +105,16 @@ pub async fn batch_add_to_collection(
     Json(req): Json<BatchCollectionRequest>,
 ) -> Result<Response, Response> {
     let state = state.clone();
-    let json = super::spawn_catalog_blocking(move || {
+    let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let col_store = crate::collection::CollectionStore::new(catalog.conn());
+        let col_store = crate::collection::CollectionStore::open(catalog.conn(), &state.catalog_root);
         let added = col_store.add_assets(&req.collection, &req.asset_ids)?;
-        let yaml = col_store.export_all()?;
-        crate::collection::save_yaml(&state.catalog_root, &yaml)?;
         state.dropdown_cache.invalidate_collections();
         Ok::<_, anyhow::Error>(serde_json::json!({
             "added": added,
             "collection": req.collection,
         }))
-    })
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }

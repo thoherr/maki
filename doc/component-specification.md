@@ -2,7 +2,7 @@
 
 > **As of v4.12.2 (October 2026).** Reviewed against the code at that
 > version: the data model below matches `src/models/*.rs` and the SQLite
-> schema in `src/catalog/schema.rs` (schema v12), the routes list is
+> schema in `src/catalog/schema.rs` (schema v13), the routes list is
 > generated from `build_router` in `src/web/mod.rs`, and the config
 > section mirrors `CatalogConfig` in `src/config.rs`. Per-release
 > narrative lives in `CHANGELOG.md` and `doc/specification.md`; the user
@@ -211,7 +211,7 @@ recipes:
 
 **Responsibility**: fast queryable index over all metadata. Rebuilt from sidecar files.
 
-**Tables** mirror the data model: `assets` (+ the `assets_fts` and `assets_tags_fts` FTS5 virtual tables and their triggers), `variants`, `file_locations`, `volumes`, `recipes`, `stacks`, `collections`, `collection_assets`, `embeddings` (created unconditionally — the `embed:` filter works in every build), `faces` and `people` (with `--features ai`), and `schema_version`. `assets_fts` indexes name, filename, description and source metadata for free-text terms; `assets_tags_fts` (schema v12) is the trigram index behind hierarchy-aware `tag:` patterns, used when `Catalog::plan_tag_index` judges the entry selective enough. `facet_counts()` additionally materialises the ids of the current result set (plus rating, label, format, year and geo flag) into the per-connection TEMP table `facet_match` once per request and aggregates every facet from it. `SCHEMA_VERSION` is 12; `run_migrations()` applies version-guarded `if current < N` blocks and is executed by `maki init`, `maki migrate` and `maki rebuild-catalog` only — every other command (and the web server) just verifies the stored version at startup and exits if it is behind.
+**Tables** mirror the data model: `assets` (+ the `assets_fts` and `assets_tags_fts` FTS5 virtual tables and their triggers), `variants`, `file_locations`, `volumes`, `recipes`, `stacks`, `collections`, `collection_assets`, `embeddings`, `faces` and `people` (all created unconditionally since schema v13, so a catalog initialised by a standard build is complete for a later Pro build; the `embed:` filter works in every build), and `schema_version`. `assets_fts` indexes name, filename, description and source metadata for free-text terms; `assets_tags_fts` (schema v12) is the trigram index behind hierarchy-aware `tag:` patterns, used when `Catalog::plan_tag_index` judges the entry selective enough. `facet_counts()` additionally materialises the ids of the current result set (plus rating, label, format, year and geo flag) into the per-connection TEMP table `facet_match` once per request and aggregates every facet from it. `SCHEMA_VERSION` is 13; `run_migrations() -> Result<()>` runs one `migrate_vN()` per version above the stored one, each in its own transaction with the version stamp inside it (a failing step is rolled back and named in the error), and is executed by `maki init`, `maki migrate` and `maki rebuild-catalog` only — every other command (and the web server) just verifies the stored version at startup and exits if it is behind.
 
 This is a **derived cache**, not the source of truth. Running `maki rebuild-catalog` regenerates it from sidecar files, `collections.yaml`, `stacks.yaml`, `faces.yaml`, `people.yaml`, and embedding binary files. This means:
 - No data loss if the SQLite file is deleted.
@@ -652,7 +652,7 @@ After each write, the file is re-hashed and the recipe's `content_hash` is updat
 
 **Responsibility**: verify (and optionally repair) the dual-store invariant — every sidecar field must match its SQLite row, both directions, including the denormalized columns.
 
-**Module**: `src/doctor.rs` — `run_doctor(catalog_root, sample, repair, on_issue) -> DoctorReport`. Lists sidecar ids and catalog ids, reports `missing_in_catalog`, `missing_sidecar`, `unreadable_sidecars` and per-asset `mismatched` fields (`AssetMismatch`); `--sample N` checks a strided subset of N assets, `--repair` rebuilds the SQLite side from YAML for flagged assets (`repaired` count). `DoctorReport::issues()` / `healthy()` drive the exit status; `--json` serializes the report.
+**Module**: `src/doctor.rs` — `run_doctor(catalog_root, sample, repair, on_issue) -> DoctorReport`. Lists sidecar ids and catalog ids, reports `missing_in_catalog`, `missing_sidecar`, `unreadable_sidecars` and per-asset `mismatched` fields (`AssetMismatch`); `--sample N` checks a strided subset of N assets, `--repair` rebuilds the SQLite side from YAML for flagged assets (`repaired` count). `DoctorReport::unresolved()` (issues minus repaired) drives the exit status — 1 via `MakiError::CheckFailed` when anything remains, also with `--json`; `--json` serializes the report.
 
 ### 24. Watch
 

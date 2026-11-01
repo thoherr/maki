@@ -2,7 +2,14 @@
 //!
 //! Stores float vectors as BLOBs for visual similarity search.
 //! Composite primary key `(asset_id, model)` allows storing embeddings from
-//! different models without collision.
+//! different models without collision. The table is created (and an old
+//! single-key table converted) by the catalog schema migrations (v13),
+//! so a store never has to initialise anything.
+//!
+//! The SQLite rows are the derived cache; the per-asset `.bin` files under
+//! `<catalog>/embeddings/<model>/` written by [`write_embedding_binary`]
+//! are what `rebuild-catalog` restores from, so callers must surface a
+//! failed binary write exactly like a failed row write.
 //! Only compiled when the `ai` feature is enabled.
 
 use anyhow::{Context, Result};
@@ -14,77 +21,10 @@ pub struct EmbeddingStore<'a> {
 }
 
 impl<'a> EmbeddingStore<'a> {
-    /// Create a new EmbeddingStore backed by the given connection.
+    /// Create a new EmbeddingStore backed by the given connection. The
+    /// `embeddings` table is guaranteed by the catalog schema (v13).
     pub fn new(conn: &'a Connection) -> Self {
         Self { conn }
-    }
-
-    /// Initialize the embeddings table (idempotent).
-    /// Migrates old single-PK schema to composite PK if needed.
-    pub fn initialize(conn: &Connection) -> Result<()> {
-        // Check if table exists and has old schema (asset_id TEXT PRIMARY KEY).
-        let needs_migration = Self::has_old_schema(conn);
-
-        if needs_migration {
-            // Migrate: rename old table, create new, copy data, drop old.
-            conn.execute_batch(
-                "ALTER TABLE embeddings RENAME TO embeddings_old;
-                 CREATE TABLE embeddings (
-                     asset_id TEXT NOT NULL,
-                     model TEXT NOT NULL DEFAULT 'siglip-vit-b16-256',
-                     embedding BLOB NOT NULL,
-                     PRIMARY KEY (asset_id, model)
-                 );
-                 INSERT INTO embeddings (asset_id, model, embedding)
-                     SELECT asset_id, COALESCE(model, 'siglip-vit-b16-256'), embedding
-                     FROM embeddings_old;
-                 DROP TABLE embeddings_old;"
-            )
-            .context("Failed to migrate embeddings table to composite PK")?;
-        } else {
-            conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS embeddings (
-                    asset_id TEXT NOT NULL,
-                    model TEXT NOT NULL DEFAULT 'siglip-vit-b16-256',
-                    embedding BLOB NOT NULL,
-                    PRIMARY KEY (asset_id, model)
-                )",
-            )
-            .context("Failed to create embeddings table")?;
-        }
-        Ok(())
-    }
-
-    /// Check if the old schema (asset_id TEXT PRIMARY KEY, no composite) exists.
-    fn has_old_schema(conn: &Connection) -> bool {
-        // Table must exist
-        let table_exists: bool = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='embeddings'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|c| c > 0)
-            .unwrap_or(false);
-
-        if !table_exists {
-            return false;
-        }
-
-        // Check if PK is single-column (old schema) by looking at table_info.
-        // Old schema: asset_id is pk=1, model is pk=0.
-        // New schema: asset_id is pk=1, model is pk=2.
-        let mut stmt = match conn.prepare("PRAGMA table_info(embeddings)") {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
-        let pk_count: i32 = stmt
-            .query_map([], |row| row.get::<_, i32>(5)) // column 5 = pk
-            .ok()
-            .map(|rows| rows.filter_map(|r| r.ok()).filter(|pk| *pk > 0).count() as i32)
-            .unwrap_or(0);
-
-        pk_count == 1
     }
 
     /// Store an embedding for an asset with a specific model (insert or replace).
@@ -440,6 +380,9 @@ pub fn delete_embedding_binary(
     asset_id: &str,
 ) {
     let path = embedding_binary_path(catalog_root, model, asset_id);
+    // A missing file is the desired end state; nothing else is reported
+    // because the row deletion that precedes this is what the caller
+    // checks.
     let _ = std::fs::remove_file(path);
 }
 
@@ -487,16 +430,18 @@ mod tests {
 
     const TEST_MODEL: &str = "siglip-vit-b16-256";
 
-    fn setup_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        EmbeddingStore::initialize(&conn).unwrap();
-        conn
+    /// A real in-memory catalog so the v13 `embeddings` table exists.
+    fn setup_db() -> crate::catalog::Catalog {
+        let catalog = crate::catalog::Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        catalog
     }
 
     #[test]
     fn store_and_retrieve() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
 
         let emb = vec![0.1f32; 768];
         store.store("asset-1", &emb, TEST_MODEL).unwrap();
@@ -508,37 +453,42 @@ mod tests {
 
     #[test]
     fn get_nonexistent() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
         assert!(store.get("nonexistent", TEST_MODEL).unwrap().is_none());
     }
 
     #[test]
     fn has_embedding_true() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
         store.store("asset-1", &vec![0.0; 768], TEST_MODEL).unwrap();
         assert!(store.has_embedding("asset-1", TEST_MODEL));
     }
 
     #[test]
     fn has_embedding_false() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
         assert!(!store.has_embedding("asset-1", TEST_MODEL));
     }
 
     #[test]
     fn count_empty() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
         assert_eq!(store.count(), 0);
     }
 
     #[test]
     fn count_after_insert() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
         store.store("a", &vec![0.0; 768], TEST_MODEL).unwrap();
         store.store("b", &vec![0.0; 768], TEST_MODEL).unwrap();
         assert_eq!(store.count(), 2);
@@ -546,8 +496,9 @@ mod tests {
 
     #[test]
     fn remove_embedding() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
         store.store("asset-1", &vec![0.0; 768], TEST_MODEL).unwrap();
         store.remove("asset-1", TEST_MODEL).unwrap();
         assert!(!store.has_embedding("asset-1", TEST_MODEL));
@@ -555,8 +506,9 @@ mod tests {
 
     #[test]
     fn store_replaces_existing() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
         store.store("asset-1", &vec![1.0; 768], TEST_MODEL).unwrap();
         store.store("asset-1", &vec![2.0; 768], TEST_MODEL).unwrap();
 
@@ -567,8 +519,9 @@ mod tests {
 
     #[test]
     fn find_similar_basic() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
 
         let base = vec![1.0f32; 768];
         let similar = vec![0.9f32; 768];
@@ -587,8 +540,9 @@ mod tests {
 
     #[test]
     fn find_similar_respects_limit() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
 
         for i in 0..10 {
             store
@@ -603,8 +557,9 @@ mod tests {
 
     #[test]
     fn multi_model_embeddings() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
 
         let emb_b = vec![1.0f32; 768];
         let emb_l = vec![2.0f32; 1024];
@@ -642,40 +597,6 @@ mod tests {
     }
 
     #[test]
-    fn migrate_old_schema() {
-        let conn = Connection::open_in_memory().unwrap();
-
-        // Create old-style table with single PK
-        conn.execute_batch(
-            "CREATE TABLE embeddings (
-                asset_id TEXT PRIMARY KEY,
-                embedding BLOB NOT NULL,
-                model TEXT NOT NULL DEFAULT 'siglip-vit-b16-256'
-            )"
-        ).unwrap();
-
-        // Insert some data
-        let emb = embedding_to_blob(&vec![0.5f32; 768]);
-        conn.execute(
-            "INSERT INTO embeddings (asset_id, embedding) VALUES ('a1', ?1)",
-            rusqlite::params![emb],
-        ).unwrap();
-
-        // Run initialize — should migrate
-        EmbeddingStore::initialize(&conn).unwrap();
-
-        // Data should be preserved
-        let store = EmbeddingStore::new(&conn);
-        let got = store.get("a1", "siglip-vit-b16-256").unwrap().unwrap();
-        assert_eq!(got.len(), 768);
-        assert!((got[0] - 0.5).abs() < 1e-6);
-
-        // Should now support multi-model
-        store.store("a1", &vec![1.0; 1024], "siglip-vit-l16-256").unwrap();
-        assert_eq!(store.count(), 2);
-    }
-
-    #[test]
     fn blob_round_trip() {
         let original = vec![1.5f32, -2.3, 0.0, std::f32::consts::PI];
         let blob = embedding_to_blob(&original);
@@ -685,8 +606,9 @@ mod tests {
 
     #[test]
     fn index_load_and_search() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
 
         // Store some normalized embeddings (dim=4 for simplicity)
         let a = vec![1.0f32, 0.0, 0.0, 0.0];
@@ -700,7 +622,7 @@ mod tests {
         store.store("b", &b, TEST_MODEL).unwrap();
         store.store("c", &c, TEST_MODEL).unwrap();
 
-        let index = EmbeddingIndex::load(&conn, TEST_MODEL, 4).unwrap();
+        let index = EmbeddingIndex::load(conn, TEST_MODEL, 4).unwrap();
         assert_eq!(index.len(), 3);
 
         let results = index.search(&a, 2, Some("a"));
@@ -711,11 +633,12 @@ mod tests {
 
     #[test]
     fn index_upsert() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
         store.store("a", &[1.0, 0.0, 0.0], TEST_MODEL).unwrap();
 
-        let mut index = EmbeddingIndex::load(&conn, TEST_MODEL, 3).unwrap();
+        let mut index = EmbeddingIndex::load(conn, TEST_MODEL, 3).unwrap();
         assert_eq!(index.len(), 1);
 
         // Insert new
@@ -733,8 +656,9 @@ mod tests {
 
     #[test]
     fn index_search_empty() {
-        let conn = setup_db();
-        let index = EmbeddingIndex::load(&conn, TEST_MODEL, 768).unwrap();
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let index = EmbeddingIndex::load(conn, TEST_MODEL, 768).unwrap();
         assert!(index.is_empty());
         let results = index.search(&vec![1.0; 768], 10, None);
         assert!(results.is_empty());
@@ -742,12 +666,13 @@ mod tests {
 
     #[test]
     fn index_skips_wrong_dim() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
         store.store("a", &vec![1.0; 768], TEST_MODEL).unwrap();
         store.store("b", &vec![1.0; 1024], TEST_MODEL).unwrap(); // wrong dim for 768 index
 
-        let index = EmbeddingIndex::load(&conn, TEST_MODEL, 768).unwrap();
+        let index = EmbeddingIndex::load(conn, TEST_MODEL, 768).unwrap();
         assert_eq!(index.len(), 1); // only 'a' loaded
     }
 
@@ -810,16 +735,18 @@ mod tests {
 
     #[test]
     fn list_models_empty() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
         let models = store.list_models().unwrap();
         assert!(models.is_empty());
     }
 
     #[test]
     fn list_models_returns_distinct_sorted() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
 
         store.store("a1", &vec![1.0; 768], "siglip-vit-b16-256").unwrap();
         store.store("a2", &vec![1.0; 768], "siglip-vit-b16-256").unwrap();
@@ -831,16 +758,18 @@ mod tests {
 
     #[test]
     fn all_embeddings_for_model_empty() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
         let results = store.all_embeddings_for_model(TEST_MODEL).unwrap();
         assert!(results.is_empty());
     }
 
     #[test]
     fn all_embeddings_for_model_returns_correct_data() {
-        let conn = setup_db();
-        let store = EmbeddingStore::new(&conn);
+        let catalog = setup_db();
+        let conn = catalog.conn();
+        let store = EmbeddingStore::new(conn);
 
         let emb1 = vec![1.0f32; 768];
         let emb2 = vec![2.0f32; 768];

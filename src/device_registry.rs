@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use uuid::Uuid;
 
+use crate::error::MakiError;
 use crate::models::{Volume, VolumePurpose, VolumeType};
+use crate::yaml_file;
 
 /// Manages volume registration and online/offline detection.
 pub struct DeviceRegistry {
@@ -23,9 +25,7 @@ impl DeviceRegistry {
 
     /// Create an empty volumes.yaml file.
     pub fn init(catalog_root: &Path) -> Result<()> {
-        let path = catalog_root.join("volumes.yaml");
-        std::fs::write(path, "[]\n")?;
-        Ok(())
+        yaml_file::save_str_atomic(&catalog_root.join("volumes.yaml"), "[]\n")
     }
 
     fn volumes_path(&self) -> PathBuf {
@@ -38,10 +38,10 @@ impl DeviceRegistry {
         Ok(volumes)
     }
 
+    /// `volumes.yaml` is a source-of-truth file: written atomically
+    /// (temp file + rename) so a crash never leaves it truncated.
     fn save(&self, volumes: &[Volume]) -> Result<()> {
-        let yaml = serde_norway::to_string(volumes)?;
-        std::fs::write(self.volumes_path(), yaml)?;
-        Ok(())
+        yaml_file::save_atomic(&self.volumes_path(), volumes)
     }
 
     /// Register a new volume.
@@ -55,7 +55,10 @@ impl DeviceRegistry {
         let mut volumes = self.load()?;
 
         if volumes.iter().any(|v| v.label == label) {
-            anyhow::bail!("a volume with label '{}' already exists", label);
+            return Err(MakiError::Conflict(format!(
+                "a volume with label '{label}' already exists"
+            ))
+            .into());
         }
 
         let mut volume = Volume::new(label.to_string(), mount_point.to_path_buf(), volume_type);
@@ -84,7 +87,7 @@ impl DeviceRegistry {
                 self.save(&volumes)?;
                 Ok(result)
             }
-            None => anyhow::bail!("no volume found matching '{}'", label_or_id),
+            None => Err(MakiError::not_found("volume", label_or_id).into()),
         }
     }
 
@@ -138,16 +141,19 @@ impl DeviceRegistry {
             return Ok(v.clone());
         }
 
+        // Typed so the CLI exits 3 and the web answers 404 (audit F19),
+        // with the known labels as the hint.
         let labels: Vec<&str> = volumes.iter().map(|v| v.label.as_str()).collect();
-        anyhow::bail!(
-            "no volume found matching '{}'. Known volumes: {}",
-            label_or_id,
-            if labels.is_empty() {
-                "(none)".to_string()
-            } else {
-                labels.join(", ")
-            }
-        )
+        if labels.is_empty() {
+            Err(MakiError::not_found("volume", label_or_id).into())
+        } else {
+            Err(MakiError::not_found_with_hint(
+                "volume",
+                label_or_id,
+                format!("known volumes: {}", labels.join(", ")),
+            )
+            .into())
+        }
     }
 
     /// Remove a volume by label or UUID. Returns the removed volume.
@@ -167,7 +173,7 @@ impl DeviceRegistry {
                 self.save(&volumes)?;
                 Ok(removed)
             }
-            None => anyhow::bail!("no volume found matching '{}'", label_or_id),
+            None => Err(MakiError::not_found("volume", label_or_id).into()),
         }
     }
 
@@ -188,7 +194,7 @@ impl DeviceRegistry {
                 self.save(&volumes)?;
                 Ok(())
             }
-            None => anyhow::bail!("no volume found matching '{}'", label_or_id),
+            None => Err(MakiError::not_found("volume", label_or_id).into()),
         }
     }
 

@@ -32,7 +32,6 @@ pub fn run_faces_command(
             println!("Current recognition model: {current_model}");
 
             let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-            let _ = maki::face_store::FaceStore::initialize(catalog.conn());
             let store = maki::face_store::FaceStore::new(catalog.conn());
             println!("Total faces detected: {}", store.total_faces());
             println!("Total people: {}", store.total_people());
@@ -172,8 +171,7 @@ pub fn run_faces_command(
         }
         FacesCommands::Cluster { query, asset, volume, threshold, min_confidence, apply } => {
             let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-            let _ = maki::face_store::FaceStore::initialize(catalog.conn());
-            let face_store = maki::face_store::FaceStore::new(catalog.conn());
+            let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
 
             // CLI threshold/min_confidence args are f32 (clap default for `--threshold`);
             // config carries f64 since v4.5.5 (for clean TOML round-trips). Cast to f32
@@ -207,10 +205,6 @@ pub fn run_faces_command(
 
             if apply {
                 let result = face_store.auto_cluster(thresh, min_conf, scope)?;
-                // Persist faces/people YAML
-                if let Err(e) = face_store.save_all_yaml(&catalog_root) {
-                    eprintln!("  Warning: failed to save faces/people YAML: {e:#}");
-                }
                 if ctx.json {
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 } else {
@@ -244,8 +238,7 @@ pub fn run_faces_command(
         }
         FacesCommands::People => {
             let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-            let _ = maki::face_store::FaceStore::initialize(catalog.conn());
-            let face_store = maki::face_store::FaceStore::new(catalog.conn());
+            let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
 
             let people = face_store.list_people()?;
             if ctx.json {
@@ -274,26 +267,22 @@ pub fn run_faces_command(
         }
         FacesCommands::Name { person_id, name } => {
             let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-            let _ = maki::face_store::FaceStore::initialize(catalog.conn());
-            let face_store = maki::face_store::FaceStore::new(catalog.conn());
+            let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
 
             // Resolve person ID prefix
             let full_id = resolve_person_id(&face_store, &person_id)?;
             face_store.name_person(&full_id, &name)?;
-            let _ = face_store.save_all_yaml(&catalog_root);
             let short = &full_id[..8.min(full_id.len())];
             println!("Named person {short} as \"{name}\"");
             Ok(())
         }
         FacesCommands::Merge { target_id, source_id } => {
             let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-            let _ = maki::face_store::FaceStore::initialize(catalog.conn());
-            let face_store = maki::face_store::FaceStore::new(catalog.conn());
+            let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
 
             let target = resolve_person_id(&face_store, &target_id)?;
             let source = resolve_person_id(&face_store, &source_id)?;
             let moved = face_store.merge_people(&target, &source)?;
-            let _ = face_store.save_all_yaml(&catalog_root);
             let short_t = &target[..8.min(target.len())];
             let short_s = &source[..8.min(source.len())];
             println!("Merged {short_s} into {short_t}: {moved} faces moved");
@@ -301,41 +290,33 @@ pub fn run_faces_command(
         }
         FacesCommands::DeletePerson { person_id } => {
             let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-            let _ = maki::face_store::FaceStore::initialize(catalog.conn());
-            let face_store = maki::face_store::FaceStore::new(catalog.conn());
+            let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
 
             let full_id = resolve_person_id(&face_store, &person_id)?;
             face_store.delete_person(&full_id)?;
-            let _ = face_store.save_all_yaml(&catalog_root);
             let short = &full_id[..8.min(full_id.len())];
             println!("Deleted person {short} (faces unassigned)");
             Ok(())
         }
         FacesCommands::Unassign { face_id } => {
             let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-            let _ = maki::face_store::FaceStore::initialize(catalog.conn());
-            let face_store = maki::face_store::FaceStore::new(catalog.conn());
+            let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
 
             // Resolve face ID prefix
             let full_id = resolve_face_id(&face_store, &face_id)?;
             face_store.unassign_face(&full_id)?;
-            let _ = face_store.save_all_yaml(&catalog_root);
             let short = &full_id[..8.min(full_id.len())];
             println!("Unassigned face {short} from its person");
             Ok(())
         }
         FacesCommands::Clean { apply } => {
             let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-            let _ = maki::face_store::FaceStore::initialize(catalog.conn());
-            let face_store = maki::face_store::FaceStore::new(catalog.conn());
+            let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
 
             let count = face_store.count_unassigned_faces()?;
             if ctx.json {
                 if apply {
                     let deleted = face_store.delete_unassigned_faces()?;
-                    if let Err(e) = face_store.save_all_yaml(&catalog_root) {
-                        eprintln!("  Warning: failed to save faces/people YAML: {e:#}");
-                    }
                     println!("{}", serde_json::json!({
                         "dry_run": false,
                         "deleted": deleted,
@@ -350,9 +331,6 @@ pub fn run_faces_command(
                 println!("No unassigned faces to delete.");
             } else if apply {
                 let deleted = face_store.delete_unassigned_faces()?;
-                if let Err(e) = face_store.save_all_yaml(&catalog_root) {
-                    eprintln!("  Warning: failed to save faces/people YAML: {e:#}");
-                }
                 println!("Deleted {deleted} unassigned face record(s).");
             } else {
                 println!("Dry run — would delete {count} unassigned face record(s).");
@@ -439,8 +417,7 @@ pub fn run_faces_command(
         }
         FacesCommands::Similarity { query, asset, volume, min_confidence, top, all } => {
             let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-            let _ = maki::face_store::FaceStore::initialize(catalog.conn());
-            let face_store = maki::face_store::FaceStore::new(catalog.conn());
+            let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
 
             // Resolve scope (same pattern as cluster)
             let scoped_ids: Option<Vec<String>> = if query.is_some() || asset.is_some() || volume.is_some() {
@@ -592,11 +569,10 @@ pub fn run_faces_command(
         }
         FacesCommands::Export => {
             let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-            let _ = maki::face_store::FaceStore::initialize(catalog.conn());
-            let face_store = maki::face_store::FaceStore::new(catalog.conn());
+            let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
 
             // Export faces + people YAML
-            face_store.save_all_yaml(&catalog_root)?;
+            face_store.persist()?;
             let faces_file = face_store.export_all_faces()?;
             let people_file = face_store.export_all_people()?;
 
@@ -638,7 +614,7 @@ pub fn resolve_person_id(face_store: &maki::face_store::FaceStore, prefix: &str)
         .filter(|(p, _)| p.id.starts_with(prefix))
         .collect();
     match matches.len() {
-        0 => anyhow::bail!("no person found matching '{prefix}'"),
+        0 => Err(maki::error::MakiError::not_found("person", prefix).into()),
         1 => Ok(matches[0].0.id.clone()),
         _ => anyhow::bail!("ambiguous person ID prefix '{prefix}' — matches {} people", matches.len()),
     }
@@ -658,7 +634,7 @@ pub fn resolve_face_id(face_store: &maki::face_store::FaceStore, prefix: &str) -
         .query_map(rusqlite::params![format!("{prefix}%")], |row| row.get(0))?
         .collect::<Result<Vec<_>, _>>()?;
     match ids.len() {
-        0 => anyhow::bail!("no face found matching '{prefix}'"),
+        0 => Err(maki::error::MakiError::not_found("face", prefix).into()),
         1 => Ok(ids[0].clone()),
         _ => anyhow::bail!("ambiguous face ID prefix '{prefix}' — matches {} faces", ids.len()),
     }

@@ -147,11 +147,11 @@ impl Catalog {
         let entries: Vec<DuplicateEntry> = entries
             .into_iter()
             .map(|mut e| {
-                e.locations = Self::load_locations_for_hash(&mut lstmt, &e.content_hash);
+                e.locations = Self::load_locations_for_hash_checked(&mut lstmt, &e.content_hash)?;
                 Self::compute_duplicate_stats(&mut e);
-                e
+                Ok(e)
             })
-            .collect();
+            .collect::<Result<_>>()?;
 
         Ok(entries)
     }

@@ -85,6 +85,13 @@ impl DoctorReport {
     pub fn healthy(&self) -> bool {
         self.issues() == 0
     }
+
+    /// Issues that are still present after this run: everything found
+    /// minus what `--repair` fixed. Drives the exit status (non-zero when
+    /// `> 0`), so `doctor --repair` succeeds when it repaired everything.
+    pub fn unresolved(&self) -> usize {
+        self.issues().saturating_sub(self.repaired)
+    }
 }
 
 /// Run the consistency check. `sample` limits the field-by-field
@@ -340,10 +347,8 @@ fn compare_asset(catalog: &Catalog, asset: &Asset) -> Result<Vec<String>> {
 
     // Variant set.
     let stored_variants: HashSet<String> = catalog
-        .conn()
-        .prepare("SELECT content_hash FROM variants WHERE asset_id = ?1")?
-        .query_map(rusqlite::params![id], |r| r.get(0))?
-        .filter_map(|r| r.ok())
+        .list_variant_hashes_for_asset(&id)?
+        .into_iter()
         .collect();
     let sidecar_variants: HashSet<String> =
         asset.variants.iter().map(|v| v.content_hash.clone()).collect();
@@ -433,81 +438,21 @@ fn compare_asset(catalog: &Catalog, asset: &Asset) -> Result<Vec<String>> {
     Ok(fields)
 }
 
-/// Rebuild one asset's catalog rows from its sidecar: re-insert the
-/// asset (upsert), variants, file locations, and recipes; recompute the
-/// denormalized columns. Faces, embeddings, and collection/stack rows
-/// are left untouched.
+/// Rebuild one asset's catalog rows from its sidecar — the shared
+/// [`Catalog::resync_asset_from_sidecar`] routine (asset upsert, variants,
+/// file locations, recipes, denormalized columns, face count), one
+/// transaction. Faces, embeddings, and collection/stack rows are left
+/// untouched.
 fn rebuild_asset_rows(catalog: &Catalog, asset: &Asset) -> Result<()> {
-    let id = asset.id.to_string();
-
-    // Delete derived rows in FK order (recipes/locations before variants).
-    let stored_hashes: Vec<String> = catalog
-        .conn()
-        .prepare("SELECT content_hash FROM variants WHERE asset_id = ?1")?
-        .query_map(rusqlite::params![id], |r| r.get(0))?
-        .filter_map(|r| r.ok())
-        .collect();
-    for hash in &stored_hashes {
-        catalog
-            .conn()
-            .execute("DELETE FROM recipes WHERE variant_hash = ?1", rusqlite::params![hash])?;
-        catalog.conn().execute(
-            "DELETE FROM file_locations WHERE content_hash = ?1",
-            rusqlite::params![hash],
-        )?;
-    }
-    catalog
-        .conn()
-        .execute("DELETE FROM variants WHERE asset_id = ?1", rusqlite::params![id])?;
-
-    // Re-insert from the sidecar (source of truth).
-    catalog.insert_asset(asset)?;
-    for variant in &asset.variants {
-        catalog.insert_variant(variant)?;
-        for loc in &variant.locations {
-            catalog.insert_file_location(&variant.content_hash, loc)?;
-        }
-    }
-    for recipe in &asset.recipes {
-        catalog.insert_recipe(recipe)?;
-    }
-    catalog.update_denormalized_variant_columns(asset)?;
-    let _ = catalog.update_face_count(&id);
-    Ok(())
+    catalog.resync_asset_from_sidecar(asset)
 }
 
 /// Delete every catalog row belonging to a phantom asset (a row with no
 /// sidecar — the sidecar is the source of truth, so the rows must go).
+/// One transaction; a failure leaves the phantom intact for the next run
+/// rather than half-deleted.
 fn delete_phantom_rows(catalog: &Catalog, asset_id: &str) -> Result<()> {
-    let stored_hashes: Vec<String> = catalog
-        .conn()
-        .prepare("SELECT content_hash FROM variants WHERE asset_id = ?1")?
-        .query_map(rusqlite::params![asset_id], |r| r.get(0))?
-        .filter_map(|r| r.ok())
-        .collect();
-    for hash in &stored_hashes {
-        let _ = catalog
-            .conn()
-            .execute("DELETE FROM recipes WHERE variant_hash = ?1", rusqlite::params![hash]);
-        let _ = catalog.conn().execute(
-            "DELETE FROM file_locations WHERE content_hash = ?1",
-            rusqlite::params![hash],
-        );
-    }
-    let _ = catalog
-        .conn()
-        .execute("DELETE FROM variants WHERE asset_id = ?1", rusqlite::params![asset_id]);
-    for table in ["faces", "embeddings", "collection_assets"] {
-        // Tables may not exist in every build; ignore errors.
-        let _ = catalog.conn().execute(
-            &format!("DELETE FROM {table} WHERE asset_id = ?1"),
-            rusqlite::params![asset_id],
-        );
-    }
-    let _ = catalog
-        .conn()
-        .execute("DELETE FROM assets WHERE id = ?1", rusqlite::params![asset_id]);
-    Ok(())
+    catalog.delete_asset_rows(asset_id)
 }
 
 #[cfg(test)]

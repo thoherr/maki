@@ -109,7 +109,64 @@ where
 /// and wording the endpoint produced inline before the migration.
 pub(super) mod err {
     use axum::http::StatusCode;
-    use axum::response::{IntoResponse, Response};
+    use axum::response::{Html, IntoResponse, Response};
+
+    /// Status for a typed error ([`crate::error::http_status_for`]:
+    /// not-found 404, offline/conflict 409, invalid input 400, forbidden
+    /// 403), `default` for anything unclassified.
+    fn status_or(e: &anyhow::Error, default: StatusCode) -> StatusCode {
+        crate::error::http_status_for(e)
+            .and_then(|s| StatusCode::from_u16(s).ok())
+            .unwrap_or(default)
+    }
+
+    /// `<typed status> "<message chain>"`, 500 when unclassified — the
+    /// default mapper for plain-text endpoints (audit F19: no handler
+    /// matches on error text any more).
+    pub(crate) fn mapped(e: anyhow::Error) -> Response {
+        mapped_or(e, StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    /// [`mapped`] with another status for unclassified errors — for
+    /// endpoints whose remaining failures are user input (400).
+    pub(crate) fn mapped_or(e: anyhow::Error, default: StatusCode) -> Response {
+        (status_or(&e, default), format!("{e:#}")).into_response()
+    }
+
+    /// [`mapped`] with a `{"error": "<message chain>"}` body for
+    /// fetch-driven UIs that read `body.error` (face/people endpoints).
+    #[cfg(feature = "ai")]
+    pub(crate) fn mapped_json(e: anyhow::Error) -> Response {
+        (
+            status_or(&e, StatusCode::INTERNAL_SERVER_ERROR),
+            axum::Json(serde_json::json!({"error": format!("{e:#}")})),
+        )
+            .into_response()
+    }
+
+    /// Minimal HTML text escaping for an error message rendered in a page.
+    fn escape(s: &str) -> String {
+        s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    }
+
+    /// [`mapped`] for page routes: a 404 renders a small HTML page with a
+    /// link back to browse, everything else is `"Error: <message chain>"`.
+    pub(crate) fn mapped_html(e: anyhow::Error) -> Response {
+        let status = status_or(&e, StatusCode::INTERNAL_SERVER_ERROR);
+        let msg = format!("{e:#}");
+        if status == StatusCode::NOT_FOUND {
+            (
+                status,
+                Html(format!(
+                    "<h1>Not Found</h1><p>{}</p><p><a href=\"/\">Back to browse</a></p>",
+                    escape(&msg)
+                )),
+            )
+                .into_response()
+        } else {
+            (status, format!("Error: {msg}")).into_response()
+        }
+    }
 
     /// `400 "<message chain>"` — user-input failures (tag ops, volumes).
     pub(crate) fn bad_request(e: anyhow::Error) -> Response {
@@ -121,22 +178,6 @@ pub(super) mod err {
         (StatusCode::BAD_REQUEST, format!("Error: {e:#}")).into_response()
     }
 
-    /// `500 "<message chain>"` — the face/people endpoints (no prefix).
-    #[cfg(feature = "ai")]
-    pub(crate) fn internal(e: anyhow::Error) -> Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
-    }
-
-    /// `500 {"error": "<message chain>"}` — fetch-driven UIs that read
-    /// `body.error`.
-    #[cfg(feature = "ai")]
-    pub(crate) fn internal_json(e: anyhow::Error) -> Response {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(serde_json::json!({"error": format!("{e:#}")})),
-        )
-            .into_response()
-    }
 }
 
 /// Append `HX-Trigger: pending-changed` to a successful HTML response

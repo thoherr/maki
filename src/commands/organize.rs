@@ -55,7 +55,7 @@ pub fn run_saved_search_command(
 
             let file = maki::saved_search::load(&catalog_root)?;
             let ss = maki::saved_search::find_by_name(&file, &name)
-                .ok_or_else(|| anyhow::anyhow!("no saved search named '{name}'"))?;
+                .ok_or_else(|| maki::error::MakiError::not_found("saved search", &name))?;
 
             let engine = QueryEngine::new(&catalog_root);
             let results = engine.search(&ss.query)?;
@@ -157,7 +157,7 @@ pub fn run_saved_search_command(
             let before = file.searches.len();
             file.searches.retain(|s| s.name != name);
             if file.searches.len() == before {
-                anyhow::bail!("no saved search named '{name}'");
+                return Err(maki::error::MakiError::not_found("saved search", &name).into());
             }
             maki::saved_search::save(&catalog_root, &file)?;
             if ctx.json {
@@ -181,15 +181,11 @@ pub fn run_stack_command(
     let _ = ctx.verbosity;
     let catalog_root = maki::config::find_catalog_root()?;
     let catalog = Catalog::open(&catalog_root)?;
-    let store = maki::stack::StackStore::new(catalog.conn());
+    // Mutators persist stacks.yaml themselves (StackStore::open).
+    let store = maki::stack::StackStore::open(catalog.conn(), &catalog_root);
     match cmd {
         StackCommands::Create { asset_ids } => {
-            if asset_ids.len() < 2 {
-                anyhow::bail!("a stack requires at least 2 assets");
-            }
             let stack = store.create(&asset_ids)?;
-            let yaml = store.export_all()?;
-            maki::stack::save_yaml(&catalog_root, &yaml)?;
             if ctx.json {
                 println!("{}", serde_json::json!({
                     "id": stack.id.to_string(),
@@ -206,8 +202,6 @@ pub fn run_stack_command(
         }
         StackCommands::Add { reference, asset_ids } => {
             let added = store.add(&reference, &asset_ids)?;
-            let yaml = store.export_all()?;
-            maki::stack::save_yaml(&catalog_root, &yaml)?;
             if ctx.json {
                 println!("{}", serde_json::json!({ "added": added }));
             } else {
@@ -220,8 +214,6 @@ pub fn run_stack_command(
                 anyhow::bail!("no asset IDs specified.");
             }
             let removed = store.remove(&asset_ids)?;
-            let yaml = store.export_all()?;
-            maki::stack::save_yaml(&catalog_root, &yaml)?;
             if ctx.json {
                 println!("{}", serde_json::json!({ "removed": removed }));
             } else {
@@ -231,8 +223,6 @@ pub fn run_stack_command(
         }
         StackCommands::Pick { asset_id } => {
             store.set_pick(&asset_id)?;
-            let yaml = store.export_all()?;
-            maki::stack::save_yaml(&catalog_root, &yaml)?;
             if ctx.json {
                 println!("{}", serde_json::json!({ "pick": asset_id }));
             } else {
@@ -242,8 +232,6 @@ pub fn run_stack_command(
         }
         StackCommands::Dissolve { asset_id } => {
             store.dissolve(&asset_id)?;
-            let yaml = store.export_all()?;
-            maki::stack::save_yaml(&catalog_root, &yaml)?;
             if ctx.json {
                 println!("{}", serde_json::json!({ "status": "dissolved" }));
             } else {
@@ -269,7 +257,7 @@ pub fn run_stack_command(
         }
         StackCommands::Show { asset_id, format } => {
             let (stack_id, members) = store.stack_for_asset(&asset_id)?
-                .ok_or_else(|| anyhow::anyhow!("asset {asset_id} is not in a stack"))?;
+                .ok_or_else(|| maki::error::MakiError::not_found_with_hint("stack", &asset_id, "asset is not in a stack"))?;
             if ctx.json {
                 println!("{}", serde_json::json!({
                     "stack_id": stack_id,
@@ -329,13 +317,11 @@ pub fn run_collection_command(
     let _ = ctx.verbosity;
     let catalog_root = maki::config::find_catalog_root()?;
     let catalog = Catalog::open(&catalog_root)?;
-    let store = maki::collection::CollectionStore::new(catalog.conn());
+    // Mutators persist collections.yaml themselves (CollectionStore::open).
+    let store = maki::collection::CollectionStore::open(catalog.conn(), &catalog_root);
     match cmd {
         CollectionCommands::Create { name, description } => {
             let col = store.create(&name, description.as_deref())?;
-            // Persist to YAML
-            let yaml = store.export_all()?;
-            maki::collection::save_yaml(&catalog_root, &yaml)?;
             if ctx.json {
                 println!("{}", serde_json::json!({
                     "id": col.id.to_string(),
@@ -368,7 +354,7 @@ pub fn run_collection_command(
             use maki::format::{self, OutputFormat};
 
             let col = store.get_by_name(&name)?
-                .ok_or_else(|| anyhow::anyhow!("no collection named '{name}'"))?;
+                .ok_or_else(|| maki::error::MakiError::not_found("collection", &name))?;
 
             if col.asset_ids.is_empty() {
                 if ctx.json {
@@ -484,9 +470,6 @@ pub fn run_collection_command(
                 anyhow::bail!("no asset IDs specified.");
             }
             let added = store.add_assets(&name, &ids)?;
-            // Persist to YAML
-            let yaml = store.export_all()?;
-            maki::collection::save_yaml(&catalog_root, &yaml)?;
             if ctx.json {
                 println!("{}", serde_json::json!({
                     "added": added,
@@ -502,9 +485,6 @@ pub fn run_collection_command(
                 anyhow::bail!("no asset IDs specified.");
             }
             let removed = store.remove_assets(&name, &asset_ids)?;
-            // Persist to YAML
-            let yaml = store.export_all()?;
-            maki::collection::save_yaml(&catalog_root, &yaml)?;
             if ctx.json {
                 println!("{}", serde_json::json!({
                     "removed": removed,
@@ -517,9 +497,6 @@ pub fn run_collection_command(
         }
         CollectionCommands::Delete { name } => {
             store.delete(&name)?;
-            // Persist to YAML
-            let yaml = store.export_all()?;
-            maki::collection::save_yaml(&catalog_root, &yaml)?;
             if ctx.json {
                 println!("{}", serde_json::json!({
                     "status": "deleted",

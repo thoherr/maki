@@ -373,7 +373,11 @@ mod tests {
             ids.push(asset.id.to_string());
         }
 
-        let store = crate::collection::CollectionStore::new(catalog.conn());
+        // The collection store persists collections.yaml next to the
+        // catalog; the resolver only reads the SQLite rows, so a scratch
+        // root that lives for the duration of the setup is enough.
+        let col_root = tempfile::tempdir().unwrap();
+        let store = crate::collection::CollectionStore::open(catalog.conn(), col_root.path());
         store.create("Favs", None).unwrap();
         store.add_assets("Favs", &[ids[0].clone()]).unwrap();
         store.create("Picks", None).unwrap();
@@ -381,7 +385,11 @@ mod tests {
 
         #[cfg(feature = "ai")]
         {
-            let faces = crate::face_store::FaceStore::new(catalog.conn());
+            // The face store persists faces.yaml / people.yaml next to the
+            // catalog; the resolver only reads the SQLite rows, so a scratch
+            // root that lives for the duration of the setup is enough.
+            let root = tempfile::tempdir().unwrap();
+            let faces = crate::face_store::FaceStore::open(catalog.conn(), root.path());
             let alice = faces.create_person(Some("Alice")).unwrap();
             let bob = faces.create_person(Some("Bob")).unwrap();
             let emb = [0.5f32; 4];

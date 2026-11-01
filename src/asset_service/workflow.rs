@@ -350,6 +350,8 @@ fn run_auto_group(
                                 {
                                     let file_path = vol.mount_point.join(&loc.relative_path);
                                     if file_path.exists() {
+                                        // Previews are a regenerable cache (also
+                                        // produced on demand): best effort here.
                                         let _ =
                                             preview_gen.generate(&v.content_hash, &file_path, &v.format);
                                         if smart {
@@ -364,9 +366,10 @@ fn run_auto_group(
                             }
                         }
                     }
-                    if let Ok(cat) = crate::catalog::Catalog::open(&service.catalog_root) {
-                        let _ = cat.update_denormalized_variant_columns(&asset);
-                    }
+                    // The group changed the variant set: the denormalized
+                    // columns must follow (a dropped write here left stale
+                    // `best_variant_hash` values behind — audit F8).
+                    catalog.update_denormalized_variant_columns(&asset)?;
                 }
             }
         }

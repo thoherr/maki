@@ -13,6 +13,7 @@ Base URL: `http://127.0.0.1:8080` (configurable via `--bind` and `--port`, or `[
 - **Asset IDs**: path parameters accept a full UUID or a unique prefix.
 - **Errors**: handlers that fail return a plain-text body `Error: <message>` with status 500; validation errors return 400 where the handler checks input explicitly (noted per endpoint). A few AI endpoints return `{"error": "..."}` JSON instead.
 - **Read-only mode** (`--read-only` or `[serve] read_only`): every request whose method is not `GET`/`HEAD` is rejected with 403 -- except `POST /api/query-image`, which writes nothing.
+- **Error statuses**: handlers map the engine's typed errors uniformly -- 404 for a missing asset/volume/stack/collection/person/saved search, 409 for a conflict (duplicate name, already present, offline volume), 400 for invalid input, 403 for a path that escapes a volume, 500 for anything unclassified. Bodies are plain text (`{"error": "..."}` on the JSON-only AI endpoints) with the error chain.
 - **Basic auth** (`[serve] username`/`password`, or `MAKI_SERVE_PASSWORD`): applies to every route including previews and SSE streams; a missing or wrong credential yields 401 with `WWW-Authenticate: Basic realm="MAKI"`.
 - **Feature gates**: routes marked *(ai)* exist only in builds with `--features ai` (which `--features pro` includes). `POST /api/asset/{id}/writeback`, `vlm-describe`, `/api/batch/describe`, `/api/maintain/writeback` and `/api/maintain/sync-metadata` are registered in every build; the web UI surfaces them only in Pro builds (the `pro` flag in `/api/build-info`).
 - **`HX-Trigger: pending-changed`**: the tag, rating, description, name and label fragment responses carry this header so the detail page can refresh its recipes block (pending-writeback markers).
@@ -240,8 +241,8 @@ Job-style endpoints respond immediately with `{"job_id": "<uuid>", "status": "st
 | `PUT /api/batch/rating` | `rating` (1-5, `0`/`null` clears) | batch result |
 | `POST /api/batch/tags` | `tags` (array), `remove` (bool, required) | batch result |
 | `PUT /api/batch/label` | `label` (name or `null`) | batch result |
-| `POST /api/batch/collection` | `collection` (name) | `{"added": 3, "collection": "..."}` |
-| `DELETE /api/batch/collection` | `collection` | `{"removed": 3, "collection": "..."}` |
+| `POST /api/batch/collection` | `collection` (name) | `{"added": 3, "collection": "..."}`; 404 if the collection or an asset does not exist |
+| `DELETE /api/batch/collection` | `collection` | `{"removed": 3, "collection": "..."}`; 404 if the collection does not exist |
 | `POST /api/batch/auto-group` | -- | `{"groups_merged", "donors_removed", "variants_moved"}` |
 | `POST /api/batch/group` | `target_id` (optional) | `{"target_id", "variants_moved", "donors_removed"}` |
 | `POST /api/batch/stack` | -- | `{"stack_id", "member_count"}`; 400 on error |
@@ -366,7 +367,7 @@ Lists filesystem entries under `<mount point>/<prefix>` for the import dialog (p
 | Method and path | Body | Response |
 |-----------------|------|----------|
 | `POST /api/dedup/resolve` | `{"min_copies", "volume", "format", "path", "prefer", "dry_run"}` (all optional; `prefer` falls back to `[dedup] prefer`) | `DedupResult`: `{"duplicates_found", "locations_to_remove", "locations_removed", "files_deleted", "files_trashed", "recipes_removed", "bytes_freed", "dry_run", "errors"}` |
-| `DELETE /api/dedup/location` | `{"content_hash", "volume_id", "relative_path"}` | `{"removed": true, "recipes_removed": 1}` -- trashes the file and co-located recipes, updates catalog and sidecar; 400 when it is the last copy or the volume is offline |
+| `DELETE /api/dedup/location` | `{"content_hash", "volume_id", "relative_path"}` | `{"removed": true, "recipes_removed": 1}` -- trashes the file and co-located recipes, updates catalog and sidecar; 409 when it is the last copy or the volume is offline, 404 for an unknown volume |
 
 ---
 

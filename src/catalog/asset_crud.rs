@@ -141,6 +141,54 @@ impl Catalog {
         Ok(())
     }
 
+    /// Rebuild every derived row set of one asset from its sidecar state,
+    /// in one transaction. This is THE "resync an asset" routine (audit
+    /// F7) — `doctor --repair`, `rebuild-catalog --asset`, `refresh
+    /// --reimport` and `undo` all go through it, so the four paths cannot
+    /// drift apart.
+    ///
+    /// Rows derived from the sidecar are deleted and re-inserted: the
+    /// variants (stale ones that the sidecar no longer lists go away),
+    /// their file locations and recipes. The asset row is upserted (not
+    /// deleted), so columns that are NOT derived from the sidecar —
+    /// `stack_id` / `stack_position`, `face_count` — survive; faces,
+    /// embeddings, collection and stack rows are never touched. Finally
+    /// the denormalized variant columns and the face count are recomputed
+    /// (with the legacy `face_scan_status` fallback for sidecars written
+    /// before v4.4.3).
+    ///
+    /// A variant the sidecar lists but SQLite currently attributes to a
+    /// different asset is moved here (`insert_variant` is keyed by the
+    /// content hash). Volume rows are not created: callers that may run
+    /// before the volume registry is mirrored (`rebuild-catalog`) call
+    /// `ensure_volume` first.
+    pub fn resync_asset_from_sidecar(&self, asset: &Asset) -> Result<()> {
+        let id = asset.id.to_string();
+        self.with_tx(|c| {
+            // Delete in foreign-key order: recipes and locations reference
+            // variants, variants reference the asset.
+            c.delete_recipes_for_asset(&id)?;
+            c.delete_file_locations_for_asset(&id)?;
+            c.delete_variants_for_asset(&id)?;
+
+            // Re-insert from the sidecar (source of truth).
+            c.insert_asset(asset)?;
+            for variant in &asset.variants {
+                c.insert_variant(variant)?;
+                for loc in &variant.locations {
+                    c.insert_file_location(&variant.content_hash, loc)?;
+                }
+            }
+            for recipe in &asset.recipes {
+                c.insert_recipe(recipe)?;
+            }
+            c.update_denormalized_variant_columns(asset)?;
+            c.update_face_count(&id)?;
+            c.backfill_face_scan_status(&id)?;
+            Ok(())
+        })
+    }
+
     /// Update just the rating for an asset in the catalog.
     pub fn update_asset_rating(&self, asset_id: &str, rating: Option<u8>) -> Result<()> {
         self.conn.execute(
@@ -334,6 +382,119 @@ mod tests {
             rusqlite::params![id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
         ).unwrap()
+    }
+
+    fn count(catalog: &Catalog, sql: &str, id: &str) -> i64 {
+        catalog
+            .conn
+            .query_row(sql, rusqlite::params![id], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// The one resync routine removes rows the sidecar no longer lists,
+    /// adds the ones it does, moves a variant that SQLite attributed to
+    /// another asset, and leaves non-derived columns alone.
+    #[test]
+    fn resync_asset_from_sidecar_rebuilds_derived_rows_only() {
+        use crate::models::volume::FileLocation;
+        use crate::models::{Recipe, RecipeType, Volume};
+
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        let volume = Volume::new(
+            "Vol".to_string(),
+            std::path::PathBuf::from("/tmp/vol"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+        let loc = |path: &str| FileLocation {
+            volume_id: volume.id,
+            relative_path: std::path::PathBuf::from(path),
+            verified_at: None,
+        };
+
+        // SQLite state: asset A owns variants a1 (with location + recipe)
+        // and stale; asset B owns b1.
+        let mut a = Asset::new(AssetType::Image, "sha256:a1");
+        let mut a1 = variant("sha256:a1", a.id, &[]);
+        a1.locations.push(loc("a1.jpg"));
+        let stale = variant("sha256:stale", a.id, &[]);
+        a.variants = vec![a1.clone(), stale.clone()];
+        a.recipes.push(Recipe {
+            id: uuid::Uuid::new_v4(),
+            variant_hash: "sha256:stale".into(),
+            software: "x".into(),
+            recipe_type: RecipeType::Sidecar,
+            content_hash: "sha256:r".into(),
+            location: loc("stale.xmp"),
+            pending_writeback: false,
+        });
+        let mut b = Asset::new(AssetType::Image, "sha256:b1");
+        let b1 = variant("sha256:b1", b.id, &[]);
+        b.variants.push(b1.clone());
+        for asset in [&a, &b] {
+            catalog.insert_asset(asset).unwrap();
+            for v in &asset.variants {
+                catalog.insert_variant(v).unwrap();
+                for l in &v.locations {
+                    catalog.insert_file_location(&v.content_hash, l).unwrap();
+                }
+            }
+            for r in &asset.recipes {
+                catalog.insert_recipe(r).unwrap();
+            }
+        }
+        let a_id = a.id.to_string();
+        // A non-derived column that must survive the resync.
+        catalog
+            .conn
+            .execute("UPDATE assets SET stack_id = 'stk', stack_position = 2 WHERE id = ?1", rusqlite::params![a_id])
+            .unwrap();
+
+        // Sidecar truth for A: a1 with a second location, b1 taken over
+        // from B, `stale` and its recipe gone, a new recipe on a1.
+        a.variants = vec![a1.clone(), b1.clone()];
+        a.variants[0].locations.push(loc("copy/a1.jpg"));
+        a.variants[1].asset_id = a.id;
+        a.recipes = vec![Recipe {
+            id: uuid::Uuid::new_v4(),
+            variant_hash: "sha256:a1".into(),
+            software: "x".into(),
+            recipe_type: RecipeType::Sidecar,
+            content_hash: "sha256:r2".into(),
+            location: loc("a1.xmp"),
+            pending_writeback: true,
+        }];
+        catalog.resync_asset_from_sidecar(&a).unwrap();
+
+        let variants = "SELECT COUNT(*) FROM variants WHERE asset_id = ?1";
+        let locations = "SELECT COUNT(*) FROM file_locations WHERE content_hash IN (SELECT content_hash FROM variants WHERE asset_id = ?1)";
+        let recipes = "SELECT COUNT(*) FROM recipes WHERE variant_hash IN (SELECT content_hash FROM variants WHERE asset_id = ?1)";
+        assert_eq!(count(&catalog, variants, &a_id), 2);
+        assert_eq!(count(&catalog, locations, &a_id), 2);
+        assert_eq!(count(&catalog, recipes, &a_id), 1);
+        assert_eq!(count(&catalog, variants, &b.id.to_string()), 0, "b1 moved to A");
+        let stale_rows: i64 = catalog
+            .conn
+            .query_row("SELECT COUNT(*) FROM variants WHERE content_hash = 'sha256:stale'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stale_rows, 0);
+        let (stack_id, pos, variant_count): (Option<String>, Option<i64>, i64) = catalog
+            .conn
+            .query_row(
+                "SELECT stack_id, stack_position, variant_count FROM assets WHERE id = ?1",
+                rusqlite::params![a_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(stack_id.as_deref(), Some("stk"));
+        assert_eq!(pos, Some(2));
+        assert_eq!(variant_count, 2);
+        let pending: i64 = catalog
+            .conn
+            .query_row("SELECT pending_writeback FROM recipes WHERE variant_hash = 'sha256:a1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(pending, 1);
     }
 
     /// Regression: the helper refreshed only hash/format/count/GPS, leaving

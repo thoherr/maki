@@ -34,7 +34,11 @@ impl QueryEngine {
     fn mark_recipe_pending(recipe: &mut Recipe, catalog: &Catalog) {
         if !recipe.pending_writeback {
             recipe.pending_writeback = true;
-            let _ = catalog.mark_pending_writeback(&recipe.id.to_string());
+            if let Err(e) = catalog.mark_pending_writeback(&recipe.id.to_string()) {
+                // The sidecar (saved by the caller) still carries the flag;
+                // `maki doctor` reports the SQLite side until the next save.
+                eprintln!("Warning: could not mark recipe {} pending in catalog: {e}", recipe.id);
+            }
         }
     }
 
@@ -43,7 +47,9 @@ impl QueryEngine {
     fn clear_recipe_pending(recipe: &mut Recipe, catalog: &Catalog) {
         if recipe.pending_writeback {
             recipe.pending_writeback = false;
-            let _ = catalog.clear_pending_writeback(&recipe.id.to_string());
+            if let Err(e) = catalog.clear_pending_writeback(&recipe.id.to_string()) {
+                eprintln!("Warning: could not clear pending flag of recipe {} in catalog: {e}", recipe.id);
+            }
         }
     }
 
@@ -655,7 +661,9 @@ impl QueryEngine {
                 if file_changed {
                     match content_store.hash_file(&full_path) {
                         Ok(new_hash) => {
-                            let _ = catalog.update_recipe_content_hash(recipe_id, &new_hash);
+                            if let Err(e) = catalog.update_recipe_content_hash(recipe_id, &new_hash) {
+                                result.errors.push(format!("{rel_path}: could not update recipe hash in catalog: {e}"));
+                            }
                             // Update the in-memory recipe too
                             if let Some(r) = asset.recipes.iter_mut().find(|r| r.id.to_string() == *recipe_id) {
                                 r.content_hash = new_hash;
@@ -695,8 +703,9 @@ impl QueryEngine {
                                 .find(|r| r.id.to_string() == *recipe_id)
                                 .map(|r| r.content_hash.clone());
                             if stored_hash.as_deref() != Some(disk_hash.as_str()) {
-                                let _ = catalog
-                                    .update_recipe_content_hash(recipe_id, &disk_hash);
+                                if let Err(e) = catalog.update_recipe_content_hash(recipe_id, &disk_hash) {
+                                    result.errors.push(format!("{rel_path}: could not update recipe hash in catalog: {e}"));
+                                }
                                 if let Some(r) = asset.recipes.iter_mut().find(|r| r.id.to_string() == *recipe_id) {
                                     r.content_hash = disk_hash;
                                 }
@@ -717,7 +726,9 @@ impl QueryEngine {
                     }
                 }
 
-                let _ = catalog.clear_pending_writeback(recipe_id);
+                if let Err(e) = catalog.clear_pending_writeback(recipe_id) {
+                    result.errors.push(format!("{rel_path}: could not clear pending flag in catalog: {e}"));
+                }
                 cleared_recipe_ids.insert(recipe_id.clone());
             }
 

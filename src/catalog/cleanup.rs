@@ -99,13 +99,57 @@ impl Catalog {
         Ok(changed)
     }
 
-    /// Delete all collection memberships for an asset.
+    /// Delete all face rows for an asset. The `faces` table is part of the
+    /// versioned schema (v13), so it exists in every build.
+    pub fn delete_faces_for_asset(&self, asset_id: &str) -> Result<usize> {
+        let changed = self.conn.execute(
+            "DELETE FROM faces WHERE asset_id = ?1",
+            rusqlite::params![asset_id],
+        )?;
+        Ok(changed)
+    }
+
+    /// Delete all collection memberships for an asset — SQLite only, the
+    /// primitive behind [`Self::delete_asset_rows`]. User-facing deletes
+    /// go through `CollectionStore::remove_asset`, which also persists
+    /// `collections.yaml`.
     pub fn delete_collection_memberships_for_asset(&self, asset_id: &str) -> Result<usize> {
         let changed = self.conn.execute(
             "DELETE FROM collection_assets WHERE asset_id = ?1",
             rusqlite::params![asset_id],
         )?;
         Ok(changed)
+    }
+
+    /// Delete all embedding rows (every model) for an asset.
+    pub fn delete_embeddings_for_asset(&self, asset_id: &str) -> Result<usize> {
+        let changed = self.conn.execute(
+            "DELETE FROM embeddings WHERE asset_id = ?1",
+            rusqlite::params![asset_id],
+        )?;
+        Ok(changed)
+    }
+
+    /// Remove every catalog row that belongs to an asset, in foreign-key
+    /// order, inside one transaction: recipes and file locations of its
+    /// variants, the variants, faces, embeddings, collection memberships,
+    /// and finally the asset row itself. Used for phantom rows (`doctor`:
+    /// a row whose sidecar is gone) and for the donors of a `group` merge
+    /// after their variants have been reassigned.
+    ///
+    /// Errors when the asset row does not exist (so a caller that already
+    /// removed it notices); stack membership columns disappear with the
+    /// row, `stacks.member_count` is left to the stack store.
+    pub fn delete_asset_rows(&self, asset_id: &str) -> Result<()> {
+        self.with_tx(|c| {
+            c.delete_recipes_for_asset(asset_id)?;
+            c.delete_file_locations_for_asset(asset_id)?;
+            c.delete_variants_for_asset(asset_id)?;
+            c.delete_faces_for_asset(asset_id)?;
+            c.delete_embeddings_for_asset(asset_id)?;
+            c.delete_collection_memberships_for_asset(asset_id)?;
+            c.delete_asset(asset_id)
+        })
     }
 
     /// List all variant content hashes for an asset.

@@ -75,7 +75,7 @@ pub async fn embed_asset(
             false,
             |_, _, _| {},
         )
-    }, super::super::err::internal)
+    }, super::super::err::mapped)
     .await?;
     Ok(Json(serde_json::json!({
         "embedded": r.embedded,

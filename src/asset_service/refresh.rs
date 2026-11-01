@@ -302,10 +302,13 @@ impl AssetService {
 
                 if !dry_run {
                     metadata_store.save(&asset)?;
-                    catalog.insert_asset(&asset)?;
-                    if let Some(v) = asset.variants.iter().find(|v| v.content_hash == *content_hash) {
-                        catalog.insert_variant(v)?;
-                    }
+                    catalog.with_tx(|c| {
+                        c.insert_asset(&asset)?;
+                        if let Some(v) = asset.variants.iter().find(|v| v.content_hash == *content_hash) {
+                            c.insert_variant(v)?;
+                        }
+                        Ok(())
+                    })?;
                 }
 
                 result.refreshed += 1;
@@ -585,10 +588,13 @@ impl AssetService {
 
                 if !dry_run {
                     metadata_store.save(&asset)?;
-                    catalog.insert_asset(&asset)?;
-                    if let Some(v) = asset.variants.iter().find(|v| v.content_hash == *content_hash) {
-                        catalog.insert_variant(v)?;
-                    }
+                    catalog.with_tx(|c| {
+                        c.insert_asset(&asset)?;
+                        if let Some(v) = asset.variants.iter().find(|v| v.content_hash == *content_hash) {
+                            c.insert_variant(v)?;
+                        }
+                        Ok(())
+                    })?;
                 }
 
                 result.media_refreshed += 1;

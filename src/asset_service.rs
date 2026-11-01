@@ -2341,6 +2341,83 @@ mod tests {
         assert!(err.to_string().contains("no volume found"));
     }
 
+    /// A catalog failure in the middle of relocate's row changes must roll
+    /// every row back (architecture audit F2): the variant location row is
+    /// inserted first, then the recipe row update fails because the recipe
+    /// row was removed behind the sidecar's back — the location row must
+    /// not survive.
+    #[test]
+    fn relocate_catalog_failure_leaves_catalog_locations_unchanged() {
+        let (catalog_dir, vol1_dir, vol2_dir, vol1, vol2) = setup_relocate();
+
+        let photos = vol1_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("DSC.nef"), "raw data for rollback").unwrap();
+        std::fs::write(photos.join("DSC.xmp"), "xmp recipe for rollback").unwrap();
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service.import(&[photos], &vol1, &default_filter()).unwrap();
+
+        let metadata_store = MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        let asset_id = asset.id.to_string();
+        let variant_hash = asset.variants[0].content_hash.clone();
+        assert_eq!(asset.recipes.len(), 1);
+
+        // Inject the failure: drop the recipe row from the catalog only.
+        let catalog = crate::catalog::Catalog::open(catalog_dir.path()).unwrap();
+        assert!(catalog.delete_recipe(&asset.recipes[0].id.to_string()).unwrap());
+        let before = catalog.get_variant_file_locations(&variant_hash).unwrap();
+        assert_eq!(before.len(), 1);
+
+        let err = service
+            .relocate(&asset_id, "vol2", false, false, false)
+            .unwrap_err();
+        assert!(err.to_string().contains("no recipe found"), "{err:#}");
+
+        // Files were copied (phase 1 precedes any metadata change) ...
+        assert!(vol2_dir.path().join("photos/DSC.nef").exists());
+        // ... the sidecar (source of truth) is ahead of the catalog ...
+        let after_sidecar = metadata_store.load(summaries[0].id).unwrap();
+        assert_eq!(after_sidecar.variants[0].locations.len(), 2);
+        // ... and the catalog rows are exactly as before: rolled back.
+        let after = catalog.get_variant_file_locations(&variant_hash).unwrap();
+        assert_eq!(after, before);
+        assert!(!after.iter().any(|(vol, _)| *vol == vol2.id.to_string()));
+    }
+
+    /// Typed errors (architecture audit F19): an offline target classifies
+    /// as `MakiError::Offline`, an unknown volume as `MakiError::NotFound`.
+    #[test]
+    fn relocate_errors_are_typed() {
+        let (catalog_dir, vol1_dir, _vol2_dir, vol1, _vol2) = setup_relocate();
+        std::fs::write(vol1_dir.path().join("photo.jpg"), "typed errors").unwrap();
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service
+            .import(&[vol1_dir.path().join("photo.jpg")], &vol1, &default_filter())
+            .unwrap();
+        let asset_id = MetadataStore::new(catalog_dir.path()).list().unwrap()[0].id.to_string();
+
+        let registry = crate::device_registry::DeviceRegistry::new(catalog_dir.path());
+        registry
+            .register("offline-vol", std::path::Path::new("/nonexistent/mount"), crate::models::VolumeType::External, None)
+            .unwrap();
+
+        let err = service.relocate(&asset_id, "offline-vol", false, false, false).unwrap_err();
+        assert!(matches!(
+            crate::error::classify(&err),
+            Some(crate::error::MakiError::Offline { volume, .. }) if volume == "offline-vol"
+        ), "{err:#}");
+        assert_eq!(err.to_string(), "volume 'offline-vol' is offline (mount point /nonexistent/mount not found)");
+
+        let err = service.relocate(&asset_id, "nonexistent-vol", false, false, false).unwrap_err();
+        assert!(matches!(
+            crate::error::classify(&err),
+            Some(crate::error::MakiError::NotFound { kind: "volume", .. })
+        ), "{err:#}");
+    }
+
     #[test]
     fn resolve_files_excludes_patterns() {
         let dir = tempfile::tempdir().unwrap();

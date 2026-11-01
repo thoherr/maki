@@ -137,13 +137,15 @@ impl AssetService {
             if apply {
                 for &idx in &fixable {
                     asset.variants[idx].role = VariantRole::Export;
-                    catalog.update_variant_role(
-                        &asset.variants[idx].content_hash,
-                        "export",
-                    )?;
                 }
+                // Sidecar first, then the catalog rows in one transaction.
                 metadata_store.save(&asset)?;
-                catalog.update_denormalized_variant_columns(&asset)?;
+                catalog.with_tx(|c| {
+                    for &idx in &fixable {
+                        c.update_variant_role(&asset.variants[idx].content_hash, "export")?;
+                    }
+                    c.update_denormalized_variant_columns(&asset)
+                })?;
             }
 
             result.fixed += 1;
@@ -345,11 +347,14 @@ impl AssetService {
                     );
                 }
                 metadata_store.save(&asset)?;
-                catalog.update_asset_created_at(&asset.id.to_string(), &oldest)?;
-                // Also update catalog variant metadata if we backfilled
-                if !backfill_dates.is_empty() {
-                    catalog.insert_asset(&asset)?;
-                }
+                catalog.with_tx(|c| {
+                    c.update_asset_created_at(&asset.id.to_string(), &oldest)?;
+                    // Also update catalog variant metadata if we backfilled
+                    if !backfill_dates.is_empty() {
+                        c.insert_asset(&asset)?;
+                    }
+                    Ok(())
+                })?;
             }
 
             result.fixed += 1;
@@ -521,25 +526,31 @@ impl AssetService {
                 }
 
                 parent_asset.recipes.push(recipe.clone());
-                metadata_store.save(&parent_asset)?;
-                catalog.insert_asset(&parent_asset)?;
-                if let Some(v) = parent_asset
-                    .variants
-                    .iter()
-                    .find(|v| v.content_hash == parent_hash)
-                {
-                    catalog.insert_variant(v)?;
-                }
-                catalog.insert_recipe(&recipe)?;
-                catalog.update_denormalized_variant_columns(&parent_asset)?;
 
-                // Delete standalone asset: recipes → locations → variants → asset → sidecar
-                let id_str = standalone_id.as_str();
-                catalog.delete_recipes_for_asset(id_str)?;
-                catalog.delete_file_locations_for_asset(id_str)?;
-                catalog.delete_variants_for_asset(id_str)?;
-                catalog.delete_asset(id_str)?;
+                // Sidecars (source of truth) first: the parent gains the
+                // recipe, the standalone asset disappears. Then every
+                // catalog row of both assets in one transaction.
+                metadata_store.save(&parent_asset)?;
                 metadata_store.delete(standalone_uuid)?;
+                let id_str = standalone_id.as_str();
+                catalog.with_tx(|c| {
+                    c.insert_asset(&parent_asset)?;
+                    if let Some(v) = parent_asset
+                        .variants
+                        .iter()
+                        .find(|v| v.content_hash == parent_hash)
+                    {
+                        c.insert_variant(v)?;
+                    }
+                    c.insert_recipe(&recipe)?;
+                    c.update_denormalized_variant_columns(&parent_asset)?;
+
+                    // Delete standalone asset: recipes → locations → variants → asset
+                    c.delete_recipes_for_asset(id_str)?;
+                    c.delete_file_locations_for_asset(id_str)?;
+                    c.delete_variants_for_asset(id_str)?;
+                    c.delete_asset(id_str)
+                })?;
             }
 
             result.reattached += 1;

@@ -171,7 +171,6 @@ pub fn auto_stack_catalog(
     }
     let threshold = threshold_pct as f32 / 100.0;
 
-    let _ = EmbeddingStore::initialize(catalog.conn());
     let emb_store = EmbeddingStore::new(catalog.conn());
 
     // Candidates: unstacked assets with a stored embedding for this model.
@@ -315,7 +314,8 @@ pub fn auto_stack_catalog(
 
     // Apply: one stack per cluster, member order = pick first.
     if apply {
-        let store = StackStore::new(catalog.conn());
+        // `create` persists stacks.yaml itself (StackStore::open).
+        let store = StackStore::open(catalog.conn(), catalog_root);
         for cluster in &mut clusters {
             let ids: Vec<String> =
                 cluster.members.iter().map(|m| m.asset_id.clone()).collect();
@@ -323,8 +323,6 @@ pub fn auto_stack_catalog(
             cluster.stack_id = Some(stack.id.to_string());
             result.stacks_created += 1;
         }
-        let yaml = store.export_all()?;
-        crate::stack::save_yaml(catalog_root, &yaml)?;
     }
 
     for (i, cluster) in clusters.iter().enumerate() {
@@ -379,7 +377,6 @@ mod tests {
     fn setup() -> Catalog {
         let catalog = Catalog::open_in_memory().unwrap();
         catalog.initialize().unwrap();
-        EmbeddingStore::initialize(catalog.conn()).unwrap();
         catalog
     }
 

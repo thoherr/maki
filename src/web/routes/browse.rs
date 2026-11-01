@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use askama::Template;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::http::{HeaderMap, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 
@@ -767,18 +767,7 @@ pub async fn asset_page(
         tmpl.faces = faces;
         tmpl.all_people = all_people_detail;
         Ok::<_, anyhow::Error>(tmpl.render()?)
-    }, |e| {
-        let msg = format!("{e:#}");
-        if msg.contains("no asset found") {
-            (
-                StatusCode::NOT_FOUND,
-                Html(format!("<h1>Not Found</h1><p>{msg}</p>")),
-            )
-                .into_response()
-        } else {
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {msg}")).into_response()
-        }
-    })
+    }, super::err::mapped_html)
     .await?;
     Ok(Html(html).into_response())
 }

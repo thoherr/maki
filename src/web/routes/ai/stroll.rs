@@ -70,7 +70,6 @@ fn stroll_page_inner(
     let preview_ext = &state.preview_ext;
     let model_id = &state.ai_config.model;
 
-    let _ = crate::embedding_store::EmbeddingStore::initialize(catalog.conn());
     let emb_store = crate::embedding_store::EmbeddingStore::new(catalog.conn());
 
     let center_id = if let Some(id_prefix) = asset_id {

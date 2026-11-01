@@ -261,9 +261,11 @@ impl AssetService {
                         metadata_store.save(&asset).with_context(|| {
                             format!("Failed to write sidecar for {}", file_path.display())
                         })?;
-                        catalog.insert_asset(&asset)?;
-                        catalog.insert_variant(&variant)?;
-                        catalog.insert_file_location(&content_hash, &location)?;
+                        catalog.with_tx(|c| {
+                            c.insert_asset(&asset)?;
+                            c.insert_variant(&variant)?;
+                            c.insert_file_location(&content_hash, &location)
+                        })?;
 
                         // Generate preview for the newly imported variant
                         match preview_gen.generate(&content_hash, file_path, ext) {
@@ -341,9 +343,11 @@ impl AssetService {
                         metadata_store.save(asset).with_context(|| {
                             format!("Failed to write sidecar for {}", file_path.display())
                         })?;
-                        catalog.insert_asset(asset)?;
-                        catalog.insert_variant(&variant)?;
-                        catalog.insert_file_location(&content_hash, &location)?;
+                        catalog.with_tx(|c| {
+                            c.insert_asset(&*asset)?;
+                            c.insert_variant(&variant)?;
+                            c.insert_file_location(&content_hash, &location)
+                        })?;
 
                         // Generate preview for the additional variant
                         match preview_gen.generate(&content_hash, file_path, ext) {
@@ -500,16 +504,23 @@ impl AssetService {
                                     let recipe_id_str = recipe_id.to_string();
                                     let recipe_mut = asset.recipes.iter_mut().find(|r| r.id == recipe_id).expect("recipe must exist after location check");
                                     recipe_mut.content_hash = content_hash.clone();
-                                    catalog.update_recipe_content_hash(&recipe_id_str, &content_hash)?;
-                                    if ext.eq_ignore_ascii_case("xmp") {
+                                    let is_xmp = ext.eq_ignore_ascii_case("xmp");
+                                    if is_xmp {
                                         let xmp = crate::xmp_reader::extract(file_path);
                                         reapply_xmp_data(&xmp, &mut asset, &parent_variant_hash);
-                                        catalog.insert_asset(&asset)?;
-                                        if let Some(v) = asset.variants.iter().find(|v| v.content_hash == parent_variant_hash) {
-                                            catalog.insert_variant(v)?;
-                                        }
                                     }
+                                    // Sidecar first, then the catalog rows in one transaction.
                                     metadata_store.save(&asset)?;
+                                    catalog.with_tx(|c| {
+                                        c.update_recipe_content_hash(&recipe_id_str, &content_hash)?;
+                                        if is_xmp {
+                                            c.insert_asset(&asset)?;
+                                            if let Some(v) = asset.variants.iter().find(|v| v.content_hash == parent_variant_hash) {
+                                                c.insert_variant(v)?;
+                                            }
+                                        }
+                                        Ok(())
+                                    })?;
                                 }
                                 recipes_updated += 1;
                                 on_file(file_path, FileStatus::RecipeUpdated, file_start.elapsed());
@@ -535,16 +546,22 @@ impl AssetService {
                                     pending_writeback: false,
                                 };
                                 asset.recipes.push(recipe.clone());
-                                if ext.eq_ignore_ascii_case("xmp") && !already_known_content {
+                                let merge_xmp = ext.eq_ignore_ascii_case("xmp") && !already_known_content;
+                                if merge_xmp {
                                     let xmp = crate::xmp_reader::extract(file_path);
                                     apply_xmp_data(&xmp, &mut asset, &parent_variant_hash);
-                                    catalog.insert_asset(&asset)?;
-                                    if let Some(v) = asset.variants.iter().find(|v| v.content_hash == parent_variant_hash) {
-                                        catalog.insert_variant(v)?;
-                                    }
                                 }
+                                // Sidecar first, then the catalog rows in one transaction.
                                 metadata_store.save(&asset)?;
-                                catalog.insert_recipe(&recipe)?;
+                                catalog.with_tx(|c| {
+                                    if merge_xmp {
+                                        c.insert_asset(&asset)?;
+                                        if let Some(v) = asset.variants.iter().find(|v| v.content_hash == parent_variant_hash) {
+                                            c.insert_variant(v)?;
+                                        }
+                                    }
+                                    c.insert_recipe(&recipe)
+                                })?;
                             }
                             if already_known_content {
                                 recipes_location_added += 1;
@@ -586,9 +603,11 @@ impl AssetService {
                     if !dry_run {
                         asset.variants.push(variant.clone());
                         metadata_store.save(&asset)?;
-                        catalog.insert_asset(&asset)?;
-                        catalog.insert_variant(&variant)?;
-                        catalog.insert_file_location(&content_hash, &location)?;
+                        catalog.with_tx(|c| {
+                            c.insert_asset(&asset)?;
+                            c.insert_variant(&variant)?;
+                            c.insert_file_location(&content_hash, &location)
+                        })?;
                     }
                     new_asset_ids.push(asset.id.to_string());
                     imported += 1;
@@ -650,20 +669,25 @@ impl AssetService {
                         let recipe_mut = asset.recipes.iter_mut().find(|r| r.id == recipe_id).expect("recipe must exist after location check");
                         recipe_mut.content_hash = content_hash.clone();
 
-                        // Update catalog
-                        catalog.update_recipe_content_hash(&recipe_id_str, &content_hash)?;
-
                         // Re-extract XMP metadata if applicable
-                        if ext.eq_ignore_ascii_case("xmp") {
+                        let is_xmp = ext.eq_ignore_ascii_case("xmp");
+                        if is_xmp {
                             let xmp = crate::xmp_reader::extract(file_path);
                             reapply_xmp_data(&xmp, asset, variant_hash);
-                            catalog.insert_asset(asset)?;
-                            if let Some(v) = asset.variants.iter().find(|v| v.content_hash == *variant_hash) {
-                                catalog.insert_variant(v)?;
-                            }
                         }
 
+                        // Sidecar first, then the catalog rows in one transaction.
                         metadata_store.save(asset)?;
+                        catalog.with_tx(|c| {
+                            c.update_recipe_content_hash(&recipe_id_str, &content_hash)?;
+                            if is_xmp {
+                                c.insert_asset(&*asset)?;
+                                if let Some(v) = asset.variants.iter().find(|v| v.content_hash == *variant_hash) {
+                                    c.insert_variant(v)?;
+                                }
+                            }
+                            Ok(())
+                        })?;
                     }
                     recipes_updated += 1;
                     on_file(file_path, FileStatus::RecipeUpdated, file_start.elapsed());
@@ -691,17 +715,23 @@ impl AssetService {
 
                     // Extract metadata from XMP sidecars — but only if the content
                     // is genuinely new (different hash from all existing recipes).
-                    if ext.eq_ignore_ascii_case("xmp") && !already_known_content {
+                    let merge_xmp = ext.eq_ignore_ascii_case("xmp") && !already_known_content;
+                    if merge_xmp {
                         let xmp = crate::xmp_reader::extract(file_path);
                         apply_xmp_data(&xmp, asset, variant_hash);
-                        catalog.insert_asset(asset)?;
-                        if let Some(v) = asset.variants.iter().find(|v| v.content_hash == *variant_hash) {
-                            catalog.insert_variant(v)?;
-                        }
                     }
 
+                    // Sidecar first, then the catalog rows in one transaction.
                     metadata_store.save(asset)?;
-                    catalog.insert_recipe(&recipe)?;
+                    catalog.with_tx(|c| {
+                        if merge_xmp {
+                            c.insert_asset(&*asset)?;
+                            if let Some(v) = asset.variants.iter().find(|v| v.content_hash == *variant_hash) {
+                                c.insert_variant(v)?;
+                            }
+                        }
+                        c.insert_recipe(&recipe)
+                    })?;
                 }
 
                 if already_known_content {
