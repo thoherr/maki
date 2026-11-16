@@ -54,7 +54,7 @@ Both feature matrices must pass before a release. The suite consists of four tar
 
 | Target | Command | Standard build | `--features pro` |
 |--------|---------|----------------|------------------|
-| Unit tests (`src/**`, incl. the web harness) | `cargo test --lib` | 1063 | 1203 |
+| Unit tests (`src/**`, incl. the web harness) | `cargo test --lib` | 1066 | 1206 |
 | CLI integration tests (`tests/cli.rs`) | `cargo test --test cli` | 297 | 344 |
 | XMP property tests (`tests/xmp_proptest.rs`) | `cargo test --test xmp_proptest` | 7 | 7 |
 | Doc tests | `cargo test --doc` | 14 | 14 |

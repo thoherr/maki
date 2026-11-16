@@ -2,7 +2,9 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## Unreleased
+## v4.13.1 (2026-11-16)
+
+Tag provenance follow-up to v4.13.0. No schema migration.
 
 ### Changed
 
