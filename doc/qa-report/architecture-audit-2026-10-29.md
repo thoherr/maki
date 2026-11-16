@@ -52,10 +52,18 @@ One finding was a defect and is fixed in the same change as this report
   The 145 tests in `catalog.rs` moved into the section file whose
   functions they exercise (`catalog.rs` 4,995 → 1,015 lines; 12 tests of
   root-level helpers stay), shared fixtures in `catalog/test_support.rs`.
-  Still private: the hand-written minimal schemas in the
-  `stack`/`collection` tests and `asset_service`'s `setup_catalog`.
-  Open: service-operation unit tests, Windows-path, pool-concurrency and
-  migration-fixture tests; `browse.html` JS modules; `Catalog::conn()`
+  The `asset_service.rs` tests moved to their section files the same way
+  (2,657 → 1,430 lines), with a `ServiceEnv` fixture in
+  `asset_service/test_support.rs`; 18 new unit tests cover verify, sync,
+  cleanup, delete, dedup, export, the volume operations and
+  update-location, which were CLI-tested only. The three gaps are
+  closed: a frozen pre-versioning catalog migrated to the current schema,
+  stored paths asserted `/`-separated through import and sync (the
+  Windows CI job is where it bites), pool readers against a concurrent
+  writer. Still private: the hand-written minimal schemas in the
+  `stack`/`collection` tests. Without unit tests: refresh,
+  sync-metadata, fix-recipes, describe, the AI operations.
+  Open: `browse.html` JS modules; `Catalog::conn()`
   visibility and the public-API decision.
 
 ## Verdict in one paragraph

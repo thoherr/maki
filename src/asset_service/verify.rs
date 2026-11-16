@@ -524,3 +524,33 @@ impl<F: Fn(&Path, VerifyStatus, Duration)> VerifyRun<'_, F> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::asset_service::test_support::*;
+    use crate::asset_service::*;
+
+    #[test]
+    fn verify_passes_intact_files_and_reports_corruption() {
+        let env = ServiceEnv::new();
+        env.add("a.jpg", "intact");
+        env.add("b.jpg", "will change");
+
+        let all = env.service.verify(&[], None, None, &FileTypeFilter::default(), None, |_, _, _| {}).unwrap();
+        assert_eq!((all.verified, all.failed), (2, 0), "{all:?}");
+
+        env.write("b.jpg", "bit rot");
+        let after = env.service.verify(&[], None, None, &FileTypeFilter::default(), None, |_, _, _| {}).unwrap();
+        assert_eq!((after.verified, after.failed), (1, 1), "{after:?}");
+    }
+
+    #[test]
+    fn verify_max_age_skips_recently_verified_files() {
+        let env = ServiceEnv::new();
+        env.add("a.jpg", "intact");
+        env.service.verify(&[], None, None, &FileTypeFilter::default(), None, |_, _, _| {}).unwrap();
+
+        let again = env.service.verify(&[], None, None, &FileTypeFilter::default(), Some(30), |_, _, _| {}).unwrap();
+        assert_eq!((again.verified, again.skipped_recent), (0, 1), "{again:?}");
+    }
+}

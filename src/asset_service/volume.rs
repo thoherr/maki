@@ -513,3 +513,77 @@ impl AssetService {
     }
 
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::asset_service::test_support::*;
+    use crate::asset_service::*;
+
+    #[test]
+    fn remove_volume_reports_then_removes_locations_and_orphaned_assets() {
+        let env = ServiceEnv::new();
+        let id = env.add("a.jpg", "only copy");
+
+        let report = env.service.remove_volume("vol", false, |_, _, _| {}).unwrap();
+        assert_eq!((report.locations, report.locations_removed), (1, 0), "{report:?}");
+        assert_eq!(env.location_rows(&id), 1);
+
+        let applied = env.service.remove_volume("vol", true, |_, _, _| {}).unwrap();
+        assert_eq!((applied.locations_removed, applied.removed_assets), (1, 1), "{applied:?}");
+        assert!(applied.errors.is_empty(), "{applied:?}");
+        assert_eq!(count(&env.cat.catalog(), "SELECT COUNT(*) FROM assets WHERE id = ?1", &id), 0);
+        assert!(crate::device_registry::DeviceRegistry::new(env.cat.path()).resolve_volume("vol").is_err());
+        assert!(env.abs("a.jpg").exists(), "removing a volume never touches its files");
+    }
+
+    #[test]
+    fn split_volume_moves_locations_below_the_path_to_a_new_volume() {
+        let env = ServiceEnv::new();
+        let inside = env.add("archive/in.jpg", "below the split path");
+        let outside = env.add("out.jpg", "stays");
+
+        let report = env.service.split_volume("vol", "archive-vol", "archive", None, false, |_, _| {}).unwrap();
+        assert_eq!((report.locations, report.locations_moved), (1, 0), "{report:?}");
+
+        let applied = env.service.split_volume("vol", "archive-vol", "archive", None, true, |_, _| {}).unwrap();
+        assert_eq!(applied.locations_moved, 1, "{applied:?}");
+        assert!(applied.errors.is_empty(), "{applied:?}");
+
+        let moved = &env.asset(&inside).variants[0].locations[0];
+        assert_eq!(moved.volume_id.to_string(), applied.new_id);
+        assert_eq!(env.location_paths(&inside), ["in.jpg"], "paths become relative to the new mount");
+        assert_eq!(env.asset(&outside).variants[0].locations[0].volume_id, env.volume.id);
+        assert_eq!(
+            count(&env.cat.catalog(), "SELECT COUNT(*) FROM file_locations fl JOIN variants v ON v.content_hash = fl.content_hash WHERE v.asset_id = ?1 AND fl.volume_id = '' || (SELECT id FROM volumes WHERE label = 'archive-vol')", &inside),
+            1
+        );
+    }
+
+    #[test]
+    fn combine_volume_folds_a_nested_volume_into_its_parent() {
+        let env = ServiceEnv::new();
+        std::fs::create_dir_all(env.abs("nested")).unwrap();
+        let nested = env.cat.register_volume("nested-vol", &env.abs("nested"));
+        env.write("nested/a.jpg", "on the nested volume");
+        let result = env
+            .service
+            .import(&[env.abs("nested/a.jpg")], &nested, &FileTypeFilter::default())
+            .unwrap();
+        let id = result.new_asset_ids[0].clone();
+        assert_eq!(env.location_paths(&id), ["a.jpg"]);
+
+        let applied = env.service.combine_volume("nested-vol", "vol", true, |_, _| {}).unwrap();
+        assert_eq!(applied.locations_moved, 1, "{applied:?}");
+        assert!(applied.errors.is_empty(), "{applied:?}");
+        assert_eq!(env.location_paths(&id), ["nested/a.jpg"]);
+        assert_eq!(env.asset(&id).variants[0].locations[0].volume_id, env.volume.id);
+        assert!(crate::device_registry::DeviceRegistry::new(env.cat.path()).resolve_volume("nested-vol").is_err());
+    }
+
+    #[test]
+    fn combine_volume_rejects_a_source_outside_the_target() {
+        let env = ServiceEnv::new();
+        let (_other_dir, _other) = env.cat.add_volume("other");
+        assert!(env.service.combine_volume("other", "vol", true, |_, _| {}).is_err());
+    }
+}

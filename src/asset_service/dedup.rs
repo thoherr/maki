@@ -335,3 +335,57 @@ impl<F: Fn(&str, &str, DedupStatus, &str)> DedupRun<'_, F> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::asset_service::test_support::*;
+    use crate::asset_service::*;
+
+    fn options(apply: bool) -> DedupOptions {
+        DedupOptions { apply, no_trash: true, ..Default::default() }
+    }
+
+    /// One asset whose file exists twice on the volume.
+    fn env_with_duplicate() -> (ServiceEnv, String) {
+        let env = ServiceEnv::new();
+        let id = env.add("keep/x.jpg", "same bytes");
+        env.write("extra/x.jpg", "same bytes");
+        let second = env.import(&["extra/x.jpg"]);
+        assert_eq!(second.locations_added, 1, "{second:?}");
+        (env, id)
+    }
+
+    #[test]
+    fn dedup_reports_then_removes_the_extra_same_volume_copy() {
+        let (env, id) = env_with_duplicate();
+
+        let report = env.service.dedup_with(&options(false), |_, _, _, _| {}).unwrap();
+        assert_eq!((report.duplicates_found, report.locations_to_remove, report.locations_removed), (1, 1, 0), "{report:?}");
+        assert_eq!(env.location_rows(&id), 2);
+
+        let applied = env.service.dedup_with(&options(true), |_, _, _, _| {}).unwrap();
+        assert_eq!((applied.locations_removed, applied.files_deleted), (1, 1), "{applied:?}");
+        assert_eq!(env.location_rows(&id), 1);
+        assert_eq!(env.location_paths(&id).len(), 1);
+        let remaining = [env.abs("keep/x.jpg").exists(), env.abs("extra/x.jpg").exists()];
+        assert_eq!(remaining.iter().filter(|e| **e).count(), 1, "exactly one file is left");
+    }
+
+    #[test]
+    fn dedup_prefer_keeps_the_matching_path() {
+        let (env, id) = env_with_duplicate();
+        let opts = DedupOptions { prefer: Some("extra".to_string()), ..options(true) };
+        env.service.dedup_with(&opts, |_, _, _, _| {}).unwrap();
+        assert_eq!(env.location_paths(&id), ["extra/x.jpg"]);
+        assert!(!env.abs("keep/x.jpg").exists());
+    }
+
+    #[test]
+    fn dedup_min_copies_protects_the_last_copies() {
+        let (env, id) = env_with_duplicate();
+        let opts = DedupOptions { min_copies: 2, ..options(true) };
+        let result = env.service.dedup_with(&opts, |_, _, _, _| {}).unwrap();
+        assert_eq!(result.locations_removed, 0, "{result:?}");
+        assert_eq!(env.location_rows(&id), 2);
+    }
+}

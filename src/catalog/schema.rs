@@ -1293,4 +1293,83 @@ mod tests {
         assert!((row.2.unwrap() - 70.0).abs() < 0.01);
         assert!((row.3.unwrap() - 2.8).abs() < 0.01);
     }
+
+    /// A catalog as the first releases wrote it: the six base tables, no
+    /// `schema_version`, no denormalised columns, no FTS tables. Frozen
+    /// here on purpose — it must not follow later changes to `initialize()`.
+    const PRE_VERSIONING_CATALOG: &str = "
+        CREATE TABLE assets (
+            id TEXT PRIMARY KEY, name TEXT, created_at TEXT NOT NULL,
+            asset_type TEXT NOT NULL, tags TEXT NOT NULL DEFAULT '[]', description TEXT
+        );
+        CREATE TABLE variants (
+            content_hash TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id),
+            role TEXT NOT NULL, format TEXT NOT NULL, file_size INTEGER NOT NULL,
+            original_filename TEXT NOT NULL, source_metadata TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE volumes (
+            id TEXT PRIMARY KEY, label TEXT NOT NULL, mount_point TEXT NOT NULL, volume_type TEXT NOT NULL
+        );
+        CREATE TABLE file_locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content_hash TEXT NOT NULL REFERENCES variants(content_hash),
+            volume_id TEXT NOT NULL REFERENCES volumes(id),
+            relative_path TEXT NOT NULL, verified_at TEXT
+        );
+        CREATE TABLE recipes (
+            id TEXT PRIMARY KEY, variant_hash TEXT NOT NULL REFERENCES variants(content_hash),
+            software TEXT NOT NULL, recipe_type TEXT NOT NULL, content_hash TEXT NOT NULL,
+            volume_id TEXT, relative_path TEXT, verified_at TEXT
+        );
+        INSERT INTO volumes VALUES ('vol-1', 'Archive', '/Volumes/Archive', 'external');
+        INSERT INTO assets VALUES
+            ('asset-1', 'eagle over the lake', '2024-05-01T10:00:00Z', 'image',
+             '[\"nature\",\"nature|birds\",\"lake\"]', 'An eagle in flight'),
+            ('asset-2', NULL, '2024-06-01T10:00:00Z', 'video', '[]', NULL);
+        INSERT INTO variants VALUES
+            ('sha256:raw1', 'asset-1', 'original', 'nef', 25000000, 'DSC_0001.NEF', '{\"camera_model\":\"Z 9\"}'),
+            ('sha256:jpg1', 'asset-1', 'export', 'jpg', 5000000, 'DSC_0001.jpg', '{}'),
+            ('sha256:mov2', 'asset-2', 'original', 'mov', 90000000, 'clip.mov', '{}');
+        INSERT INTO file_locations (content_hash, volume_id, relative_path) VALUES
+            ('sha256:raw1', 'vol-1', '2024/2024-05/DSC_0001.NEF'),
+            ('sha256:jpg1', 'vol-1', '2024/2024-05/Output/DSC_0001.jpg'),
+            ('sha256:mov2', 'vol-1', '2024/2024-06/clip.mov');
+        INSERT INTO recipes VALUES
+            ('recipe-1', 'sha256:raw1', 'unknown', 'sidecar', 'sha256:xmp1', 'vol-1', '2024/2024-05/DSC_0001.xmp', NULL);
+    ";
+
+    #[test]
+    fn migrates_a_pre_versioning_catalog_and_keeps_its_data() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.conn.execute_batch(PRE_VERSIONING_CATALOG).unwrap();
+        assert_eq!(catalog.schema_version(), 0);
+
+        catalog.run_migrations().unwrap();
+        assert_eq!(catalog.schema_version(), SCHEMA_VERSION);
+
+        let n = |sql: &str| -> i64 { catalog.conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        // Every row survived.
+        assert_eq!(n("SELECT COUNT(*) FROM assets"), 2);
+        assert_eq!(n("SELECT COUNT(*) FROM variants"), 3);
+        assert_eq!(n("SELECT COUNT(*) FROM file_locations"), 3);
+        assert_eq!(n("SELECT COUNT(*) FROM recipes WHERE pending_writeback = 0"), 1);
+        // Denormalised columns were backfilled from the existing rows.
+        assert_eq!(n("SELECT variant_count FROM assets WHERE id = 'asset-1'"), 2);
+        assert_eq!(n("SELECT COUNT(*) FROM assets WHERE best_variant_hash IS NOT NULL"), 2);
+        assert_eq!(n("SELECT COUNT(*) FROM assets WHERE primary_variant_format IS NOT NULL"), 2);
+        assert_eq!(n("SELECT leaf_tag_count FROM assets WHERE id = 'asset-1'"), 2);
+        assert_eq!(n("SELECT COUNT(*) FROM assets WHERE tag_sources = '{}'"), 2);
+        // Both full-text indexes cover the pre-existing assets.
+        assert_eq!(n("SELECT COUNT(*) FROM assets_fts"), 2);
+        assert_eq!(n("SELECT COUNT(*) FROM assets_tags_fts WHERE tags LIKE '%birds%'"), 1);
+        // The migrated catalog answers a search through the normal path.
+        let hits = catalog.search_assets(Some("eagle"), None, None, None, None, None).unwrap();
+        assert_eq!(hits.len(), 1);
+        let details = catalog.load_asset_details("asset-1").unwrap().unwrap();
+        assert_eq!(details.variants.len(), 2);
+
+        // A second run is a no-op.
+        catalog.run_migrations().unwrap();
+        assert_eq!(n("SELECT COUNT(*) FROM assets"), 2);
+    }
 }

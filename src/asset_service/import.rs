@@ -801,3 +801,672 @@ fn extract_file_metadata(file_path: &Path, ext: &str) -> crate::exif_reader::Exi
     }
     exif_data
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::asset_service::test_support::*;
+    use crate::asset_service::*;
+
+    #[test]
+    fn import_duplicate_from_different_path_adds_location() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        // Create a volume with two copies of the same file at different paths
+        let vol_dir = tempfile::tempdir().unwrap();
+        let dir_a = vol_dir.path().join("a");
+        let dir_b = vol_dir.path().join("b");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        std::fs::write(dir_a.join("photo.jpg"), "identical content").unwrap();
+        std::fs::write(dir_b.join("photo.jpg"), "identical content").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+
+        // First import
+        let r1 = service.import(&[dir_a.join("photo.jpg")], &volume, &default_filter()).unwrap();
+        assert_eq!(r1.imported, 1);
+        assert_eq!(r1.locations_added, 0);
+        assert_eq!(r1.skipped, 0);
+
+        // Second import — same content, different path
+        let r2 = service.import(&[dir_b.join("photo.jpg")], &volume, &default_filter()).unwrap();
+        assert_eq!(r2.imported, 0);
+        assert_eq!(r2.locations_added, 1);
+        assert_eq!(r2.skipped, 0);
+
+        // Verify sidecar has 2 locations
+        let catalog = crate::catalog::Catalog::open(catalog_dir.path()).unwrap();
+        let content_hash = crate::content_store::ContentStore::new(catalog_dir.path())
+            .ingest(&dir_a.join("photo.jpg"), &volume)
+            .unwrap();
+        let asset_id_str = catalog.find_asset_id_by_variant(&content_hash).unwrap().unwrap();
+        let asset_id: uuid::Uuid = asset_id_str.parse().unwrap();
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let asset = metadata_store.load(asset_id).unwrap();
+        let variant = &asset.variants[0];
+        assert_eq!(variant.locations.len(), 2);
+        assert_eq!(
+            variant.locations[0].relative_path,
+            std::path::Path::new("a/photo.jpg")
+        );
+        assert_eq!(
+            variant.locations[1].relative_path,
+            std::path::Path::new("b/photo.jpg")
+        );
+    }
+
+    #[test]
+    fn import_duplicate_from_same_path_is_skipped() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        std::fs::write(vol_dir.path().join("photo.jpg"), "some content").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+
+        // First import
+        let r1 = service
+            .import(&[vol_dir.path().join("photo.jpg")], &volume, &default_filter())
+            .unwrap();
+        assert_eq!(r1.imported, 1);
+
+        // Second import — exact same path
+        let r2 = service
+            .import(&[vol_dir.path().join("photo.jpg")], &volume, &default_filter())
+            .unwrap();
+        assert_eq!(r2.imported, 0);
+        assert_eq!(r2.locations_added, 0);
+        assert_eq!(r2.skipped, 1);
+    }
+
+    #[test]
+    fn import_raw_and_jpg_groups_into_one_asset() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photos = vol_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("DSC_4521.nef"), "raw file content").unwrap();
+        std::fs::write(photos.join("DSC_4521.jpg"), "jpeg file content").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        let result = service
+            .import(std::slice::from_ref(&photos), &volume, &default_filter())
+            .unwrap();
+
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.recipes_attached, 0);
+
+        // Verify: one asset with two variants
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        assert_eq!(summaries.len(), 1);
+
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert_eq!(asset.variants.len(), 2);
+        // RAW should be first (defines the asset)
+        assert_eq!(asset.variants[0].format, "nef");
+        assert_eq!(asset.variants[1].format, "jpg");
+        // RAW is original, JPG is an alternate
+        assert_eq!(asset.variants[0].role, VariantRole::Original);
+        assert_eq!(asset.variants[1].role, VariantRole::Alternate);
+        assert_eq!(asset.name.as_deref(), Some("DSC_4521"));
+    }
+
+    #[test]
+    fn import_two_jpgs_both_original() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photos = vol_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("photo.jpg"), "jpeg content").unwrap();
+        std::fs::write(photos.join("photo.png"), "png content").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        let result = service
+            .import(std::slice::from_ref(&photos), &volume, &default_filter())
+            .unwrap();
+
+        assert_eq!(result.imported, 2);
+
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        assert_eq!(summaries.len(), 1);
+
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert_eq!(asset.variants.len(), 2);
+        // No RAW present → both variants stay Original
+        assert_eq!(asset.variants[0].role, VariantRole::Original);
+        assert_eq!(asset.variants[1].role, VariantRole::Original);
+    }
+
+    #[test]
+    fn import_raw_and_xmp_creates_asset_with_recipe() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photos = vol_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("DSC_4521.nef"), "raw file data").unwrap();
+        std::fs::write(photos.join("DSC_4521.xmp"), "xmp sidecar data").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        let result = service
+            .import(std::slice::from_ref(&photos), &volume, &default_filter())
+            .unwrap();
+
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.recipes_attached, 1);
+
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        assert_eq!(summaries.len(), 1);
+
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert_eq!(asset.variants.len(), 1);
+        assert_eq!(asset.recipes.len(), 1);
+        assert_eq!(asset.recipes[0].software, "Adobe/CaptureOne");
+    }
+
+    #[test]
+    fn import_raw_jpg_xmp_cos_groups_correctly() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photos = vol_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("DSC_4521.nef"), "raw data").unwrap();
+        std::fs::write(photos.join("DSC_4521.jpg"), "jpeg data").unwrap();
+        std::fs::write(photos.join("DSC_4521.xmp"), "xmp data").unwrap();
+        std::fs::write(photos.join("DSC_4521.cos"), "cos data").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        let mut filter = FileTypeFilter::default();
+        filter.include("captureone").unwrap();
+        let result = service.import(std::slice::from_ref(&photos), &volume, &filter).unwrap();
+
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.recipes_attached, 2);
+
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        assert_eq!(summaries.len(), 1);
+
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert_eq!(asset.variants.len(), 2);
+        assert_eq!(asset.recipes.len(), 2);
+    }
+
+    #[test]
+    fn import_same_stem_different_dirs_creates_separate_assets() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let dir_a = vol_dir.path().join("a");
+        let dir_b = vol_dir.path().join("b");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        // Different content so they don't dedup
+        std::fs::write(dir_a.join("photo.jpg"), "content A").unwrap();
+        std::fs::write(dir_b.join("photo.jpg"), "content B").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        let result = service
+            .import(&[dir_a, dir_b], &volume, &default_filter())
+            .unwrap();
+
+        assert_eq!(result.imported, 2);
+
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        assert_eq!(summaries.len(), 2);
+    }
+
+    #[test]
+    fn import_solo_file_works_unchanged() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        std::fs::write(vol_dir.path().join("solo.jpg"), "solo content").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        let result = service
+            .import(&[vol_dir.path().join("solo.jpg")], &volume, &default_filter())
+            .unwrap();
+
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.recipes_attached, 0);
+
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].variant_count, 1);
+    }
+
+    /// Helper to create an XMP sidecar with given keywords, rating, label, description.
+    fn make_xmp(
+        keywords: &[&str],
+        rating: Option<u8>,
+        label: Option<&str>,
+        description: Option<&str>,
+        creator: Option<&str>,
+        copyright: Option<&str>,
+    ) -> String {
+        let mut parts = Vec::new();
+        parts.push(r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/""#.to_string());
+        if let Some(r) = rating {
+            parts.push(format!("\n    xmp:Rating=\"{r}\""));
+        }
+        if let Some(l) = label {
+            parts.push(format!("\n    xmp:Label=\"{l}\""));
+        }
+        parts.push(">".to_string());
+        if !keywords.is_empty() {
+            parts.push("   <dc:subject>\n    <rdf:Bag>".to_string());
+            for kw in keywords {
+                parts.push(format!("     <rdf:li>{kw}</rdf:li>"));
+            }
+            parts.push("    </rdf:Bag>\n   </dc:subject>".to_string());
+        }
+        if let Some(desc) = description {
+            parts.push(format!(
+                "   <dc:description>\n    <rdf:Alt>\n     <rdf:li xml:lang=\"x-default\">{desc}</rdf:li>\n    </rdf:Alt>\n   </dc:description>"
+            ));
+        }
+        if let Some(c) = creator {
+            parts.push(format!(
+                "   <dc:creator>\n    <rdf:Seq>\n     <rdf:li>{c}</rdf:li>\n    </rdf:Seq>\n   </dc:creator>"
+            ));
+        }
+        if let Some(cr) = copyright {
+            parts.push(format!(
+                "   <dc:rights>\n    <rdf:Alt>\n     <rdf:li xml:lang=\"x-default\">{cr}</rdf:li>\n    </rdf:Alt>\n   </dc:rights>"
+            ));
+        }
+        parts.push("  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>".to_string());
+        parts.join("\n")
+    }
+
+    #[test]
+    fn import_xmp_extracts_tags_and_metadata() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photos = vol_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("DSC_001.nef"), "raw file data").unwrap();
+        let xmp = make_xmp(
+            &["landscape", "sunset"],
+            Some(4),
+            Some("Blue"),
+            None,
+            None,
+            None,
+        );
+        std::fs::write(photos.join("DSC_001.xmp"), &xmp).unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        let result = service.import(&[photos], &volume, &default_filter()).unwrap();
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.recipes_attached, 1);
+
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+
+        assert!(asset.tags.contains(&"landscape".to_string()));
+        assert!(asset.tags.contains(&"sunset".to_string()));
+        assert_eq!(
+            asset.variants[0].source_metadata.get("rating").map(|s| s.as_str()),
+            Some("4")
+        );
+        assert_eq!(
+            asset.variants[0].source_metadata.get("label").map(|s| s.as_str()),
+            Some("Blue")
+        );
+    }
+
+    #[test]
+    fn import_xmp_sets_description() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photos = vol_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("DSC_002.nef"), "raw data 2").unwrap();
+        let xmp = make_xmp(&[], None, None, Some("A great photo"), None, None);
+        std::fs::write(photos.join("DSC_002.xmp"), &xmp).unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service.import(&[photos], &volume, &default_filter()).unwrap();
+
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert_eq!(asset.description.as_deref(), Some("A great photo"));
+    }
+
+    #[test]
+    fn import_xmp_does_not_overwrite_existing_tags() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photos = vol_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("DSC_003.nef"), "raw data 3").unwrap();
+        let xmp = make_xmp(&["nature", "forest"], Some(5), None, None, None, None);
+        std::fs::write(photos.join("DSC_003.xmp"), &xmp).unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service.import(&[photos], &volume, &default_filter()).unwrap();
+
+        // Now manually add a tag to the asset
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let mut asset = metadata_store.load(summaries[0].id).unwrap();
+        asset.tags.push("manual-tag".to_string());
+        metadata_store.save(&asset).unwrap();
+
+        // Verify original XMP tags + manual tag are all present
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert!(asset.tags.contains(&"nature".to_string()));
+        assert!(asset.tags.contains(&"forest".to_string()));
+        assert!(asset.tags.contains(&"manual-tag".to_string()));
+    }
+
+    #[test]
+    fn import_auto_tags_applied() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        std::fs::write(vol_dir.path().join("photo.jpg"), "test content for tags").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        let auto_tags = vec!["inbox".to_string(), "unreviewed".to_string()];
+        let result = service.import_with_callback(
+            &[vol_dir.path().join("photo.jpg")],
+            &volume,
+            &default_filter(),
+            &[],
+            &auto_tags,
+            false,
+            false,
+            |_, _, _| {},
+        ).unwrap();
+
+        assert_eq!(result.imported, 1);
+
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert!(asset.tags.contains(&"inbox".to_string()));
+        assert!(asset.tags.contains(&"unreviewed".to_string()));
+    }
+
+    #[test]
+    fn import_exclude_patterns_skip_files() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        std::fs::write(vol_dir.path().join("photo.jpg"), "real image").unwrap();
+        std::fs::write(vol_dir.path().join("Thumbs.db"), "thumbnail cache").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        let exclude = vec!["Thumbs.db".to_string()];
+        let result = service.import_with_callback(
+            &[vol_dir.path().to_path_buf()],
+            &volume,
+            &default_filter(),
+            &exclude,
+            &[],
+            false,
+            false,
+            |_, _, _| {},
+        ).unwrap();
+
+        assert_eq!(result.imported, 1);
+    }
+
+    #[test]
+    fn import_uses_mtime_fallback_when_no_exif() {
+        use chrono::Utc;
+
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photo_path = vol_dir.path().join("plain.jpg");
+        // Write a file with no EXIF data
+        std::fs::write(&photo_path, "no exif data here just plain bytes").unwrap();
+
+        // Set a specific mtime in the past (2020-01-15)
+        let target_time = std::time::SystemTime::UNIX_EPOCH
+            + std::time::Duration::from_secs(1579046400); // 2020-01-15 00:00:00 UTC
+        let file_times = std::fs::FileTimes::new()
+            .set_modified(target_time);
+        let file = std::fs::File::options().write(true).open(&photo_path).unwrap();
+        file.set_times(file_times).unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        let result = service.import(
+            &[photo_path],
+            &volume,
+            &default_filter(),
+        ).unwrap();
+        assert_eq!(result.imported, 1);
+
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+
+        // Should use mtime, not current time
+        let now = Utc::now();
+        let diff_from_now = (now - asset.created_at).num_hours();
+        assert!(diff_from_now > 24, "created_at should be in 2020, not near now; got {}", asset.created_at);
+
+        // Check it's close to our target mtime (2020-01-15)
+        let expected = chrono::DateTime::<Utc>::from(target_time);
+        let diff_from_target = (asset.created_at - expected).num_seconds().abs();
+        assert!(diff_from_target <= 1, "created_at should match file mtime; got {} vs expected {}", asset.created_at, expected);
+    }
+
+    #[test]
+    fn import_second_variant_updates_date_if_older() {
+        use chrono::Utc;
+
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+
+        // Create two files with the same stem (will be grouped)
+        let raw_path = vol_dir.path().join("photo.arw");
+        let jpg_path = vol_dir.path().join("photo.jpg");
+        std::fs::write(&raw_path, "fake raw content for date test").unwrap();
+        std::fs::write(&jpg_path, "fake jpg content for date test").unwrap();
+
+        // Set RAW to newer mtime (2024), JPG to older mtime (2020)
+        let newer_time = std::time::SystemTime::UNIX_EPOCH
+            + std::time::Duration::from_secs(1704067200); // 2024-01-01
+        let older_time = std::time::SystemTime::UNIX_EPOCH
+            + std::time::Duration::from_secs(1579046400); // 2020-01-15
+
+        let raw_file = std::fs::File::options().write(true).open(&raw_path).unwrap();
+        raw_file.set_times(std::fs::FileTimes::new().set_modified(newer_time)).unwrap();
+        let jpg_file = std::fs::File::options().write(true).open(&jpg_path).unwrap();
+        jpg_file.set_times(std::fs::FileTimes::new().set_modified(older_time)).unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        let result = service.import(
+            &[vol_dir.path().to_path_buf()],
+            &volume,
+            &default_filter(),
+        ).unwrap();
+        assert_eq!(result.imported, 2); // RAW + JPG grouped into one asset
+
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        assert_eq!(summaries.len(), 1, "should be one asset (grouped)");
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+
+        // Asset date should be the older of the two mtimes (2020-01-15)
+        let expected = chrono::DateTime::<Utc>::from(older_time);
+        let diff = (asset.created_at - expected).num_seconds().abs();
+        assert!(diff <= 1, "created_at should be the older variant date; got {} vs expected {}", asset.created_at, expected);
+    }
+
+    /// Catalog keys and sidecar paths are `/`-separated on every platform;
+    /// on Windows this is the test that a `strip_prefix` result never
+    /// reaches a store with backslashes.
+    #[test]
+    fn stored_paths_use_forward_slashes_on_every_platform() {
+        let env = ServiceEnv::new();
+        env.write("2026/shoot one/DSC_1.nef", "raw bytes");
+        env.write("2026/shoot one/DSC_1.xmp", &make_xmp(&["bird"], Some(3), None, None, None, None));
+        let result = env.import(&["2026"]);
+        assert_eq!((result.imported, result.recipes_attached), (1, 1));
+        let id = result.new_asset_ids[0].clone();
+
+        let stored = |env: &ServiceEnv| -> Vec<String> {
+            let catalog = env.cat.catalog();
+            let mut paths: Vec<String> = Vec::new();
+            for sql in ["SELECT relative_path FROM file_locations", "SELECT relative_path FROM recipes"] {
+                let mut stmt = catalog.conn().prepare(sql).unwrap();
+                paths.extend(stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().map(|p| p.unwrap()));
+            }
+            let asset = env.asset(&id);
+            paths.extend(asset.variants.iter().flat_map(|v| &v.locations).map(|l| l.relative_path.to_string_lossy().to_string()));
+            paths.extend(asset.recipes.iter().map(|r| r.location.relative_path.to_string_lossy().to_string()));
+            paths.sort();
+            paths
+        };
+        assert_eq!(
+            stored(&env),
+            [
+                "2026/shoot one/DSC_1.nef",
+                "2026/shoot one/DSC_1.nef",
+                "2026/shoot one/DSC_1.xmp",
+                "2026/shoot one/DSC_1.xmp",
+            ]
+        );
+        assert_eq!(result.imported_directories, ["2026/shoot one"]);
+
+        // A move found by sync is stored the same way.
+        std::fs::create_dir_all(env.abs("sorted/deep")).unwrap();
+        std::fs::rename(env.abs("2026/shoot one/DSC_1.nef"), env.abs("sorted/deep/DSC_1.nef")).unwrap();
+        std::fs::rename(env.abs("2026/shoot one/DSC_1.xmp"), env.abs("sorted/deep/DSC_1.xmp")).unwrap();
+        let root = [env.vol_dir.path().to_path_buf()];
+        env.service.sync(&root, &env.volume, true, false, &[], |_, _, _| {}).unwrap();
+        let after = stored(&env);
+        assert!(after.iter().all(|p| p.starts_with("sorted/deep/DSC_1.")), "{after:?}");
+    }
+}

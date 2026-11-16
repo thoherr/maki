@@ -561,3 +561,263 @@ impl AssetService {
     }
 
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::asset_service::test_support::*;
+    use crate::asset_service::*;
+
+    #[test]
+    fn fix_roles_corrects_raw_jpg_pair() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photos = vol_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("DSC_001.nef"), "raw file content").unwrap();
+        std::fs::write(photos.join("DSC_001.jpg"), "jpeg file content").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service.import(std::slice::from_ref(&photos), &volume, &default_filter()).unwrap();
+
+        // Manually set the JPG variant back to Original (simulating pre-fix import)
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let mut asset = metadata_store.load(summaries[0].id).unwrap();
+        let jpg_idx = asset.variants.iter().position(|v| v.format == "jpg").unwrap();
+        asset.variants[jpg_idx].role = VariantRole::Original;
+        metadata_store.save(&asset).unwrap();
+        let catalog = crate::catalog::Catalog::open(catalog_dir.path()).unwrap();
+        catalog.update_variant_role(&asset.variants[jpg_idx].content_hash, "original").unwrap();
+
+        // Run fix_roles with apply
+        let result = service.fix_roles(&[], None, None, true, |_, _| {}).unwrap();
+        assert_eq!(result.checked, 1);
+        assert_eq!(result.fixed, 1);
+        assert_eq!(result.variants_fixed, 1);
+        assert_eq!(result.already_correct, 0);
+        assert!(!result.dry_run);
+
+        // Verify the JPG variant is now Export in sidecar
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        let jpg = asset.variants.iter().find(|v| v.format == "jpg").unwrap();
+        assert_eq!(jpg.role, VariantRole::Export);
+        // RAW should still be Original
+        let raw = asset.variants.iter().find(|v| v.format == "nef").unwrap();
+        assert_eq!(raw.role, VariantRole::Original);
+    }
+
+    #[test]
+    fn fix_roles_skips_non_raw_groups() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photos = vol_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("photo.jpg"), "jpeg content").unwrap();
+        std::fs::write(photos.join("photo.png"), "png content").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service.import(std::slice::from_ref(&photos), &volume, &default_filter()).unwrap();
+
+        // Both should be Original (no RAW)
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert!(asset.variants.iter().all(|v| v.role == VariantRole::Original));
+
+        // Run fix_roles — should not change anything
+        let result = service.fix_roles(&[], None, None, true, |_, _| {}).unwrap();
+        assert_eq!(result.checked, 1);
+        assert_eq!(result.fixed, 0);
+        assert_eq!(result.variants_fixed, 0);
+        assert_eq!(result.already_correct, 1);
+
+        // Verify roles unchanged
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert!(asset.variants.iter().all(|v| v.role == VariantRole::Original));
+    }
+
+    #[test]
+    fn fix_roles_dry_run_does_not_modify() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photos = vol_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("DSC_002.nef"), "raw data here").unwrap();
+        std::fs::write(photos.join("DSC_002.jpg"), "jpeg data here").unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".into(),
+            vol_dir.path().to_path_buf(),
+            crate::models::VolumeType::Local,
+        );
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service.import(std::slice::from_ref(&photos), &volume, &default_filter()).unwrap();
+
+        // Manually set the JPG variant back to Original
+        let metadata_store = crate::metadata_store::MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let mut asset = metadata_store.load(summaries[0].id).unwrap();
+        let jpg_idx = asset.variants.iter().position(|v| v.format == "jpg").unwrap();
+        asset.variants[jpg_idx].role = VariantRole::Original;
+        metadata_store.save(&asset).unwrap();
+        let catalog = crate::catalog::Catalog::open(catalog_dir.path()).unwrap();
+        catalog.update_variant_role(&asset.variants[jpg_idx].content_hash, "original").unwrap();
+
+        // Run fix_roles with dry run (apply=false)
+        let result = service.fix_roles(&[], None, None, false, |_, _| {}).unwrap();
+        assert_eq!(result.fixed, 1);
+        assert_eq!(result.variants_fixed, 1);
+        assert!(result.dry_run);
+
+        // Verify roles are NOT changed in sidecar
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        let jpg = asset.variants.iter().find(|v| v.format == "jpg").unwrap();
+        assert_eq!(jpg.role, VariantRole::Original, "dry run should not modify sidecar");
+    }
+
+    #[test]
+    fn fix_dates_corrects_wrong_date() {
+        use chrono::{DateTime, Utc, TimeZone};
+
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+        DeviceRegistry::init(catalog_dir.path()).unwrap();
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photo_path = vol_dir.path().join("photo.jpg");
+        std::fs::write(&photo_path, "content for fix-dates test").unwrap();
+
+        // Set mtime to 2020
+        let old_time = std::time::SystemTime::UNIX_EPOCH
+            + std::time::Duration::from_secs(1579046400); // 2020-01-15
+        let file = std::fs::File::options().write(true).open(&photo_path).unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(old_time)).unwrap();
+
+        // Register volume so fix_dates can find it
+        let registry = DeviceRegistry::new(catalog_dir.path());
+        let volume = registry.register("test-vol", vol_dir.path(), crate::models::VolumeType::Local, None).unwrap();
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service.import(
+            &[photo_path],
+            &volume,
+            &default_filter(),
+        ).unwrap();
+
+        // Manually set asset date to "now" (simulating the old bug)
+        let metadata_store = MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let mut asset = metadata_store.load(summaries[0].id).unwrap();
+        let wrong_date = Utc.with_ymd_and_hms(2026, 2, 23, 12, 0, 0).unwrap();
+        asset.created_at = wrong_date;
+        metadata_store.save(&asset).unwrap();
+        let catalog = crate::catalog::Catalog::open(catalog_dir.path()).unwrap();
+        catalog.insert_asset(&asset).unwrap();
+
+        // Run fix_dates in dry-run mode
+        let result = service.fix_dates(None, None, false, |_, _, _| {}).unwrap();
+        assert_eq!(result.fixed, 1);
+        assert!(result.dry_run);
+
+        // Verify date NOT changed (dry run)
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        let diff = (asset.created_at - wrong_date).num_seconds().abs();
+        assert!(diff <= 1, "dry run should not change date");
+
+        // Run fix_dates with apply
+        let result = service.fix_dates(None, None, true, |_, _, _| {}).unwrap();
+        assert_eq!(result.fixed, 1);
+        assert!(!result.dry_run);
+
+        // Verify date IS changed to the older mtime
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        let expected = DateTime::<Utc>::from(old_time);
+        let diff = (asset.created_at - expected).num_seconds().abs();
+        assert!(diff <= 1, "fix_dates should correct date to file mtime; got {} vs {}", asset.created_at, expected);
+    }
+
+    #[test]
+    fn fix_dates_uses_source_metadata_date_taken() {
+        use chrono::{Utc, TimeZone};
+
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+        DeviceRegistry::init(catalog_dir.path()).unwrap();
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photo_path = vol_dir.path().join("photo.jpg");
+        std::fs::write(&photo_path, "content for date_taken metadata test").unwrap();
+
+        let registry = DeviceRegistry::new(catalog_dir.path());
+        let volume = registry.register("test-vol", vol_dir.path(), crate::models::VolumeType::Local, None).unwrap();
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service.import(&[photo_path], &volume, &default_filter()).unwrap();
+
+        // Manually set a date_taken in source_metadata and a wrong created_at
+        let metadata_store = MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let mut asset = metadata_store.load(summaries[0].id).unwrap();
+        let exif_date = Utc.with_ymd_and_hms(2019, 6, 15, 10, 30, 0).unwrap();
+        asset.variants[0].source_metadata.insert(
+            "date_taken".to_string(),
+            exif_date.to_rfc3339(),
+        );
+        let wrong_date = Utc.with_ymd_and_hms(2026, 2, 23, 12, 0, 0).unwrap();
+        asset.created_at = wrong_date;
+        metadata_store.save(&asset).unwrap();
+        let catalog = crate::catalog::Catalog::open(catalog_dir.path()).unwrap();
+        catalog.insert_asset(&asset).unwrap();
+
+        // Run fix_dates with apply
+        let result = service.fix_dates(None, None, true, |_, _, _| {}).unwrap();
+        assert_eq!(result.fixed, 1);
+
+        // Should pick the EXIF date (2019) which is older than file mtime
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        let diff = (asset.created_at - exif_date).num_seconds().abs();
+        assert!(diff <= 1, "fix_dates should use source_metadata date_taken; got {} vs {}", asset.created_at, exif_date);
+    }
+
+    #[test]
+    fn fix_dates_already_correct_no_change() {
+        let catalog_dir = tempfile::tempdir().unwrap();
+        setup_catalog(catalog_dir.path());
+        DeviceRegistry::init(catalog_dir.path()).unwrap();
+
+        let vol_dir = tempfile::tempdir().unwrap();
+        let photo_path = vol_dir.path().join("photo.jpg");
+        std::fs::write(&photo_path, "correct date test content").unwrap();
+
+        let registry = DeviceRegistry::new(catalog_dir.path());
+        let volume = registry.register("test-vol", vol_dir.path(), crate::models::VolumeType::Local, None).unwrap();
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service.import(&[photo_path], &volume, &default_filter()).unwrap();
+
+        // The import now uses mtime fallback, so created_at should already be correct.
+        // fix_dates should report it as already correct.
+        let result = service.fix_dates(None, None, false, |_, _, _| {}).unwrap();
+        assert_eq!(result.already_correct, 1);
+        assert_eq!(result.fixed, 0);
+    }
+}

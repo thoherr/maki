@@ -577,3 +577,378 @@ fn offline_mount_point(volume: &Volume) -> MakiError {
         Some(format!("mount point {} not found", volume.mount_point.display())),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::asset_service::test_support::*;
+    use crate::asset_service::*;
+
+    /// Set up a catalog with volumes registered for relocate tests.
+    /// Returns (catalog_dir, vol1_dir, vol2_dir, vol1, vol2).
+    fn setup_relocate() -> (
+        crate::test_support::TempCatalog,
+        tempfile::TempDir,
+        tempfile::TempDir,
+        Volume,
+        Volume,
+    ) {
+        let catalog_dir = crate::test_support::TempCatalog::new();
+        let (vol1_dir, vol1) = catalog_dir.add_volume("vol1");
+        let (vol2_dir, vol2) = catalog_dir.add_volume("vol2");
+        (catalog_dir, vol1_dir, vol2_dir, vol1, vol2)
+    }
+
+    #[test]
+    fn relocate_copies_variant_to_target_volume() {
+        let (catalog_dir, vol1_dir, vol2_dir, vol1, _vol2) = setup_relocate();
+
+        // Create a file on vol1
+        std::fs::write(vol1_dir.path().join("photo.jpg"), "photo data").unwrap();
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service
+            .import(
+                &[vol1_dir.path().join("photo.jpg")],
+                &vol1,
+                &default_filter(),
+            )
+            .unwrap();
+
+        // Get asset ID
+        let metadata_store = MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset_id = summaries[0].id.to_string();
+
+        // Relocate to vol2
+        let result = service.relocate(&asset_id, "vol2", false, false, false).unwrap();
+        assert_eq!(result.copied, 1);
+        assert_eq!(result.removed, 0);
+
+        // Verify file exists on vol2
+        assert!(vol2_dir.path().join("photo.jpg").exists());
+        // File also still on vol1
+        assert!(vol1_dir.path().join("photo.jpg").exists());
+
+        // Verify sidecar has locations on both volumes
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert_eq!(asset.variants[0].locations.len(), 2);
+    }
+
+    #[test]
+    fn relocate_with_remove_source_moves_files() {
+        let (catalog_dir, vol1_dir, vol2_dir, vol1, _vol2) = setup_relocate();
+
+        std::fs::write(vol1_dir.path().join("photo.jpg"), "move me").unwrap();
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service
+            .import(
+                &[vol1_dir.path().join("photo.jpg")],
+                &vol1,
+                &default_filter(),
+            )
+            .unwrap();
+
+        let metadata_store = MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset_id = summaries[0].id.to_string();
+
+        let result = service.relocate(&asset_id, "vol2", true, false, false).unwrap();
+        assert_eq!(result.copied, 1);
+        assert_eq!(result.removed, 1);
+
+        // File should be on vol2 but not on vol1
+        assert!(vol2_dir.path().join("photo.jpg").exists());
+        assert!(!vol1_dir.path().join("photo.jpg").exists());
+
+        // Sidecar should have only vol2 location
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert_eq!(asset.variants[0].locations.len(), 1);
+        assert_eq!(asset.variants[0].locations[0].volume_id, _vol2.id);
+    }
+
+    #[test]
+    fn relocate_copies_recipes_alongside_variants() {
+        let (catalog_dir, vol1_dir, vol2_dir, vol1, _vol2) = setup_relocate();
+
+        let photos = vol1_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("DSC.nef"), "raw data for relocate").unwrap();
+        std::fs::write(photos.join("DSC.xmp"), "xmp recipe data").unwrap();
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service
+            .import(&[photos], &vol1, &default_filter())
+            .unwrap();
+
+        let metadata_store = MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset_id = summaries[0].id.to_string();
+
+        let result = service.relocate(&asset_id, "vol2", false, false, false).unwrap();
+        // Should copy both variant and recipe
+        assert_eq!(result.copied, 2);
+
+        // Both files should exist on vol2
+        assert!(vol2_dir.path().join("photos/DSC.nef").exists());
+        assert!(vol2_dir.path().join("photos/DSC.xmp").exists());
+    }
+
+    #[test]
+    fn relocate_skips_already_present_files() {
+        let (catalog_dir, vol1_dir, _vol2_dir, vol1, _vol2) = setup_relocate();
+
+        std::fs::write(vol1_dir.path().join("photo.jpg"), "skip test").unwrap();
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service
+            .import(
+                &[vol1_dir.path().join("photo.jpg")],
+                &vol1,
+                &default_filter(),
+            )
+            .unwrap();
+
+        let metadata_store = MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset_id = summaries[0].id.to_string();
+
+        // First relocate
+        service.relocate(&asset_id, "vol2", false, false, false).unwrap();
+
+        // Second relocate — vol1 location still generates a plan entry,
+        // but the file already exists on vol2 with matching hash, so it's skipped
+        let result = service.relocate(&asset_id, "vol2", false, false, false).unwrap();
+        assert_eq!(result.copied, 0);
+        assert_eq!(result.skipped, 1);
+        assert!(result.actions[0].contains("already exists"));
+    }
+
+    #[test]
+    fn relocate_dry_run_makes_no_changes() {
+        let (catalog_dir, vol1_dir, vol2_dir, vol1, _vol2) = setup_relocate();
+
+        std::fs::write(vol1_dir.path().join("photo.jpg"), "dry run test").unwrap();
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service
+            .import(
+                &[vol1_dir.path().join("photo.jpg")],
+                &vol1,
+                &default_filter(),
+            )
+            .unwrap();
+
+        let metadata_store = MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset_id = summaries[0].id.to_string();
+
+        let result = service.relocate(&asset_id, "vol2", false, false, true).unwrap();
+        assert_eq!(result.copied, 1);
+
+        // File should NOT exist on vol2
+        assert!(!vol2_dir.path().join("photo.jpg").exists());
+
+        // Sidecar should still only have vol1 location
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        assert_eq!(asset.variants[0].locations.len(), 1);
+    }
+
+    #[test]
+    fn relocate_noop_when_already_on_target() {
+        let (catalog_dir, vol1_dir, _vol2_dir, vol1, _vol2) = setup_relocate();
+
+        std::fs::write(vol1_dir.path().join("photo.jpg"), "noop test").unwrap();
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service
+            .import(
+                &[vol1_dir.path().join("photo.jpg")],
+                &vol1,
+                &default_filter(),
+            )
+            .unwrap();
+
+        let metadata_store = MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset_id = summaries[0].id.to_string();
+
+        // Relocate to same volume
+        let result = service.relocate(&asset_id, "vol1", false, false, false).unwrap();
+        assert_eq!(result.copied, 0);
+        assert_eq!(result.skipped, 0);
+        assert!(result.actions[0].contains("already on target"));
+    }
+
+    #[test]
+    fn relocate_fails_if_target_volume_offline() {
+        let (catalog_dir, vol1_dir, _vol2_dir, vol1, _vol2) = setup_relocate();
+
+        std::fs::write(vol1_dir.path().join("photo.jpg"), "offline test").unwrap();
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service
+            .import(
+                &[vol1_dir.path().join("photo.jpg")],
+                &vol1,
+                &default_filter(),
+            )
+            .unwrap();
+
+        let metadata_store = MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset_id = summaries[0].id.to_string();
+
+        // Register an offline volume
+        let registry = crate::device_registry::DeviceRegistry::new(catalog_dir.path());
+        registry
+            .register(
+                "offline-vol",
+                std::path::Path::new("/nonexistent/mount"),
+                crate::models::VolumeType::External,
+                None,
+            )
+            .unwrap();
+
+        let err = service
+            .relocate(&asset_id, "offline-vol", false, false, false)
+            .unwrap_err();
+        assert!(err.to_string().contains("offline"));
+    }
+
+    #[test]
+    fn relocate_fails_for_unknown_asset_id() {
+        let (catalog_dir, _vol1_dir, _vol2_dir, _vol1, _vol2) = setup_relocate();
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        let err = service
+            .relocate("nonexistent-id", "vol2", false, false, false)
+            .unwrap_err();
+        assert!(err.to_string().contains("no asset found"));
+    }
+
+    #[test]
+    fn relocate_fails_for_unknown_volume() {
+        let (catalog_dir, vol1_dir, _vol2_dir, vol1, _vol2) = setup_relocate();
+
+        std::fs::write(vol1_dir.path().join("photo.jpg"), "unknown vol test").unwrap();
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service
+            .import(
+                &[vol1_dir.path().join("photo.jpg")],
+                &vol1,
+                &default_filter(),
+            )
+            .unwrap();
+
+        let metadata_store = MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset_id = summaries[0].id.to_string();
+
+        let err = service
+            .relocate(&asset_id, "nonexistent-vol", false, false, false)
+            .unwrap_err();
+        assert!(err.to_string().contains("no volume found"));
+    }
+
+    /// A catalog failure in the middle of relocate's row changes must roll
+    /// every row back (architecture audit F2): the variant location row is
+    /// inserted first, then the recipe row update fails because the recipe
+    /// row was removed behind the sidecar's back — the location row must
+    /// not survive.
+    #[test]
+    fn relocate_catalog_failure_leaves_catalog_locations_unchanged() {
+        let (catalog_dir, vol1_dir, vol2_dir, vol1, vol2) = setup_relocate();
+
+        let photos = vol1_dir.path().join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(photos.join("DSC.nef"), "raw data for rollback").unwrap();
+        std::fs::write(photos.join("DSC.xmp"), "xmp recipe for rollback").unwrap();
+
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service.import(&[photos], &vol1, &default_filter()).unwrap();
+
+        let metadata_store = MetadataStore::new(catalog_dir.path());
+        let summaries = metadata_store.list().unwrap();
+        let asset = metadata_store.load(summaries[0].id).unwrap();
+        let asset_id = asset.id.to_string();
+        let variant_hash = asset.variants[0].content_hash.clone();
+        assert_eq!(asset.recipes.len(), 1);
+
+        // Inject the failure: drop the recipe row from the catalog only.
+        let catalog = crate::catalog::Catalog::open(catalog_dir.path()).unwrap();
+        assert!(catalog.delete_recipe(&asset.recipes[0].id.to_string()).unwrap());
+        let before = catalog.get_variant_file_locations(&variant_hash).unwrap();
+        assert_eq!(before.len(), 1);
+
+        let err = service
+            .relocate(&asset_id, "vol2", false, false, false)
+            .unwrap_err();
+        assert!(err.to_string().contains("no recipe found"), "{err:#}");
+
+        // Files were copied (phase 1 precedes any metadata change) ...
+        assert!(vol2_dir.path().join("photos/DSC.nef").exists());
+        // ... the sidecar (source of truth) is ahead of the catalog ...
+        let after_sidecar = metadata_store.load(summaries[0].id).unwrap();
+        assert_eq!(after_sidecar.variants[0].locations.len(), 2);
+        // ... and the catalog rows are exactly as before: rolled back.
+        let after = catalog.get_variant_file_locations(&variant_hash).unwrap();
+        assert_eq!(after, before);
+        assert!(!after.iter().any(|(vol, _)| *vol == vol2.id.to_string()));
+    }
+
+    /// Typed errors (architecture audit F19): an offline target classifies
+    /// as `MakiError::Offline`, an unknown volume as `MakiError::NotFound`.
+    #[test]
+    fn relocate_errors_are_typed() {
+        let (catalog_dir, vol1_dir, _vol2_dir, vol1, _vol2) = setup_relocate();
+        std::fs::write(vol1_dir.path().join("photo.jpg"), "typed errors").unwrap();
+        let service = AssetService::new(catalog_dir.path(), crate::Verbosity::quiet(), &crate::config::PreviewConfig::default());
+        service
+            .import(&[vol1_dir.path().join("photo.jpg")], &vol1, &default_filter())
+            .unwrap();
+        let asset_id = MetadataStore::new(catalog_dir.path()).list().unwrap()[0].id.to_string();
+
+        let registry = crate::device_registry::DeviceRegistry::new(catalog_dir.path());
+        registry
+            .register("offline-vol", std::path::Path::new("/nonexistent/mount"), crate::models::VolumeType::External, None)
+            .unwrap();
+
+        let err = service.relocate(&asset_id, "offline-vol", false, false, false).unwrap_err();
+        assert!(matches!(
+            crate::error::classify(&err),
+            Some(crate::error::MakiError::Offline { volume, .. }) if volume == "offline-vol"
+        ), "{err:#}");
+        assert_eq!(err.to_string(), "volume 'offline-vol' is offline (mount point /nonexistent/mount not found)");
+
+        let err = service.relocate(&asset_id, "nonexistent-vol", false, false, false).unwrap_err();
+        assert!(matches!(
+            crate::error::classify(&err),
+            Some(crate::error::MakiError::NotFound { kind: "volume", .. })
+        ), "{err:#}");
+    }
+
+    #[test]
+    fn update_location_follows_a_file_moved_by_hand() {
+        let env = ServiceEnv::new();
+        let id = env.add("a.jpg", "moved by hand");
+        std::fs::create_dir_all(env.abs("sorted")).unwrap();
+        std::fs::rename(env.abs("a.jpg"), env.abs("sorted/a.jpg")).unwrap();
+
+        let result = env.service.update_location(&id, "a.jpg", &env.abs("sorted/a.jpg"), None).unwrap();
+        assert_eq!((result.old_path.as_str(), result.new_path.as_str()), ("a.jpg", "sorted/a.jpg"));
+        assert_eq!(env.location_paths(&id), ["sorted/a.jpg"]);
+        assert_eq!(env.location_rows(&id), 1);
+    }
+
+    #[test]
+    fn update_location_rejects_a_file_with_different_content() {
+        let env = ServiceEnv::new();
+        let id = env.add("a.jpg", "original bytes");
+        env.write("other.jpg", "different bytes");
+
+        assert!(env.service.update_location(&id, "a.jpg", &env.abs("other.jpg"), None).is_err());
+        assert_eq!(env.location_paths(&id), ["a.jpg"]);
+    }
+}

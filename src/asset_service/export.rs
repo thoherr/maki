@@ -559,3 +559,46 @@ impl AssetService {
     }
 
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::asset_service::test_support::*;
+    use crate::asset_service::*;
+
+    fn export(env: &ServiceEnv, target: &Path, layout: ExportLayout, dry_run: bool) -> ExportResult {
+        env.service
+            .export("", target, layout, false, false, false, ExportSource::Originals, dry_run, false, |_, _, _| {})
+            .unwrap()
+    }
+
+    #[test]
+    fn export_flat_copies_files_and_dry_run_copies_nothing() {
+        let env = ServiceEnv::new();
+        env.add("2026/a.jpg", "first");
+        env.add("2026/b.jpg", "second");
+        let target = tempfile::tempdir().unwrap();
+
+        let dry = export(&env, target.path(), ExportLayout::Flat, true);
+        assert!(dry.dry_run);
+        assert_eq!(dry.assets_matched, 2, "{dry:?}");
+        assert_eq!(std::fs::read_dir(target.path()).unwrap().count(), 0);
+
+        let result = export(&env, target.path(), ExportLayout::Flat, false);
+        assert_eq!((result.assets_matched, result.files_exported), (2, 2), "{result:?}");
+        assert_eq!(std::fs::read_to_string(target.path().join("a.jpg")).unwrap(), "first");
+
+        let again = export(&env, target.path(), ExportLayout::Flat, false);
+        assert_eq!((again.files_exported, again.files_skipped), (0, 2), "identical files are skipped: {again:?}");
+    }
+
+    #[test]
+    fn export_mirror_keeps_the_volume_relative_path() {
+        let env = ServiceEnv::new();
+        env.add("2026/shoot/a.jpg", "first");
+        let target = tempfile::tempdir().unwrap();
+
+        let result = export(&env, target.path(), ExportLayout::Mirror, false);
+        assert_eq!(result.files_exported, 1, "{result:?}");
+        assert!(target.path().join("2026/shoot/a.jpg").exists());
+    }
+}

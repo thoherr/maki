@@ -1503,3 +1503,66 @@ async fn read_only_blocks_tag_rename_and_collection_create() {
     let (status, _, _) = srv.get("/tags").await;
     assert_eq!(status, StatusCode::OK);
 }
+
+/// Readers taken from the pool keep answering while another connection
+/// writes: no `SQLITE_BUSY`, no torn counts, and every connection goes
+/// back to the pool.
+#[test]
+fn pool_readers_run_against_a_concurrent_writer() {
+    use crate::test_support::TempCatalog;
+    use crate::web::CatalogPool;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    const BATCHES: usize = 40;
+    const PER_BATCH: usize = 5;
+    let cat = TempCatalog::new();
+    let pool = Arc::new(CatalogPool::new(cat.path(), 4).unwrap());
+    let done = Arc::new(AtomicBool::new(false));
+
+    let readers: Vec<_> = (0..6)
+        .map(|_| {
+            let (pool, done) = (Arc::clone(&pool), Arc::clone(&done));
+            std::thread::spawn(move || {
+                let mut reads = 0usize;
+                while !done.load(Ordering::Relaxed) {
+                    let catalog = pool.get().unwrap();
+                    // One statement, one snapshot: a reader sees whole
+                    // transactions only, never a batch half written.
+                    let (assets, variants): (i64, i64) = catalog
+                        .conn()
+                        .query_row(
+                            "SELECT (SELECT COUNT(*) FROM assets), (SELECT COUNT(*) FROM variants)",
+                            [],
+                            |r| Ok((r.get(0)?, r.get(1)?)),
+                        )
+                        .unwrap();
+                    assert_eq!(assets % PER_BATCH as i64, 0, "torn read: {assets} assets");
+                    assert_eq!(assets, variants, "torn read across tables");
+                    reads += 1;
+                }
+                reads
+            })
+        })
+        .collect();
+
+    let writer = cat.catalog();
+    for batch in 0..BATCHES {
+        writer
+            .with_tx(|c| {
+                for i in 0..PER_BATCH {
+                    let asset = test_asset(&format!("sha256:pool-{batch}-{i}")).build();
+                    c.insert_asset(&asset)?;
+                    c.insert_variant(&asset.variants[0])?;
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+    done.store(true, Ordering::Relaxed);
+    let reads: usize = readers.into_iter().map(|r| r.join().expect("a reader panicked")).sum();
+    assert!(reads > 0);
+
+    let catalog = pool.get().unwrap();
+    let total: i64 = catalog.conn().query_row("SELECT COUNT(*) FROM assets", [], |r| r.get(0)).unwrap();
+    assert_eq!(total as usize, BATCHES * PER_BATCH);
+}

@@ -769,3 +769,62 @@ impl<F: Fn(&Path, CleanupStatus, Duration)> CleanupRun<'_, F> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::asset_service::test_support::*;
+
+    #[test]
+    fn cleanup_reports_stale_locations_and_removes_them_on_apply() {
+        let env = ServiceEnv::new();
+        let kept = env.add("kept.jpg", "still there");
+        let gone = env.add("gone.jpg", "deleted behind maki's back");
+        std::fs::remove_file(env.abs("gone.jpg")).unwrap();
+
+        let report = env.service.cleanup(None, None, false, |_, _, _| {}).unwrap();
+        assert_eq!((report.stale, report.removed), (1, 0), "{report:?}");
+        assert_eq!(env.location_rows(&gone), 1, "report mode changes nothing");
+
+        let applied = env.service.cleanup(None, None, true, |_, _, _| {}).unwrap();
+        assert_eq!((applied.stale, applied.removed, applied.removed_assets), (1, 1, 1), "{applied:?}");
+        assert!(applied.errors.is_empty(), "{applied:?}");
+        let catalog = env.cat.catalog();
+        assert_eq!(count(&catalog, "SELECT COUNT(*) FROM assets WHERE id = ?1", &gone), 0);
+        assert_eq!(count(&catalog, "SELECT COUNT(*) FROM assets WHERE id = ?1", &kept), 1);
+        assert_eq!(env.location_paths(&kept), ["kept.jpg"]);
+    }
+
+    #[test]
+    fn delete_assets_is_report_only_until_applied() {
+        let env = ServiceEnv::new();
+        let id = env.add("a.jpg", "delete me");
+
+        let report = env.service.delete_assets(std::slice::from_ref(&id), false, false, false, |_, _, _| {}).unwrap();
+        assert!(report.dry_run);
+        assert_eq!(count(&env.cat.catalog(), "SELECT COUNT(*) FROM assets WHERE id = ?1", &id), 1);
+
+        let ids = [id.clone(), "00000000-0000-0000-0000-000000000000".to_string()];
+        let applied = env.service.delete_assets(&ids, true, false, false, |_, _, _| {}).unwrap();
+        assert_eq!(applied.deleted, 1, "{applied:?}");
+        assert_eq!(applied.not_found.len(), 1, "{applied:?}");
+        assert_eq!(count(&env.cat.catalog(), "SELECT COUNT(*) FROM assets WHERE id = ?1", &id), 0);
+        assert_eq!(count(&env.cat.catalog(), "SELECT COUNT(*) FROM variants WHERE asset_id = ?1", &id), 0);
+        assert!(env.cat.store().load(id.parse().unwrap()).is_err(), "the sidecar is gone");
+        assert!(env.abs("a.jpg").exists(), "files stay without --remove-files");
+    }
+
+    #[test]
+    fn delete_assets_remove_files_deletes_or_trashes_the_file() {
+        let env = ServiceEnv::new();
+        let permanent = env.add("permanent.jpg", "no trash");
+        let trashed = env.add("trashed.jpg", "to the trash");
+
+        let result = env.service.delete_assets(&[permanent], true, true, true, |_, _, _| {}).unwrap();
+        assert_eq!((result.files_removed, result.files_trashed), (1, 0), "{result:?}");
+        assert!(!env.abs("permanent.jpg").exists());
+
+        let result = env.service.delete_assets(&[trashed], true, true, false, |_, _, _| {}).unwrap();
+        assert_eq!(result.files_trashed, 1, "{result:?}");
+        assert!(!env.abs("trashed.jpg").exists());
+    }
+}

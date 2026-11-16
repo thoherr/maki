@@ -28,7 +28,14 @@ All notable changes to the Digital Asset Manager are documented here.
   `catalog.rs` now sit in the section file whose functions they exercise
   (`src/catalog/search_exec.rs`, `lookup.rs`, `recipe_query.rs`, …), with
   shared fixtures in `src/catalog/test_support.rs`; `catalog.rs` shrinks
-  from about 5,000 to 1,000 lines.
+  from about 5,000 to 1,000 lines. The `asset_service.rs` tests moved the
+  same way.
+- **Unit tests for service operations and three coverage gaps.** 18 new
+  unit tests for verify, sync, cleanup, delete, dedup, export, the volume
+  operations and update-location (previously tested only through the
+  binary), plus: migration of a frozen pre-versioning catalog, stored
+  paths `/`-separated through import and sync, and pool readers against
+  a concurrent writer.
 
 ## v4.13.1 (2026-11-16)
 

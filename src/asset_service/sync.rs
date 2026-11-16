@@ -790,3 +790,43 @@ impl<F: Fn(&Path, SyncStatus, Duration)> SyncRun<'_, F> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::asset_service::test_support::*;
+
+    #[test]
+    fn sync_apply_follows_a_moved_file_in_both_stores() {
+        let env = ServiceEnv::new();
+        let id = env.add("a.jpg", "moved on disk");
+        std::fs::create_dir_all(env.abs("sub")).unwrap();
+        std::fs::rename(env.abs("a.jpg"), env.abs("sub/a.jpg")).unwrap();
+
+        let root = [env.vol_dir.path().to_path_buf()];
+        let dry = env.service.sync(&root, &env.volume, false, false, &[], |_, _, _| {}).unwrap();
+        assert_eq!(dry.moved, 1, "{dry:?}");
+        assert_eq!(env.location_paths(&id), ["a.jpg"], "a dry run changes nothing");
+
+        let applied = env.service.sync(&root, &env.volume, true, false, &[], |_, _, _| {}).unwrap();
+        assert_eq!(applied.moved, 1, "{applied:?}");
+        assert_eq!(env.location_paths(&id), ["sub/a.jpg"]);
+        assert_eq!(env.location_rows(&id), 1);
+    }
+
+    #[test]
+    fn sync_reports_new_and_missing_files_and_removes_stale_locations_on_request() {
+        let env = ServiceEnv::new();
+        let id = env.add("gone.jpg", "will be deleted");
+        std::fs::remove_file(env.abs("gone.jpg")).unwrap();
+        env.write("new.jpg", "not imported yet");
+
+        let root = [env.vol_dir.path().to_path_buf()];
+        let report = env.service.sync(&root, &env.volume, true, false, &[], |_, _, _| {}).unwrap();
+        assert_eq!((report.new_files, report.missing, report.stale_removed), (1, 1, 0), "{report:?}");
+        assert_eq!(env.location_rows(&id), 1, "missing files keep their location without --remove-stale");
+
+        let removed = env.service.sync(&root, &env.volume, true, true, &[], |_, _, _| {}).unwrap();
+        assert_eq!(removed.stale_removed, 1, "{removed:?}");
+        assert_eq!(env.location_rows(&id), 0);
+    }
+}
