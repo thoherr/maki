@@ -2,6 +2,28 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## Unreleased
+
+### Changed
+
+- **Adding a machine tag by hand makes it yours.** `maki tag <asset>
+  <tag>`, the tag field on the detail page and batch tagging used to
+  ignore a tag the asset already had. When that tag came from an XMP
+  import, auto-tag or the VLM, the explicit add now marks it -- and its
+  ancestors -- as a `user` tag: the provenance badge disappears and
+  `maki tag clear --source xmp-import|auto-tag|vlm` no longer removes it.
+  The CLI reports `Now your tags (were machine-added): …` (`"promoted"`
+  in `--json`), the change is one undoable operation, and it does not
+  trigger an XMP write-back (the keywords in the file do not change).
+  Promotion is one-way: imports, auto-tag, VLM describe and XMP refresh
+  never change the source of an existing tag.
+- **Provenance tooltips say what the badge means.** The badge on a tag
+  chip now reads "Added by XMP import / auto-tag / VLM describe" and
+  points to both ways out (add it yourself, or clear by source); a tag
+  without a badge says "Your tag", noting that it may still be present in
+  the XMP file -- the badge records who added a tag, not where it is
+  stored.
+
 ## v4.13.0 (2026-11-16)
 
 Architecture release: Phases 0–2 of the October 2026 architecture audit

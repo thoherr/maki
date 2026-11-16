@@ -464,6 +464,32 @@ async fn tags_fragment_keeps_badges_after_edit() {
 }
 
 #[tokio::test]
+async fn adding_a_machine_tag_by_hand_makes_it_a_user_tag() {
+    let srv = TestServer::new();
+    let (_, _, page) = srv.get(&format!("/asset/{}", srv.asset_id)).await;
+    assert!(page.contains("Added by VLM describe"), "badge tooltip names the source");
+    assert!(page.contains("Your tag:"), "user tags say so in their tooltip");
+
+    // "festival" is on the asset from the VLM; the user adds it again.
+    let (status, _, body) = srv
+        .form(
+            Method::POST,
+            &format!("/api/asset/{}/tags", srv.asset_id),
+            "tags=festival",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.contains("festival"));
+    assert_eq!(body.matches("tag-source-badge").count(), 0, "badge is gone: {body}");
+
+    // The sidecar and the catalog (the page renders from it) agree.
+    let (asset, _) = srv.asset_from_both_stores();
+    assert!(asset.tag_sources.is_empty(), "{:?}", asset.tag_sources);
+    let (_, _, page) = srv.get(&format!("/asset/{}", srv.asset_id)).await;
+    assert_eq!(page.matches("tag-source-badge").count(), 0);
+}
+
+#[tokio::test]
 async fn all_ids_returns_seeded_asset() {
     let srv = TestServer::new();
     let (status, _, body) = srv.get("/api/all-ids").await;

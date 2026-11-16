@@ -391,7 +391,7 @@ Adds or removes tags on an asset. Tags are free-form text strings stored on the 
 
 When tags are changed, MAKI automatically writes the changes back to any `.xmp` recipe files associated with the asset. Tag write-back uses operation-level deltas: added tags are inserted into the XMP `dc:subject` / `rdf:Bag` block, and removed tags are deleted -- tags added independently in external tools like CaptureOne are preserved.
 
-Tags are deduplicated: adding a tag that already exists is a no-op.
+Tags are deduplicated: adding a tag that already exists does not add it again. If the existing tag was added by a machine source (XMP import, auto-tag, VLM), adding it yourself marks it and its ancestors as your own tag -- see [tag clear](#maki-tag-clear) for what the source is used for. The command reports this as `Now your tags (were machine-added): ...`.
 
 Asset IDs support unique prefix matching (see [CLI Conventions](00-cli-conventions.md#asset-id-matching)).
 
@@ -737,7 +737,7 @@ maki-tag-clear -- remove all tags from an asset
 
 Removes all tags from the specified asset. This is equivalent to running `maki tag <id> --remove` with every tag the asset currently has, but without having to list them.
 
-With `--source`, only tags with the given provenance are removed. Every tag records where it came from: `user` (manual edits, configured import auto_tags), `xmp-import` (XMP keywords absorbed at import/reimport), `auto-tag` (SigLIP auto-tagger), or `vlm` (VLM describe). Tags created before provenance tracking count as `user`. This makes it easy to wipe machine-applied tags — for example before re-running auto-tag with a better model — without touching human curation. `maki show` annotates machine tags (`(auto-tag)`, `(vlm)`, `(xmp)`) so you can preview what a source-filtered clear would remove.
+With `--source`, only tags with the given provenance are removed. Every tag records where it came from: `user` (manual edits, configured import auto_tags), `xmp-import` (XMP keywords absorbed at import/reimport), `auto-tag` (SigLIP auto-tagger), or `vlm` (VLM describe). Tags created before provenance tracking count as `user`. A tag has exactly one source, and the first one wins: a tag you set at import (`--add-tag`, a profile, `[import] auto_tags`) stays `user` even when the XMP file contains the same keyword, and a machine pipeline never changes the source of a tag that is already there. The one exception is deliberate: adding a tag yourself (`maki tag`, the tag field on the detail page, batch tagging) that the asset already has from a machine source turns it -- and its ancestors -- into a `user` tag, so a source-filtered clear keeps it. This makes it easy to wipe machine-applied tags — for example before re-running auto-tag with a better model — without touching human curation. `maki show` annotates machine tags (`(auto-tag)`, `(vlm)`, `(xmp)`) so you can preview what a source-filtered clear would remove.
 
 If writeback is enabled, the tag removal is written back to XMP recipe files on disk.
 

@@ -633,12 +633,19 @@ fn tag_add_remove(
     if ctx.json {
         println!("{}", serde_json::json!({
             "changed": result.changed,
+            "promoted": result.promoted,
             "tags": result.current_tags,
         }));
     } else {
         let display_changed: Vec<String> = result.changed.iter()
             .map(|t| maki::tag_util::tag_storage_to_display(t))
             .collect();
+        if !result.promoted.is_empty() {
+            let display_promoted: Vec<String> = result.promoted.iter()
+                .map(|t| maki::tag_util::tag_storage_to_display(t))
+                .collect();
+            println!("Now your tags (were machine-added): {}", display_promoted.join(", "));
+        }
         let display_tags: Vec<String> = result.current_tags.iter()
             .map(|t| maki::tag_util::tag_storage_to_display(t))
             .collect();

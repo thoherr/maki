@@ -156,6 +156,11 @@ pub struct EditResult {
 pub struct TagResult {
     /// Tags that were actually added or removed.
     pub changed: Vec<String>,
+    /// Tags that were already on the asset with a machine source
+    /// (`xmp-import` / `auto-tag` / `vlm`) and became user tags because a
+    /// person added them explicitly. Always empty on remove and for
+    /// machine-sourced adds.
+    pub promoted: Vec<String>,
     /// The full set of tags after the operation.
     pub current_tags: Vec<String>,
     /// Provenance map for `current_tags` (absent = user) — lets the web

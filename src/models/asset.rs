@@ -194,6 +194,22 @@ impl Asset {
         }
     }
 
+    /// Mark the given tags as user curation: drop the machine-source
+    /// entry of every listed tag that is on the asset and has one.
+    /// Returns the tags whose source actually changed, in input order.
+    /// Used when a person explicitly adds a tag the asset already
+    /// carries from a machine pipeline or an XMP import — promotion is
+    /// one-way, nothing ever demotes a user tag.
+    pub fn promote_tags_to_user(&mut self, tags: &[String]) -> Vec<String> {
+        let mut promoted = Vec::new();
+        for tag in tags {
+            if self.tags.contains(tag) && self.tag_sources.remove(tag).is_some() {
+                promoted.push(tag.clone());
+            }
+        }
+        promoted
+    }
+
     /// Look up the source of a tag; absent from the map = `User`.
     pub fn tag_source(&self, tag: &str) -> TagSource {
         self.tag_sources.get(tag).copied().unwrap_or(TagSource::User)
@@ -359,6 +375,22 @@ mod tests {
         a.add_tags_with_source(&["machine".to_string()], TagSource::Vlm);
         a.add_tags_with_source(&["machine".to_string()], TagSource::AutoTag);
         assert_eq!(a.tag_source("machine"), TagSource::Vlm);
+    }
+
+    #[test]
+    fn promote_tags_to_user_clears_machine_sources_only() {
+        let mut a = asset();
+        a.add_tags_with_source(&["x".to_string(), "y".to_string()], TagSource::XmpImport);
+        a.add_tags_with_source(&["mine".to_string()], TagSource::User);
+        let promoted = a.promote_tags_to_user(&[
+            "x".to_string(),
+            "mine".to_string(),
+            "not-on-asset".to_string(),
+        ]);
+        assert_eq!(promoted, vec!["x".to_string()]);
+        assert_eq!(a.tag_source("x"), TagSource::User);
+        assert_eq!(a.tag_source("y"), TagSource::XmpImport);
+        assert_eq!(a.tags.len(), 3, "the tag list itself is untouched");
     }
 
     #[test]

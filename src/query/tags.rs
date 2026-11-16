@@ -14,6 +14,12 @@ impl QueryEngine {
     // ═══ TAG OPERATIONS ═══
 
     /// Add or remove tags on an asset. Updates both sidecar YAML and SQLite catalog.
+    ///
+    /// This is the explicit, human entry point (source `user`): adding a
+    /// tag the asset already carries from an XMP import, auto-tag or the
+    /// VLM marks it — and its ancestors — as a user tag
+    /// ([`TagResult::promoted`]), so `tag clear --source …` no longer
+    /// removes it.
     pub fn tag(&self, asset_id_prefix: &str, tags: &[String], remove: bool) -> Result<TagResult> {
         self.tag_with_source(asset_id_prefix, tags, remove, crate::models::TagSource::User)
     }
@@ -36,6 +42,11 @@ impl QueryEngine {
         // success; drain the recorder regardless of Ok/Err.
         let summary = match &result {
             Ok(r) if remove => format!("removed {} tag(s)", r.changed.len()),
+            Ok(r) if !r.promoted.is_empty() => format!(
+                "added {} tag(s), marked {} as user",
+                r.changed.len(),
+                r.promoted.len()
+            ),
             Ok(r) => format!("added {} tag(s)", r.changed.len()),
             Err(_) => if remove { "removed tag(s)".to_string() } else { "added tag(s)".to_string() },
         };
@@ -77,6 +88,7 @@ impl QueryEngine {
         };
 
         self.mutate_asset(ctx, asset_id_prefix, |asset| {
+            let mut promoted = Vec::new();
             let changed = if remove {
                 // Collect tags to remove, including orphaned ancestors
                 let mut all_to_remove = Vec::new();
@@ -117,11 +129,19 @@ impl QueryEngine {
                     .collect();
                 // Records `source` for the genuinely-new tags only.
                 asset.add_tags_with_source(&added, source);
+                // An explicit human add of a tag that is already there
+                // from a machine source claims it (ancestors included, so
+                // a later `tag clear --source` cannot orphan the leaf).
+                // Machine pipelines never change an existing source.
+                if source == crate::models::TagSource::User {
+                    promoted = asset.promote_tags_to_user(&expanded);
+                }
                 added
             };
 
             let result = TagResult {
                 changed: changed.clone(),
+                promoted,
                 current_tags: asset.tags.clone(),
                 tag_sources: asset.tag_sources.clone(),
             };
@@ -130,8 +150,14 @@ impl QueryEngine {
             } else {
                 (changed, Vec::new())
             };
-            Ok(Mutation::new(!result.changed.is_empty(), result).then(move |asset| {
-                self.write_back_tags_to_xmp(asset, &to_add, &to_remove, ctx)
+            // A promotion alone changes the sidecar and the row but not
+            // the XMP keywords, so it must not trigger (or flag) a
+            // write-back.
+            let dirty = !result.changed.is_empty() || !result.promoted.is_empty();
+            Ok(Mutation::new(dirty, result).then(move |asset| {
+                if !to_add.is_empty() || !to_remove.is_empty() {
+                    self.write_back_tags_to_xmp(asset, &to_add, &to_remove, ctx)
+                }
             }))
         })
     }
@@ -909,6 +935,51 @@ mod tests {
         assert!(asset.tag_sources.is_empty(), "{:?}", asset.tag_sources);
         let details = engine.show(&id).unwrap();
         assert!(details.tag_sources.is_empty());
+    }
+
+    #[test]
+    fn explicit_add_promotes_machine_tags_to_user() {
+        use crate::models::TagSource;
+        let (dir, id) = setup_tag_env();
+        let engine = QueryEngine::new(dir.path());
+        let uuid: uuid::Uuid = id.parse().unwrap();
+        let leaf = "location|Germany|Bayern".to_string();
+
+        // The XMP import delivered the whole path.
+        engine.tag_with_source(&id, std::slice::from_ref(&leaf), false, TagSource::XmpImport).unwrap();
+        engine.tag_with_source(&id, &["robot".to_string()], false, TagSource::AutoTag).unwrap();
+
+        // A machine pipeline re-adding it changes nothing.
+        let r = engine.tag_with_source(&id, std::slice::from_ref(&leaf), false, TagSource::Vlm).unwrap();
+        assert!(r.changed.is_empty() && r.promoted.is_empty());
+        let asset = MetadataStore::new(dir.path()).load(uuid).unwrap();
+        assert_eq!(asset.tag_source(&leaf), TagSource::XmpImport);
+
+        // The user adding it claims the leaf and its ancestors.
+        let r = engine.tag(&id, std::slice::from_ref(&leaf), false).unwrap();
+        assert!(r.changed.is_empty(), "{:?}", r.changed);
+        assert_eq!(r.promoted.len(), 3, "{:?}", r.promoted);
+        let asset = MetadataStore::new(dir.path()).load(uuid).unwrap();
+        for t in ["location", "location|Germany", "location|Germany|Bayern"] {
+            assert_eq!(asset.tag_source(t), TagSource::User, "{t}");
+        }
+        assert_eq!(asset.tag_source("robot"), TagSource::AutoTag, "unrelated machine tag untouched");
+        // SQLite mirrors the sidecar.
+        let details = engine.show(&id).unwrap();
+        assert!(!details.tag_sources.contains_key(&leaf));
+        assert_eq!(details.tag_sources.get("robot"), Some(&TagSource::AutoTag));
+
+        // Doing it again is a no-op.
+        let r = engine.tag(&id, std::slice::from_ref(&leaf), false).unwrap();
+        assert!(r.changed.is_empty() && r.promoted.is_empty());
+
+        // The promotion is one undoable operation that restores the source.
+        let history = crate::history::HistoryStore::from_config(dir.path());
+        let op = history.newest_active().unwrap().expect("promotion is journaled");
+        assert!(op.summary.contains("marked 3 as user"), "{}", op.summary);
+        engine.restore_asset(&op.assets[0].before).unwrap();
+        let asset = MetadataStore::new(dir.path()).load(uuid).unwrap();
+        assert_eq!(asset.tag_source(&leaf), TagSource::XmpImport);
     }
 
     #[test]

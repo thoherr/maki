@@ -720,6 +720,9 @@ pub struct TagsFragment {
 pub struct TagChip {
     pub value: String,
     pub badge: Option<&'static str>,
+    /// Tooltip stating where the tag came from — on the badge for a
+    /// machine tag, on the tag itself for a user tag.
+    pub title: &'static str,
 }
 
 /// Build chips from a tag list + the asset's provenance map
@@ -730,14 +733,26 @@ pub fn tag_chips(
 ) -> Vec<TagChip> {
     use crate::models::TagSource;
     tags.iter()
-        .map(|t| TagChip {
-            value: t.clone(),
-            badge: match sources.get(t) {
-                Some(TagSource::AutoTag) => Some("auto"),
-                Some(TagSource::Vlm) => Some("vlm"),
-                Some(TagSource::XmpImport) => Some("xmp"),
-                Some(TagSource::User) | None => None,
-            },
+        .map(|t| {
+            let (badge, title) = match sources.get(t) {
+                Some(TagSource::AutoTag) => (
+                    Some("auto"),
+                    "Added by auto-tag. Add the tag yourself to make it yours; `maki tag clear --source auto-tag` removes such tags in bulk.",
+                ),
+                Some(TagSource::Vlm) => (
+                    Some("vlm"),
+                    "Added by VLM describe. Add the tag yourself to make it yours; `maki tag clear --source vlm` removes such tags in bulk.",
+                ),
+                Some(TagSource::XmpImport) => (
+                    Some("xmp"),
+                    "Added by XMP import. Add the tag yourself to make it yours; `maki tag clear --source xmp-import` removes such tags in bulk.",
+                ),
+                Some(TagSource::User) | None => (
+                    None,
+                    "Your tag: not added by XMP import, auto-tag or VLM (it may still be present in the XMP file).",
+                ),
+            };
+            TagChip { value: t.clone(), badge, title }
         })
         .collect()
 }

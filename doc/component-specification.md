@@ -23,7 +23,7 @@ The central entity. Represents a logical asset (e.g. "photo of sunset at beach, 
 | created_at | DateTime | Capture date when known (EXIF/XMP), else first import |
 | asset_type | Enum | Image, Video, Audio, Document, Other |
 | tags | Vec<String> | Hierarchical tags (`a|b|c`) |
-| tag_sources | BTreeMap<String, TagSource> | Tag provenance: `user` / `xmp-import` / `auto-tag` / `vlm`; a tag absent from the map is `user`. Mutated only through `add_tags_with_source` / `remove_tags` / `rename_tag_value` |
+| tag_sources | BTreeMap<String, TagSource> | Tag provenance: `user` / `xmp-import` / `auto-tag` / `vlm`; a tag absent from the map is `user`. Mutated only through `add_tags_with_source` / `remove_tags` / `rename_tag_value` / `promote_tags_to_user` (an explicit user add of an existing machine tag claims it) |
 | description | Option<String> | Free-text description |
 | rating | Option<u8> | User/XMP rating 1–5, or unset |
 | color_label | Option<String> | Red, Orange, Yellow, Green, Blue, Pink, Purple, or unset |
