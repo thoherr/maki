@@ -219,7 +219,7 @@ Stack errors (asset not in a stack, fewer than two members) return 400; creating
 |-----------------|------|----------|
 | `POST /api/asset/{id}/suggest-tags` | -- | `[{"tag": "subject\|vehicle\|car", "confidence": 0.42, "existing": false, "source_label": "car"}]` (`source_label` only for non-identity vocabulary mappings) |
 | `POST /api/asset/{id}/similar` | -- | 20 nearest neighbours: `[{"asset_id", "similarity", "preview_url", "name"}]`; computes and stores the embedding first if missing |
-| `POST /api/asset/{id}/stack-similar` | JSON `{"threshold": 85, "limit": 40}` (both optional, percent) | `{"stack_id", "member_count", "threshold"}`; 400 `{"error": "..."}` if already stacked or nothing above the threshold |
+| `POST /api/asset/{id}/stack-similar` | JSON `{"threshold": 85, "limit": 40}` (both optional, percent) | `{"stack_id", "member_count", "threshold"}`; 409 `{"error": "..."}` if the asset is already in a stack, 400 if nothing is above the threshold or the asset has no embedding |
 | `POST /api/asset/{id}/embed` | -- | `{"embedded": 1, "skipped": 0, "errors": []}` (synchronous); 500 if the model is not downloaded |
 | `GET /api/asset/{id}/faces` | -- | `[{"face_id", "confidence", "bbox": [x, y, w, h], "person_id", "person_name", "crop_url"}]` |
 | `POST /api/asset/{id}/detect-faces` | -- | `{"succeeded": 1, "faces_detected": 2, "errors": []}` (synchronous); 500 `{"error"}` if face models are missing |

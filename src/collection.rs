@@ -93,31 +93,29 @@ impl<'a> CollectionStore<'a> {
     }
 
     /// Write `collections.yaml` from the current SQLite rows (atomic
-    /// temp-file + rename). The mutators call it themselves.
+    /// temp-file + rename) — immediately, or at the commit of the
+    /// transaction the connection is in (`crate::tx`). The mutators call
+    /// it themselves.
     fn persist(&self) -> Result<()> {
         let root = self.catalog_root.as_deref().ok_or_else(|| {
             anyhow!("CollectionStore opened without a catalog root (CollectionStore::new); use CollectionStore::open to change collections")
         })?;
-        let file = self.export_all()?;
-        save_yaml(root, &file)
+        crate::tx::export_at_commit(self.conn, "collections", root, |conn, root| {
+            save_yaml(root, &CollectionStore::new(conn).export_all()?)
+        })
     }
 
     /// Run `f` inside one SQLite transaction (joining an enclosing one),
     /// committing on `Ok` and rolling back on `Err` — the same contract as
     /// `Catalog::with_tx`, for a store that only holds the connection.
     fn with_tx<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
-        if !self.conn.is_autocommit() {
-            return f();
-        }
-        let tx = self.conn.unchecked_transaction()?;
-        let out = f()?;
-        tx.commit()?;
-        Ok(out)
+        crate::tx::run(self.conn, f)
     }
 
     /// A mutation: SQLite rows via `f`, then the YAML export, all inside
     /// one transaction so a failed YAML write rolls the rows back and
-    /// neither store is left ahead of the other.
+    /// neither store is left ahead of the other. Joined to an enclosing
+    /// transaction, the export happens at that transaction's commit.
     fn mutate<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
         self.with_tx(|| {
             let out = f()?;

@@ -137,8 +137,15 @@ pub(super) mod err {
     /// fetch-driven UIs that read `body.error` (face/people endpoints).
     #[cfg(feature = "ai")]
     pub(crate) fn mapped_json(e: anyhow::Error) -> Response {
+        mapped_json_or(e, StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    /// [`mapped_json`] with another status for unclassified errors — for
+    /// endpoints whose remaining failures are user input (400).
+    #[cfg(feature = "ai")]
+    pub(crate) fn mapped_json_or(e: anyhow::Error, default: StatusCode) -> Response {
         (
-            status_or(&e, StatusCode::INTERNAL_SERVER_ERROR),
+            status_or(&e, default),
             axum::Json(serde_json::json!({"error": format!("{e:#}")})),
         )
             .into_response()

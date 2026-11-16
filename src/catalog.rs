@@ -910,13 +910,7 @@ impl Catalog {
     /// `catalog.conn().execute_batch("PRAGMA defer_foreign_keys = ON")`
     /// inside the closure (see `migrate_variant_hash`).
     pub fn with_tx<T>(&self, f: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
-        if !self.conn.is_autocommit() {
-            return f(self);
-        }
-        let tx = self.conn.unchecked_transaction()?;
-        let out = f(self)?;
-        tx.commit()?;
-        Ok(out)
+        crate::tx::run(&self.conn, || f(self))
     }
 
 }

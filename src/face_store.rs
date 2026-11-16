@@ -100,29 +100,24 @@ impl<'a> FaceStore<'a> {
     /// Write `faces.yaml` and `people.yaml` from the current SQLite rows
     /// (atomic temp-file + rename). Call once at the end of a batch of
     /// `store_face` / `delete_faces_for_asset` / import calls; the
-    /// single-entity mutators call it themselves.
+    /// single-entity mutators call it themselves. Inside a transaction
+    /// the write happens at its commit (`crate::tx`).
     pub fn persist(&self) -> Result<()> {
         let root = self.catalog_root.as_deref().ok_or_else(|| {
             anyhow!("FaceStore opened without a catalog root (FaceStore::new); use FaceStore::open to persist faces.yaml / people.yaml")
         })?;
-        let faces = self.export_all_faces()?;
-        save_faces_yaml(root, &faces)?;
-        let people = self.export_all_people()?;
-        save_people_yaml(root, &people)?;
-        Ok(())
+        crate::tx::export_at_commit(self.conn, "faces", root, |conn, root| {
+            let store = FaceStore::new(conn);
+            save_faces_yaml(root, &store.export_all_faces()?)?;
+            save_people_yaml(root, &store.export_all_people()?)
+        })
     }
 
     /// Run `f` inside one SQLite transaction (joining an enclosing one),
     /// committing on `Ok` and rolling back on `Err` — the same contract as
     /// `Catalog::with_tx`, for a store that only holds the connection.
     fn with_tx<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
-        if !self.conn.is_autocommit() {
-            return f();
-        }
-        let tx = self.conn.unchecked_transaction()?;
-        let out = f()?;
-        tx.commit()?;
-        Ok(out)
+        crate::tx::run(self.conn, f)
     }
 
     /// A single-entity mutation: SQLite rows via `f`, then the YAML

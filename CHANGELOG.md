@@ -133,6 +133,22 @@ adapters over the service, and `maki.toml` read once per invocation.
   merge use it (test: a merged-away donor is absent from
   `collections.yaml`).
 
+### Phase 2 follow-up
+
+- **Store YAML follows the enclosing transaction.** `Catalog::with_tx`
+  and the `StackStore` / `CollectionStore` / `FaceStore` transactions
+  share one primitive (`src/tx.rs`). A store mutator that joins an
+  enclosing transaction no longer writes `stacks.yaml` /
+  `collections.yaml` / `faces.yaml` + `people.yaml` on the spot: the
+  outermost transaction exports each requested file once, after all row
+  changes and immediately before COMMIT, so a later failure of the
+  enclosing operation can no longer leave the YAML ahead of SQLite (the
+  last Phase 1 residue), and a batch of nested mutators writes each file
+  once instead of once per call.
+- **`POST /api/asset/{id}/stack-similar` answers 409** (was 400) when the
+  asset is already in a stack, like `POST /api/batch/stack`; an unknown
+  asset is 404. Other failures stay 400 with the `{"error"}` body.
+
 ### Phase 1 — correctness (committed abd5bf2)
 
 #### Changed (behaviour)

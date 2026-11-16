@@ -159,8 +159,8 @@ impl Catalog {
 
     /// [`Self::delete_asset_rows`] for an asset that is gone for good:
     /// its collection memberships are removed through the
-    /// `CollectionStore`, which persists `collections.yaml` (the source
-    /// of truth) in the same transaction, before the rows go. Used for
+    /// `CollectionStore`, which exports `collections.yaml` (the source
+    /// of truth) at the commit of this transaction (`crate::tx`). Used for
     /// phantom rows (`doctor`: a row whose sidecar is gone) and for the
     /// donors of a `group` merge after their variants were reassigned.
     pub fn delete_asset_with_collections(&self, catalog_root: &Path, asset_id: &str) -> Result<()> {

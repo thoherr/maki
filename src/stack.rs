@@ -90,32 +90,29 @@ impl<'a> StackStore<'a> {
         Self { conn, catalog_root: Some(catalog_root.to_path_buf()) }
     }
 
-    /// Write `stacks.yaml` from the current SQLite rows (atomic temp-file
-    /// + rename). The mutators call it themselves.
+    /// Write `stacks.yaml` from the current SQLite rows (atomic temp file
+    /// and rename) — immediately, or at the commit of the transaction the
+    /// connection is in (`crate::tx`). The mutators call it themselves.
     fn persist(&self) -> Result<()> {
         let root = self.catalog_root.as_deref().ok_or_else(|| {
             anyhow!("StackStore opened without a catalog root (StackStore::new); use StackStore::open to change stacks")
         })?;
-        let file = self.export_all()?;
-        save_yaml(root, &file)
+        crate::tx::export_at_commit(self.conn, "stacks", root, |conn, root| {
+            save_yaml(root, &StackStore::new(conn).export_all()?)
+        })
     }
 
     /// Run `f` inside one SQLite transaction (joining an enclosing one),
     /// committing on `Ok` and rolling back on `Err` — the same contract as
     /// `Catalog::with_tx`, for a store that only holds the connection.
     fn with_tx<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
-        if !self.conn.is_autocommit() {
-            return f();
-        }
-        let tx = self.conn.unchecked_transaction()?;
-        let out = f()?;
-        tx.commit()?;
-        Ok(out)
+        crate::tx::run(self.conn, f)
     }
 
     /// A mutation: SQLite rows via `f`, then the YAML export, all inside
     /// one transaction so a failed YAML write rolls the rows back and
-    /// neither store is left ahead of the other.
+    /// neither store is left ahead of the other. Joined to an enclosing
+    /// transaction, the export happens at that transaction's commit.
     fn mutate<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
         self.with_tx(|| {
             let out = f()?;
@@ -531,6 +528,39 @@ mod tests {
         assert!(format!("{err:#}").contains("StackStore::open"), "{err:#}");
         assert!(store.list().unwrap().is_empty());
         assert!(store.stack_for_asset("a1").unwrap().is_none());
+    }
+
+    #[test]
+    fn yaml_follows_the_enclosing_transaction() {
+        let (conn, dir) = setup_db();
+        insert_test_asset(&conn, "a1");
+        insert_test_asset(&conn, "a2");
+        insert_test_asset(&conn, "a3");
+        let store = StackStore::open(&conn, dir.path());
+        let yaml_path = dir.path().join("stacks.yaml");
+
+        // The mutator joins an outer transaction that fails afterwards:
+        // neither the rows nor stacks.yaml change.
+        let r: Result<()> = crate::tx::run(&conn, || {
+            store.create(&["a1".into(), "a2".into()])?;
+            assert!(!yaml_path.exists(), "export waits for the outer commit");
+            anyhow::bail!("a later step of the enclosing operation fails")
+        });
+        assert!(r.is_err());
+        assert!(!yaml_path.exists());
+        assert!(store.stack_for_asset("a1").unwrap().is_none());
+
+        // The same work committed: rows and YAML agree, including the
+        // second mutation made inside the transaction.
+        crate::tx::run(&conn, || {
+            store.create(&["a1".into(), "a2".into()])?;
+            store.add("a1", &["a3".into()])?;
+            Ok(())
+        })
+        .unwrap();
+        let yaml = load_yaml(dir.path()).unwrap();
+        assert_eq!(yaml.stacks.len(), 1);
+        assert_eq!(yaml.stacks[0].asset_ids.len(), 3);
     }
 
     #[test]

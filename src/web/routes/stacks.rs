@@ -176,7 +176,10 @@ pub async fn stack_by_similarity(
 
         let store = crate::stack::StackStore::open(catalog.conn(), &state.catalog_root);
         if store.stack_for_asset(&full_id)?.is_some() {
-            anyhow::bail!("asset is already in a stack. Dissolve it first.");
+            return Err(crate::error::MakiError::Conflict(
+                "asset is already in a stack. Dissolve it first.".into(),
+            )
+            .into());
         }
 
         let model_id = &state.ai_config.model;
@@ -217,7 +220,7 @@ pub async fn stack_by_similarity(
             "member_count": stack_ids.len(),
             "threshold": (threshold * 100.0) as u32,
         }))
-    }, |e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": format!("{e:#}") }))).into_response())
+    }, |e| super::err::mapped_json_or(e, StatusCode::BAD_REQUEST))
     .await?;
     Ok(Json(json).into_response())
 }

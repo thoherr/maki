@@ -38,9 +38,11 @@ One finding was a defect and is fixed in the same change as this report
   phase-split behind request structs and typed events, web describe /
   generate-previews / browse endpoints as adapters over the service,
   `maki.toml` read once per invocation, `features` module. The Phase 1
-  residue on collection membership and the stack 409 is closed; still
-  open: a store mutator that joins an enclosing transaction writes its
-  YAML before the outer COMMIT. Exit criteria re-measured below.
+  residue is closed: collection membership follows asset deletion, the
+  stack routes answer 409 for "already stacked" (including
+  `stack-similar`), and the stores' YAML exports are deferred to the
+  commit of the outermost transaction (`src/tx.rs`). Exit criteria
+  re-measured below.
 - Phase 3: open.
 
 ## Verdict in one paragraph

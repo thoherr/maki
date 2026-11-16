@@ -1417,6 +1417,16 @@ async fn stack_members_after_batch_stack() {
     assert_eq!(status, StatusCode::CONFLICT, "body: {resp}");
     assert!(resp.contains("already in stack"), "body: {resp}");
 
+    // The similarity variant answers the same way (JSON error body).
+    #[cfg(feature = "ai")]
+    {
+        let path = format!("/api/asset/{}/stack-similar", srv.asset_id);
+        let (status, _, resp) = srv.json(Method::POST, &path, "{}").await;
+        assert_eq!(status, StatusCode::CONFLICT, "body: {resp}");
+        let err: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert!(err["error"].as_str().unwrap().contains("already in a stack"), "{err}");
+    }
+
     // Unstack both: the stack disappears.
     let (status, _, resp) = srv.json(Method::DELETE, "/api/batch/stack", &body).await;
     assert_eq!(status, StatusCode::OK, "body: {resp}");
