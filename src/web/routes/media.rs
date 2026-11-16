@@ -38,7 +38,7 @@ pub async fn compare_page(
     let ids_owned: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
     let state = state.clone();
     let html = super::spawn_blocking_with(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let preview_gen = state.preview_generator();
         let mut assets = Vec::new();
 
@@ -369,21 +369,22 @@ pub async fn writeback_asset(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let wb = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let catalog = state.catalog()?;
         let full_id = super::resolve_asset_id_or_err(&catalog, &asset_id)?;
 
-        let wb_result = engine.writeback(
-            None,
-            Some(&full_id),
-            None,
-            false,  // all: only pending recipes for this asset
-            false,  // force: respect pending flag
-            false,  // mirror_tags: web flush is incremental, never destructive
-            false,  // dry_run
-            false,  // log
-            None,
-        )?;
+        // Only this asset's pending recipes; the web flush is incremental
+        // (no `all`, no `force`, no `mirror_tags`). Warnings go to the
+        // server log.
+        let req = crate::query::WritebackRequest {
+            asset_prefix: Some(&full_id),
+            ..Default::default()
+        };
+        let wb_result = engine.writeback_with(&req, &mut |event| {
+            if let crate::query::WritebackEvent::Warning(message) = &event {
+                eprintln!("{message}");
+            }
+        })?;
         Ok::<_, anyhow::Error>(wb_result)
     })
     .await?;
@@ -444,7 +445,7 @@ fn vlm_describe_asset_inner(
     let prompt = params.prompt.as_deref()
         .unwrap_or_else(|| vlm::default_prompt_for_mode(mode));
 
-    let engine = state.query_engine();
+    let engine = state.query_engine().map_err(|e| format!("{e:#}"))?;
     let service = state.asset_service();
     let preview_gen = state.preview_generator();
 
@@ -572,6 +573,10 @@ pub async fn batch_vlm_describe(
     })
 }
 
+/// The batch loop is [`AssetService::describe_assets`] (shared with
+/// `maki describe` and the post-import phase); this adds what the web UI
+/// needs around it: ID-prefix resolution for the selection, the per-asset
+/// SSE progress events, and the response counters the job toast reads.
 fn batch_vlm_describe_inner(
     state: &AppState,
     asset_ids: &[String],
@@ -580,7 +585,7 @@ fn batch_vlm_describe_inner(
     job: &std::sync::Arc<crate::web::jobs::Job>,
     total: usize,
 ) -> Result<BatchVlmDescribeResponse, String> {
-    use crate::vlm::{self, DescribeMode};
+    use crate::vlm::{DescribeError, DescribeMode, DescribeStatus, SkipReason};
 
     let vlm = &state.vlm_config;
     let mode = mode_str
@@ -589,22 +594,6 @@ fn batch_vlm_describe_inner(
         .unwrap_or_else(|| DescribeMode::parse_mode(&vlm.mode).unwrap_or(DescribeMode::Describe));
     let vlm_model = model_override.unwrap_or(&vlm.model);
     let params = vlm.params_for_model(vlm_model);
-    let prompt = params.prompt.as_deref()
-        .unwrap_or_else(|| vlm::default_prompt_for_mode(mode));
-
-    let engine = state.query_engine();
-    let service = state.asset_service();
-    let preview_gen = state.preview_generator();
-    let registry = DeviceRegistry::new(&state.catalog_root);
-    let volumes = registry.list().map_err(|e| e.to_string())?;
-    let online_volumes: std::collections::HashMap<String, &crate::models::Volume> = volumes
-        .iter()
-        .filter(|v| v.is_online)
-        .map(|v| (v.id.to_string(), v))
-        .collect();
-
-    let wants_description = mode == DescribeMode::Describe || mode == DescribeMode::Both;
-    let concurrency = (vlm.concurrency.max(1)) as usize;
 
     let mut result = BatchVlmDescribeResponse {
         succeeded: 0,
@@ -614,198 +603,64 @@ fn batch_vlm_describe_inner(
         errors: Vec::new(),
     };
 
-    struct WebWorkItem {
-        full_id: String,
-        original_id: String,
-        image_path: std::path::PathBuf,
-        existing_tags: std::collections::HashSet<String>,
-    }
-    let mut work_items: Vec<WebWorkItem> = Vec::new();
-    let mut processed: usize = 0;
-    // Helper to emit per-asset progress with the current cumulative counters.
-    // Defined once here so the prep loop and the chunk-result loop emit a
-    // consistent shape.
-    let emit_progress = |processed: usize, aid: &str, status: &str, descriptions_set: u32, tags_applied: u32| {
-        let short = &aid[..8.min(aid.len())];
+    // Per-asset progress with a running `processed` count, so the toast
+    // advances smoothly even through pre-flight outcomes (not found,
+    // already described, no preview).
+    let processed = std::sync::atomic::AtomicUsize::new(0);
+    let emit_progress = |aid: &str, status: &str| {
+        let n = processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         job.emit(&serde_json::json!({
             "phase": "describe",
             "done": false,
-            "processed": processed,
+            "processed": n,
             "total": total,
-            "asset": short,
+            "asset": &aid[..8.min(aid.len())],
             "status": status,
-            "descriptions_set": descriptions_set,
-            "tags_applied": tags_applied,
         }));
     };
 
-    for aid in asset_ids {
-        // Pre-flight outcomes (catalog error, not found, already described,
-        // no preview) finalise this asset before VLM is invoked. Counted
-        // toward `processed` so the toast progresses smoothly even for
-        // already-described batches.
-        let catalog = match state.catalog() {
-            Ok(c) => c,
-            Err(e) => {
-                result.errors.push(format!("Catalog error: {e}"));
-                result.failed += 1;
-                processed += 1;
-                emit_progress(processed, aid, "error", result.descriptions_set, result.tags_applied);
-                continue;
+    // `state.verbosity` (not the quiet `asset_service()`) so `--debug`
+    // shows the VLM exchange on stderr as the CLI does. The selection may
+    // carry ID prefixes; `DescribeScope::Ids` resolves them.
+    let service = crate::asset_service::AssetService::with_config(
+        &state.catalog_root,
+        state.verbosity,
+        state.config(),
+    );
+    let request = crate::asset_service::DescribeRequest {
+        scope: crate::asset_service::DescribeScope::Ids(asset_ids.to_vec()),
+        endpoint: vlm.endpoint.clone(),
+        model: vlm_model.to_string(),
+        params,
+        mode,
+        apply: true,
+        force: false,
+        dry_run: false,
+        concurrency: vlm.concurrency,
+    };
+    let mut descriptions_set = 0u32;
+    let batch = service
+        .describe_with(&request, |event| {
+            if event.description_set {
+                descriptions_set += 1;
             }
-        };
-        let full_id = match catalog.resolve_asset_id(aid) {
-            Ok(Some(id)) => id,
-            _ => {
-                result.errors.push(format!("Asset not found: {aid}"));
-                result.failed += 1;
-                processed += 1;
-                emit_progress(processed, aid, "not-found", result.descriptions_set, result.tags_applied);
-                continue;
-            }
-        };
-
-        let details = match engine.show(&full_id) {
-            Ok(d) => d,
-            Err(e) => {
-                result.errors.push(format!("{aid}: {e}"));
-                result.failed += 1;
-                processed += 1;
-                emit_progress(processed, aid, "error", result.descriptions_set, result.tags_applied);
-                continue;
-            }
-        };
-
-        if wants_description {
-            if let Some(ref desc) = details.description {
-                if !desc.is_empty() {
-                    result.succeeded += 1;
-                    processed += 1;
-                    emit_progress(processed, aid, "skipped", result.descriptions_set, result.tags_applied);
-                    continue;
-                }
-            }
-        }
-
-        let image_path = match service.find_image_for_vlm(&details, &preview_gen, &online_volumes) {
-            Some(p) => p,
-            None => {
-                result.succeeded += 1;
-                processed += 1;
-                emit_progress(processed, aid, "no-image", result.descriptions_set, result.tags_applied);
-                continue;
-            }
-        };
-
-        let existing_tags: std::collections::HashSet<String> = details
-            .tags
-            .iter()
-            .map(|t| t.to_lowercase())
-            .collect();
-
-        work_items.push(WebWorkItem {
-            full_id,
-            original_id: aid.clone(),
-            image_path,
-            existing_tags,
-        });
-    }
-
-    let vlm_endpoint = &vlm.endpoint;
-    let vlm_max_edge = if params.max_image_edge > 0 { Some(params.max_image_edge) } else { None };
-
-    for chunk in work_items.chunks(concurrency) {
-        let vlm_results: Vec<(String, String, std::collections::HashSet<String>, Result<vlm::VlmOutput, String>)> =
-            std::thread::scope(|s| {
-                let handles: Vec<_> = chunk
-                    .iter()
-                    .map(|item| {
-                        let image_path = &item.image_path;
-                        let params = &params;
-                        s.spawn(move || {
-                            let image_base64 = match vlm::encode_image_base64(image_path, vlm_max_edge) {
-                                Ok(b) => b,
-                                Err(e) => return Err(format!("{}: {e}", item.original_id)),
-                            };
-
-                            vlm::call_vlm_with_mode(
-                                vlm_endpoint, vlm_model, &image_base64, prompt,
-                                params, mode, state.verbosity,
-                            )
-                            .map_err(|e| format!("{}: {e}", item.original_id))
-                        })
-                    })
-                    .collect();
-
-                handles
-                    .into_iter()
-                    .zip(chunk.iter())
-                    .map(|(h, item)| {
-                        let vlm_result = h.join().unwrap();
-                        (
-                            item.full_id.clone(),
-                            item.original_id.clone(),
-                            item.existing_tags.clone(),
-                            vlm_result,
-                        )
-                    })
-                    .collect()
+            emit_progress(event.asset_id, match event.status {
+                DescribeStatus::Described => "described",
+                DescribeStatus::Skipped(SkipReason::NoImage { .. }) => "no-image",
+                DescribeStatus::Skipped(_) => "skipped",
+                DescribeStatus::Error(DescribeError::NotFound { .. }) => "not-found",
+                DescribeStatus::Error(_) => "error",
             });
+        })
+        .map_err(|e| format!("{e:#}"))?;
 
-        for (full_id, original_id, existing_tags, vlm_result) in vlm_results {
-            processed += 1;
-            match vlm_result {
-                Err(msg) => {
-                    result.errors.push(msg);
-                    result.failed += 1;
-                    emit_progress(processed, &original_id, "error", result.descriptions_set, result.tags_applied);
-                }
-                Ok(output) => {
-                    if let Some(ref desc) = output.description {
-                        if !desc.is_empty() {
-                            let edit_fields = crate::query::EditFields {
-                                name: None,
-                                description: Some(Some(desc.clone())),
-                                rating: None,
-                                color_label: None,
-                                created_at: None,
-                            };
-                            if let Err(e) = engine.edit(&full_id, edit_fields) {
-                                result.errors.push(format!("{original_id}: {e}"));
-                                result.failed += 1;
-                                emit_progress(processed, &original_id, "error", result.descriptions_set, result.tags_applied);
-                                continue;
-                            }
-                            result.descriptions_set += 1;
-                        }
-                    }
-
-                    if !output.tags.is_empty() {
-                        let new_tags: Vec<String> = output
-                            .tags
-                            .iter()
-                            .filter(|t| !existing_tags.contains(&t.to_lowercase()))
-                            .cloned()
-                            .collect();
-                        if !new_tags.is_empty() {
-                            let count = new_tags.len();
-                            if let Err(e) = engine.tag_with_source(&full_id, &new_tags, false, crate::models::TagSource::Vlm) {
-                                result.errors.push(format!("{original_id}: {e}"));
-                                result.failed += 1;
-                                emit_progress(processed, &original_id, "error", result.descriptions_set, result.tags_applied);
-                                continue;
-                            }
-                            result.tags_applied += count as u32;
-                        }
-                    }
-
-                    result.succeeded += 1;
-                    emit_progress(processed, &original_id, "described", result.descriptions_set, result.tags_applied);
-                }
-            }
-        }
-    }
-
+    // `succeeded` is "finished without error": described, already
+    // described, or nothing to describe (no preview).
+    result.succeeded += (batch.described + batch.skipped) as u32;
+    result.failed += batch.failed as u32;
+    result.tags_applied += batch.tags_applied as u32;
+    result.descriptions_set = descriptions_set;
+    result.errors.extend(batch.errors);
     Ok(result)
 }
 
@@ -842,19 +697,17 @@ pub async fn export_zip(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ExportZipRequest>,
 ) -> Result<Response, Response> {
-    use axum::body::Body;
     use axum::http::header;
     use crate::asset_service::{AssetService, ExportLayout, ExportSource};
 
     let catalog_root = state.catalog_root.clone();
-    let preview_config = state.preview_config.clone();
 
     let asset_ids = if !req.asset_ids.is_empty() {
         req.asset_ids
     } else {
         let state2 = state.clone();
         let params = req.filters.unwrap_or_default();
-        let rows = super::spawn_blocking_with(move || -> anyhow::Result<Vec<crate::catalog::SearchRow>> {
+        super::spawn_blocking_with(move || -> anyhow::Result<Vec<String>> {
             let catalog = state2.catalog()?;
 
             // Same pipeline as browse_page / search_api, so "Export all"
@@ -865,27 +718,15 @@ pub async fn export_zip(
             // collection/person exports nothing rather than everything
             // (fail-closed; see the drift-matrix history in the resolver
             // docs for why export-zip is stricter here).
-            let bf = super::build_parsed_search(&params, &state2);
-            let mut resolved = super::ResolvedSearch::resolve(
-                &catalog,
-                &state2,
-                &bf.parsed,
-                bf.volume,
-                bf.path_volume_id,
-                crate::query::EmptyFilterPolicy::MatchNothing,
-            )?;
-            resolved.resolve_ai_filters(&catalog, &state2, &bf.parsed)?;
-
-            let mut opts = bf.parsed.to_search_options();
-            resolved.apply(&mut opts);
-            opts.collapse_stacks = bf.collapse_stacks;
-
-            opts.per_page = u32::MAX;
-            opts.page = 1;
-            catalog.search_paginated(&opts)
+            let query = super::BrowseQuery {
+                empty_filter_policy: crate::query::EmptyFilterPolicy::MatchNothing,
+                scope: super::BrowseScope::All,
+                count: false,
+                count_deltas: false,
+            };
+            Ok(super::run_browse_search(&state2, &catalog, &params, query)?.ids())
         }, |e| (StatusCode::BAD_REQUEST, format!("Search failed: {e}")).into_response())
-        .await?;
-        rows.into_iter().map(|r| r.asset_id).collect()
+        .await?
     };
 
     if asset_ids.is_empty() {
@@ -904,11 +745,10 @@ pub async fn export_zip(
 
     let ids = asset_ids;
     let root = catalog_root.clone();
-    let pc = preview_config.clone();
     let tmp = std::env::temp_dir().join(format!("maki-export-{}.zip", std::process::id()));
     let tmp2 = tmp.clone();
     let (zip_path, exported, skipped, skipped_offline) = super::spawn_blocking_with(move || {
-        let service = AssetService::new(&root, state.verbosity, &pc);
+        let service = AssetService::with_config(&root, state.verbosity, state.config());
         let result = service.export_zip_for_ids(&ids, &tmp2, layout, all_variants, include_sidecars, source, |_, _, _| {})
             .map_err(|e| anyhow::anyhow!("Export failed: {e}"))?;
         if result.files_exported == 0 && result.sidecars_exported == 0 {
@@ -924,32 +764,7 @@ pub async fn export_zip(
     }, |e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response())
     .await?;
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(32);
-    let zip_path_clone = zip_path.clone();
-    tokio::task::spawn_blocking(move || {
-        use std::io::Read;
-        let file = match std::fs::File::open(&zip_path_clone) {
-            Ok(f) => f,
-            Err(_) => return,
-        };
-        let mut reader = std::io::BufReader::with_capacity(512 * 1024, file);
-        let mut buf = vec![0u8; 512 * 1024];
-        loop {
-            let n = match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => n,
-                Err(_) => break,
-            };
-            if tx.blocking_send(Ok(buf[..n].to_vec())).is_err() {
-                break;
-            }
-        }
-        drop(tx);
-        let _ = std::fs::remove_file(&zip_path_clone);
-    });
-
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    let body = Body::from_stream(stream);
+    let body = super::stream_file_then_remove(zip_path);
 
     let filename = format!("maki-export-{}-assets.zip", count);
 

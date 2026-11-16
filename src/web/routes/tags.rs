@@ -8,6 +8,7 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use axum::{Form, Json};
 
+use crate::error::MakiError;
 use crate::web::templates::{TagTreeEntry, TagsFragment, TagsPage};
 use crate::web::AppState;
 
@@ -31,7 +32,7 @@ pub async fn add_tags(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let html = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let tags: Vec<String> = form
             .tags
             .split(',')
@@ -59,7 +60,7 @@ pub async fn remove_tag(
     let state = state.clone();
     let tag = query.tag;
     let html = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let result = engine.tag(&asset_id, &[tag], true)?;
         state.dropdown_cache.invalidate_tags();
         let tmpl = TagsFragment {
@@ -79,7 +80,7 @@ pub async fn clear_tags(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let html = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let details = engine.show(&asset_id)?;
         if details.tags.is_empty() {
             let tmpl = TagsFragment {
@@ -118,9 +119,9 @@ pub async fn rename_tag_api(
         let old_storage = crate::tag_util::tag_input_to_storage(&req.old_tag);
         let new_storage = crate::tag_util::tag_input_to_storage(&req.new_tag);
         if new_storage.is_empty() {
-            anyhow::bail!("new tag name cannot be empty");
+            return Err(MakiError::InvalidInput("new tag name cannot be empty".into()).into());
         }
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let result = engine.tag_rename(&old_storage, &new_storage, req.apply, |_, _| {})?;
         if req.apply {
             state.dropdown_cache.invalidate_tags();
@@ -132,7 +133,7 @@ pub async fn rename_tag_api(
             "skipped": result.skipped,
             "dry_run": result.dry_run,
         }))
-    }, super::err::bad_request)
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }
@@ -160,9 +161,9 @@ pub async fn split_tag_api(
             .filter(|t| !t.is_empty())
             .collect();
         if new_storage.is_empty() {
-            anyhow::bail!("at least one target tag is required");
+            return Err(MakiError::InvalidInput("at least one target tag is required".into()).into());
         }
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let result = engine.tag_split(&old_storage, &new_storage, req.keep, req.apply, |_, _| {})?;
         if req.apply {
             state.dropdown_cache.invalidate_tags();
@@ -173,7 +174,7 @@ pub async fn split_tag_api(
             "skipped": result.skipped,
             "dry_run": result.dry_run,
         }))
-    }, super::err::bad_request)
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }
@@ -197,9 +198,9 @@ pub async fn delete_tag_api(
         // tag_input_to_storage only swaps `>` → `|`, so markers pass through.
         let tag_storage = crate::tag_util::tag_input_to_storage(&req.tag);
         if tag_storage.trim_start_matches(['=', '/', '^']).is_empty() {
-            anyhow::bail!("tag must not be empty");
+            return Err(MakiError::InvalidInput("tag must not be empty".into()).into());
         }
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let result = engine.tag_delete(&tag_storage, req.apply, |_, _| {})?;
         if req.apply {
             state.dropdown_cache.invalidate_tags();
@@ -210,7 +211,7 @@ pub async fn delete_tag_api(
             "skipped": result.skipped,
             "dry_run": result.dry_run,
         }))
-    }, super::err::bad_request)
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }
@@ -513,7 +514,7 @@ pub async fn batch_tags(
     let state = state.clone();
     let batch = super::spawn_catalog_blocking(move || {
         let start = std::time::Instant::now();
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let storage_tags: Vec<String> = req.tags.iter()
             .map(|t| crate::tag_util::tag_input_to_storage(t))
             .collect();

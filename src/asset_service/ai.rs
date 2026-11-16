@@ -35,8 +35,8 @@ impl AssetService {
         use crate::embedding_store::EmbeddingStore;
         use crate::preview::PreviewGenerator;
 
-        let catalog = Catalog::open(&self.catalog_root)?;
-        let engine = self.query_engine();
+        let engine = self.query_engine_on(Catalog::open(&self.catalog_root)?);
+        let catalog = engine.catalog()?;
         let preview_gen = PreviewGenerator::new(&self.catalog_root, self.verbosity, &self.preview_config);
         let registry = DeviceRegistry::new(&self.catalog_root);
         let volumes = registry.list()?;
@@ -437,9 +437,9 @@ impl AssetService {
         apply: bool,
         on_asset: impl Fn(&str, u32, std::time::Duration),
     ) -> Result<DetectFacesResult> {
-        let catalog = crate::catalog::Catalog::open(&self.catalog_root)?;
+        let engine = self.query_engine_on(crate::catalog::Catalog::open(&self.catalog_root)?);
+        let catalog = engine.catalog()?;
         let face_store = crate::face_store::FaceStore::open(catalog.conn(), &self.catalog_root);
-        let engine = self.query_engine();
         let metadata_store = crate::metadata_store::MetadataStore::new(&self.catalog_root);
         let preview_gen = crate::preview::PreviewGenerator::new(&self.catalog_root, crate::Verbosity::quiet(), &self.preview_config);
         let registry = crate::device_registry::DeviceRegistry::new(&self.catalog_root);

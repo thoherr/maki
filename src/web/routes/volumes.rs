@@ -83,11 +83,11 @@ pub async fn register_volume_api(
     let json = super::spawn_blocking_with(move || {
         let path = std::path::PathBuf::from(&req.path);
         if !path.exists() {
-            anyhow::bail!("path does not exist: {}", req.path);
+            return Err(crate::error::MakiError::InvalidInput(format!("path does not exist: {}", req.path)).into());
         }
         let label = req.label.trim().to_string();
         if label.is_empty() {
-            anyhow::bail!("label cannot be empty");
+            return Err(crate::error::MakiError::InvalidInput("label cannot be empty".into()).into());
         }
         let purpose = req
             .purpose
@@ -95,7 +95,7 @@ pub async fn register_volume_api(
             .filter(|s| !s.is_empty())
             .map(|s| {
                 crate::models::VolumePurpose::parse(s)
-                    .ok_or_else(|| anyhow::anyhow!("invalid purpose: {s}"))
+                    .ok_or_else(|| crate::error::MakiError::InvalidInput(format!("invalid purpose: {s}")))
             })
             .transpose()?;
         let registry = crate::device_registry::DeviceRegistry::new(&state.catalog_root);
@@ -124,12 +124,12 @@ pub async fn rename_volume_api(
     let json = super::spawn_blocking_with(move || {
         let label = req.label.trim().to_string();
         if label.is_empty() {
-            anyhow::bail!("label cannot be empty");
+            return Err(crate::error::MakiError::InvalidInput("label cannot be empty".into()).into());
         }
         let registry = crate::device_registry::DeviceRegistry::new(&state.catalog_root);
         registry.rename(&id, &label)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"ok": true}))
-    }, super::err::bad_request)
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }
@@ -153,13 +153,13 @@ pub async fn set_volume_purpose_api(
             .filter(|s| !s.is_empty())
             .map(|s| {
                 crate::models::VolumePurpose::parse(s)
-                    .ok_or_else(|| anyhow::anyhow!("invalid purpose: {s}"))
+                    .ok_or_else(|| crate::error::MakiError::InvalidInput(format!("invalid purpose: {s}")))
             })
             .transpose()?;
         let registry = crate::device_registry::DeviceRegistry::new(&state.catalog_root);
         registry.set_purpose(&id, purpose)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"ok": true}))
-    }, super::err::bad_request)
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }
@@ -301,7 +301,7 @@ pub async fn remove_volume_api(
             "recipes_removed": result.recipes_removed,
             "assets_removed": result.removed_assets,
         }))
-    }, super::err::bad_request)
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }

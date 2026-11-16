@@ -1040,7 +1040,7 @@ mod filters {
     #[askama::filter_fn]
     pub fn version(_s: &str, _: &dyn askama::Values) -> ::askama::Result<String> {
         let v = env!("CARGO_PKG_VERSION");
-        if cfg!(feature = "pro") {
+        if crate::features::PRO {
             Ok(format!("{v} Pro"))
         } else {
             Ok(v.to_string())

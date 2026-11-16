@@ -13,6 +13,11 @@ impl AssetService {
     ///
     /// Also scans for orphaned derived files (previews, smart previews, embeddings,
     /// face crops) and removes them.
+    ///
+    /// Passes, each a method of [`CleanupRun`]: stale locations and recipes
+    /// per online volume (1), locationless variants (2), orphaned assets
+    /// (3), and — unless the run is scoped to a volume or path — orphaned
+    /// derived files under the catalog directory (4–7).
     pub fn cleanup(
         &self,
         volume_filter: Option<&str>,
@@ -21,245 +26,57 @@ impl AssetService {
         on_file: impl Fn(&Path, CleanupStatus, Duration),
     ) -> Result<CleanupResult> {
         let registry = DeviceRegistry::new(&self.catalog_root);
-        let catalog = Catalog::open(&self.catalog_root)?;
-        let metadata_store = MetadataStore::new(&self.catalog_root);
-
-        let mut result = CleanupResult {
-            checked: 0,
-            stale: 0,
-            removed: 0,
-            skipped_offline: 0,
-            locationless_variants: 0,
-            removed_variants: 0,
-            orphaned_assets: 0,
-            removed_assets: 0,
-            orphaned_previews: 0,
-            removed_previews: 0,
-            orphaned_smart_previews: 0,
-            removed_smart_previews: 0,
-            orphaned_embeddings: 0,
-            removed_embeddings: 0,
-            orphaned_face_files: 0,
-            removed_face_files: 0,
-            errors: Vec::new(),
-            skipped_global_passes: false,
-        };
-
         let volumes = if let Some(label) = volume_filter {
             vec![registry.resolve_volume(label)?]
         } else {
             registry.list()?
         };
 
-        // Collect stale locations for report-mode orphan prediction
-        let mut stale_locations: Vec<(String, String, String)> = Vec::new();
+        let mut run = CleanupRun {
+            service: self,
+            catalog: Catalog::open(&self.catalog_root)?,
+            metadata_store: MetadataStore::new(&self.catalog_root),
+            apply,
+            result: CleanupResult {
+                checked: 0,
+                stale: 0,
+                removed: 0,
+                skipped_offline: 0,
+                locationless_variants: 0,
+                removed_variants: 0,
+                orphaned_assets: 0,
+                removed_assets: 0,
+                orphaned_previews: 0,
+                removed_previews: 0,
+                orphaned_smart_previews: 0,
+                removed_smart_previews: 0,
+                orphaned_embeddings: 0,
+                removed_embeddings: 0,
+                orphaned_face_files: 0,
+                removed_face_files: 0,
+                errors: Vec::new(),
+                skipped_global_passes: false,
+            },
+            stale_locations: Vec::new(),
+            on_file,
+        };
 
+        // Pass 1: stale file locations and recipes, per volume
+        let prefix = path_prefix.unwrap_or("");
         for volume in &volumes {
             if !volume.is_online {
-                result.skipped_offline += 1;
-                on_file(&volume.mount_point, CleanupStatus::Offline, Duration::ZERO);
+                run.result.skipped_offline += 1;
+                (run.on_file)(&volume.mount_point, CleanupStatus::Offline, Duration::ZERO);
                 continue;
             }
-
-            let vol_id_str = volume.id.to_string();
-
-            // Check variant file locations
-            let prefix = path_prefix.unwrap_or("");
-            let locations = catalog.list_locations_for_volume_under_prefix(&vol_id_str, prefix)?;
-            for (content_hash, relative_path) in &locations {
-                let file_start = Instant::now();
-                let full_path = volume.mount_point.join(relative_path);
-
-                if full_path.exists() {
-                    result.checked += 1;
-                    on_file(&full_path, CleanupStatus::Ok, file_start.elapsed());
-                } else {
-                    result.stale += 1;
-                    on_file(&full_path, CleanupStatus::Stale, file_start.elapsed());
-                    if apply {
-                        // Sidecar (source of truth) first, then the catalog row.
-                        if let Err(e) = self.remove_sidecar_file_location(
-                            &metadata_store,
-                            &catalog,
-                            content_hash,
-                            volume.id,
-                            relative_path,
-                        ) {
-                            result.errors.push(format!(
-                                "Failed to update sidecar for {}: {e}",
-                                relative_path
-                            ));
-                        } else if let Err(e) = catalog.delete_file_location(
-                            content_hash,
-                            &vol_id_str,
-                            relative_path,
-                        ) {
-                            result.errors.push(format!(
-                                "Failed to remove location {}: {e}",
-                                relative_path
-                            ));
-                        } else {
-                            result.removed += 1;
-                        }
-                    } else {
-                        stale_locations.push((
-                            content_hash.clone(),
-                            vol_id_str.clone(),
-                            relative_path.clone(),
-                        ));
-                    }
-                }
-            }
-
-            // Check recipe file locations
-            let recipes =
-                catalog.list_recipes_for_volume_under_prefix(&vol_id_str, prefix)?;
-            for (recipe_id, _content_hash, variant_hash, relative_path) in &recipes {
-                let file_start = Instant::now();
-                let full_path = volume.mount_point.join(relative_path);
-
-                if full_path.exists() {
-                    result.checked += 1;
-                    on_file(&full_path, CleanupStatus::Ok, file_start.elapsed());
-                } else {
-                    result.stale += 1;
-                    on_file(&full_path, CleanupStatus::Stale, file_start.elapsed());
-                    if apply {
-                        if let Err(e) = self.remove_sidecar_recipe(
-                            &metadata_store,
-                            &catalog,
-                            variant_hash,
-                            volume.id,
-                            relative_path,
-                        ) {
-                            result.errors.push(format!(
-                                "Failed to update sidecar for recipe {}: {e}",
-                                relative_path
-                            ));
-                        } else if let Err(e) = catalog.delete_recipe(recipe_id) {
-                            result.errors.push(format!(
-                                "Failed to remove recipe {}: {e}",
-                                relative_path
-                            ));
-                        } else {
-                            result.removed += 1;
-                        }
-                    }
-                }
-            }
+            run.check_volume_locations(volume, prefix)?;
         }
 
         // Pass 2: Locationless variants (variant has no locations but asset has other located variants)
-        let locationless = if apply {
-            catalog.list_locationless_variants()?
-        } else {
-            catalog.list_would_be_locationless_variants(&stale_locations)?
-        };
-        result.locationless_variants = locationless.len();
-
-        if apply {
-            let preview_gen2 = crate::preview::PreviewGenerator::new(
-                &self.catalog_root,
-                self.verbosity,
-                &self.preview_config,
-            );
-            // Group by asset_id so we can update sidecars and denormalized columns once per asset
-            let mut by_asset: std::collections::HashMap<String, Vec<String>> =
-                std::collections::HashMap::new();
-            for (asset_id, content_hash) in &locationless {
-                by_asset
-                    .entry(asset_id.clone())
-                    .or_default()
-                    .push(content_hash.clone());
-            }
-
-            for (asset_id, hashes) in &by_asset {
-                let asset_start = Instant::now();
-
-                // Sidecar (source of truth) first: drop the variant(s) and
-                // their recipes. An asset without a loadable sidecar is a
-                // catalog-only ghost; its rows are still removed below.
-                let sidecar_asset = match uuid::Uuid::parse_str(asset_id)
-                    .ok()
-                    .and_then(|uuid| metadata_store.load(uuid).ok())
-                {
-                    Some(mut asset) => {
-                        let hash_set: std::collections::HashSet<&str> =
-                            hashes.iter().map(|h| h.as_str()).collect();
-                        asset.variants.retain(|v| !hash_set.contains(v.content_hash.as_str()));
-                        asset.recipes.retain(|r| !hash_set.contains(r.variant_hash.as_str()));
-                        if let Err(e) = metadata_store.save(&asset) {
-                            result.errors.push(format!(
-                                "Failed to update sidecar for asset {asset_id}: {e}"
-                            ));
-                            continue;
-                        }
-                        Some(asset)
-                    }
-                    None => None,
-                };
-
-                // Then every catalog row of this asset in one transaction
-                // (variant rows cascade to file_locations, recipes, embeddings;
-                // the denormalized columns follow the new variant set).
-                let tx = catalog.with_tx(|c| {
-                    for hash in hashes {
-                        c.delete_variant(hash)?;
-                    }
-                    if let Some(asset) = &sidecar_asset {
-                        c.update_denormalized_variant_columns(asset)?;
-                    }
-                    Ok(())
-                });
-                if let Err(e) = tx {
-                    result.errors.push(format!(
-                        "Failed to delete locationless variants of asset {asset_id}: {e:#}"
-                    ));
-                    continue;
-                }
-
-                for hash in hashes {
-                    // Derived files are a regenerable cache: best-effort removal.
-                    let _ = std::fs::remove_file(preview_gen2.preview_path(hash));
-                    let _ = std::fs::remove_file(preview_gen2.smart_preview_path(hash));
-                    result.removed_variants += 1;
-                    on_file(&PathBuf::from(hash), CleanupStatus::LocationlessVariant, asset_start.elapsed());
-                }
-            }
-        }
+        run.remove_locationless_variants()?;
 
         // Pass 3: Orphaned assets (all variants have zero file_locations)
-        // In apply mode, locations were already removed so we query directly.
-        // In report mode, we predict which assets would become orphaned.
-        let orphaned_ids = if apply {
-            catalog.list_orphaned_asset_ids()?
-        } else {
-            catalog.list_would_be_orphaned_asset_ids(&stale_locations)?
-        };
-        result.orphaned_assets = orphaned_ids.len();
-
-        if apply {
-            let preview_gen = crate::preview::PreviewGenerator::new(
-                &self.catalog_root,
-                self.verbosity,
-                &self.preview_config,
-            );
-            for asset_id in &orphaned_ids {
-                let file_start = Instant::now();
-                let asset_id_path = PathBuf::from(asset_id);
-                if !self.purge_orphaned_asset(
-                    &catalog,
-                    &metadata_store,
-                    &preview_gen,
-                    asset_id,
-                    &mut result.errors,
-                ) {
-                    continue;
-                }
-                result.removed_assets += 1;
-                on_file(&asset_id_path, CleanupStatus::OrphanedAsset, file_start.elapsed());
-            }
-        }
+        run.remove_orphaned_assets()?;
 
         // Passes 4-7 scan all files under `<catalog_root>/{previews,smart-previews,
         // embeddings,faces}` against the entire catalog — they cannot be meaningfully
@@ -269,93 +86,12 @@ impl AssetService {
         // passes so counts in the summary don't mix path-scoped and catalog-wide numbers.
         let scope_restricted = volume_filter.is_some() || path_prefix.is_some();
         if scope_restricted {
-            result.skipped_global_passes = true;
-            return Ok(result);
+            run.result.skipped_global_passes = true;
+            return Ok(run.result);
         }
+        run.remove_orphaned_derived_files()?;
 
-        // Pass 4: Orphaned previews (preview files with no matching variant)
-        let variant_hashes = catalog.list_all_variant_hashes()?;
-        scan_orphaned_sharded_files(
-            &self.catalog_root.join("previews"),
-            |stem| {
-                let content_hash = format!("sha256:{stem}");
-                variant_hashes.contains(&content_hash)
-            },
-            apply,
-            &mut result.orphaned_previews,
-            &mut result.removed_previews,
-            &mut result.errors,
-            &on_file,
-        );
-
-        // Pass 5: Orphaned smart previews (same logic, different directory)
-        scan_orphaned_sharded_files(
-            &self.catalog_root.join("smart-previews"),
-            |stem| {
-                let content_hash = format!("sha256:{stem}");
-                variant_hashes.contains(&content_hash)
-            },
-            apply,
-            &mut result.orphaned_smart_previews,
-            &mut result.removed_smart_previews,
-            &mut result.errors,
-            &on_file,
-        );
-
-        // Pass 6: Orphaned embedding binaries (asset_id.bin under embeddings/<model>/)
-        let asset_ids_set: HashSet<String> = catalog.list_all_asset_ids()?;
-        let emb_base = self.catalog_root.join("embeddings");
-        if emb_base.is_dir() {
-            if let Ok(model_entries) = std::fs::read_dir(&emb_base) {
-                for model_entry in model_entries.flatten() {
-                    if !model_entry.path().is_dir() {
-                        continue;
-                    }
-                    let model_name = model_entry.file_name().to_string_lossy().to_string();
-                    if model_name == "arcface" {
-                        continue; // handled separately in pass 7
-                    }
-                    scan_orphaned_sharded_files(
-                        &model_entry.path(),
-                        |stem| asset_ids_set.contains(stem),
-                        apply,
-                        &mut result.orphaned_embeddings,
-                        &mut result.removed_embeddings,
-                        &mut result.errors,
-                        &on_file,
-                    );
-                }
-            }
-        }
-
-        // Pass 7: Orphaned face crop thumbnails (face_id.jpg under faces/)
-        let face_ids_set: HashSet<String> = catalog.conn()
-            .prepare("SELECT id FROM faces")
-            .and_then(|mut s| s.query_map([], |r| r.get(0))
-                .and_then(|rows| rows.collect()))
-            .unwrap_or_default();
-        scan_orphaned_sharded_files(
-            &self.catalog_root.join("faces"),
-            |stem| face_ids_set.contains(stem),
-            apply,
-            &mut result.orphaned_face_files,
-            &mut result.removed_face_files,
-            &mut result.errors,
-            &on_file,
-        );
-
-        // Pass 7: Orphaned ArcFace embedding binaries (face_id.bin under embeddings/arcface/)
-        scan_orphaned_sharded_files(
-            &self.catalog_root.join("embeddings").join("arcface"),
-            |stem| face_ids_set.contains(stem),
-            apply,
-            &mut result.orphaned_embeddings,
-            &mut result.removed_embeddings,
-            &mut result.errors,
-            &on_file,
-        );
-
-        Ok(result)
+        Ok(run.result)
     }
 
     /// Delete assets from the catalog. Report-only by default; `apply` executes deletion.
@@ -716,4 +452,320 @@ fn list_face_ids(catalog: &Catalog, asset_id: &str) -> Vec<String> {
         .and_then(|mut s| s.query_map(rusqlite::params![asset_id], |r| r.get(0))
             .and_then(|rows| rows.collect()))
         .unwrap_or_default()
+}
+
+/// One `cleanup` in progress: stores, the apply flag, the result under
+/// construction, the stale locations found in report mode (which predict
+/// the orphans the later passes would produce) and the progress callback.
+struct CleanupRun<'a, F> {
+    service: &'a AssetService,
+    catalog: Catalog,
+    metadata_store: MetadataStore,
+    apply: bool,
+    result: CleanupResult,
+    /// `(content_hash, volume_id, relative_path)` of stale locations seen in
+    /// report mode, for the would-be-orphan predictions of passes 2 and 3.
+    stale_locations: Vec<(String, String, String)>,
+    on_file: F,
+}
+
+impl<F: Fn(&Path, CleanupStatus, Duration)> CleanupRun<'_, F> {
+    /// Pass 1 for one online volume: every variant location and recipe
+    /// under `prefix` whose file is gone is stale; with `apply` its row is
+    /// removed (sidecar first).
+    fn check_volume_locations(&mut self, volume: &Volume, prefix: &str) -> Result<()> {
+        let vol_id_str = volume.id.to_string();
+
+        // Check variant file locations
+        let locations = self
+            .catalog
+            .list_locations_for_volume_under_prefix(&vol_id_str, prefix)?;
+        for (content_hash, relative_path) in &locations {
+            let file_start = Instant::now();
+            let full_path = volume.mount_point.join(relative_path);
+
+            if full_path.exists() {
+                self.result.checked += 1;
+                (self.on_file)(&full_path, CleanupStatus::Ok, file_start.elapsed());
+                continue;
+            }
+            self.result.stale += 1;
+            (self.on_file)(&full_path, CleanupStatus::Stale, file_start.elapsed());
+            if self.apply {
+                // Sidecar (source of truth) first, then the catalog row.
+                if let Err(e) = self.service.remove_sidecar_file_location(
+                    &self.metadata_store,
+                    &self.catalog,
+                    content_hash,
+                    volume.id,
+                    relative_path,
+                ) {
+                    self.result.errors.push(format!(
+                        "Failed to update sidecar for {}: {e}",
+                        relative_path
+                    ));
+                } else if let Err(e) = self.catalog.delete_file_location(
+                    content_hash,
+                    &vol_id_str,
+                    relative_path,
+                ) {
+                    self.result.errors.push(format!(
+                        "Failed to remove location {}: {e}",
+                        relative_path
+                    ));
+                } else {
+                    self.result.removed += 1;
+                }
+            } else {
+                self.stale_locations.push((
+                    content_hash.clone(),
+                    vol_id_str.clone(),
+                    relative_path.clone(),
+                ));
+            }
+        }
+
+        // Check recipe file locations
+        let recipes = self
+            .catalog
+            .list_recipes_for_volume_under_prefix(&vol_id_str, prefix)?;
+        for (recipe_id, _content_hash, variant_hash, relative_path) in &recipes {
+            let file_start = Instant::now();
+            let full_path = volume.mount_point.join(relative_path);
+
+            if full_path.exists() {
+                self.result.checked += 1;
+                (self.on_file)(&full_path, CleanupStatus::Ok, file_start.elapsed());
+                continue;
+            }
+            self.result.stale += 1;
+            (self.on_file)(&full_path, CleanupStatus::Stale, file_start.elapsed());
+            if self.apply {
+                if let Err(e) = self.service.remove_sidecar_recipe(
+                    &self.metadata_store,
+                    &self.catalog,
+                    variant_hash,
+                    volume.id,
+                    relative_path,
+                ) {
+                    self.result.errors.push(format!(
+                        "Failed to update sidecar for recipe {}: {e}",
+                        relative_path
+                    ));
+                } else if let Err(e) = self.catalog.delete_recipe(recipe_id) {
+                    self.result.errors.push(format!(
+                        "Failed to remove recipe {}: {e}",
+                        relative_path
+                    ));
+                } else {
+                    self.result.removed += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Pass 2: variants without any location whose asset still has other
+    /// located variants. In apply mode they are dropped from the sidecar
+    /// and the catalog (one transaction per asset) with their previews;
+    /// in report mode the count is predicted from the stale locations.
+    fn remove_locationless_variants(&mut self) -> Result<()> {
+        let locationless = if self.apply {
+            self.catalog.list_locationless_variants()?
+        } else {
+            self.catalog
+                .list_would_be_locationless_variants(&self.stale_locations)?
+        };
+        self.result.locationless_variants = locationless.len();
+        if !self.apply {
+            return Ok(());
+        }
+
+        let preview_gen = self.service.preview_generator();
+        // Group by asset_id so we can update sidecars and denormalized columns once per asset
+        let mut by_asset: HashMap<String, Vec<String>> = HashMap::new();
+        for (asset_id, content_hash) in &locationless {
+            by_asset
+                .entry(asset_id.clone())
+                .or_default()
+                .push(content_hash.clone());
+        }
+
+        for (asset_id, hashes) in &by_asset {
+            let asset_start = Instant::now();
+
+            // Sidecar (source of truth) first: drop the variant(s) and
+            // their recipes. An asset without a loadable sidecar is a
+            // catalog-only ghost; its rows are still removed below.
+            let sidecar_asset = match uuid::Uuid::parse_str(asset_id)
+                .ok()
+                .and_then(|uuid| self.metadata_store.load(uuid).ok())
+            {
+                Some(mut asset) => {
+                    let hash_set: HashSet<&str> = hashes.iter().map(|h| h.as_str()).collect();
+                    asset.variants.retain(|v| !hash_set.contains(v.content_hash.as_str()));
+                    asset.recipes.retain(|r| !hash_set.contains(r.variant_hash.as_str()));
+                    if let Err(e) = self.metadata_store.save(&asset) {
+                        self.result.errors.push(format!(
+                            "Failed to update sidecar for asset {asset_id}: {e}"
+                        ));
+                        continue;
+                    }
+                    Some(asset)
+                }
+                None => None,
+            };
+
+            // Then every catalog row of this asset in one transaction
+            // (variant rows cascade to file_locations, recipes, embeddings;
+            // the denormalized columns follow the new variant set).
+            let tx = self.catalog.with_tx(|c| {
+                for hash in hashes {
+                    c.delete_variant(hash)?;
+                }
+                if let Some(asset) = &sidecar_asset {
+                    c.update_denormalized_variant_columns(asset)?;
+                }
+                Ok(())
+            });
+            if let Err(e) = tx {
+                self.result.errors.push(format!(
+                    "Failed to delete locationless variants of asset {asset_id}: {e:#}"
+                ));
+                continue;
+            }
+
+            for hash in hashes {
+                // Derived files are a regenerable cache: best-effort removal.
+                let _ = std::fs::remove_file(preview_gen.preview_path(hash));
+                let _ = std::fs::remove_file(preview_gen.smart_preview_path(hash));
+                self.result.removed_variants += 1;
+                (self.on_file)(&PathBuf::from(hash), CleanupStatus::LocationlessVariant, asset_start.elapsed());
+            }
+        }
+        Ok(())
+    }
+
+    /// Pass 3: assets whose variants all have zero file locations. In
+    /// apply mode, locations were already removed so we query directly;
+    /// in report mode, we predict which assets would become orphaned.
+    fn remove_orphaned_assets(&mut self) -> Result<()> {
+        let orphaned_ids = if self.apply {
+            self.catalog.list_orphaned_asset_ids()?
+        } else {
+            self.catalog
+                .list_would_be_orphaned_asset_ids(&self.stale_locations)?
+        };
+        self.result.orphaned_assets = orphaned_ids.len();
+        if !self.apply {
+            return Ok(());
+        }
+
+        let preview_gen = self.service.preview_generator();
+        for asset_id in &orphaned_ids {
+            let file_start = Instant::now();
+            let asset_id_path = PathBuf::from(asset_id);
+            if !self.service.purge_orphaned_asset(
+                &self.catalog,
+                &self.metadata_store,
+                &preview_gen,
+                asset_id,
+                &mut self.result.errors,
+            ) {
+                continue;
+            }
+            self.result.removed_assets += 1;
+            (self.on_file)(&asset_id_path, CleanupStatus::OrphanedAsset, file_start.elapsed());
+        }
+        Ok(())
+    }
+
+    /// Passes 4–7: derived files under the catalog directory that no
+    /// variant, asset or face refers to any more.
+    fn remove_orphaned_derived_files(&mut self) -> Result<()> {
+        let catalog_root = &self.service.catalog_root;
+
+        // Pass 4: Orphaned previews (preview files with no matching variant)
+        let variant_hashes = self.catalog.list_all_variant_hashes()?;
+        scan_orphaned_sharded_files(
+            &catalog_root.join("previews"),
+            |stem| {
+                let content_hash = format!("sha256:{stem}");
+                variant_hashes.contains(&content_hash)
+            },
+            self.apply,
+            &mut self.result.orphaned_previews,
+            &mut self.result.removed_previews,
+            &mut self.result.errors,
+            &self.on_file,
+        );
+
+        // Pass 5: Orphaned smart previews (same logic, different directory)
+        scan_orphaned_sharded_files(
+            &catalog_root.join("smart-previews"),
+            |stem| {
+                let content_hash = format!("sha256:{stem}");
+                variant_hashes.contains(&content_hash)
+            },
+            self.apply,
+            &mut self.result.orphaned_smart_previews,
+            &mut self.result.removed_smart_previews,
+            &mut self.result.errors,
+            &self.on_file,
+        );
+
+        // Pass 6: Orphaned embedding binaries (asset_id.bin under embeddings/<model>/)
+        let asset_ids_set: HashSet<String> = self.catalog.list_all_asset_ids()?;
+        let emb_base = catalog_root.join("embeddings");
+        if emb_base.is_dir() {
+            if let Ok(model_entries) = std::fs::read_dir(&emb_base) {
+                for model_entry in model_entries.flatten() {
+                    if !model_entry.path().is_dir() {
+                        continue;
+                    }
+                    let model_name = model_entry.file_name().to_string_lossy().to_string();
+                    if model_name == "arcface" {
+                        continue; // handled separately in pass 7
+                    }
+                    scan_orphaned_sharded_files(
+                        &model_entry.path(),
+                        |stem| asset_ids_set.contains(stem),
+                        self.apply,
+                        &mut self.result.orphaned_embeddings,
+                        &mut self.result.removed_embeddings,
+                        &mut self.result.errors,
+                        &self.on_file,
+                    );
+                }
+            }
+        }
+
+        // Pass 7: Orphaned face crop thumbnails (face_id.jpg under faces/)
+        let face_ids_set: HashSet<String> = self.catalog.conn()
+            .prepare("SELECT id FROM faces")
+            .and_then(|mut s| s.query_map([], |r| r.get(0))
+                .and_then(|rows| rows.collect()))
+            .unwrap_or_default();
+        scan_orphaned_sharded_files(
+            &catalog_root.join("faces"),
+            |stem| face_ids_set.contains(stem),
+            self.apply,
+            &mut self.result.orphaned_face_files,
+            &mut self.result.removed_face_files,
+            &mut self.result.errors,
+            &self.on_file,
+        );
+
+        // Pass 7: Orphaned ArcFace embedding binaries (face_id.bin under embeddings/arcface/)
+        scan_orphaned_sharded_files(
+            &catalog_root.join("embeddings").join("arcface"),
+            |stem| face_ids_set.contains(stem),
+            self.apply,
+            &mut self.result.orphaned_embeddings,
+            &mut self.result.removed_embeddings,
+            &mut self.result.errors,
+            &self.on_file,
+        );
+        Ok(())
+    }
 }

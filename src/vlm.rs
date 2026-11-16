@@ -9,19 +9,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// Resolved VLM parameters for a single request (global + per-model overrides merged).
-#[derive(Debug, Clone)]
-pub struct VlmParams {
-    pub max_tokens: u32,
-    pub timeout: u32,
-    pub temperature: f32,
-    pub max_image_edge: u32,
-    pub num_ctx: u32,
-    pub top_p: f32,
-    pub top_k: u32,
-    pub repeat_penalty: f32,
-    pub prompt: Option<String>,
-}
+pub use crate::config::VlmParams;
 
 /// Describe mode: what to generate from the VLM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,7 +69,7 @@ pub struct VlmOutput {
 }
 
 /// Result of a single VLM call.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DescribeResult {
     pub asset_id: String,
     pub description: Option<String>,
@@ -90,17 +78,82 @@ pub struct DescribeResult {
     pub status: DescribeStatus,
 }
 
-/// Status of a single describe operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// Why a describe run skipped an asset (no VLM call made). `Display`
+/// is the message after `skipped:` on the CLI line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkipReason {
+    /// Already has a description and `force` is off.
+    AlreadyDescribed,
+    /// No preview or reachable image file; `short_id` names the asset.
+    NoImage { short_id: String },
+    /// Dry run: the asset would be sent to the VLM with this image.
+    WouldProcess { image: String },
+}
+
+impl std::fmt::Display for SkipReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyDescribed => f.write_str("already has description"),
+            Self::NoImage { short_id } => write!(
+                f,
+                "No preview/image for asset {short_id}. Run `maki generate-previews` first."
+            ),
+            Self::WouldProcess { image } => write!(f, "would process (image: {image})"),
+        }
+    }
+}
+
+/// Why a describe run failed an asset. `Display` is the message after
+/// `error:` on the CLI line and the entry in [`BatchDescribeResult::errors`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DescribeError {
+    /// The id (or prefix) matched no asset.
+    NotFound { short_id: String },
+    /// The VLM call or the catalog write failed; the message as produced.
+    Failed(String),
+}
+
+impl std::fmt::Display for DescribeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound { short_id } => write!(f, "Asset {short_id} not found"),
+            Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+/// Status of a single describe operation. Serialises as `"described"`,
+/// `{"skipped": "<message>"}` or `{"error": "<message>"}` — the shape
+/// from before the reasons were typed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(into = "DescribeStatusRepr")]
 pub enum DescribeStatus {
+    Described,
+    Skipped(SkipReason),
+    Error(DescribeError),
+}
+
+/// The JSON shape of [`DescribeStatus`].
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DescribeStatusRepr {
     Described,
     Skipped(String),
     Error(String),
 }
 
+impl From<DescribeStatus> for DescribeStatusRepr {
+    fn from(status: DescribeStatus) -> Self {
+        match status {
+            DescribeStatus::Described => Self::Described,
+            DescribeStatus::Skipped(reason) => Self::Skipped(reason.to_string()),
+            DescribeStatus::Error(error) => Self::Error(error.to_string()),
+        }
+    }
+}
+
 /// Aggregate result for batch describe.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BatchDescribeResult {
     pub described: usize,
     pub skipped: usize,

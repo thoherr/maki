@@ -2,6 +2,18 @@
 
 use super::*;
 
+/// The CLI's view of a writeback run: warnings always go to stderr, the
+/// per-file line only with `--log`.
+#[cfg(feature = "pro")]
+fn writeback_event_logger(ctx: &CliContext) -> impl FnMut(maki::query::WritebackEvent<'_>) {
+    let log = ctx.log;
+    move |event| {
+        if log || matches!(event, maki::query::WritebackEvent::Warning(_)) {
+            eprintln!("{event}");
+        }
+    }
+}
+
 /// Extracted body of `Commands::Writeback`. See `run_import_command` for the
 /// extraction pattern.
 #[cfg(feature = "pro")]
@@ -16,10 +28,10 @@ pub fn run_writeback_command(
         no_trash: bool,
         dry_run: bool,
         asset_ids: Vec<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let catalog_root = maki::config::find_catalog_root()?;
-    let engine = maki::query::QueryEngine::new(&catalog_root);
+    let catalog_root = ctx.catalog_root()?;
+    let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
     let _start = std::time::Instant::now();
 
     let scope = engine.resolve_scope(query.as_deref(), asset.as_deref(), &asset_ids)?;
@@ -29,24 +41,23 @@ pub fn run_writeback_command(
     // takes effect on top (OR semantics); there's no need for a
     // `--no-mirror-tags` opt-out because mirror semantics are
     // idempotent at the keyword level — re-running adds nothing.
-    let cfg = maki::config::CatalogConfig::load(&catalog_root).unwrap_or_default();
-    let effective_mirror_tags = mirror_tags || cfg.writeback.mirror_tags;
+    let effective_mirror_tags = mirror_tags || ctx.config.writeback.mirror_tags;
 
     // `--embed` REPLACES the recipe flush for this run: catalog
     // metadata is written into the JPEG variant files' embedded XMP;
     // the .xmp recipe sidecars (and their pending flags) are untouched.
+    let req = maki::query::WritebackRequest {
+        volume: volume.as_deref(),
+        asset_prefix: None, // asset_filter replaced by scope
+        asset_ids: scope.as_ref(),
+        all,
+        force,
+        mirror_tags: effective_mirror_tags,
+        dry_run,
+        no_trash,
+    };
     if embed {
-        let result = engine.writeback_embedded(
-            volume.as_deref(),
-            scope.as_ref(),
-            all,
-            force,
-            effective_mirror_tags,
-            no_trash,
-            dry_run,
-            ctx.log,
-            None,
-        )?;
+        let result = engine.writeback_embedded_with(&req, &mut writeback_event_logger(ctx))?;
 
         if ctx.json {
             println!("{}", serde_json::to_string_pretty(&result)?);
@@ -89,17 +100,7 @@ pub fn run_writeback_command(
         return Ok(());
     }
 
-    let result = engine.writeback(
-        volume.as_deref(),
-        None, // asset_filter replaced by scope
-        scope.as_ref(),
-        all,
-        force,
-        effective_mirror_tags,
-        dry_run,
-        ctx.log,
-        None,
-    )?;
+    let result = engine.writeback_with(&req, &mut writeback_event_logger(ctx))?;
 
     if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -151,12 +152,12 @@ pub fn run_sync_metadata_command(
         dry_run: bool,
         media: bool,
         asset_ids: Vec<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     let _start = std::time::Instant::now();
-    let (catalog_root, config) = maki::config::load_config()?;
+    let (catalog_root, config) = ctx.catalog()?;
     let registry = DeviceRegistry::new(&catalog_root);
-    let engine = maki::query::QueryEngine::new(&catalog_root);
+    let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
 
     // Resolve volume
     let resolved_volume = if let Some(label) = &volume {
@@ -172,7 +173,7 @@ pub fn run_sync_metadata_command(
         None => vec![None], // process all
     };
 
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
     let mut result = maki::asset_service::SyncMetadataResult { dry_run, ..Default::default() };
     for aid in &asset_id_list {
         let r = if ctx.log {
@@ -269,7 +270,7 @@ pub fn run_sync_command(
         volume: Option<String>,
         apply: bool,
         remove_stale: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     if paths.is_empty() {
         anyhow::bail!("no paths specified for sync.");
@@ -278,7 +279,7 @@ pub fn run_sync_command(
         anyhow::bail!("--remove-stale requires --apply.");
     }
 
-    let (catalog_root, config) = maki::config::load_config()?;
+    let (catalog_root, config) = ctx.catalog()?;
     let registry = DeviceRegistry::new(&catalog_root);
 
     let canonical_paths: Vec<PathBuf> = paths
@@ -295,7 +296,7 @@ pub fn run_sync_command(
         registry.find_volume_for_path(&canonical_paths[0])?
     };
 
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
     let result = if ctx.log {
         use maki::asset_service::SyncStatus;
         service.sync(
@@ -403,12 +404,12 @@ pub fn run_verify_command(
         skip: Vec<String>,
         max_age: Option<u64>,
         force: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     use maki::asset_service::FileTypeFilter;
 
-    let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let (catalog_root, config) = ctx.catalog()?;
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
 
     let max_age_days: Option<u64> = if force {
         None

@@ -268,7 +268,9 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 - `tag(asset_id, tags, remove)` — add or remove tags, with XMP write-back
 - `edit(asset_id, fields)` — set/clear name, description, rating, color label, and date via `EditFields` (triple-option pattern: `None` = no change, `Some(None)` = clear, `Some(Some(x))` = set). Rating, description, and label changes trigger XMP write-back.
 - `set_rating(asset_id, rating)` / `set_color_label(asset_id, label)` — individual field setters used by web UI and batch operations
-- `auto_group(asset_ids, apply)` — group assets by filename stem using fuzzy prefix matching; `auto_group_scoped(asset_ids, apply, import_roots)` is the `import --auto-group` variant whose session-root fallback is the imported directory
+- `auto_group(asset_ids, dry_run, scope, on_group)` — group assets by filename stem using fuzzy prefix matching; `AutoGroupScope::{SessionRoots, ImportRoots, Global}` selects the candidate neighbourhood (`ImportRoots` is the `import --auto-group` variant whose session-root fallback is the imported directory)
+
+**Module layout**: `src/query.rs` holds the types and constructors; one `impl QueryEngine` block per concern lives in `src/query/{search,grouping,tags,fields,reimport,context,writeback,writeback_embed}.rs`, the parser in `query/parse.rs`. An engine holds one `Catalog` connection — lent by the caller (`QueryEngine::with_catalog(root, config, conn)`; the web pool and `AssetService` do this) or opened lazily on first use (`with_config`). Every field setter and `edit` go through one `mutate_asset` primitive (load → change in memory → sidecar → SQLite in one `with_tx` → write-back/history); setting a field to its current value is a no-op. `query::search_in(catalog, …)` searches on a connection the caller already holds.
 
 ### 7. Preview Generator
 
@@ -468,7 +470,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 
 **Responsibility**: parse and provide catalog configuration from `maki.toml`.
 
-**Module**: `src/config.rs` — `CatalogConfig` with one sub-struct per section: `PreviewConfig`, `ServeConfig`, `ImportConfig` (+ `ImportProfile`), `DedupConfig`, `VerifyConfig`, `AiConfig`, `ContactSheetDefaults`, `VlmConfig` (+ `VlmModelConfig` per-model overrides), `BrowseConfig`, `WritebackConfig`, `TrashConfig`, `HistoryConfig`, `CliDefaults`, `GroupConfig`, `WatchConfig`, `AudioConfig`. `load_config()` resolves the catalog root and parses the file; `resolve_model_dir()` expands `~/` in `[ai] model_dir`. The settings dialog reads and writes the file through `GET|POST /api/config`, with a JSON Schema derived from the same structs (`schemars`) driving the form.
+**Module**: `src/config.rs` — `CatalogConfig` with one sub-struct per section: `PreviewConfig`, `ServeConfig`, `ImportConfig` (+ `ImportProfile`), `DedupConfig`, `VerifyConfig`, `AiConfig`, `ContactSheetDefaults`, `VlmConfig` (+ `VlmModelConfig` per-model overrides), `BrowseConfig`, `WritebackConfig`, `TrashConfig`, `HistoryConfig`, `CliDefaults`, `GroupConfig`, `WatchConfig`, `AudioConfig`. `CatalogConfig::load(root)` parses the file — the CLI entry point calls it once per invocation and hands the result to every handler through `CliContext` (`ctx.catalog()`), the web server keeps it in `AppState::config()`; `resolve_model_dir()` expands `~/` in `[ai] model_dir`. The settings dialog reads and writes the file through `GET|POST /api/config`, with a JSON Schema derived from the same structs (`schemars`) driving the form.
 
 **Sections** (every field optional; defaults in `src/config.rs`, full documentation in `doc/manual/reference/08-configuration.md`):
 - top level: `default_volume` (UUID fallback for import)
@@ -630,7 +632,7 @@ After each write, the file is re-hashed and the recipe's `content_hash` is updat
 **Module**: `src/history.rs` — `HistoryStore` over `<catalog_root>/history/`, one JSON file per operation (`<epoch-millis>-<opid>.json`); undone operations move to `history/undone/`. `Operation` carries `command`, `summary`, `source` (`OpSource`, labelled `cli` for every surface in v4.12) and one `AssetDelta` (full prior `Asset` state) per touched asset.
 
 **Operations**:
-- `HistoryStore::from_config(catalog_root)` — honours `[history] enabled` / `max_operations`
+- `HistoryStore::new_with(catalog_root, &HistoryConfig)` — honours `[history] enabled` / `max_operations`
 - `record(op)` — append an operation and prune beyond `max_operations`
 - `list(limit)` / `list_for_asset(asset_id, limit)` — newest first
 - `newest_active()` / `mark_undone(op_id)` — LIFO undo bookkeeping
@@ -643,7 +645,7 @@ After each write, the file is re-hashed and the recipe's `content_hash` is updat
 **Module**: `src/trash.rs` — `Trash` moves media and recipe files into `<catalog_root>/.trash/<YYYY-MM-DD>/<volume_label>/<relative_path>` instead of unlinking them. Used by `delete --remove-files`, `dedup`, `writeback --embed` (pre-splice copy) and the web duplicates page. Derived files (previews, embeddings, face crops) are exempt. Config `[trash] enabled` / `retention_days`; `--no-trash` bypasses it per command.
 
 **Operations**:
-- `Trash::from_config(catalog_root, no_trash)` / `is_enabled()`
+- `Trash::new_with(catalog_root, &TrashConfig, no_trash)` / `is_enabled()`
 - `dispose(path, volume_label, relative_path) -> Disposition` — move to trash (falls back to copy+delete across filesystems) or delete when disabled
 - `preserve_copy(...)` — keep a copy of a file about to be rewritten in place
 - `list(catalog_root) -> Vec<TrashEntry>`, `restore(catalog_root, trash_path)`, `empty(...) -> EmptyResult` (by age or `--all`, dry-run aware) — the `maki trash list|restore|empty` commands

@@ -121,7 +121,7 @@ pub fn normalize_tag_for_storage(input: &str) -> TagNormalization {
         // segment. All three are malformed at storage time (the cause
         // is usually a Lightroom/CaptureOne export quirk where a
         // mis-typed XMP keyword like " |München" survived into the
-        // catalog via apply_xmp_data, which used to push raw XMP
+        // catalog via `XmpData::apply_to`, which used to push raw XMP
         // keywords straight into asset.tags without going through this
         // normaliser). Strip them so the stored tag is canonical.
         let parts: Vec<&str> = collapsed

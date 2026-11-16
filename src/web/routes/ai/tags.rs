@@ -94,7 +94,7 @@ impl<'a> SuggestContext<'a> {
             };
         }
 
-        let engine = state.query_engine();
+        let engine = state.query_engine().map_err(|e| format!("{e:#}"))?;
         let preview_gen = state.preview_generator();
         let service = state.asset_service();
 

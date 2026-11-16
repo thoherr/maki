@@ -94,7 +94,7 @@ fn stroll_page_inner(
         _ => None,
     };
     let filter_ids: Option<std::collections::HashSet<String>> = if let Some(ref eq) = effective_query {
-        let engine = state.query_engine();
+        let engine = state.query_engine().map_err(|e| format!("{e:#}"))?;
         let results = engine.search(eq)
             .map_err(|e| format!("{e:#}"))?;
         Some(results.into_iter().map(|r| r.asset_id).collect())

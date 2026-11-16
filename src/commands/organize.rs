@@ -5,10 +5,10 @@ use super::*;
 /// Extracted body of `Commands::SavedSearch`.
 pub fn run_saved_search_command(
     cmd: SavedSearchCommands,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     let _ = ctx.verbosity;
-    let catalog_root = maki::config::find_catalog_root()?;
+    let catalog_root = ctx.catalog_root()?;
     match cmd {
         SavedSearchCommands::Save { name, query, sort, favorite } => {
             let mut file = maki::saved_search::load(&catalog_root)?;
@@ -57,7 +57,7 @@ pub fn run_saved_search_command(
             let ss = maki::saved_search::find_by_name(&file, &name)
                 .ok_or_else(|| maki::error::MakiError::not_found("saved search", &name))?;
 
-            let engine = QueryEngine::new(&catalog_root);
+            let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
             let results = engine.search(&ss.query)?;
 
             let output_format = if let Some(fmt) = &format {
@@ -176,10 +176,10 @@ pub fn run_saved_search_command(
 /// Extracted body of `Commands::Stack`.
 pub fn run_stack_command(
     cmd: StackCommands,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     let _ = ctx.verbosity;
-    let catalog_root = maki::config::find_catalog_root()?;
+    let catalog_root = ctx.catalog_root()?;
     let catalog = Catalog::open(&catalog_root)?;
     // Mutators persist stacks.yaml themselves (StackStore::open).
     let store = maki::stack::StackStore::open(catalog.conn(), &catalog_root);
@@ -288,8 +288,13 @@ pub fn run_stack_command(
             Ok(())
         }
         StackCommands::FromTag { pattern, remove_tags, apply } => {
-            let engine = QueryEngine::new(&catalog_root);
-            let result = engine.stack_from_tag(&pattern, remove_tags, apply, ctx.log)?;
+            let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
+            let log = ctx.log;
+            let result = engine.stack_from_tag(&pattern, remove_tags, apply, &mut |event| {
+                if log {
+                    eprintln!("{event}");
+                }
+            })?;
 
             if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -312,10 +317,10 @@ pub fn run_stack_command(
 /// Extracted body of `Commands::Collection`.
 pub fn run_collection_command(
     cmd: CollectionCommands,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     let _ = ctx.verbosity;
-    let catalog_root = maki::config::find_catalog_root()?;
+    let catalog_root = ctx.catalog_root()?;
     let catalog = Catalog::open(&catalog_root)?;
     // Mutators persist collections.yaml themselves (CollectionStore::open).
     let store = maki::collection::CollectionStore::open(catalog.conn(), &catalog_root);
@@ -366,7 +371,7 @@ pub fn run_collection_command(
             }
 
             // Search with collection filter
-            let engine = QueryEngine::new(&catalog_root);
+            let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
             let query_str = format!("collection:{}", name);
             let results = engine.search(&query_str)?;
 
@@ -516,10 +521,10 @@ pub fn run_auto_group_command(
         query: Option<String>,
         apply: bool,
         global: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let catalog_root = maki::config::find_catalog_root()?;
-    let engine = QueryEngine::new(&catalog_root);
+    let catalog_root = ctx.catalog_root()?;
+    let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
 
     // Search to get asset IDs, deduplicate (search returns one row per variant)
     let results = engine.search(query.as_deref().unwrap_or(""))?;
@@ -532,16 +537,14 @@ pub fn run_auto_group_command(
             .collect()
     };
 
-    let show_log = ctx.log;
-    let result = if global {
-        engine.auto_group_global(&asset_ids, !apply)?
-    } else {
-        engine.auto_group_with_log(&asset_ids, !apply, |stem, count| {
-            if show_log {
-                eprintln!("  {} — {} asset(s)", stem, count);
-            }
-        })?
-    };
+    // Per-group progress lines are a session-scope feature (as before).
+    let show_log = ctx.log && !global;
+    let scope = if global { AutoGroupScope::Global } else { AutoGroupScope::SessionRoots };
+    let result = engine.auto_group(&asset_ids, !apply, scope, |stem, count| {
+        if show_log {
+            eprintln!("  {} — {} asset(s)", stem, count);
+        }
+    })?;
 
     if ctx.json {
         println!("{}", serde_json::to_string(&result)?);
@@ -581,10 +584,10 @@ pub fn run_auto_group_command(
 pub fn run_split_command(
         asset_id: String,
         variant_hashes: Vec<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let catalog_root = maki::config::find_catalog_root()?;
-    let engine = QueryEngine::new(&catalog_root);
+    let catalog_root = ctx.catalog_root()?;
+    let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
     let result = engine.split(&asset_id, &variant_hashes)?;
 
     if ctx.json {
@@ -610,10 +613,10 @@ pub fn run_split_command(
 /// extraction pattern.
 pub fn run_group_command(
         variant_hashes: Vec<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let catalog_root = maki::config::find_catalog_root()?;
-    let engine = QueryEngine::new(&catalog_root);
+    let catalog_root = ctx.catalog_root()?;
+    let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
     let result = engine.group(&variant_hashes)?;
 
     if ctx.json {
@@ -654,7 +657,7 @@ pub fn run_edit_command(
         clear_date: bool,
         role: Option<String>,
         variant: Option<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     use maki::query::{EditFields, parse_date_input};
 
@@ -663,8 +666,8 @@ pub fn run_edit_command(
         let role = role.ok_or_else(|| anyhow::anyhow!("--variant requires --role"))?;
         let variant_hash = variant.ok_or_else(|| anyhow::anyhow!("--role requires --variant"))?;
 
-        let catalog_root = maki::config::find_catalog_root()?;
-        let engine = QueryEngine::new(&catalog_root);
+        let catalog_root = ctx.catalog_root()?;
+        let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
         engine.set_variant_role(&asset_id, &variant_hash, &role)?;
 
         if ctx.json {
@@ -725,8 +728,8 @@ pub fn run_edit_command(
         created_at: date_field,
     };
 
-    let catalog_root = maki::config::find_catalog_root()?;
-    let engine = QueryEngine::new(&catalog_root);
+    let catalog_root = ctx.catalog_root()?;
+    let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
 
     // Clear all tags if requested (before edit, so JSON output includes the result)
     let tags_cleared = if clear_tags {

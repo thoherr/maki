@@ -17,11 +17,11 @@ pub fn run_import_command(
     smart: bool,
     #[cfg(feature = "ai")] embed: bool,
     #[cfg(feature = "pro")] describe: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     use maki::asset_service::{ImportEvent, ImportPhase, ImportRequest};
 
-    let (catalog_root, config) = maki::config::load_config()?;
+    let (catalog_root, config) = ctx.catalog()?;
 
     // Canonicalize input paths against the working directory. The workflow
     // takes already-canonicalised paths so it can be called from contexts
@@ -68,8 +68,8 @@ pub fn run_import_command(
         }
     }
 
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
-    let workflow_result = service.import_workflow(&req, &config, |evt| {
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
+    let workflow_result = service.import_workflow(&req, config, |evt| {
         // Per-event progress: only emit per-item lines in --ctx.log mode. Phase
         // boundaries print a one-line announcement when --ctx.log is on (or
         // verbose); skipped phases always print so the user knows why a
@@ -100,7 +100,6 @@ pub fn run_import_command(
                     .unwrap_or_else(|| path.to_str().unwrap_or("?"));
                 item_status(name, label, Some(elapsed));
             }
-            #[cfg(feature = "ai")]
             ImportEvent::Embed { asset_id, status } => {
                 if !ctx.log { return; }
                 let short = &asset_id[..8.min(asset_id.len())];
@@ -114,7 +113,6 @@ pub fn run_import_command(
                     maki::asset_service::EmbedStatus::Skipped(_) => {}
                 }
             }
-            #[cfg(feature = "pro")]
             ImportEvent::Describe { asset_id, status, elapsed } => {
                 if !ctx.log { return; }
                 let short = &asset_id[..8.min(asset_id.len())];
@@ -137,9 +135,7 @@ pub fn run_import_command(
     // unpacks it into JSON or human text. Frontend-specific concern only.
     let result = &workflow_result.import;
     let auto_group_result = workflow_result.auto_group.as_ref();
-    #[cfg(feature = "ai")]
     let embed_result = workflow_result.embed.as_ref();
-    #[cfg(feature = "pro")]
     let describe_result = workflow_result.describe.as_ref();
 
     if ctx.json {
@@ -148,12 +144,10 @@ pub fn run_import_command(
         if let Some(ag) = auto_group_result {
             json_val["auto_group"] = serde_json::to_value(ag)?;
         }
-        #[cfg(feature = "ai")]
         if let Some(er) = embed_result {
             json_val["embeddings_generated"] = serde_json::json!(er.embedded);
             json_val["embeddings_skipped"] = serde_json::json!(er.skipped);
         }
-        #[cfg(feature = "pro")]
         if let Some(dr) = describe_result {
             json_val["descriptions_generated"] = serde_json::json!(dr.described);
             json_val["descriptions_skipped"] = serde_json::json!(dr.skipped);
@@ -173,11 +167,9 @@ pub fn run_import_command(
         if result.previews_generated > 0       { parts.push(format!("{} preview(s) generated", result.previews_generated)); }
         if result.smart_previews_generated > 0 { parts.push(format!("{} smart preview(s) generated", result.smart_previews_generated)); }
         if result.sidecars_created > 0  { parts.push(format!("{} sidecar(s) created", result.sidecars_created)); }
-        #[cfg(feature = "ai")]
         if let Some(er) = embed_result {
             if er.embedded > 0 { parts.push(format!("{} embedding(s) generated", er.embedded)); }
         }
-        #[cfg(feature = "pro")]
         if let Some(dr) = describe_result {
             if dr.described > 0 { parts.push(format!("{} described", dr.described)); }
         }
@@ -302,7 +294,7 @@ fn watch_act(
     excludes: &[String],
     to_import: &[PathBuf],
     to_refresh: &[PathBuf],
-    log: bool,
+    ctx: &CliContext,
 ) -> WatchTickSummary {
     use maki::asset_service::{FileStatus, ImportEvent, ImportRequest, RefreshStatus};
 
@@ -324,7 +316,7 @@ fn watch_act(
             describe: false,
         };
         let result = service.import_workflow(&req, config, |evt| {
-            if !log { return; }
+            if !ctx.log { return; }
             if let ImportEvent::File { path, status, elapsed } = evt {
                 let label = match status {
                     FileStatus::Imported => "imported",
@@ -364,7 +356,7 @@ fn watch_act(
             false,
             excludes,
             |path, status, elapsed| {
-                if !log { return; }
+                if !ctx.log { return; }
                 let label = match status {
                     RefreshStatus::Unchanged => "unchanged",
                     RefreshStatus::Refreshed => "recipe refreshed",
@@ -418,7 +410,7 @@ pub fn run_watch_command(
     volume: Option<String>,
     interval: Option<u64>,
     once: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -426,7 +418,7 @@ pub fn run_watch_command(
 
     use maki::asset_service::{is_recipe_path, WatchScanner};
 
-    let (catalog_root, config) = maki::config::load_config()?;
+    let (catalog_root, config) = ctx.catalog()?;
     let registry = DeviceRegistry::new(&catalog_root);
 
     // ── Resolve watch roots ────────────────────────────────────────
@@ -489,7 +481,7 @@ pub fn run_watch_command(
             .collect();
 
     let poll_seconds = interval.unwrap_or(config.watch.poll_seconds).max(2);
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
 
     if once {
         // ── Single cycle: scan, ~1s stability wait, re-scan, act ───
@@ -550,7 +542,7 @@ pub fn run_watch_command(
             }
         }
 
-        let mut summary = watch_act(&service, &registry, &config, &excludes, &to_import, &to_refresh, ctx.log);
+        let mut summary = watch_act(&service, &registry, config, &excludes, &to_import, &to_refresh, ctx);
         summary.errors.extend(pre_errors);
 
         for e in &summary.errors {
@@ -635,7 +627,7 @@ pub fn run_watch_command(
             continue;
         }
 
-        let summary = watch_act(&service, &registry, &config, &excludes, &to_import, &to_refresh, ctx.log);
+        let summary = watch_act(&service, &registry, config, &excludes, &to_import, &to_refresh, ctx);
         for e in &summary.errors {
             eprintln!("  {e}");
         }
@@ -662,14 +654,14 @@ pub fn run_create_sidecars_command(
         asset: Option<String>,
         apply: bool,
         asset_ids: Vec<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let catalog_root = maki::config::find_catalog_root()?;
+    let catalog_root = ctx.catalog_root()?;
     let catalog = Catalog::open(&catalog_root)?;
     let metadata_store = MetadataStore::new(&catalog_root);
     let content_store = maki::content_store::ContentStore::new(&catalog_root);
     let registry = DeviceRegistry::new(&catalog_root);
-    let engine = maki::query::QueryEngine::new(&catalog_root);
+    let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
     let volumes = registry.list()?;
 
     // Resolve target volume filter
@@ -687,9 +679,7 @@ pub fn run_create_sidecars_command(
         None => summaries.iter().map(|s| s.id).collect(),
     };
 
-    let naming = maki::config::CatalogConfig::load(&catalog_root)
-        .map(|c| c.writeback.sidecar_naming)
-        .unwrap_or_default();
+    let naming = ctx.config.writeback.sidecar_naming;
     let online: std::collections::HashMap<uuid::Uuid, std::path::PathBuf> = volumes
         .iter()
         .filter(|v| v.is_online)
@@ -780,7 +770,7 @@ pub fn run_delete_command(
         apply: bool,
         remove_files: bool,
         no_trash: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     if remove_files && !apply {
         anyhow::bail!("--remove-files requires --apply");
@@ -801,8 +791,8 @@ pub fn run_delete_command(
         anyhow::bail!("no asset IDs specified.");
     }
 
-    let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let (catalog_root, _) = ctx.catalog()?;
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
 
     // Collect face IDs for deleted assets before deletion (for AI cleanup)
     #[cfg(feature = "ai")]

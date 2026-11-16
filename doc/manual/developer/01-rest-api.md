@@ -211,7 +211,7 @@ curl -X PUT -d "rating=5" http://localhost:8080/api/asset/550e8400/rating
 | `DELETE /api/asset/{id}/stack` | -- | `{"status": "dissolved"}` |
 | `POST /api/asset/{id}/stack-add` | JSON `{"asset_ids": [...]}` | `{"added": 2}` -- adds the listed assets to the stack of `{id}` |
 
-Stack errors (asset not in a stack, fewer than two members) return 400.
+Stack errors (asset not in a stack, fewer than two members) return 400; creating a stack from an asset that is already in one returns 409.
 
 ### AI per asset *(ai)*
 
@@ -245,7 +245,7 @@ Job-style endpoints respond immediately with `{"job_id": "<uuid>", "status": "st
 | `DELETE /api/batch/collection` | `collection` | `{"removed": 3, "collection": "..."}`; 404 if the collection does not exist |
 | `POST /api/batch/auto-group` | -- | `{"groups_merged", "donors_removed", "variants_moved"}` |
 | `POST /api/batch/group` | `target_id` (optional) | `{"target_id", "variants_moved", "donors_removed"}` |
-| `POST /api/batch/stack` | -- | `{"stack_id", "member_count"}`; 400 on error |
+| `POST /api/batch/stack` | -- | `{"stack_id", "member_count"}`; 400 for fewer than two assets, 409 if one is already in a stack |
 | `DELETE /api/batch/stack` | -- | `{"removed": 2}` |
 | `POST /api/batch/delete` | `remove_files` (bool, default false) | `{"deleted", "files_removed", "files_trashed", "previews_removed", "not_found", "errors"}`; files go through the trash unless `[trash]` is disabled |
 | `POST /api/batch/describe` | `mode`, `model` (optional) | job; terminal event `{"phase": "describe", "succeeded", "failed", "descriptions_set", "tags_applied", "errors", "done": true}` |
@@ -559,7 +559,7 @@ Responses under `/preview/`, `/smart-preview/` and `/face/` get `Cache-Control: 
 | 401 | Basic auth required or wrong |
 | 403 | Read-only mode (non-GET request), volume browse escaping the mount point |
 | 404 | Unknown asset page, job, query-image token, stroll centre, missing media file |
-| 409 | Duplicate collection / volume / saved-search name; a job of the same kind already running |
+| 409 | Duplicate collection / volume / saved-search name; asset already in a stack; a job of the same kind already running |
 | 416 | Unsatisfiable `Range` |
 | 422 | Unusable query image |
 | 425 | `GET /api/jobs/{id}/result` while the job is running |

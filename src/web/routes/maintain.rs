@@ -24,6 +24,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 
 use super::super::AppState;
+use crate::query::{WritebackEvent, WritebackRequest};
 use crate::web::jobs::JobKind;
 
 // ════════════════════════════════════════════════════════════════════════
@@ -69,7 +70,7 @@ fn run_writeback(
     req: &StartWritebackRequest,
     job: &Arc<crate::web::jobs::Job>,
 ) -> anyhow::Result<serde_json::Value> {
-    let engine = state.query_engine();
+    let engine = state.query_engine()?;
     let asset_id_set = engine
         .resolve_scope(req.query.as_deref(), None, &[])
         .ok()
@@ -77,12 +78,18 @@ fn run_writeback(
 
     let counter = AtomicUsize::new(0);
     let job_cb = job.clone();
-    let callback = move |_asset_id: &str, status: &str| {
-        let n = counter.fetch_add(1, Relaxed) + 1;
-        job_cb.emit(&serde_json::json!({
-            "processed": n,
-            "status": status,
-        }));
+    let mut on_event = move |event: WritebackEvent<'_>| {
+        if let WritebackEvent::Warning(message) = &event {
+            eprintln!("{message}");
+            return;
+        }
+        if let (Some(_), Some(status)) = (event.path(), event.status()) {
+            let n = counter.fetch_add(1, Relaxed) + 1;
+            job_cb.emit(&serde_json::json!({
+                "processed": n,
+                "status": status,
+            }));
+        }
     };
 
     // `[writeback] mirror_tags` in maki.toml turns mirror-tags on by
@@ -90,16 +97,18 @@ fn run_writeback(
     // checkbox still takes effect on top (OR semantics).
     let effective_mirror_tags = req.mirror_tags || state.config().writeback.mirror_tags;
 
-    let result = engine.writeback(
-        req.volume.as_deref(),
-        None,
-        asset_id_set.as_ref(),
-        req.all,
-        req.force,
-        effective_mirror_tags,
-        req.dry_run,
-        false,
-        Some(&callback),
+    let result = engine.writeback_with(
+        &WritebackRequest {
+            volume: req.volume.as_deref(),
+            asset_prefix: None,
+            asset_ids: asset_id_set.as_ref(),
+            all: req.all,
+            force: req.force,
+            mirror_tags: effective_mirror_tags,
+            dry_run: req.dry_run,
+            no_trash: false,
+        },
+        &mut on_event,
     )?;
 
     let skipped_offline: Vec<String> = result
@@ -322,125 +331,42 @@ fn run_generate_previews(
     req: &StartGeneratePreviewsRequest,
     job: &Arc<crate::web::jobs::Job>,
 ) -> anyhow::Result<serde_json::Value> {
-    let (catalog_root, config) = crate::config::load_config()?;
-    let preview_gen = crate::preview::PreviewGenerator::new(
-        &catalog_root,
-        crate::Verbosity::new(false, false),
-        &config.preview,
-    );
-    let metadata_store = crate::metadata_store::MetadataStore::new(&catalog_root);
-    let registry = crate::device_registry::DeviceRegistry::new(&catalog_root);
-    let volumes = registry.list()?;
+    use crate::asset_service::{PreviewOptions, PreviewScope, PreviewStatus};
 
-    let volume_filter = match req.volume.as_deref() {
-        Some(label) if !label.is_empty() => Some(
-            volumes
-                .iter()
-                .find(|v| v.label == label)
-                .ok_or_else(|| anyhow::anyhow!("unknown volume: {label}"))?
-                .clone(),
-        ),
-        _ => None,
+    let scope = match req.asset.as_deref() {
+        Some(asset) => PreviewScope::Asset(asset.to_string()),
+        None => PreviewScope::All,
     };
-
-    // Collect asset IDs to process.
-    let asset_ids: Vec<uuid::Uuid> = if let Some(asset_str) = req.asset.as_deref() {
-        let engine = state.query_engine();
-        let details = engine.show(asset_str)?;
-        vec![details.id.parse()?]
-    } else {
-        metadata_store.list()?.into_iter().map(|s| s.id).collect()
+    let options = PreviewOptions {
+        volume: req.volume.as_deref().filter(|l| !l.is_empty()).map(str::to_string),
+        force: req.force,
+        upgrade: req.upgrade,
+        smart: req.smart,
+        ..Default::default()
     };
-
-    let mut generated: usize = 0;
-    let mut skipped: usize = 0;
-    let mut failed: usize = 0;
-    let mut upgraded: usize = 0;
-    let mut errors: Vec<String> = Vec::new();
-    let mut offline_blockers: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    let total = asset_ids.len();
-    for (idx, aid) in asset_ids.iter().enumerate() {
-        let asset_data = match metadata_store.load(*aid) {
-            Ok(a) => a,
-            Err(_) => { skipped += 1; continue; }
-        };
-
-        // Pick the asset's best-preview variant (same selection as CLI).
-        let pidx = asset_data
-            .preview_variant
-            .as_ref()
-            .and_then(|h| asset_data.variants.iter().position(|v| &v.content_hash == h))
-            .or_else(|| crate::models::variant::best_preview_index(&asset_data.variants))
-            .unwrap_or(0);
-        let variant = match asset_data.variants.get(pidx) {
-            Some(v) => v,
-            None => { skipped += 1; continue; }
-        };
-
-        if req.upgrade && pidx == 0 { skipped += 1; continue; }
-
-        // Find a reachable file for this variant (respecting volume filter if any).
-        let source_path = variant.locations.iter().find_map(|loc| {
-            if let Some(ref vf) = volume_filter {
-                if loc.volume_id != vf.id { return None; }
-            }
-            volumes.iter().find_map(|v| {
-                if v.id == loc.volume_id && v.is_online {
-                    let full = v.mount_point.join(&loc.relative_path);
-                    if full.exists() { Some(full) } else { None }
-                } else { None }
-            })
-        });
-
-        if source_path.is_none() {
-            for loc in &variant.locations {
-                if let Some(v) = volumes.iter().find(|v| v.id == loc.volume_id) {
-                    if !v.is_online { offline_blockers.insert(v.label.clone()); }
-                }
-            }
-            skipped += 1;
-            continue;
+    let result = state.asset_service().generate_previews(&scope, &options, |event| {
+        // One progress event per settled asset (a failed smart preview or
+        // metadata backfill precedes the asset's own event).
+        let settled = !matches!(
+            event.status,
+            PreviewStatus::SmartFailed(_) | PreviewStatus::MetadataBackfillFailed(_)
+        );
+        if let (true, Some(aid)) = (settled, event.asset_id) {
+            job.emit(&serde_json::json!({
+                "processed": event.processed,
+                "total": event.total,
+                "asset": &aid[..8.min(aid.len())],
+            }));
         }
-        let path = source_path.unwrap();
-
-        let rotation = asset_data.preview_rotation;
-        let result = if req.force || req.upgrade {
-            preview_gen.regenerate_with_rotation(&variant.content_hash, &path, &variant.format, rotation)
-        } else {
-            preview_gen.generate(&variant.content_hash, &path, &variant.format)
-        };
-        if req.smart {
-            let _ = if req.force || req.upgrade {
-                preview_gen.regenerate_smart_with_rotation(&variant.content_hash, &path, &variant.format, rotation)
-            } else {
-                preview_gen.generate_smart(&variant.content_hash, &path, &variant.format)
-            };
-        }
-        match result {
-            Ok(Some(_)) => {
-                generated += 1;
-                if req.upgrade { upgraded += 1; }
-            }
-            Ok(None) => skipped += 1,
-            Err(e) => { failed += 1; errors.push(format!("{}: {e:#}", path.display())); }
-        }
-
-        let asset_short = aid.to_string()[..8.min(aid.to_string().len())].to_string();
-        job.emit(&serde_json::json!({
-            "processed": idx + 1,
-            "total": total,
-            "asset": asset_short,
-        }));
-    }
+    })?;
 
     Ok(serde_json::json!({
-        "generated": generated,
-        "skipped": skipped,
-        "failed": failed,
-        "upgraded": upgraded,
-        "errors": errors,
-        "offline_blockers": offline_blockers.into_iter().collect::<Vec<_>>(),
+        "generated": result.generated,
+        "skipped": result.skipped,
+        "failed": result.failed,
+        "upgraded": result.upgraded,
+        "errors": result.errors,
+        "offline_blockers": result.offline_blockers,
     }))
 }
 

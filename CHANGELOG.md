@@ -4,15 +4,136 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ## Unreleased
 
-Phase 1 of the October 2026 architecture audit
-(`doc/qa-report/architecture-audit-2026-10-29.md`, "correctness"): the
-catalog's multi-row writers become transactional, migrations stop
-swallowing failures, the four copies of "rebuild an asset's rows" become
-one, the YAML side files are written atomically and owned by their
-stores, and the first typed errors drive exit codes and HTTP statuses.
-Schema v13.
+Phases 1 and 2 of the October 2026 architecture audit
+(`doc/qa-report/architecture-audit-2026-10-29.md`). Phase 1,
+"correctness": the catalog's multi-row writers become transactional,
+migrations stop swallowing failures, the four copies of "rebuild an
+asset's rows" become one, the YAML side files are written atomically and
+owned by their stores, and the first typed errors drive exit codes and
+HTTP statuses. Schema v13. Phase 2, "structure": pure `models`, the
+`QueryEngine` split into per-concern files holding one connection fed by
+the web pool, the long service functions split into phases behind request
+structs and typed events, the web loops and the CLI dispatcher reduced to
+adapters over the service, and `maki.toml` read once per invocation.
 
-### Phase 1 — correctness
+### Phase 2 — structure
+
+#### Changed (behaviour)
+
+- **Idempotent setters are no-ops.** Setting a rating, label, name, date,
+  description, rotation, preview variant or variant role to the value an
+  asset already has no longer rewrites the sidecar, the SQLite row and the
+  XMP recipe (which, with `[writeback] enabled = false`, used to flag the
+  recipe `pending_writeback` for nothing). Every field setter and `edit`
+  run through one `mutate_asset` primitive and therefore also take part in
+  batch undo (`set_name`/`set_date`/`set_description` did not before).
+- **Standard builds reject AI-only search filters.** `similar:` and
+  `text:` used to be silently dropped by a build without the `ai`
+  feature; the parser now accepts them in every build and execution
+  fails with `the similar: filter requires a build with the ai feature`.
+- **Web batch describe and generate-previews run the CLI's code.** The
+  web VLM batch now goes through `AssetService::describe_with`: an empty
+  VLM answer is an error (the web counted it as success), a tag-apply
+  failure after a saved description keeps the asset counted as described,
+  unresolved ids are reported by the service (`Asset <id> not found`), and
+  a panicking worker yields an error row for its asset instead of killing
+  the job. Web preview generation goes through
+  `AssetService::generate_previews`: the type filter, the video/audio
+  metadata backfill and the progress event per settled asset now match the
+  CLI; the handler no longer reads `maki.toml` from the process working
+  directory.
+- **Web stack and input errors carry typed statuses.** "already stacked"
+  answers 409 instead of 400; tag rename/split/delete and volume
+  register/rename/purpose raise `InvalidInput` (400) for their own checks
+  while a missing asset/volume is 404 and a registry conflict 409
+  (`doc/manual/developer/01-rest-api.md`).
+- **Browse-derived endpoints share one pipeline.** `/api/all-ids` and the
+  export ZIP return rows in grid order in similarity views (previously raw
+  SQL order), and a similarity view with `page>1` clamps to page 1 like
+  `/api/page-ids` already did. Contact sheets use the catalog's `[preview]`
+  format instead of the default, so non-default preview formats are found.
+- **`maki.toml` is read once per invocation** (once per line in the
+  shell), after the catalog root is resolved; `--verbose` output and
+  behaviour are unchanged, a broken `maki.toml` fails with the same text.
+
+#### Changed (internal)
+
+- **Pure `models`** (F11): the extension tables and format classifiers
+  (`is_raw_extension`, `determine_asset_type`, `strip_media_extension`,
+  `normalize_rating`, …) live in `models::format`, `NumericFilter` in
+  `models::numeric_filter`, `parse_dms_string` in `models::geo`,
+  `VariantDetails`/`LocationDetails` beside `Variant`, `VlmParams` in
+  `config`. `models` and `catalog` import nothing from services or readers
+  (upward edges 5 → 0). XMP application became `XmpData::apply_to` /
+  `reapply_to` and `create_missing_sidecars` moved to `src/sidecars.rs`,
+  so `query` no longer imports `asset_service` (the service↔engine cycle
+  is gone). Old paths keep working through `pub use`.
+- **`QueryEngine` split** (F12.1): `src/query.rs` 6,362 → ~470 lines of
+  types and constructors; one `impl QueryEngine` block per concern in
+  `query/{search,grouping,tags,fields,reimport,context}.rs`, tests moved
+  alongside, shared fixtures in `query/test_support.rs`, the parser got its
+  own test module.
+- **One connection per engine** (F12.3–4): `QueryEngine` holds a lent or
+  lazily opened `Catalog` (`QueryEngine::with_catalog(root, config, conn)`;
+  `catalog()`; exactly one `Catalog::open` in the engine). `MutationContext`
+  (alias `BatchContext`) borrows the engine's handles; `build_context` is
+  its only constructor. Free `query::search_in(catalog, root, config,
+  default_filter, query)` / `run_search` search on a connection the caller
+  holds. The web's 30 engine users take their connection from the pool;
+  `AssetService` hands its open connection to the engine
+  (`query_engine_on`) or searches directly (`search_in`).
+- **Service phase splits** (F13): `import_with_callback` 767 → 100 lines
+  (`ImportTally`, `GroupOwner` enum replacing the five `expect()`s,
+  `attach_recipe`, `track_known_variant`, `generate_previews_for`,
+  `extract_file_metadata`), `relocate` (`plan_relocation` → `RelocateRun::{
+  copy_files, apply_locations, remove_sources}`), `sync`, `cleanup`,
+  `refresh`/`sync_metadata` (shared `reextract_embedded_xmp`), `verify`
+  (path mode reuses `apply_modified_recipe`), `dedup` all split into
+  per-operation run structs. No function in the crate is over 300 lines
+  (13 were).
+- **Request structs and typed events** (F13, F23): `DescribeRequest` +
+  `DescribeScope::{Query, Ids}` + `DescribeEvent` →
+  `AssetService::describe_with`; `DedupOptions` → `dedup_with`;
+  `PreviewScope`/`PreviewOptions`/`PreviewEvent`/`PreviewGenerateResult`
+  → `AssetService::generate_previews` (the CLI's `generate-previews` loop
+  moved into the service; CLI and web are adapters). `WritebackRequest` +
+  `WritebackEvent` (with `Display` = the former stderr line) →
+  `QueryEngine::writeback_with` / `writeback_recipes` /
+  `writeback_embedded_with`; `FromTagEvent` → `stack_from_tag`;
+  `AutoGroupScope::{SessionRoots, ImportRoots, Global}` → one
+  `auto_group`. `DescribeStatus` carries `SkipReason` / `DescribeError`
+  enums (same JSON and CLI text). No `log: bool` parameter or ad-hoc
+  `Fn(&str, &str)` callback is left in the library.
+- **Web layer** (F18, F21): `run_browse_search(state, catalog, params,
+  BrowseQuery) -> BrowseResult` feeds `browse_page`, `search_api`,
+  `all_ids_api`, `page_ids_api` and `export_zip`; `build_router` 327 → 29
+  lines over per-area route functions; `AppState::query_engine()` returns
+  `Result` and draws from the pool; the only raw `spawn_blocking` calls
+  left are the job runner, the blocking helper itself and the ZIP body
+  streamer, each commented.
+- **CLI layer** (F20): `run_command` 638 → 170 lines of one-line arms;
+  `run_faces_command`, `run_tag_command`, `run_volume_command`,
+  `run_auto_tag_command` split into one function per subcommand.
+  `CliContext` carries `config: Arc<CatalogConfig>` and the resolved
+  catalog root (`ctx.catalog()`, `ctx.catalog_root()`); handlers take
+  `&CliContext`. `config::load_config()`, `Trash::from_config` and
+  `QueryEngine::with_default_filter` are gone (`QueryEngine::default_filter`
+  builder); `QueryEngine::new`, `AssetService::new`,
+  `HistoryStore::from_config` are test-only. `CatalogConfig::load` in
+  library code: only `config.rs` and the web config editor.
+- **Feature gates out of data** (F25): `features::{AI, PRO, VERSION,
+  edition()}` replace the branding `cfg!` checks; `ParsedSearch`,
+  `ImportEvent`, `ImportWorkflowResult` and the embed/describe result
+  types are unconditional, only implementations are gated (`cfg(feature`
+  in `query.rs`/`parse.rs` 29 → 0, web 5 → 0).
+- **Collection membership on asset deletion** (Phase 1 residue):
+  `Catalog::delete_asset_with_collections(root, id)` removes the asset
+  from `collection_assets` and `collections.yaml` in the same transaction
+  before `delete_asset_rows`; doctor's phantom-row removal and the group
+  merge use it (test: a merged-away donor is absent from
+  `collections.yaml`).
+
+### Phase 1 — correctness (committed abd5bf2)
 
 #### Changed (behaviour)
 

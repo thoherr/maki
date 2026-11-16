@@ -8,13 +8,13 @@ pub fn run_serve_command(
         port: Option<u16>,
         bind: Option<String>,
         read_only: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let (catalog_root, config) = maki::config::load_config()?;
+    let (catalog_root, config) = ctx.catalog()?;
     let port = port.unwrap_or(config.serve.port);
     let bind = bind.unwrap_or_else(|| config.serve.bind.clone());
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(maki::web::serve(catalog_root, maki::web::ServeOptions { bind, port, config, log_requests: ctx.log, read_only, verbosity: ctx.verbosity }))?;
+    rt.block_on(maki::web::serve(catalog_root, maki::web::ServeOptions { bind, port, config: config.clone(), log_requests: ctx.log, read_only, verbosity: ctx.verbosity }))?;
     Ok(())
 }
 
@@ -22,7 +22,7 @@ pub fn run_serve_command(
 /// extraction pattern.
 pub fn run_doc_command(
         document: String,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     let url = match document.to_lowercase().as_str() {
         "manual" | "man" | "guide" => "https://github.com/thoherr/maki/releases/latest/download/maki-manual.pdf",
@@ -47,7 +47,7 @@ pub fn run_doc_command(
 /// extraction pattern.
 pub fn run_licenses_command(
         summary: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     let third_party_url = "https://github.com/thoherr/maki/releases/latest/download/THIRD_PARTY_LICENSES.md";
 
@@ -110,11 +110,11 @@ pub fn run_licenses_command(
 /// extraction pattern.
 pub fn run_preview_command(
         asset_id: String,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let (catalog_root, config) = maki::config::load_config()?;
+    let (catalog_root, config) = ctx.catalog()?;
     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-    let engine = QueryEngine::new(&catalog_root);
+    let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
     let details = engine.show(&asset_id)?;
     let full_id = &details.id;
     let preview_gen = maki::preview::PreviewGenerator::new(&catalog_root, ctx.verbosity, &config.preview);
@@ -170,10 +170,10 @@ pub fn run_preview_command(
 pub fn run_show_command(
         asset_id: String,
         locations: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let (catalog_root, config) = maki::config::load_config()?;
-    let engine = QueryEngine::new(&catalog_root);
+    let (catalog_root, config) = ctx.catalog()?;
+    let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
     let details = engine.show(&asset_id)?;
 
     if locations {
@@ -313,7 +313,7 @@ pub fn run_show_command(
 
 /// `maki init` — create the catalog skeleton (directories, maki.toml,
 /// SQLite schema, volumes registry, .gitignore, default vocabulary).
-pub fn run_init_command(ctx: CliContext) -> anyhow::Result<()> {
+pub fn run_init_command(ctx: &CliContext) -> anyhow::Result<()> {
     use maki::config::CatalogConfig;
     let catalog_root = std::env::current_dir()?;
     let config_path = catalog_root.join("maki.toml");

@@ -55,13 +55,11 @@ pub struct ImportRequest {
     pub smart: bool,
     /// Run auto-group on imported assets and their on-volume neighbours.
     pub auto_group: bool,
-    /// Run the post-import embed phase. Only honored on `ai` builds; the
-    /// field exists unconditionally so the request shape is uniform across
+    /// Run the post-import embed phase. Only honored on `ai` builds (the
+    /// phase is skipped otherwise); the request shape is the same across
     /// feature sets.
-    #[allow(dead_code)]
     pub embed: bool,
     /// Run the post-import VLM describe phase. Only honored on `pro` builds.
-    #[allow(dead_code)]
     pub describe: bool,
 }
 
@@ -104,14 +102,14 @@ pub enum ImportEvent<'a> {
         status: FileStatus,
         elapsed: Duration,
     },
-    /// Per-asset event during the post-import embed phase. AI feature only.
-    #[cfg(feature = "ai")]
+    /// Per-asset event during the post-import embed phase. Only emitted
+    /// by `ai` builds.
     Embed {
         asset_id: &'a str,
         status: &'a super::EmbedStatus,
     },
-    /// Per-asset event during the post-import describe phase. Pro feature only.
-    #[cfg(feature = "pro")]
+    /// Per-asset event during the post-import describe phase. Only
+    /// emitted by `pro` builds.
     Describe {
         asset_id: &'a str,
         status: &'a crate::vlm::DescribeStatus,
@@ -120,14 +118,12 @@ pub enum ImportEvent<'a> {
 }
 
 /// Bundled outcome of `import_workflow`. Each phase that ran fills its
-/// corresponding field; phases that were skipped (or are gated out by
-/// feature flags) leave their field `None`.
+/// corresponding field; phases that were skipped (or that this build
+/// cannot run) leave their field `None`.
 pub struct ImportWorkflowResult {
     pub import: super::ImportResult,
     pub auto_group: Option<crate::query::AutoGroupResult>,
-    #[cfg(feature = "ai")]
     pub embed: Option<super::EmbedAssetsResult>,
-    #[cfg(feature = "pro")]
     pub describe: Option<crate::vlm::BatchDescribeResult>,
 }
 
@@ -244,21 +240,15 @@ impl AssetService {
         let auto_group_result = auto_group_result.flatten();
 
         // ── Phase 3: embed (AI feature) ────────────────────────────────
-        #[cfg(feature = "ai")]
         let embed_result = run_embed_phase(self, &mut on_event, req, config, &import_result)?;
-        #[cfg(not(feature = "ai"))]
-        let _ = (req,); // suppress unused warning when feature off (req.embed)
 
         // ── Phase 4: describe (Pro feature) ────────────────────────────
-        #[cfg(feature = "pro")]
         let describe_result = run_describe_phase(self, &mut on_event, req, config, &import_result)?;
 
         Ok(ImportWorkflowResult {
             import: import_result,
             auto_group: auto_group_result,
-            #[cfg(feature = "ai")]
             embed: embed_result,
-            #[cfg(feature = "pro")]
             describe: describe_result,
         })
     }
@@ -266,7 +256,7 @@ impl AssetService {
 
 /// Auto-group: scan the on-volume session neighborhood of just-imported
 /// directories, merge those existing asset IDs with the newly-imported ones,
-/// and run `engine.auto_group_scoped`. The session root of each imported
+/// and run `engine.auto_group` with `AutoGroupScope::ImportRoots`. The session root of each imported
 /// directory comes from `[group] session_root_pattern`; without a match the
 /// import directory (or its parent, when the files sit directly in it) is
 /// the boundary — see `query::find_session_root`. The same rule partitions
@@ -315,7 +305,8 @@ fn run_auto_group(
     }
 
     let engine = service.query_engine();
-    let ag_result = engine.auto_group_scoped(&all_ids, dry_run, import_roots)?;
+    let scope = crate::query::AutoGroupScope::ImportRoots(import_roots.to_vec());
+    let ag_result = engine.auto_group(&all_ids, dry_run, scope, |_, _| {})?;
     if ag_result.groups.is_empty() {
         return Ok(None);
     }
@@ -378,6 +369,19 @@ fn run_auto_group(
     Ok(Some(ag_result))
 }
 
+/// Post-import embed phase. Without the `ai` feature nothing can embed,
+/// so the phase is a no-op that leaves the result `None`.
+#[cfg(not(feature = "ai"))]
+fn run_embed_phase(
+    _service: &AssetService,
+    _on_event: &mut impl FnMut(ImportEvent<'_>),
+    _req: &ImportRequest,
+    _config: &crate::config::CatalogConfig,
+    _import_result: &super::ImportResult,
+) -> Result<Option<super::EmbedAssetsResult>> {
+    Ok(None)
+}
+
 #[cfg(feature = "ai")]
 fn run_embed_phase(
     service: &AssetService,
@@ -419,6 +423,19 @@ fn run_embed_phase(
     Ok(Some(r))
 }
 
+/// Post-import describe phase. VLM description is a Pro feature; other
+/// builds leave the result `None`.
+#[cfg(not(feature = "pro"))]
+fn run_describe_phase(
+    _service: &AssetService,
+    _on_event: &mut (impl FnMut(ImportEvent<'_>) + Send),
+    _req: &ImportRequest,
+    _config: &crate::config::CatalogConfig,
+    _import_result: &super::ImportResult,
+) -> Result<Option<crate::vlm::BatchDescribeResult>> {
+    Ok(None)
+}
+
 #[cfg(feature = "pro")]
 fn run_describe_phase(
     service: &AssetService,
@@ -446,31 +463,24 @@ fn run_describe_phase(
 
     let mode = crate::vlm::DescribeMode::parse_mode(&config.vlm.mode)
         .unwrap_or(crate::vlm::DescribeMode::Describe);
-    let params = config.vlm.params_for_model(vlm_model);
-    // describe_assets requires `Fn + Sync` because it dispatches across worker
-    // threads. Our outer `on_event` is `FnMut` (single-threaded sequential).
-    // Wrap it in a Mutex so the per-thread callback can lock-and-call. The
-    // contention is negligible — each callback fires after a multi-second
-    // VLM HTTP roundtrip.
-    let on_event_mu = std::sync::Mutex::new(&mut *on_event);
-    let result = service.describe_assets(
-        &import_result.new_asset_ids,
-        endpoint,
-        vlm_model,
-        &params,
+    let request = super::DescribeRequest {
+        scope: super::DescribeScope::Ids(import_result.new_asset_ids.clone()),
+        endpoint: endpoint.clone(),
+        model: vlm_model.clone(),
+        params: config.vlm.params_for_model(vlm_model),
         mode,
-        false, // force
-        false, // dry_run (the workflow's dry_run was already short-circuited above)
-        config.vlm.concurrency,
-        |aid, status, elapsed| {
-            if let Ok(mut cb) = on_event_mu.lock() {
-                (*cb)(ImportEvent::Describe {
-                    asset_id: aid,
-                    status,
-                    elapsed,
-                });
-            }
-        },
-    )?;
+        apply: true,
+        force: false,
+        // The workflow's dry_run was already short-circuited above.
+        dry_run: false,
+        concurrency: config.vlm.concurrency,
+    };
+    let result = service.describe_with(&request, |event| {
+        on_event(ImportEvent::Describe {
+            asset_id: event.asset_id,
+            status: event.status,
+            elapsed: event.elapsed,
+        });
+    })?;
     Ok(Some(result))
 }

@@ -519,7 +519,7 @@ impl AssetService {
                             let file_path = vol.mount_point.join(rel_path);
                             if file_path.exists() {
                                 let xmp = crate::xmp_reader::extract(&file_path);
-                                apply_xmp_data(&xmp, &mut parent_asset, &parent_hash);
+                                xmp.apply_to(&mut parent_asset, &parent_hash);
                             }
                         }
                     }

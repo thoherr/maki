@@ -3,8 +3,8 @@
 //! Defines `CatalogConfig` (the parsed `maki.toml`), `AiConfig`, `VlmConfig`,
 //! `PreviewConfig`, `ImportConfig`, etc. — each with `Default` impls so a
 //! missing or partial config file works. `find_catalog_root` walks up the
-//! filesystem looking for `maki.toml`; `load_config` is the convenience
-//! helper most command handlers use.
+//! filesystem looking for `maki.toml`; the CLI entry point loads it once
+//! into `CliContext`, the web server into `AppState`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -546,13 +546,13 @@ impl Default for VlmConfig {
 impl VlmConfig {
     /// Build resolved parameters for a specific model, merging per-model overrides
     /// over global defaults.
-    pub fn params_for_model(&self, model: &str) -> crate::vlm::VlmParams {
+    pub fn params_for_model(&self, model: &str) -> VlmParams {
         let mc = self.model_config.get(model);
         // Config holds float values as f64 (TOML's native float type, so the
         // round-trip through `toml::to_string_pretty` doesn't expose f32
         // imprecision like 0.1 → 0.10000000149011612). VlmParams takes f32
         // because the downstream LLM API expects f32; cast at this boundary.
-        crate::vlm::VlmParams {
+        VlmParams {
             max_tokens: mc.and_then(|c| c.max_tokens).unwrap_or(self.max_tokens),
             timeout: mc.and_then(|c| c.timeout).unwrap_or(self.timeout),
             temperature: mc.and_then(|c| c.temperature).unwrap_or(self.temperature) as f32,
@@ -1023,17 +1023,6 @@ pub fn find_catalog_root() -> Result<PathBuf> {
             anyhow::bail!("no maki catalog found. Run `maki init` to create one.");
         }
     }
-}
-
-/// Locate the catalog root and load its `maki.toml`.
-///
-/// Convenience helper for command handlers that need both the path and the
-/// parsed config — almost every long-running command does. Returns
-/// `(catalog_root, config)`.
-pub fn load_config() -> Result<(PathBuf, CatalogConfig)> {
-    let root = find_catalog_root()?;
-    let config = CatalogConfig::load(&root)?;
-    Ok((root, config))
 }
 
 /// Resolve a model directory by expanding a `~/`-prefixed path and joining
@@ -1619,4 +1608,20 @@ skip = ["audio"]
         assert_eq!(SidecarNaming::Stem.sidecar_path(bare), Path::new("scan.xmp"));
         assert_eq!(SidecarNaming::Full.sidecar_path(bare), Path::new("scan.xmp"));
     }
+}
+
+// ═══ RESOLVED VLM PARAMETERS ═══
+
+/// Resolved VLM parameters for a single request (global + per-model overrides merged).
+#[derive(Debug, Clone)]
+pub struct VlmParams {
+    pub max_tokens: u32,
+    pub timeout: u32,
+    pub temperature: f32,
+    pub max_image_edge: u32,
+    pub num_ctx: u32,
+    pub top_p: f32,
+    pub top_k: u32,
+    pub repeat_penalty: f32,
+    pub prompt: Option<String>,
 }

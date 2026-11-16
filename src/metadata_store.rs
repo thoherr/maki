@@ -128,7 +128,7 @@ impl MetadataStore {
         // Normalize MicrosoftPhoto:Rating percentage values (>5) to 1-5 scale
         if let Some(r) = asset.rating {
             if r > 5 {
-                asset.rating = Some(crate::asset_service::normalize_rating(r));
+                asset.rating = Some(crate::models::format::normalize_rating(r));
             }
         }
         Ok(asset)
@@ -200,9 +200,14 @@ impl MetadataStore {
         Ok(summaries)
     }
 
-    /// Rebuild the SQLite catalog from sidecar files, with optional
-    /// per-sidecar progress on stderr (`maki rebuild-catalog --log`).
-    pub fn sync_to_catalog_with_log(&self, catalog: &crate::catalog::Catalog, log: bool) -> Result<SyncResult> {
+    /// Rebuild the SQLite catalog from sidecar files. `on_asset` sees
+    /// every sidecar that loaded, before its rows are inserted
+    /// (`maki rebuild-catalog --log` prints it).
+    pub fn sync_to_catalog_with(
+        &self,
+        catalog: &crate::catalog::Catalog,
+        mut on_asset: impl FnMut(&Asset),
+    ) -> Result<SyncResult> {
         let summaries = self.list()?;
         let mut synced = 0u64;
         let mut errors = 0u64;
@@ -210,9 +215,7 @@ impl MetadataStore {
         for summary in &summaries {
             match self.load(summary.id) {
                 Ok(asset) => {
-                    if log {
-                        eprintln!("  {}  {}", asset.id, asset.name.as_deref().unwrap_or("-"));
-                    }
+                    on_asset(&asset);
                     if let Err(e) = catalog.insert_asset(&asset) {
                         eprintln!("Error inserting asset {}: {e}", summary.id);
                         errors += 1;
@@ -349,7 +352,7 @@ mod tests {
         asset.variants.push(variant);
         store.save(&asset).unwrap();
 
-        let result = store.sync_to_catalog_with_log(&catalog, false).unwrap();
+        let result = store.sync_to_catalog_with(&catalog, |_| {}).unwrap();
         assert_eq!(result.synced, 1);
         assert_eq!(result.errors, 0);
 

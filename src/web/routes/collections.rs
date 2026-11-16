@@ -131,8 +131,8 @@ pub async fn batch_auto_group(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let json = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
-        let result = engine.auto_group(&req.asset_ids, false)?;
+        let engine = state.query_engine()?;
+        let result = engine.auto_group(&req.asset_ids, false, crate::query::AutoGroupScope::SessionRoots, |_, _| {})?;
         Ok::<_, anyhow::Error>(serde_json::json!({
             "groups_merged": result.groups.len(),
             "donors_removed": result.total_donors_merged,
@@ -156,7 +156,7 @@ pub async fn batch_group(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let json = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let result = engine.group_by_asset_ids(&req.asset_ids, req.target_id.as_deref())?;
         Ok::<_, anyhow::Error>(serde_json::json!({
             "target_id": result.target_id,

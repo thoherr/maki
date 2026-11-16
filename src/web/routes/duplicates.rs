@@ -126,16 +126,16 @@ pub async fn dedup_resolve_api(
         let path = req.path.filter(|s| !s.is_empty());
         let prefer = req.prefer.filter(|s| !s.is_empty())
             .or_else(|| state.dedup_prefer.clone());
-        let dedup_result = service.dedup(
-            volume.as_deref(),
-            format.as_deref(),
-            path.as_deref(),
-            prefer.as_deref(),
+        let options = crate::asset_service::DedupOptions {
+            volume,
+            format,
+            path_prefix: path,
+            prefer,
             min_copies,
             apply,
-            false, // no_trash: web auto-resolve always honors [trash] config
-            |_, _, _, _| {},
-        )?;
+            no_trash: false, // web auto-resolve always honors [trash] config
+        };
+        let dedup_result = service.dedup_with(&options, |_, _, _, _| {})?;
         Ok::<_, anyhow::Error>(dedup_result)
     })
     .await?;
@@ -177,7 +177,7 @@ pub async fn dedup_remove_location_api(
             return Err(MakiError::offline(&vol.label, None).into());
         }
 
-        let trash = crate::trash::Trash::from_config(&state.catalog_root, false);
+        let trash = crate::trash::Trash::new_with(&state.catalog_root, &state.config().trash, false);
         let full_path = vol.mount_point.join(&req.relative_path);
         if full_path.exists() {
             trash

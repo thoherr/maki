@@ -1,10 +1,7 @@
-//! MAKI binary entrypoint — parses the CLI, dispatches to command handlers,
-//! and converts the result to a process exit code.
-//!
-//! Long match arms are extracted into standalone `run_X_command` functions
-//! (see `run_import_command`, `run_tag_command`, etc.). The remaining inline
-//! arms are the smaller commands; they get extracted opportunistically as
-//! they're touched.
+//! MAKI binary entrypoint — parses the CLI, resolves the catalog and its
+//! `maki.toml` once, dispatches to the `commands::run_X_command` handlers,
+//! and converts the result to a process exit code. `run_command` is a flat
+//! dispatcher: every arm is one call.
 
 use std::path::PathBuf;
 
@@ -102,11 +99,7 @@ Printable 2-page PDF: `maki doc filters`
 
 #[derive(Parser)]
 #[command(name = "maki", about = "Media Asset Keeper & Indexer",
-    version = if cfg!(feature = "pro") {
-        concat!(env!("CARGO_PKG_VERSION"), " Pro")
-    } else {
-        env!("CARGO_PKG_VERSION")
-    },
+    version = maki::features::VERSION,
     after_help = "Use maki --help for grouped overview, or maki <command> --help for details."
 )]
 struct Cli {
@@ -2100,8 +2093,8 @@ fn render_help_overview() -> String {
 
     let cmd = Cli::command();
     let version = env!("CARGO_PKG_VERSION");
-    let edition = if cfg!(feature = "pro") { " Pro" } else { "" };
-    let ai_note = if cfg!(feature = "pro") { "" } else { "  (download MAKI Pro for: describe, auto-tag, auto-stack, embed, faces, writeback, sync-metadata)" };
+    let edition = maki::features::edition();
+    let ai_note = if maki::features::PRO { "" } else { "  (download MAKI Pro for: describe, auto-tag, auto-stack, embed, faces, writeback, sync-metadata)" };
 
     let mut help = format!("maki{edition} {version} — Media Asset Keeper & Indexer{ai_note}\n\nUsage: maki [OPTIONS] <COMMAND>\n");
 
@@ -2166,18 +2159,37 @@ fn atty_stdout() -> bool {
     std::io::stdout().is_terminal()
 }
 
-fn check_schema() {
-    if let Ok(root) = maki::config::find_catalog_root() {
-        if let Ok(catalog) = Catalog::open(&root) {
-            if !catalog.is_schema_current() {
-                eprintln!(
-                    "Error: catalog schema is outdated (v{}, expected v{}). Run `maki migrate` to update.",
-                    catalog.schema_version(),
-                    maki::catalog::SCHEMA_VERSION,
-                );
-                std::process::exit(1);
-            }
+fn check_schema(root: &std::path::Path) {
+    if let Ok(catalog) = Catalog::open(root) {
+        if !catalog.is_schema_current() {
+            eprintln!(
+                "Error: catalog schema is outdated (v{}, expected v{}). Run `maki migrate` to update.",
+                catalog.schema_version(),
+                maki::catalog::SCHEMA_VERSION,
+            );
+            std::process::exit(1);
         }
+    }
+}
+
+/// The catalog this invocation runs in: its root and the outcome of
+/// reading its `maki.toml`. `None` outside a catalog (`init`, `licenses`,
+/// `doc`, …). This is the one place the CLI reads the configuration from
+/// disk; handlers take it from [`CliContext`].
+fn resolve_catalog() -> Option<(PathBuf, anyhow::Result<CatalogConfig>)> {
+    let root = maki::config::find_catalog_root().ok()?;
+    let loaded = CatalogConfig::load(&root);
+    Some((root, loaded))
+}
+
+/// Build the per-command context from the parsed global flags and the
+/// resolved catalog.
+fn build_context(cli: &Cli, catalog: Option<(PathBuf, anyhow::Result<CatalogConfig>)>) -> CliContext {
+    let verbosity = maki::Verbosity::new(cli.verbose, cli.debug);
+    let ctx = CliContext::new(cli.json, cli.log, verbosity);
+    match catalog {
+        Some((root, loaded)) => ctx.with_catalog(root, loaded),
+        None => ctx,
     }
 }
 
@@ -2192,33 +2204,39 @@ fn main() {
     let mut cli = Cli::parse();
     let start = std::time::Instant::now();
 
+    let catalog = resolve_catalog();
+
     // Merge [cli] defaults from maki.toml (if inside a catalog)
-    if let Ok(catalog_root) = maki::config::find_catalog_root() {
-        if let Ok(config) = CatalogConfig::load(&catalog_root) {
-            cli.log = cli.log || config.cli.log;
-            cli.timing = cli.timing || config.cli.time;
-            cli.verbose = cli.verbose || config.cli.verbose;
-        }
+    if let Some((_, Ok(config))) = &catalog {
+        cli.log = cli.log || config.cli.log;
+        cli.timing = cli.timing || config.cli.time;
+        cli.verbose = cli.verbose || config.cli.verbose;
     }
 
     // Handle shell command specially — it has its own loop
     if let Commands::Shell { script, command_str, strict } = &cli.command {
-        check_schema();
-        let catalog_root = match maki::config::find_catalog_root() {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("Error: {e:#}");
-                std::process::exit(1);
-            }
+        let catalog_root = match catalog {
+            Some((root, _)) => root,
+            None => match maki::config::find_catalog_root() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Error: {e:#}");
+                    std::process::exit(1);
+                }
+            },
         };
+        check_schema(&catalog_root);
         let opts = maki::shell::RunOptions {
             script: script.as_ref().map(PathBuf::from),
             command: command_str.clone(),
             strict: *strict,
         };
+        // Each shell line is one invocation: it re-reads `maki.toml`, so
+        // the shell's `reload` keeps its meaning.
         maki::shell::run(&catalog_root, opts, |args| {
             let shell_cli = Cli::try_parse_from(&args).map_err(|e| anyhow::anyhow!("{e}"))?;
-            run_command(shell_cli)
+            let ctx = build_context(&shell_cli, resolve_catalog());
+            run_command(shell_cli, ctx)
         });
         return;
     }
@@ -2226,11 +2244,14 @@ fn main() {
     // Check schema version at startup (if inside a catalog).
     // Only `maki init` and `maki migrate` skip this check.
     if !matches!(cli.command, Commands::Init | Commands::Migrate) {
-        check_schema();
+        if let Some((root, _)) = &catalog {
+            check_schema(root);
+        }
     }
 
     let timing = cli.timing;
-    let result = run_command(cli);
+    let ctx = build_context(&cli, catalog);
+    let result = run_command(cli, ctx);
 
     if timing {
         eprintln!("Elapsed: {}", format_duration(start.elapsed()));
@@ -2242,635 +2263,167 @@ fn main() {
     }
 }
 
-
-
-fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
-    let verbosity = maki::Verbosity::new(cli.verbose, cli.debug);
-    let ctx = CliContext::new(cli.json, cli.log, verbosity);
-    let mut _asset_ids: Vec<String> = Vec::new();
+/// Dispatch one parsed command to its handler. Returns the asset IDs the
+/// command produced (`search` only; the shell's `_` variable).
+fn run_command(cli: Cli, ctx: CliContext) -> anyhow::Result<Vec<String>> {
+    let ctx = &ctx;
+    let mut asset_ids: Vec<String> = Vec::new();
 
     let result: anyhow::Result<()> = (|| match cli.command {
         Commands::Init => run_init_command(ctx),
         Commands::Volume(cmd) => run_volume_command(cmd, ctx),
         Commands::Import {
-            paths,
-            volume,
-            profile,
-            include,
-            skip,
-            add_tags,
-            dry_run,
-            auto_group,
-            smart,
-            #[cfg(feature = "ai")]
-            embed,
-            #[cfg(feature = "pro")]
-            describe,
+            paths, volume, profile, include, skip, add_tags, dry_run, auto_group, smart,
+            #[cfg(feature = "ai")] embed,
+            #[cfg(feature = "pro")] describe,
         } => run_import_command(
-            paths,
-            volume,
-            profile,
-            include,
-            skip,
-            add_tags,
-            dry_run,
-            auto_group,
-            smart,
-            #[cfg(feature = "ai")]
-            embed,
-            #[cfg(feature = "pro")]
-            describe,
+            paths, volume, profile, include, skip, add_tags, dry_run, auto_group, smart,
+            #[cfg(feature = "ai")] embed,
+            #[cfg(feature = "pro")] describe,
             ctx,
         ),
         Commands::Watch { paths, volume, interval, once } => {
             run_watch_command(paths, volume, interval, once, ctx)
         }
         Commands::Search { query, format, quiet, image, limit } => {
-            _asset_ids = run_search_command(query, format, quiet, image, limit, ctx)?;
+            asset_ids = run_search_command(query, format, quiet, image, limit, ctx)?;
             Ok(())
         }
-        Commands::Show {
-            asset_id,
-            locations,
-        } => run_show_command(
-            asset_id,
-            locations,
-            ctx,
-        ),
-        Commands::Preview {
-            asset_id,
-        } => run_preview_command(
-            asset_id,
-            ctx,
-        ),
-        Commands::Tag { asset_id, remove, tags, subcmd } => run_tag_command(
-            asset_id, remove, tags, subcmd, ctx,
-        ),
+        Commands::Show { asset_id, locations } => run_show_command(asset_id, locations, ctx),
+        Commands::Preview { asset_id } => run_preview_command(asset_id, ctx),
+        Commands::Tag { asset_id, remove, tags, subcmd } => {
+            run_tag_command(asset_id, remove, tags, subcmd, ctx)
+        }
         Commands::Edit {
-            asset_id,
-            name,
-            clear_name,
-            description,
-            clear_description,
-            rating,
-            clear_rating,
-            label,
-            clear_label,
-            clear_tags,
-            date,
-            clear_date,
-            role,
-            variant,
+            asset_id, name, clear_name, description, clear_description, rating, clear_rating,
+            label, clear_label, clear_tags, date, clear_date, role, variant,
         } => run_edit_command(
-            asset_id,
-            name,
-            clear_name,
-            description,
-            clear_description,
-            rating,
-            clear_rating,
-            label,
-            clear_label,
-            clear_tags,
-            date,
-            clear_date,
-            role,
-            variant,
-            ctx,
+            asset_id, name, clear_name, description, clear_description, rating, clear_rating,
+            label, clear_label, clear_tags, date, clear_date, role, variant, ctx,
         ),
-        Commands::Group {
-            variant_hashes,
-        } => run_group_command(
-            variant_hashes,
-            ctx,
-        ),
-        Commands::Split {
-            asset_id,
-            variant_hashes,
-        } => run_split_command(
-            asset_id,
-            variant_hashes,
-            ctx,
-        ),
-        Commands::Delete {
-            asset_ids,
-            apply,
-            remove_files,
-            no_trash,
-        } => run_delete_command(
-            asset_ids,
-            apply,
-            remove_files,
-            no_trash,
-            ctx,
-        ),
+        Commands::Group { variant_hashes } => run_group_command(variant_hashes, ctx),
+        Commands::Split { asset_id, variant_hashes } => {
+            run_split_command(asset_id, variant_hashes, ctx)
+        }
+        Commands::Delete { asset_ids, apply, remove_files, no_trash } => {
+            run_delete_command(asset_ids, apply, remove_files, no_trash, ctx)
+        }
         #[cfg(feature = "pro")]
         Commands::Describe {
-            query,
-            asset,
-            volume,
-            model,
-            endpoint,
-            prompt,
-            max_tokens,
-            timeout,
-            mode,
-            temperature,
-            num_ctx,
-            top_p,
-            top_k,
-            repeat_penalty,
-            apply,
-            force,
-            dry_run,
-            check,
+            query, asset, volume, model, endpoint, prompt, max_tokens, timeout, mode,
+            temperature, num_ctx, top_p, top_k, repeat_penalty, apply, force, dry_run, check,
             asset_ids,
         } => run_describe_command(
-            query,
-            asset,
-            volume,
-            model,
-            endpoint,
-            prompt,
-            max_tokens,
-            timeout,
-            mode,
-            temperature,
-            num_ctx,
-            top_p,
-            top_k,
-            repeat_penalty,
-            apply,
-            force,
-            dry_run,
-            check,
-            asset_ids,
-            ctx,
+            query, asset, volume, model, endpoint, prompt, max_tokens, timeout, mode,
+            temperature, num_ctx, top_p, top_k, repeat_penalty, apply, force, dry_run, check,
+            asset_ids, ctx,
         ),
         #[cfg(feature = "ai")]
         Commands::AutoTag {
-            query,
-            asset,
-            volume,
-            model,
-            threshold,
-            labels,
-            apply,
-            download,
-            remove_model,
-            list_models,
-            list_labels,
-            similar,
-            asset_ids,
+            query, asset, volume, model, threshold, labels, apply, download, remove_model,
+            list_models, list_labels, similar, asset_ids,
         } => run_auto_tag_command(
-            query,
-            asset,
-            volume,
-            model,
-            threshold,
-            labels,
-            apply,
-            download,
-            remove_model,
-            list_models,
-            list_labels,
-            similar,
-            asset_ids,
-            ctx,
+            query, asset, volume, model, threshold, labels, apply, download, remove_model,
+            list_models, list_labels, similar, asset_ids, ctx,
         ),
         #[cfg(feature = "ai")]
-        Commands::AutoStack {
-            query,
-            threshold,
-            min_size,
-            apply,
-            asset_ids,
-        } => run_auto_stack_command(
-            query,
-            threshold,
-            min_size,
-            apply,
-            asset_ids,
-            ctx,
-        ),
-        #[cfg(feature = "ai")]
-        Commands::Embed {
-            query,
-            asset,
-            volume,
-            model,
-            force,
-            export,
-            asset_ids,
-        } => run_embed_command(
-            query,
-            asset,
-            volume,
-            model,
-            force,
-            export,
-            asset_ids,
-            ctx,
-        ),
-        #[cfg(feature = "ai")]
-        Commands::Faces(cmd) => {
-            run_faces_command(cmd, ctx)?;
-            Ok(())
+        Commands::AutoStack { query, threshold, min_size, apply, asset_ids } => {
+            run_auto_stack_command(query, threshold, min_size, apply, asset_ids, ctx)
         }
         #[cfg(feature = "ai")]
-        Commands::Ai(cmd) => {
-            run_ai_command(cmd, ctx)?;
-            Ok(())
+        Commands::Embed { query, asset, volume, model, force, export, asset_ids } => {
+            run_embed_command(query, asset, volume, model, force, export, asset_ids, ctx)
         }
-
-        Commands::AutoGroup {
-            query,
-            apply,
-            global,
-        } => run_auto_group_command(
-            query,
-            apply,
-            global,
-            ctx,
-        ),
-        Commands::Relocate {
-            asset_ids,
-            target,
-            query,
-            remove_source,
-            create_sidecars,
-            dry_run,
-        } => run_relocate_command(
-            asset_ids,
-            target,
-            query,
-            remove_source,
-            create_sidecars,
-            dry_run,
-            ctx,
-        ),
-        Commands::Undo { dry_run, force } => {
-            run_undo_command(dry_run, force, ctx)
+        #[cfg(feature = "ai")]
+        Commands::Faces(cmd) => run_faces_command(cmd, ctx),
+        #[cfg(feature = "ai")]
+        Commands::Ai(cmd) => run_ai_command(cmd, ctx),
+        Commands::AutoGroup { query, apply, global } => {
+            run_auto_group_command(query, apply, global, ctx)
         }
-        Commands::History { asset, limit } => {
-            run_history_command(asset, limit, ctx)
+        Commands::Relocate { asset_ids, target, query, remove_source, create_sidecars, dry_run } => {
+            run_relocate_command(asset_ids, target, query, remove_source, create_sidecars, dry_run, ctx)
         }
-        Commands::Doctor { sample, repair } => {
-            run_doctor_command(sample, repair, ctx)
+        Commands::Undo { dry_run, force } => run_undo_command(dry_run, force, ctx),
+        Commands::History { asset, limit } => run_history_command(asset, limit, ctx),
+        Commands::Doctor { sample, repair } => run_doctor_command(sample, repair, ctx),
+        Commands::Verify { paths, volume, asset, include, skip, max_age, force } => {
+            run_verify_command(paths, volume, asset, include, skip, max_age, force, ctx)
         }
-        Commands::Verify {
-            paths,
-            volume,
-            asset,
-            include,
-            skip,
-            max_age,
-            force,
-        } => run_verify_command(
-            paths,
-            volume,
-            asset,
-            include,
-            skip,
-            max_age,
-            force,
-            ctx,
-        ),
-        Commands::Sync {
-            paths,
-            volume,
-            apply,
-            remove_stale,
-        } => run_sync_command(
-            paths,
-            volume,
-            apply,
-            remove_stale,
-            ctx,
-        ),
+        Commands::Sync { paths, volume, apply, remove_stale } => {
+            run_sync_command(paths, volume, apply, remove_stale, ctx)
+        }
         #[cfg(feature = "pro")]
-        Commands::SyncMetadata {
-            query,
-            volume,
-            asset,
-            dry_run,
-            media,
-            asset_ids,
-        } => run_sync_metadata_command(
-            query,
-            volume,
-            asset,
-            dry_run,
-            media,
-            asset_ids,
-            ctx,
-        ),
-        Commands::Refresh {
-            paths,
-            volume,
-            asset,
-            dry_run,
-            media,
-            reimport,
-            exif_only,
-        } => run_refresh_command(
-            paths,
-            volume,
-            asset,
-            dry_run,
-            media,
-            reimport,
-            exif_only,
-            ctx,
-        ),
+        Commands::SyncMetadata { query, volume, asset, dry_run, media, asset_ids } => {
+            run_sync_metadata_command(query, volume, asset, dry_run, media, asset_ids, ctx)
+        }
+        Commands::Refresh { paths, volume, asset, dry_run, media, reimport, exif_only } => {
+            run_refresh_command(paths, volume, asset, dry_run, media, reimport, exif_only, ctx)
+        }
         #[cfg(feature = "pro")]
         Commands::Writeback {
-            query,
-            volume,
-            asset,
-            all,
-            force,
-            mirror_tags,
-            embed,
-            no_trash,
-            dry_run,
-            asset_ids,
+            query, volume, asset, all, force, mirror_tags, embed, no_trash, dry_run, asset_ids,
         } => run_writeback_command(
-            query,
-            volume,
-            asset,
-            all,
-            force,
-            mirror_tags,
-            embed,
-            no_trash,
-            dry_run,
-            asset_ids,
-            ctx,
+            query, volume, asset, all, force, mirror_tags, embed, no_trash, dry_run, asset_ids, ctx,
         ),
-        Commands::Cleanup {
-            volume,
-            path,
-            list,
-            apply,
-        } => run_cleanup_command(
-            volume,
-            path,
-            list,
-            apply,
-            ctx,
-        ),
-        Commands::Dedup {
-            volume,
-            prefer,
-            filter_format,
-            path,
-            min_copies,
-            apply,
-            no_trash,
-        } => run_dedup_command(
-            volume,
-            prefer,
-            filter_format,
-            path,
-            min_copies,
-            apply,
-            no_trash,
-            ctx,
-        ),
+        Commands::Cleanup { volume, path, list, apply } => {
+            run_cleanup_command(volume, path, list, apply, ctx)
+        }
+        Commands::Dedup { volume, prefer, filter_format, path, min_copies, apply, no_trash } => {
+            run_dedup_command(volume, prefer, filter_format, path, min_copies, apply, no_trash, ctx)
+        }
         Commands::Trash { command } => run_trash_command(command, ctx),
         Commands::Audio { command } => match command {
             AudioCommands::Analyze { query, force, dry_run } => {
                 run_audio_analyze_command(query, force, dry_run, ctx)
             }
         },
-        Commands::UpdateLocation {
-            asset_id,
-            from,
-            to,
-            volume,
-        } => run_update_location_command(
-            asset_id,
-            from,
-            to,
-            volume,
-            ctx,
-        ),
-        Commands::Duplicates {
-            format,
-            same_volume,
-            cross_volume,
-            volume,
-            filter_format,
-            path,
-        } => run_duplicates_command(
-            format,
-            same_volume,
-            cross_volume,
-            volume,
-            filter_format,
-            path,
-            ctx,
-        ),
-        Commands::GeneratePreviews {
-            paths,
-            volume,
-            asset,
-            include,
-            skip,
-            force,
-            upgrade,
-            smart,
-        } => run_generate_previews_command(
-            paths,
-            volume,
-            asset,
-            include,
-            skip,
-            force,
-            upgrade,
-            smart,
-            ctx,
-        ),
-        Commands::FixRoles {
-            paths,
-            volume,
-            asset,
-            apply,
-        } => run_fix_roles_command(
-            paths,
-            volume,
-            asset,
-            apply,
-            ctx,
-        ),
-        Commands::FixDates {
-            query,
-            volume,
-            asset,
-            apply,
-            asset_ids,
-        } => run_fix_dates_command(
-            query,
-            volume,
-            asset,
-            apply,
-            asset_ids,
-            ctx,
-        ),
-        Commands::FixRecipes {
-            query,
-            volume,
-            asset,
-            apply,
-            asset_ids,
-        } => run_fix_recipes_command(
-            query,
-            volume,
-            asset,
-            apply,
-            asset_ids,
-            ctx,
-        ),
-        Commands::CreateSidecars {
-            query,
-            volume,
-            asset,
-            apply,
-            asset_ids,
-        } => run_create_sidecars_command(
-            query,
-            volume,
-            asset,
-            apply,
-            asset_ids,
-            ctx,
-        ),
+        Commands::UpdateLocation { asset_id, from, to, volume } => {
+            run_update_location_command(asset_id, from, to, volume, ctx)
+        }
+        Commands::Duplicates { format, same_volume, cross_volume, volume, filter_format, path } => {
+            run_duplicates_command(format, same_volume, cross_volume, volume, filter_format, path, ctx)
+        }
+        Commands::GeneratePreviews { paths, volume, asset, include, skip, force, upgrade, smart } => {
+            run_generate_previews_command(paths, volume, asset, include, skip, force, upgrade, smart, ctx)
+        }
+        Commands::FixRoles { paths, volume, asset, apply } => {
+            run_fix_roles_command(paths, volume, asset, apply, ctx)
+        }
+        Commands::FixDates { query, volume, asset, apply, asset_ids } => {
+            run_fix_dates_command(query, volume, asset, apply, asset_ids, ctx)
+        }
+        Commands::FixRecipes { query, volume, asset, apply, asset_ids } => {
+            run_fix_recipes_command(query, volume, asset, apply, asset_ids, ctx)
+        }
+        Commands::CreateSidecars { query, volume, asset, apply, asset_ids } => {
+            run_create_sidecars_command(query, volume, asset, apply, asset_ids, ctx)
+        }
         Commands::RebuildCatalog { asset } => run_rebuild_catalog_command(asset, ctx),
-        Commands::Licenses {
-            summary,
-        } => run_licenses_command(
-            summary,
-            ctx,
-        ),
-        Commands::Doc {
-            document,
-        } => run_doc_command(
-            document,
-            ctx,
-        ),
-        Commands::Serve {
-            port,
-            bind,
-            read_only,
-        } => run_serve_command(
-            port,
-            bind,
-            read_only,
-            ctx,
-        ),
+        Commands::Licenses { summary } => run_licenses_command(summary, ctx),
+        Commands::Doc { document } => run_doc_command(document, ctx),
+        Commands::Serve { port, bind, read_only } => run_serve_command(port, bind, read_only, ctx),
         Commands::ContactSheet {
-            query,
-            output,
-            layout,
-            columns,
-            rows,
-            paper,
-            landscape,
-            title,
-            fields,
-            sort,
-            no_smart,
-            group_by,
-            margin,
-            label_style,
-            quality,
-            copyright,
-            dry_run,
+            query, output, layout, columns, rows, paper, landscape, title, fields, sort, no_smart,
+            group_by, margin, label_style, quality, copyright, dry_run,
         } => run_contact_sheet_command(
-            query,
-            output,
-            layout,
-            columns,
-            rows,
-            paper,
-            landscape,
-            title,
-            fields,
-            sort,
-            no_smart,
-            group_by,
-            margin,
-            label_style,
-            quality,
-            copyright,
-            dry_run,
-            ctx,
+            query, output, layout, columns, rows, paper, landscape, title, fields, sort, no_smart,
+            group_by, margin, label_style, quality, copyright, dry_run, ctx,
         ),
         Commands::Export {
-            query,
-            target,
-            layout,
-            symlink,
-            all_variants,
-            include_sidecars,
-            previews,
-            smart_previews,
-            dry_run,
-            overwrite,
-            zip,
+            query, target, layout, symlink, all_variants, include_sidecars, previews,
+            smart_previews, dry_run, overwrite, zip,
         } => run_export_command(
-            query,
-            target,
-            layout,
-            symlink,
-            all_variants,
-            include_sidecars,
-            previews,
-            smart_previews,
-            dry_run,
-            overwrite,
-            zip,
-            ctx,
+            query, target, layout, symlink, all_variants, include_sidecars, previews,
+            smart_previews, dry_run, overwrite, zip, ctx,
         ),
-        Commands::Stats {
-            types,
-            volumes,
-            tags,
-            verified,
-            all,
-            limit,
-        } => run_stats_command(
-            types,
-            volumes,
-            tags,
-            verified,
-            all,
-            limit,
-            ctx,
-        ),
-        Commands::Status {
-            min_copies,
-        } => run_status_command(
-            min_copies,
-            ctx,
-        ),
-        Commands::BackupStatus {
-            query,
-            at_risk,
-            min_copies,
-            volume,
-            format,
-            quiet,
-        } => run_backup_status_command(
-            query,
-            at_risk,
-            min_copies,
-            volume,
-            format,
-            quiet,
-            ctx,
-        ),
+        Commands::Stats { types, volumes, tags, verified, all, limit } => {
+            run_stats_command(types, volumes, tags, verified, all, limit, ctx)
+        }
+        Commands::Status { min_copies } => run_status_command(min_copies, ctx),
+        Commands::BackupStatus { query, at_risk, min_copies, volume, format, quiet } => {
+            run_backup_status_command(query, at_risk, min_copies, volume, format, quiet, ctx)
+        }
         Commands::Collection(cmd) => run_collection_command(cmd, ctx),
         Commands::Stack(cmd) => run_stack_command(cmd, ctx),
         Commands::SavedSearch(cmd) => run_saved_search_command(cmd, ctx),
@@ -2880,7 +2433,7 @@ fn run_command(cli: Cli) -> anyhow::Result<Vec<String>> {
         }
     })();
 
-    result.map(|()| _asset_ids)
+    result.map(|()| asset_ids)
 }
 
 #[cfg(test)]
@@ -2918,7 +2471,7 @@ mod tests {
             for name in subcommand_names() {
                 assert!(listed.contains(&name.as_str()), "`{name}` is missing from HELP_GROUPS");
             }
-            if cfg!(feature = "pro") {
+            if maki::features::PRO {
                 let names = subcommand_names();
                 for name in &listed {
                     assert!(names.iter().any(|n| n == name), "HELP_GROUPS lists unknown command `{name}`");
@@ -3009,7 +2562,7 @@ mod tests {
                 .collect();
             expected.sort_unstable();
             let actual: Vec<String> = maki::shell::SUBCOMMANDS.iter().map(|s| s.to_string()).collect();
-            if cfg!(feature = "pro") {
+            if maki::features::PRO {
                 assert_eq!(actual, expected, "shell::SUBCOMMANDS drifted from clap");
             } else {
                 // The shell lives in the library and lists the gated commands

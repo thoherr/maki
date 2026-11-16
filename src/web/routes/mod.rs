@@ -168,16 +168,38 @@ pub(super) mod err {
         }
     }
 
-    /// `400 "<message chain>"` — user-input failures (tag ops, volumes).
-    pub(crate) fn bad_request(e: anyhow::Error) -> Response {
-        (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response()
-    }
+}
 
-    /// `400 "Error: <message chain>"` — the stack endpoints' wording.
-    pub(crate) fn bad_request_prefixed(e: anyhow::Error) -> Response {
-        (StatusCode::BAD_REQUEST, format!("Error: {e:#}")).into_response()
-    }
-
+/// Stream `path` as a response body from the blocking pool and delete the
+/// file once it has been sent (or the client went away). The reader is
+/// deliberately not awaited — it feeds the body while the response is
+/// already on the wire — so it is the one blocking task in the routes
+/// that cannot go through [`spawn_catalog_blocking`]. A read failure ends
+/// the body early; callers that need a verdict before the body starts
+/// (the ZIP export's skip counts) put it in headers.
+pub(super) fn stream_file_then_remove(path: std::path::PathBuf) -> axum::body::Body {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(32);
+    tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+        let Ok(file) = std::fs::File::open(&path) else {
+            return;
+        };
+        let mut reader = std::io::BufReader::with_capacity(512 * 1024, file);
+        let mut buf = vec![0u8; 512 * 1024];
+        loop {
+            let n = match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            if tx.blocking_send(Ok(buf[..n].to_vec())).is_err() {
+                break;
+            }
+        }
+        drop(tx);
+        // Best-effort removal of the temp file; nothing to report to.
+        let _ = std::fs::remove_file(&path);
+    });
+    axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))
 }
 
 /// Append `HX-Trigger: pending-changed` to a successful HTML response

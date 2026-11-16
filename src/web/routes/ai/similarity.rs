@@ -56,7 +56,7 @@ fn find_similar_inner(
     let query_emb = if let Some(emb) = stored_emb {
         emb
     } else {
-        let engine = state.query_engine();
+        let engine = state.query_engine().map_err(|e| format!("{e:#}"))?;
         let details = engine.show(asset_id).map_err(|e| format!("{e:#}"))?;
 
         let preview_gen = state.preview_generator();

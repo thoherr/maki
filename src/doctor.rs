@@ -187,7 +187,7 @@ pub fn run_doctor(
             }
         }
         for id in &report.missing_sidecar {
-            delete_phantom_rows(&catalog, id)?;
+            delete_phantom_rows(&catalog, catalog_root, id)?;
             report.repaired += 1;
         }
     }
@@ -448,11 +448,11 @@ fn rebuild_asset_rows(catalog: &Catalog, asset: &Asset) -> Result<()> {
 }
 
 /// Delete every catalog row belonging to a phantom asset (a row with no
-/// sidecar — the sidecar is the source of truth, so the rows must go).
-/// One transaction; a failure leaves the phantom intact for the next run
-/// rather than half-deleted.
-fn delete_phantom_rows(catalog: &Catalog, asset_id: &str) -> Result<()> {
-    catalog.delete_asset_rows(asset_id)
+/// sidecar — the sidecar is the source of truth, so the rows must go),
+/// and its membership in `collections.yaml`. One transaction; a failure
+/// leaves the phantom intact for the next run rather than half-deleted.
+fn delete_phantom_rows(catalog: &Catalog, catalog_root: &Path, asset_id: &str) -> Result<()> {
+    catalog.delete_asset_with_collections(catalog_root, asset_id)
 }
 
 #[cfg(test)]

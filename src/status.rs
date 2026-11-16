@@ -120,7 +120,7 @@ pub struct VolumeRow {
 pub fn gather(
     catalog_root: &Path,
     verbosity: Verbosity,
-    preview_config: &crate::config::PreviewConfig,
+    config: std::sync::Arc<crate::config::CatalogConfig>,
     min_copies: u64,
     ai_enabled: bool,
 ) -> Result<StatusReport> {
@@ -144,7 +144,7 @@ pub fn gather(
     // Reuses the existing cleanup pipeline — same passes, same SQL,
     // same disk scan — without `--apply`. Drops the per-file callback
     // since we only want totals.
-    let service = crate::asset_service::AssetService::new(catalog_root, verbosity, preview_config);
+    let service = crate::asset_service::AssetService::with_config(catalog_root, verbosity, config.clone());
     let cleanup_dry = service.cleanup(None, None, false, |_, _, _| {})?;
     let cleanup = CleanupNeeds {
         locationless_variants: cleanup_dry.locationless_variants,
@@ -194,13 +194,7 @@ pub fn gather(
     pending_writebacks_by_volume.sort_by(|a, b| {
         b.count.cmp(&a.count).then_with(|| a.volume_label.cmp(&b.volume_label))
     });
-    // `gather` is the entry-level report behind `maki status`; its
-    // signature (called from the CLI) takes only the preview section, so
-    // the `[writeback]` flag is read here once per report rather than
-    // injected. Moves to the entry point when `gather` takes the config.
-    let writeback_enabled = crate::config::CatalogConfig::load(catalog_root)
-        .map(|c| c.writeback.enabled)
-        .unwrap_or(false);
+    let writeback_enabled = config.writeback.enabled;
 
     let (assets_without_embedding, assets_without_face_scan) = if ai_enabled {
         let total = assets as i64;

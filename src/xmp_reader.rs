@@ -39,6 +39,9 @@ use anyhow::Result;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
+use crate::models::format::normalize_rating;
+use crate::models::{Asset, TagSource};
+
 /// Extracted metadata from an XMP sidecar file.
 pub struct XmpData {
     /// Keywords from `dc:subject`.
@@ -60,6 +63,145 @@ impl XmpData {
             source_metadata: HashMap::new(),
         }
     }
+}
+
+impl XmpData {
+    /// Apply this XMP data to `asset` on initial import (conservative merge:
+    /// keywords are added, description / rating / label only fill empty
+    /// fields, `source_metadata` keys are added but never overwritten).
+    pub fn apply_to(&self, asset: &mut Asset, variant_hash: &str) {
+        let merged = merge_hierarchical_keywords(&self.keywords, &self.hierarchical_keywords);
+        // Run every XMP-sourced keyword through the same normaliser that
+        // `maki tag` uses for user input. Lightroom / CaptureOne / manual
+        // XMP edits occasionally produce malformed keywords (leading
+        // whitespace, leading `|`, comma-joined "red, gold" pairs) that
+        // would otherwise land in `asset.tags` verbatim and become
+        // un-renameable later. `|`-prefix-anchor in search syntax means a
+        // tag like ` |München` collides with thousands of legitimately
+        // hierarchical tags ending in `|München` and becomes impossible
+        // to isolate without bespoke tooling — better to never let it in.
+        //
+        // Genuinely-new keywords are recorded with `xmp-import` provenance;
+        // tags already on the asset keep their existing source (a
+        // re-import must not demote a user tag).
+        for raw in &merged {
+            let normalized = crate::tag_util::normalize_tag_for_storage(raw).tags;
+            asset.add_tags_with_source(&normalized, TagSource::XmpImport);
+        }
+
+        if asset.description.is_none() {
+            asset.description.clone_from(&self.description);
+        }
+
+        // Promote rating to asset level (conservative: only if not already set)
+        if asset.rating.is_none() {
+            if let Some(rating_str) = self.source_metadata.get("rating") {
+                if let Ok(r) = rating_str.parse::<u8>() {
+                    asset.rating = Some(normalize_rating(r));
+                }
+            }
+        }
+
+        // Promote color label to asset level (conservative: only if not already set)
+        if asset.color_label.is_none() {
+            if let Some(label_str) = self.source_metadata.get("label") {
+                if let Ok(Some(canonical)) = Asset::validate_color_label(label_str) {
+                    asset.color_label = Some(canonical);
+                }
+            }
+        }
+
+        if let Some(variant) = asset.variants.iter_mut().find(|v| v.content_hash == variant_hash) {
+            for (key, val) in &self.source_metadata {
+                variant
+                    .source_metadata
+                    .entry(key.clone())
+                    .or_insert_with(|| val.clone());
+            }
+        }
+    }
+
+    /// Re-apply XMP metadata when a recipe file has been modified.
+    /// Unlike [`XmpData::apply_to`] (initial import, conservative merge):
+    /// - Keywords: merge (add new; cannot remove since we don't track provenance)
+    /// - Description: overwrite (user explicitly edited the XMP)
+    /// - source_metadata: overwrite XMP-sourced keys (rating, label, creator, copyright)
+    pub fn reapply_to(&self, asset: &mut Asset, variant_hash: &str) {
+        let merged = merge_hierarchical_keywords(&self.keywords, &self.hierarchical_keywords);
+        // Same normaliser pass as `apply_to`; see comment there for
+        // why we don't trust XMP keywords verbatim. New keywords get
+        // `xmp-import` provenance; existing tags keep their source.
+        for raw in &merged {
+            let normalized = crate::tag_util::normalize_tag_for_storage(raw).tags;
+            asset.add_tags_with_source(&normalized, TagSource::XmpImport);
+        }
+
+        if self.description.is_some() {
+            asset.description.clone_from(&self.description);
+        }
+
+        // Overwrite rating on re-import (matches overwrite semantics)
+        if let Some(rating_str) = self.source_metadata.get("rating") {
+            if let Ok(r) = rating_str.parse::<u8>() {
+                asset.rating = Some(normalize_rating(r));
+            }
+        }
+
+        // Overwrite color label on re-import (matches overwrite semantics)
+        if let Some(label_str) = self.source_metadata.get("label") {
+            if let Ok(Some(canonical)) = Asset::validate_color_label(label_str) {
+                asset.color_label = Some(canonical);
+            }
+        }
+
+        if let Some(variant) = asset.variants.iter_mut().find(|v| v.content_hash == variant_hash) {
+            for (key, val) in &self.source_metadata {
+                variant.source_metadata.insert(key.clone(), val.clone());
+            }
+        }
+    }
+}
+
+/// Merge flat `dc:subject` keywords with hierarchical `lr:hierarchicalSubject` keywords.
+///
+/// Hierarchical tags use `|` as separator internally. Flat keywords that are components
+/// of any hierarchical tag are suppressed (e.g., `birds` is suppressed when
+/// `animals|birds|eagles` exists). Non-component flat keywords are kept as-is.
+fn merge_hierarchical_keywords(
+    flat_keywords: &[String],
+    hierarchical_keywords: &[String],
+) -> Vec<String> {
+    use std::collections::HashSet;
+
+    if hierarchical_keywords.is_empty() {
+        return flat_keywords.to_vec();
+    }
+
+    // Collect all individual components from hierarchical tags (split on `|`)
+    let components: HashSet<&str> = hierarchical_keywords
+        .iter()
+        .flat_map(|h| h.split('|'))
+        .collect();
+
+    let mut result: Vec<String> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+
+    // Add hierarchical tags first
+    for h in hierarchical_keywords {
+        if seen.insert(h.as_str()) {
+            result.push(h.clone());
+        }
+    }
+
+    // Add flat keywords that are NOT components of any hierarchical tag
+    for kw in flat_keywords {
+        if !components.contains(kw.as_str()) && !seen.contains(kw.as_str()) {
+            seen.insert(kw.as_str());
+            result.push(kw.clone());
+        }
+    }
+
+    result
 }
 
 /// Which RDF container we're currently inside.
@@ -1467,6 +1609,7 @@ fn handle_open_tag(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{AssetType, Variant, VariantRole};
     use std::path::PathBuf;
 
     // ── locator tests ────────────────────────────────────────
@@ -3422,5 +3565,137 @@ mod tests {
         );
         let after_second = update_tags_in_string(&after_first, &[catalog_tag], &[]);
         assert_eq!(after_second, after_first, "Round 2 must be a no-op");
+    }
+
+    #[test]
+    fn reapply_xmp_data_overwrites_metadata() {
+        let mut asset = Asset::new(AssetType::Image, "sha256:reapply_test");
+        asset.description = Some("old description".to_string());
+        asset.tags = vec!["existing_tag".to_string()];
+
+        let variant = Variant {
+            content_hash: "sha256:reapply_test".to_string(),
+            asset_id: asset.id,
+            role: VariantRole::Original,
+            format: "nef".to_string(),
+            file_size: 100,
+            original_filename: "test.nef".to_string(),
+            source_metadata: {
+                let mut m = std::collections::BTreeMap::new();
+                m.insert("rating".to_string(), "3".to_string());
+                m.insert("exif_key".to_string(), "exif_value".to_string());
+                m
+            },
+            locations: vec![],
+        };
+        asset.variants.push(variant);
+
+        let xmp = crate::xmp_reader::XmpData {
+            keywords: vec!["new_tag".to_string(), "existing_tag".to_string()],
+            hierarchical_keywords: vec![],
+            description: Some("new description".to_string()),
+            source_metadata: {
+                let mut m = std::collections::HashMap::new();
+                m.insert("rating".to_string(), "5".to_string());
+                m.insert("label".to_string(), "Red".to_string());
+                m
+            },
+        };
+
+        xmp.reapply_to(&mut asset, "sha256:reapply_test");
+
+        // Description overwritten
+        assert_eq!(asset.description.as_deref(), Some("new description"));
+        // Tags merged (no duplicates)
+        assert!(asset.tags.contains(&"existing_tag".to_string()));
+        assert!(asset.tags.contains(&"new_tag".to_string()));
+        assert_eq!(asset.tags.len(), 2);
+        // source_metadata: XMP keys overwritten, non-XMP keys preserved
+        let meta = &asset.variants[0].source_metadata;
+        assert_eq!(meta.get("rating").unwrap(), "5");
+        assert_eq!(meta.get("label").unwrap(), "Red");
+        assert_eq!(meta.get("exif_key").unwrap(), "exif_value");
+    }
+
+    #[test]
+    fn apply_xmp_data_records_xmp_import_source_for_new_tags_only() {
+        use crate::models::TagSource;
+        let mut asset = Asset::new(AssetType::Image, "sha256:xmp_source_test");
+        // Pre-existing user tag (absent from the provenance map = user).
+        asset.tags = vec!["existing_tag".to_string()];
+
+        let xmp = crate::xmp_reader::XmpData {
+            keywords: vec!["new_tag".to_string(), "existing_tag".to_string()],
+            hierarchical_keywords: vec![],
+            description: None,
+            source_metadata: Default::default(),
+        };
+
+        xmp.apply_to(&mut asset, "sha256:xmp_source_test");
+
+        // The genuinely-new keyword carries xmp-import provenance…
+        assert_eq!(asset.tag_source("new_tag"), TagSource::XmpImport);
+        // …but the pre-existing tag is NOT demoted to xmp-import.
+        assert_eq!(asset.tag_source("existing_tag"), TagSource::User);
+        assert!(!asset.tag_sources.contains_key("existing_tag"));
+
+        // Re-applying (recipe modified) keeps the same semantics.
+        xmp.reapply_to(&mut asset, "sha256:xmp_source_test");
+        assert_eq!(asset.tag_source("new_tag"), TagSource::XmpImport);
+        assert_eq!(asset.tag_source("existing_tag"), TagSource::User);
+    }
+
+    #[test]
+    fn merge_hierarchical_deduplicates_components() {
+        let flat = vec![
+            "animals".to_string(),
+            "birds".to_string(),
+            "eagles".to_string(),
+            "sunset".to_string(),
+        ];
+        let hier = vec!["animals|birds|eagles".to_string()];
+        let result = merge_hierarchical_keywords(&flat, &hier);
+        assert_eq!(result, vec!["animals|birds|eagles", "sunset"]);
+    }
+
+    #[test]
+    fn merge_hierarchical_empty_hierarchical() {
+        let flat = vec!["landscape".to_string(), "sunset".to_string()];
+        let hier: Vec<String> = vec![];
+        let result = merge_hierarchical_keywords(&flat, &hier);
+        assert_eq!(result, vec!["landscape", "sunset"]);
+    }
+
+    #[test]
+    fn merge_hierarchical_multiple_hierarchies() {
+        let flat = vec![
+            "animals".to_string(),
+            "birds".to_string(),
+            "nature".to_string(),
+            "sky".to_string(),
+            "sunset".to_string(),
+            "portrait".to_string(),
+        ];
+        let hier = vec![
+            "animals|birds|eagles".to_string(),
+            "nature|sky|sunset".to_string(),
+        ];
+        let result = merge_hierarchical_keywords(&flat, &hier);
+        assert_eq!(
+            result,
+            vec![
+                "animals|birds|eagles",
+                "nature|sky|sunset",
+                "portrait",
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_hierarchical_no_flat_overlap() {
+        let flat = vec!["portrait".to_string(), "studio".to_string()];
+        let hier = vec!["animals|birds".to_string()];
+        let result = merge_hierarchical_keywords(&flat, &hier);
+        assert_eq!(result, vec!["animals|birds", "portrait", "studio"]);
     }
 }

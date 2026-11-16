@@ -4,8 +4,13 @@
 //! dispatch + handlers all jumbled together) so main.rs can be a
 //! near-pure dispatcher + CLI entrypoint. Each handler takes the
 //! destructured command fields by value plus one trailing
-//! `ctx: CliContext` carrying the cross-cutting `--json`, `--log`,
-//! `--verbose`/`--debug` flags.
+//! `ctx: &CliContext` carrying the cross-cutting `--json`, `--log`,
+//! `--verbose`/`--debug` flags and the catalog the entry point resolved
+//! (`ctx.catalog_root()`, `ctx.catalog()`, `ctx.config`) — `maki.toml`
+//! is read once per invocation, never inside a handler.
+//!
+//! Subcommand families (`faces`, `tag`, `volume`) dispatch to one private
+//! function per subcommand (`faces_detect`, `tag_rename`, …).
 //!
 //! Split into one submodule per command family; this `mod.rs` holds the
 //! shared imports (submodules start with `use super::*;`) and the
@@ -17,11 +22,9 @@ use std::path::PathBuf;
 use maki::asset_service::AssetService;
 use maki::catalog::Catalog;
 use maki::cli_output::{format_duration, format_size, item_status, CliContext};
-#[cfg(feature = "ai")]
-use maki::config::CatalogConfig;
 use maki::device_registry::DeviceRegistry;
 use maki::metadata_store::MetadataStore;
-use maki::query::QueryEngine;
+use maki::query::{AutoGroupScope, QueryEngine};
 
 #[cfg(feature = "ai")]
 use crate::FacesCommands;

@@ -26,9 +26,11 @@
 //  12. REFRESH & SYNC METADATA .......... refresh, sync_metadata
 //  13. FIX COMMANDS ..................... fix_roles, fix_dates, fix_recipes
 //  14. EXPORT ........................... build_export_plan, export, export_zip
-//  15. AI & FACES ....................... auto_tag, detect_faces, describe (feature-gated)
-//  16. VIDEO METADATA ................... backfill_video_metadata
-//  17. FREE FUNCTIONS ................... compute_prefixes, apply_xmp_data, helpers
+//  15. AI & FACES ....................... auto_tag, detect_faces (feature-gated)
+//  16. VIDEO METADATA ................... backfill_video_metadata (video.rs)
+//  16a. DESCRIBE ........................ describe_with + DescribeRequest (describe.rs)
+//  16b. GENERATE PREVIEWS ............... generate_previews + PreviewScope (previews.rs)
+//  17. FREE FUNCTIONS ................... compute_prefixes, helpers
 //  18. TESTS ............................ Unit and integration tests
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -48,54 +50,13 @@ use crate::metadata_store::MetadataStore;
 use crate::models::{
     Asset, AssetType, FileLocation, Recipe, RecipeType, Variant, VariantRole, Volume,
 };
+use crate::models::format::{GROUPS, RECIPE_GROUPS};
+pub use crate::models::format::{
+    determine_asset_type, determine_recipe_software, is_embedded_xmp_extension,
+    is_media_extension, is_raw_extension, normalize_rating, strip_media_extension,
+};
 
 // ═══ FILE TYPE FILTER ═══
-
-/// File type group definitions: (name, extensions, default_on).
-const GROUPS: &[(&str, &[&str], bool)] = &[
-    (
-        "images",
-        &[
-            "jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "webp", "heic", "heif", "svg",
-            "ico", "psd", "xcf", // standard image formats
-            "raw", "cr2", "cr3", "crw", "nef", "nrw", "arw", "sr2", "srf", "orf", "rw2",
-            "dng", "raf", "pef", "srw", "mrw", "3fr", "fff", "iiq", "erf", "kdc", "dcr",
-            "mef", "mos", "rwl", "bay", "x3f", // RAW
-        ],
-        true,
-    ),
-    (
-        "video",
-        &[
-            "mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "3gp",
-            "mts", "m2ts",
-        ],
-        true,
-    ),
-    (
-        "audio",
-        &[
-            "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a", "aiff", "alac",
-        ],
-        true,
-    ),
-    ("xmp", &["xmp"], true),
-    (
-        "documents",
-        &[
-            "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "rtf", "csv",
-            "json", "xml", "html", "htm",
-        ],
-        false,
-    ),
-    ("captureone", &["cos", "cot", "cop"], false),
-    ("rawtherapee", &["pp3"], false),
-    ("dxo", &["dop"], false),
-    ("on1", &["on1"], false),
-];
-
-/// Recipe group names — extensions in these groups are treated as recipe sidecars.
-const RECIPE_GROUPS: &[&str] = &["xmp", "captureone", "rawtherapee", "dxo", "on1"];
 
 /// Controls which file types are imported based on enabled/disabled groups.
 pub struct FileTypeFilter {
@@ -425,7 +386,8 @@ pub struct VolumeSplitResult {
 }
 
 /// Result of generating SigLIP embeddings for a batch of assets.
-#[cfg(feature = "ai")]
+/// Produced by `ai` builds only; the type exists in every build so the
+/// import workflow's result and events have one shape.
 #[derive(Debug, serde::Serialize)]
 pub struct EmbedAssetsResult {
     pub embedded: u32,
@@ -433,16 +395,15 @@ pub struct EmbedAssetsResult {
     pub errors: Vec<String>,
 }
 
-/// Per-asset status during embedding.
-#[cfg(feature = "ai")]
+/// Per-asset status during embedding (see [`EmbedAssetsResult`]).
 pub enum EmbedStatus {
     Embedded,
     Skipped(&'static str),
     Error(String),
 }
 
-/// Result of face detection on a batch of assets.
-#[cfg(feature = "ai")]
+/// Result of face detection on a batch of assets (`ai` builds only
+/// produce one).
 #[derive(Debug, serde::Serialize)]
 pub struct DetectFacesResult {
     pub assets_processed: u32,
@@ -732,6 +693,12 @@ fn create_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_file(source, target)
 }
 
+/// Whether extracted XMP carries anything worth merging into an asset
+/// (keywords, a description, or rating/label/creator-style metadata).
+fn xmp_has_metadata(xmp: &crate::xmp_reader::XmpData) -> bool {
+    !xmp.keywords.is_empty() || xmp.description.is_some() || !xmp.source_metadata.is_empty()
+}
+
 /// Get file modification time as DateTime<Utc>. Returns None on any error.
 fn file_mtime(path: &Path) -> Option<chrono::DateTime<chrono::Utc>> {
     let metadata = std::fs::metadata(path).ok()?;
@@ -812,8 +779,9 @@ impl AssetService {
     /// Verbosity controls per-operation logging; the preview config is
     /// cloned so the service owns its own copy. Loads `maki.toml` once
     /// for the remaining sections (defaults when the file is missing or
-    /// unreadable); callers that already hold a config use
-    /// [`Self::with_config`].
+    /// unreadable). Test fixture: library and entry-point code hold a
+    /// loaded config and use [`Self::with_config`].
+    #[cfg(test)]
     pub fn new(catalog_root: &Path, verbosity: crate::Verbosity, preview_config: &crate::config::PreviewConfig) -> Self {
         let config = std::sync::Arc::new(
             crate::config::CatalogConfig::load(catalog_root).unwrap_or_default(),
@@ -846,9 +814,27 @@ impl AssetService {
         &self.config
     }
 
-    /// A `QueryEngine` sharing this service's configuration.
+    /// A `QueryEngine` sharing this service's configuration; its connection
+    /// opens lazily. Operations that already hold a `Catalog` use
+    /// [`Self::query_engine_on`] or [`Self::search_in`] instead.
     fn query_engine(&self) -> crate::query::QueryEngine {
         crate::query::QueryEngine::with_config(&self.catalog_root, self.config.clone())
+    }
+
+    /// A `QueryEngine` over a connection this operation already opened:
+    /// one connection per operation, handed back by `engine.catalog()`.
+    fn query_engine_on(&self, catalog: Catalog) -> crate::query::QueryEngine {
+        crate::query::QueryEngine::with_catalog(&self.catalog_root, self.config.clone(), Box::new(catalog))
+    }
+
+    /// Run a search on a connection this operation already holds.
+    fn search_in(&self, catalog: &Catalog, query: &str) -> Result<Vec<crate::catalog::SearchRow>> {
+        crate::query::search_in(catalog, &self.catalog_root, &self.config, None, query)
+    }
+
+    /// A `PreviewGenerator` over this service's catalog and preview config.
+    fn preview_generator(&self) -> crate::preview::PreviewGenerator {
+        crate::preview::PreviewGenerator::new(&self.catalog_root, self.verbosity, &self.preview_config)
     }
 
 }
@@ -868,10 +854,14 @@ mod ai;
 mod auto_stack;
 mod audio;
 mod video;
+mod describe;
+mod previews;
 mod watch;
 mod workflow;
-mod sidecars;
-pub use sidecars::{asset_has_sidecar_metadata, create_missing_sidecars, SidecarCreation, SidecarStatus};
+pub use dedup::DedupOptions;
+pub use describe::{DescribeEvent, DescribeRequest, DescribeScope};
+pub use previews::{PreviewEvent, PreviewGenerateResult, PreviewOptions, PreviewScope, PreviewStatus};
+pub use crate::sidecars::{asset_has_sidecar_metadata, create_missing_sidecars, SidecarCreation, SidecarStatus};
 pub use audio::{AudioAnalyzeResult, AudioAnalyzeStatus};
 #[cfg(feature = "ai")]
 pub use auto_stack::{auto_stack_catalog, AutoStackCluster, AutoStackMember, AutoStackResult};
@@ -916,234 +906,6 @@ fn compute_prefixes(paths: &[PathBuf], mount_point: &Path) -> Vec<String> {
     prefixes.sort();
     prefixes.dedup();
     prefixes
-}
-
-/// Merge flat `dc:subject` keywords with hierarchical `lr:hierarchicalSubject` keywords.
-///
-/// Hierarchical tags use `|` as separator internally. Flat keywords that are components
-/// of any hierarchical tag are suppressed (e.g., `birds` is suppressed when
-/// `animals|birds|eagles` exists). Non-component flat keywords are kept as-is.
-fn merge_hierarchical_keywords(
-    flat_keywords: &[String],
-    hierarchical_keywords: &[String],
-) -> Vec<String> {
-    use std::collections::HashSet;
-
-    if hierarchical_keywords.is_empty() {
-        return flat_keywords.to_vec();
-    }
-
-    // Collect all individual components from hierarchical tags (split on `|`)
-    let components: HashSet<&str> = hierarchical_keywords
-        .iter()
-        .flat_map(|h| h.split('|'))
-        .collect();
-
-    let mut result: Vec<String> = Vec::new();
-    let mut seen: HashSet<&str> = HashSet::new();
-
-    // Add hierarchical tags first
-    for h in hierarchical_keywords {
-        if seen.insert(h.as_str()) {
-            result.push(h.clone());
-        }
-    }
-
-    // Add flat keywords that are NOT components of any hierarchical tag
-    for kw in flat_keywords {
-        if !components.contains(kw.as_str()) && !seen.contains(kw.as_str()) {
-            seen.insert(kw.as_str());
-            result.push(kw.clone());
-        }
-    }
-
-    result
-}
-
-/// Normalize a rating value: convert MicrosoftPhoto:Rating percentage scale (1-100)
-/// to xmp:Rating 1-5 scale. Values already in 1-5 range pass through unchanged.
-pub fn normalize_rating(r: u8) -> u8 {
-    if r <= 5 {
-        r
-    } else {
-        // MicrosoftPhoto:Rating percentages: 1→1, 25→2, 50→3, 75→4, 99/100→5
-        match r {
-            1..=12 => 1,
-            13..=37 => 2,
-            38..=62 => 3,
-            63..=87 => 4,
-            _ => 5,
-        }
-    }
-}
-
-/// Public wrapper for `apply_xmp_data` — used by `QueryEngine::reimport_metadata`.
-pub fn apply_xmp_data_pub(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant_hash: &str) {
-    apply_xmp_data(xmp, asset, variant_hash);
-}
-
-fn apply_xmp_data(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant_hash: &str) {
-    let merged = merge_hierarchical_keywords(&xmp.keywords, &xmp.hierarchical_keywords);
-    // Run every XMP-sourced keyword through the same normaliser that
-    // `maki tag` uses for user input. Lightroom / CaptureOne / manual
-    // XMP edits occasionally produce malformed keywords (leading
-    // whitespace, leading `|`, comma-joined "red, gold" pairs) that
-    // would otherwise land in `asset.tags` verbatim and become
-    // un-renameable later. `|`-prefix-anchor in search syntax means a
-    // tag like ` |München` collides with thousands of legitimately
-    // hierarchical tags ending in `|München` and becomes impossible
-    // to isolate without bespoke tooling — better to never let it in.
-    //
-    // Genuinely-new keywords are recorded with `xmp-import` provenance;
-    // tags already on the asset keep their existing source (a
-    // re-import must not demote a user tag).
-    for raw in &merged {
-        let normalized = crate::tag_util::normalize_tag_for_storage(raw).tags;
-        asset.add_tags_with_source(&normalized, crate::models::TagSource::XmpImport);
-    }
-
-    if asset.description.is_none() {
-        asset.description.clone_from(&xmp.description);
-    }
-
-    // Promote rating to asset level (conservative: only if not already set)
-    if asset.rating.is_none() {
-        if let Some(rating_str) = xmp.source_metadata.get("rating") {
-            if let Ok(r) = rating_str.parse::<u8>() {
-                asset.rating = Some(normalize_rating(r));
-            }
-        }
-    }
-
-    // Promote color label to asset level (conservative: only if not already set)
-    if asset.color_label.is_none() {
-        if let Some(label_str) = xmp.source_metadata.get("label") {
-            if let Ok(Some(canonical)) = Asset::validate_color_label(label_str) {
-                asset.color_label = Some(canonical);
-            }
-        }
-    }
-
-    if let Some(variant) = asset.variants.iter_mut().find(|v| v.content_hash == variant_hash) {
-        for (key, val) in &xmp.source_metadata {
-            variant
-                .source_metadata
-                .entry(key.clone())
-                .or_insert_with(|| val.clone());
-        }
-    }
-}
-
-/// Re-apply XMP metadata when a recipe file has been modified.
-/// Unlike `apply_xmp_data` (initial import, conservative merge):
-/// - Keywords: merge (add new; cannot remove since we don't track provenance)
-/// - Description: overwrite (user explicitly edited the XMP)
-/// - source_metadata: overwrite XMP-sourced keys (rating, label, creator, copyright)
-fn reapply_xmp_data(xmp: &crate::xmp_reader::XmpData, asset: &mut Asset, variant_hash: &str) {
-    let merged = merge_hierarchical_keywords(&xmp.keywords, &xmp.hierarchical_keywords);
-    // Same normaliser pass as `apply_xmp_data`; see comment there for
-    // why we don't trust XMP keywords verbatim. New keywords get
-    // `xmp-import` provenance; existing tags keep their source.
-    for raw in &merged {
-        let normalized = crate::tag_util::normalize_tag_for_storage(raw).tags;
-        asset.add_tags_with_source(&normalized, crate::models::TagSource::XmpImport);
-    }
-
-    if xmp.description.is_some() {
-        asset.description.clone_from(&xmp.description);
-    }
-
-    // Overwrite rating on re-import (matches overwrite semantics)
-    if let Some(rating_str) = xmp.source_metadata.get("rating") {
-        if let Ok(r) = rating_str.parse::<u8>() {
-            asset.rating = Some(normalize_rating(r));
-        }
-    }
-
-    // Overwrite color label on re-import (matches overwrite semantics)
-    if let Some(label_str) = xmp.source_metadata.get("label") {
-        if let Ok(Some(canonical)) = Asset::validate_color_label(label_str) {
-            asset.color_label = Some(canonical);
-        }
-    }
-
-    if let Some(variant) = asset.variants.iter_mut().find(|v| v.content_hash == variant_hash) {
-        for (key, val) in &xmp.source_metadata {
-            variant.source_metadata.insert(key.clone(), val.clone());
-        }
-    }
-}
-
-/// Check if a file extension supports embedded XMP extraction (JPEG/TIFF).
-fn is_embedded_xmp_extension(ext: &str) -> bool {
-    matches!(ext.to_lowercase().as_str(), "jpg" | "jpeg" | "tif" | "tiff")
-}
-
-/// Determine the asset type from a file extension.
-pub fn determine_asset_type(ext: &str) -> AssetType {
-    match ext.to_lowercase().as_str() {
-        // Images
-        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "tif" | "webp" | "heic" | "heif"
-        | "raw" | "cr2" | "cr3" | "crw" | "nef" | "nrw" | "arw" | "sr2" | "srf" | "orf"
-        | "rw2" | "dng" | "raf" | "pef" | "srw" | "mrw" | "3fr" | "fff" | "iiq" | "erf"
-        | "kdc" | "dcr" | "mef" | "mos" | "rwl" | "bay" | "x3f"
-        | "svg" | "ico" | "psd" | "xcf" => AssetType::Image,
-        // Video
-        "mp4" | "mov" | "avi" | "mkv" | "wmv" | "flv" | "webm" | "m4v" | "mpg" | "mpeg"
-        | "3gp" | "mts" | "m2ts" => AssetType::Video,
-        // Audio
-        "mp3" | "wav" | "flac" | "aac" | "ogg" | "wma" | "m4a" | "aiff" | "alac" => {
-            AssetType::Audio
-        }
-        // Documents
-        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "md" | "rtf"
-        | "csv" | "json" | "xml" | "html" | "htm" => AssetType::Document,
-        _ => AssetType::Other,
-    }
-}
-
-/// Check if a file extension is a RAW camera format.
-pub fn is_raw_extension(ext: &str) -> bool {
-    matches!(
-        ext.to_lowercase().as_str(),
-        "raw" | "cr2" | "cr3" | "crw" | "nef" | "nrw" | "arw" | "sr2" | "srf"
-            | "orf" | "rw2" | "dng" | "raf" | "pef" | "srw" | "mrw"
-            | "3fr" | "fff" | "iiq" | "erf" | "kdc" | "dcr"
-            | "mef" | "mos" | "rwl" | "bay" | "x3f"
-    )
-}
-
-/// Infer the processing software from a recipe file extension.
-fn determine_recipe_software(ext: &str) -> &'static str {
-    match ext.to_lowercase().as_str() {
-        "xmp" => "Adobe/CaptureOne",
-        "cos" | "cot" | "cop" => "CaptureOne",
-        "pp3" => "RawTherapee",
-        "dop" => "DxO",
-        "on1" => "ON1",
-        _ => "Unknown",
-    }
-}
-
-/// True if `ext` is a media (non-recipe) extension of any file-type group,
-/// regardless of which groups an import filter has enabled.
-fn is_media_extension(ext: &str) -> bool {
-    let lower = ext.to_lowercase();
-    GROUPS
-        .iter()
-        .filter(|(name, _, _)| !RECIPE_GROUPS.contains(name))
-        .any(|(_, extensions, _)| extensions.contains(&lower.as_str()))
-}
-
-/// Strip a trailing media extension from a recipe file's stem so that
-/// `DSC_001.NEF.xmp` (darktable / `[writeback] sidecar_naming = "full"`)
-/// resolves to the same parent as `DSC_001.xmp` (Capture One, Lightroom).
-/// Stems without such a suffix are returned unchanged.
-pub fn strip_media_extension(stem: &str) -> &str {
-    match stem.rsplit_once('.') {
-        Some((base, inner)) if !base.is_empty() && is_media_extension(inner) => base,
-        _ => stem,
-    }
 }
 
 /// Group resolved files by (parent_directory, file_stem).
@@ -1415,84 +1177,6 @@ mod tests {
         assert_eq!(determine_recipe_software("dop"), "DxO");
         assert_eq!(determine_recipe_software("on1"), "ON1");
         assert_eq!(determine_recipe_software("txt"), "Unknown");
-    }
-
-    #[test]
-    fn reapply_xmp_data_overwrites_metadata() {
-        let mut asset = Asset::new(AssetType::Image, "sha256:reapply_test");
-        asset.description = Some("old description".to_string());
-        asset.tags = vec!["existing_tag".to_string()];
-
-        let variant = Variant {
-            content_hash: "sha256:reapply_test".to_string(),
-            asset_id: asset.id,
-            role: VariantRole::Original,
-            format: "nef".to_string(),
-            file_size: 100,
-            original_filename: "test.nef".to_string(),
-            source_metadata: {
-                let mut m = std::collections::BTreeMap::new();
-                m.insert("rating".to_string(), "3".to_string());
-                m.insert("exif_key".to_string(), "exif_value".to_string());
-                m
-            },
-            locations: vec![],
-        };
-        asset.variants.push(variant);
-
-        let xmp = crate::xmp_reader::XmpData {
-            keywords: vec!["new_tag".to_string(), "existing_tag".to_string()],
-            hierarchical_keywords: vec![],
-            description: Some("new description".to_string()),
-            source_metadata: {
-                let mut m = std::collections::HashMap::new();
-                m.insert("rating".to_string(), "5".to_string());
-                m.insert("label".to_string(), "Red".to_string());
-                m
-            },
-        };
-
-        reapply_xmp_data(&xmp, &mut asset, "sha256:reapply_test");
-
-        // Description overwritten
-        assert_eq!(asset.description.as_deref(), Some("new description"));
-        // Tags merged (no duplicates)
-        assert!(asset.tags.contains(&"existing_tag".to_string()));
-        assert!(asset.tags.contains(&"new_tag".to_string()));
-        assert_eq!(asset.tags.len(), 2);
-        // source_metadata: XMP keys overwritten, non-XMP keys preserved
-        let meta = &asset.variants[0].source_metadata;
-        assert_eq!(meta.get("rating").unwrap(), "5");
-        assert_eq!(meta.get("label").unwrap(), "Red");
-        assert_eq!(meta.get("exif_key").unwrap(), "exif_value");
-    }
-
-    #[test]
-    fn apply_xmp_data_records_xmp_import_source_for_new_tags_only() {
-        use crate::models::TagSource;
-        let mut asset = Asset::new(AssetType::Image, "sha256:xmp_source_test");
-        // Pre-existing user tag (absent from the provenance map = user).
-        asset.tags = vec!["existing_tag".to_string()];
-
-        let xmp = crate::xmp_reader::XmpData {
-            keywords: vec!["new_tag".to_string(), "existing_tag".to_string()],
-            hierarchical_keywords: vec![],
-            description: None,
-            source_metadata: Default::default(),
-        };
-
-        apply_xmp_data(&xmp, &mut asset, "sha256:xmp_source_test");
-
-        // The genuinely-new keyword carries xmp-import provenance…
-        assert_eq!(asset.tag_source("new_tag"), TagSource::XmpImport);
-        // …but the pre-existing tag is NOT demoted to xmp-import.
-        assert_eq!(asset.tag_source("existing_tag"), TagSource::User);
-        assert!(!asset.tag_sources.contains_key("existing_tag"));
-
-        // Re-applying (recipe modified) keeps the same semantics.
-        reapply_xmp_data(&xmp, &mut asset, "sha256:xmp_source_test");
-        assert_eq!(asset.tag_source("new_tag"), TagSource::XmpImport);
-        assert_eq!(asset.tag_source("existing_tag"), TagSource::User);
     }
 
     #[test]
@@ -2880,60 +2564,6 @@ mod tests {
         let result = service.fix_dates(None, None, false, |_, _, _| {}).unwrap();
         assert_eq!(result.already_correct, 1);
         assert_eq!(result.fixed, 0);
-    }
-
-    #[test]
-    fn merge_hierarchical_deduplicates_components() {
-        let flat = vec![
-            "animals".to_string(),
-            "birds".to_string(),
-            "eagles".to_string(),
-            "sunset".to_string(),
-        ];
-        let hier = vec!["animals|birds|eagles".to_string()];
-        let result = merge_hierarchical_keywords(&flat, &hier);
-        assert_eq!(result, vec!["animals|birds|eagles", "sunset"]);
-    }
-
-    #[test]
-    fn merge_hierarchical_empty_hierarchical() {
-        let flat = vec!["landscape".to_string(), "sunset".to_string()];
-        let hier: Vec<String> = vec![];
-        let result = merge_hierarchical_keywords(&flat, &hier);
-        assert_eq!(result, vec!["landscape", "sunset"]);
-    }
-
-    #[test]
-    fn merge_hierarchical_multiple_hierarchies() {
-        let flat = vec![
-            "animals".to_string(),
-            "birds".to_string(),
-            "nature".to_string(),
-            "sky".to_string(),
-            "sunset".to_string(),
-            "portrait".to_string(),
-        ];
-        let hier = vec![
-            "animals|birds|eagles".to_string(),
-            "nature|sky|sunset".to_string(),
-        ];
-        let result = merge_hierarchical_keywords(&flat, &hier);
-        assert_eq!(
-            result,
-            vec![
-                "animals|birds|eagles",
-                "nature|sky|sunset",
-                "portrait",
-            ]
-        );
-    }
-
-    #[test]
-    fn merge_hierarchical_no_flat_overlap() {
-        let flat = vec!["portrait".to_string(), "studio".to_string()];
-        let hier = vec!["animals|birds".to_string()];
-        let result = merge_hierarchical_keywords(&flat, &hier);
-        assert_eq!(result, vec!["animals|birds", "portrait", "studio"]);
     }
 
     #[test]

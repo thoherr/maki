@@ -1,12 +1,19 @@
 //! Shared domain types — `Asset`, `Variant`, `Recipe`, `Volume`,
-//! `FileLocation`, `AssetType`, etc. Pure data; no DB or filesystem deps.
+//! `FileLocation`, `AssetType`, etc. — and the pure vocabulary around
+//! them (`format` extension tables, `NumericFilter`, `geo`). Pure data
+//! and pure functions: this module imports nothing from storage,
+//! services or readers (checked by the architecture audit, F11).
 
 pub mod asset;
+pub mod format;
+pub mod geo;
+pub mod numeric_filter;
 pub mod recipe;
 pub mod variant;
 pub mod volume;
 
 pub use asset::{Asset, AssetType, TagSource};
+pub use numeric_filter::NumericFilter;
 pub use recipe::{Recipe, RecipeType};
 pub use variant::{Variant, VariantRole};
 pub use volume::{FileLocation, Volume, VolumePurpose, VolumeType};

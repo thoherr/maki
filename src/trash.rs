@@ -62,7 +62,7 @@ pub struct EmptyResult {
 }
 
 /// Handle for disposing files. Construct per operation via
-/// [`Trash::from_config`] (honors `[trash] enabled`) and the caller's
+/// [`Trash::new_with`] (honors `[trash] enabled`) and the caller's
 /// `--no-trash` override.
 pub struct Trash {
     trash_root: PathBuf,
@@ -85,14 +85,6 @@ impl Trash {
     /// caller's `--no-trash` flag.
     pub fn new_with(catalog_root: &Path, cfg: &crate::config::TrashConfig, no_trash: bool) -> Self {
         Self::new(catalog_root, cfg.enabled && !no_trash)
-    }
-
-    /// [`Self::new_with`] over a freshly loaded `maki.toml`. Thin wrapper
-    /// for callers that have no config at hand; the services pass their
-    /// own config.
-    pub fn from_config(catalog_root: &Path, no_trash: bool) -> Self {
-        let cfg = crate::config::CatalogConfig::load(catalog_root).unwrap_or_default();
-        Self::new_with(catalog_root, &cfg.trash, no_trash)
     }
 
     /// Whether disposed files go to the trash (vs. permanent deletion).

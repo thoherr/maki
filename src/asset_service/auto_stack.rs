@@ -125,11 +125,10 @@ impl AssetService {
                 "Unknown model: {model_id}. Run 'maki auto-tag --list-models' to see available models."
             )
         })?;
-        let catalog = Catalog::open(&self.catalog_root)?;
-        let engine = self.query_engine();
+        let engine = self.query_engine_on(Catalog::open(&self.catalog_root)?);
         let scope = engine.resolve_scope(query, asset, &[])?;
         auto_stack_catalog(
-            &catalog,
+            engine.catalog()?,
             &self.catalog_root,
             scope.as_ref(),
             model_id,

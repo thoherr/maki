@@ -10,13 +10,14 @@ pub fn run_search_command(
     quiet: bool,
     image: Option<PathBuf>,
     limit: Option<usize>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<Vec<String>> {
     use maki::format::{self, OutputFormat};
 
     let query = query.unwrap_or_default();
-    let (catalog_root, config) = maki::config::load_config()?;
-    let engine = QueryEngine::with_default_filter(&catalog_root, config.browse.default_filter);
+    let (catalog_root, config) = ctx.catalog()?;
+    let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone())
+        .default_filter(config.browse.default_filter.clone());
     let results = if let Some(ref image_path) = image {
         let (rows, info) = engine.search_with_image(
             &query,

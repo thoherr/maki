@@ -173,7 +173,6 @@ fn run_import_with_progress(
                     "recipes": summary_for_cb.recipes.load(Relaxed),
                 }));
             }
-            #[cfg(feature = "ai")]
             ImportEvent::Embed { asset_id, status } => {
                 let label = match status {
                     crate::asset_service::EmbedStatus::Embedded => {
@@ -192,7 +191,6 @@ fn run_import_with_progress(
                     "embedded": summary_for_cb.embedded.load(Relaxed),
                 }));
             }
-            #[cfg(feature = "pro")]
             ImportEvent::Describe { asset_id, status, elapsed: _ } => {
                 let label = match status {
                     crate::vlm::DescribeStatus::Described => {
@@ -230,12 +228,10 @@ fn run_import_with_progress(
         "sidecars_created": r.import.sidecars_created,
         "new_asset_ids": r.import.new_asset_ids,
     });
-    #[cfg(feature = "ai")]
     if let Some(ref er) = r.embed {
         out["embedded"] = serde_json::json!(er.embedded);
         out["embeddings_skipped"] = serde_json::json!(er.skipped);
     }
-    #[cfg(feature = "pro")]
     if let Some(ref dr) = r.describe {
         out["described"] = serde_json::json!(dr.described);
         out["descriptions_skipped"] = serde_json::json!(dr.skipped);
@@ -252,8 +248,8 @@ fn run_import_with_progress(
 pub async fn build_info_api(
     State(state): State<Arc<AppState>>,
 ) -> Response {
-    let ai = cfg!(feature = "ai");
-    let pro = cfg!(feature = "pro");
+    let ai = crate::features::AI;
+    let pro = crate::features::PRO;
     Json(serde_json::json!({
         "ai": ai,
         "pro": pro,

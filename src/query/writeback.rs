@@ -2,11 +2,12 @@
 //! tags) to `.xmp` recipe files on disk.
 //!
 //! Extracted from query.rs (was section 16 of its table of contents).
-//! All methods are `impl QueryEngine`.
+//! All methods are `impl QueryEngine`. Progress is reported as
+//! [`WritebackEvent`]s; the scope of a run is a [`WritebackRequest`].
 //!
 //! The four field-specific write-back loops (rating, tags, description,
 //! label) previously existed as four near-identical ~90-line copies; they
-//! now share one generic engine (`write_back_field_to_xmp_inner`) so the
+//! now share one generic engine (`write_back_field_to_xmp`) so the
 //! pending-flag bookkeeping, offline-volume handling, and re-hash logic
 //! exist exactly once. Each field contributes only its `xmp_reader`
 //! update call as a closure. The v4.5.14–v4.5.17 escape-handling fixes
@@ -19,14 +20,105 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::catalog::Catalog;
-use crate::content_store::ContentStore;
 use crate::device_registry::DeviceRegistry;
-use crate::metadata_store::MetadataStore;
 use crate::models::recipe::Recipe;
 use crate::models::Asset;
 use crate::xmp_reader;
 
-use super::{QueryEngine, WritebackResult};
+use super::{MutationContext, QueryEngine, WritebackResult};
+
+/// Scope and mode of one `maki writeback` run — shared by the sidecar
+/// flush ([`QueryEngine::writeback_with`]) and the embedded flush
+/// ([`QueryEngine::writeback_embedded_with`]).
+///
+/// Scope: `volume` restricts to recipes / file locations on that volume
+/// (label); `asset_prefix` and `asset_ids` narrow to assets; `all`
+/// widens to every recipe (asset) regardless of its pending flag; `force`
+/// keeps the caller's scope but rewrites recipes whose pending flag is
+/// false and rebuilds the keyword blocks from scratch; `mirror_tags`
+/// removes XMP keywords the catalog no longer has; `dry_run` counts
+/// without writing; `no_trash` skips preserving originals (embedded only).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WritebackRequest<'a> {
+    pub volume: Option<&'a str>,
+    pub asset_prefix: Option<&'a str>,
+    pub asset_ids: Option<&'a HashSet<String>>,
+    pub all: bool,
+    pub force: bool,
+    pub mirror_tags: bool,
+    pub dry_run: bool,
+    pub no_trash: bool,
+}
+
+/// Progress of a writeback run, one per file touched (plus non-fatal
+/// warnings). `Display` renders the CLI's per-file stderr line;
+/// [`Self::status`] the short status a progress stream shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WritebackEvent<'a> {
+    /// File written — or would be, in a dry run. `embedded` tells the
+    /// JPEG (APP1 segment) flush from the `.xmp` sidecar flush.
+    Written { path: &'a str, embedded: bool, dry_run: bool },
+    /// File already carried the catalog state; nothing written.
+    AlreadyInSync { path: &'a str },
+    /// Volume holding the file is offline.
+    SkippedOffline { path: &'a str, volume: &'a str },
+    /// Volume online but the file is gone.
+    SkippedMissing { path: &'a str },
+    /// Format not supported by this flush (embedded: TIFF).
+    SkippedUnsupported { path: &'a str, reason: &'static str },
+    /// File failed; original untouched. `message` is the error-list entry.
+    Failed { path: &'a str, message: &'a str },
+    /// Non-fatal note about a side step (re-hash, sidecar save) that the
+    /// run continued past. Always surfaced, regardless of per-file logging.
+    Warning(String),
+}
+
+impl WritebackEvent<'_> {
+    /// The volume-relative path the event is about (`None` for warnings).
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            Self::Written { path, .. }
+            | Self::AlreadyInSync { path }
+            | Self::SkippedOffline { path, .. }
+            | Self::SkippedMissing { path }
+            | Self::SkippedUnsupported { path, .. }
+            | Self::Failed { path, .. } => Some(path),
+            Self::Warning(_) => None,
+        }
+    }
+
+    /// Short status for progress streams (the web job log); `None` for
+    /// the skips a stream does not report.
+    pub fn status(&self) -> Option<&'static str> {
+        match self {
+            Self::Written { embedded: false, dry_run: true, .. } => Some("would write back"),
+            Self::Written { embedded: false, dry_run: false, .. } => Some("written"),
+            Self::Written { embedded: true, dry_run: true, .. } => Some("would write (embedded)"),
+            Self::Written { embedded: true, dry_run: false, .. } => Some("written (embedded)"),
+            Self::AlreadyInSync { .. } => Some("already in sync"),
+            Self::SkippedUnsupported { .. } => Some("skipped (TIFF not supported)"),
+            Self::Failed { .. } => Some("failed"),
+            Self::SkippedOffline { .. } | Self::SkippedMissing { .. } | Self::Warning(_) => None,
+        }
+    }
+}
+
+impl std::fmt::Display for WritebackEvent<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Written { path, embedded: false, dry_run: true } => write!(f, "{path} — would write back"),
+            Self::Written { path, embedded: false, dry_run: false } => write!(f, "{path} — written"),
+            Self::Written { path, embedded: true, dry_run: true } => write!(f, "{path} — would write (embedded)"),
+            Self::Written { path, embedded: true, dry_run: false } => write!(f, "{path} — written (embedded)"),
+            Self::AlreadyInSync { path } => write!(f, "{path} — already in sync (no write)"),
+            Self::SkippedOffline { path, volume } => write!(f, "{path} — skipped (volume offline: {volume})"),
+            Self::SkippedMissing { path } => write!(f, "{path} — skipped (file missing)"),
+            Self::SkippedUnsupported { path, reason } => write!(f, "{path} — skipped ({reason})"),
+            Self::Failed { path, .. } => write!(f, "{path} — FAILED"),
+            Self::Warning(message) => f.write_str(message),
+        }
+    }
+}
 
 impl QueryEngine {
     /// Mark a recipe as pending write-back in SQLite and set the flag on the struct.
@@ -67,17 +159,21 @@ impl QueryEngine {
     /// - `Err` → warn naming `field_label`; pending state untouched
     ///
     /// Saves the sidecar once at the end if any recipe state changed.
-    fn write_back_field_to_xmp_inner(
+    ///
+    /// Note: no `if !config.writeback.enabled return` short-circuit here.
+    /// Tracking is always on; the loop skips the actual XMP file write
+    /// when disabled and marks the recipe pending for later flush via
+    /// `maki writeback`. This lets users keep auto-write off as a safety
+    /// net without losing the change record.
+    fn write_back_field_to_xmp(
         &self,
         asset: &mut Asset,
-        catalog: &Catalog,
-        store: &MetadataStore,
-        online: &HashMap<uuid::Uuid, PathBuf>,
-        content_store: &ContentStore,
-        wb_cfg: &crate::config::WritebackConfig,
+        ctx: &MutationContext<'_>,
         field_label: &str,
         apply: impl Fn(&Path) -> Result<bool>,
     ) {
+        let catalog = ctx.catalog;
+        let wb_cfg = &ctx.config.writeback;
         let writeback_active = wb_cfg.enabled;
         let mut sidecar_dirty = false;
 
@@ -86,11 +182,11 @@ impl QueryEngine {
         // new file already carries the asset's full current metadata; the
         // field loop then sees it as one more recipe (usually a no-op).
         if writeback_active && wb_cfg.create_sidecars {
-            match crate::asset_service::create_missing_sidecars(
+            match crate::sidecars::create_missing_sidecars(
                 asset,
                 catalog,
-                content_store,
-                online,
+                ctx.content_store,
+                &ctx.online_volumes,
                 None,
                 wb_cfg.sidecar_naming,
                 true,
@@ -124,7 +220,7 @@ impl QueryEngine {
                 continue;
             }
 
-            let mount_point = match online.get(&recipe.location.volume_id) {
+            let mount_point = match ctx.online_volumes.get(&recipe.location.volume_id) {
                 Some(mp) => mp.as_path(),
                 None => {
                     Self::mark_recipe_pending(recipe, catalog);
@@ -141,7 +237,7 @@ impl QueryEngine {
             }
 
             match apply(&full_path) {
-                Ok(true) => match content_store.hash_file(&full_path) {
+                Ok(true) => match ctx.content_store.hash_file(&full_path) {
                     Ok(new_hash) => {
                         if let Err(e) = catalog
                             .update_recipe_content_hash(&recipe.id.to_string(), &new_hash)
@@ -174,51 +270,12 @@ impl QueryEngine {
         }
 
         if sidecar_dirty {
-            if let Err(e) = store.save(asset) {
+            if let Err(e) = ctx.meta_store.save(asset) {
                 eprintln!(
                     "Warning: could not save sidecar after XMP {field_label} write-back: {e}"
                 );
             }
         }
-    }
-
-    /// Registry prologue shared by the auto-writeback entry points that
-    /// only have catalog + store at hand (the `edit` path): load online
-    /// volumes, build the content store, delegate to the shared loop.
-    ///
-    /// Note: no `if !config.writeback.enabled return` short-circuit here.
-    /// Tracking is always on; the inner loop skips the actual XMP file
-    /// write when disabled and marks the recipe pending for later flush
-    /// via `maki writeback`. This lets users keep auto-write off as a
-    /// safety net without losing the change record.
-    fn write_back_field_to_xmp_auto(
-        &self,
-        asset: &mut Asset,
-        catalog: &Catalog,
-        store: &MetadataStore,
-        field_label: &str,
-        apply: impl Fn(&Path) -> Result<bool>,
-    ) {
-        let online = match DeviceRegistry::new(&self.catalog_root).online_map() {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!(
-                    "Warning: could not load volumes for XMP {field_label} write-back: {e}"
-                );
-                return;
-            }
-        };
-        let content_store = ContentStore::new(&self.catalog_root);
-        self.write_back_field_to_xmp_inner(
-            asset,
-            catalog,
-            store,
-            &online,
-            &content_store,
-            &self.config.writeback,
-            field_label,
-            apply,
-        );
     }
 
     /// Write back a rating change to `.xmp` recipe files on disk
@@ -227,26 +284,9 @@ impl QueryEngine {
         &self,
         asset: &mut Asset,
         rating: Option<u8>,
-        catalog: &Catalog,
-        store: &MetadataStore,
+        ctx: &MutationContext<'_>,
     ) {
-        self.write_back_field_to_xmp_auto(asset, catalog, store, "rating", |p| {
-            xmp_reader::update_rating(p, rating)
-        });
-    }
-
-    /// Like [`Self::write_back_rating_to_xmp`] but with the online-volume
-    /// map and content store supplied by the caller (batch context).
-    pub(super) fn write_back_rating_to_xmp_inner(
-        &self,
-        asset: &mut Asset,
-        rating: Option<u8>,
-        catalog: &Catalog,
-        store: &MetadataStore,
-        online: &HashMap<uuid::Uuid, PathBuf>,
-        content_store: &ContentStore,
-    ) {
-        self.write_back_field_to_xmp_inner(asset, catalog, store, online, content_store, &self.config.writeback, "rating", |p| {
+        self.write_back_field_to_xmp(asset, ctx, "rating", |p| {
             xmp_reader::update_rating(p, rating)
         });
     }
@@ -257,10 +297,9 @@ impl QueryEngine {
         &self,
         asset: &mut Asset,
         description: Option<&str>,
-        catalog: &Catalog,
-        store: &MetadataStore,
+        ctx: &MutationContext<'_>,
     ) {
-        self.write_back_field_to_xmp_auto(asset, catalog, store, "description", |p| {
+        self.write_back_field_to_xmp(asset, ctx, "description", |p| {
             xmp_reader::update_description(p, description)
         });
     }
@@ -271,26 +310,9 @@ impl QueryEngine {
         &self,
         asset: &mut Asset,
         label: Option<&str>,
-        catalog: &Catalog,
-        store: &MetadataStore,
+        ctx: &MutationContext<'_>,
     ) {
-        self.write_back_field_to_xmp_auto(asset, catalog, store, "label", |p| {
-            xmp_reader::update_label(p, label)
-        });
-    }
-
-    /// Like [`Self::write_back_label_to_xmp`] but with the online-volume
-    /// map and content store supplied by the caller (batch context).
-    pub(super) fn write_back_label_to_xmp_inner(
-        &self,
-        asset: &mut Asset,
-        label: Option<&str>,
-        catalog: &Catalog,
-        store: &MetadataStore,
-        online: &HashMap<uuid::Uuid, PathBuf>,
-        content_store: &ContentStore,
-    ) {
-        self.write_back_field_to_xmp_inner(asset, catalog, store, online, content_store, &self.config.writeback, "label", |p| {
+        self.write_back_field_to_xmp(asset, ctx, "label", |p| {
             xmp_reader::update_label(p, label)
         });
     }
@@ -303,15 +325,12 @@ impl QueryEngine {
     /// "artist", "musician"), `lr:hierarchicalSubject` gets all ancestor
     /// paths ("person", "person|artist", "person|artist|musician").
     /// Silently skips offline volumes and missing files.
-    pub(super) fn write_back_tags_to_xmp_inner(
+    pub(super) fn write_back_tags_to_xmp(
         &self,
         asset: &mut Asset,
         tags_to_add: &[String],
         tags_to_remove: &[String],
-        catalog: &Catalog,
-        store: &MetadataStore,
-        online: &HashMap<uuid::Uuid, PathBuf>,
-        content_store: &ContentStore,
+        ctx: &MutationContext<'_>,
     ) {
         let dc_add: Vec<String> = tags_to_add
             .iter()
@@ -332,61 +351,43 @@ impl QueryEngine {
         // change" (matching the historical behavior) rather than aborting
         // the recipe — a dc:subject failure must not block the
         // lr:hierarchicalSubject update.
-        self.write_back_field_to_xmp_inner(
-            asset,
-            catalog,
-            store,
-            online,
-            content_store,
-            &self.config.writeback,
-            "tags",
-            |full_path| {
-                let changed_dc = match xmp_reader::update_tags(full_path, &dc_add, &dc_remove) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!(
-                            "Warning: could not write tags to {}: {e}",
-                            full_path.display()
-                        );
-                        false
-                    }
-                };
-                let changed_lr = match xmp_reader::update_hierarchical_subjects(
-                    full_path, &lr_add, &lr_remove,
-                ) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!(
-                            "Warning: could not write hierarchical subjects to {}: {e}",
-                            full_path.display()
-                        );
-                        false
-                    }
-                };
-                Ok(changed_dc || changed_lr)
-            },
-        );
+        self.write_back_field_to_xmp(asset, ctx, "tags", |full_path| {
+            let changed_dc = match xmp_reader::update_tags(full_path, &dc_add, &dc_remove) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!(
+                        "Warning: could not write tags to {}: {e}",
+                        full_path.display()
+                    );
+                    false
+                }
+            };
+            let changed_lr = match xmp_reader::update_hierarchical_subjects(
+                full_path, &lr_add, &lr_remove,
+            ) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!(
+                        "Warning: could not write hierarchical subjects to {}: {e}",
+                        full_path.display()
+                    );
+                    false
+                }
+            };
+            Ok(changed_dc || changed_lr)
+        });
     }
 
     /// Write back pending metadata changes to XMP recipe files.
     ///
-    /// For each recipe with `pending_writeback=1`, reads the current asset metadata
-    /// (rating, label, tags, description) and writes all four fields to the XMP file.
-    /// Clears the pending flag on success.
-    ///
-    /// `all=true` writes back all XMP recipes regardless of pending flag.
-    #[allow(clippy::too_many_arguments)]
-    pub fn writeback(
+    /// Flush catalog metadata to the `.xmp` recipe sidecars in scope,
+    /// reporting one [`WritebackEvent`] per file (and per non-fatal
+    /// warning) to `on_event`. See [`WritebackRequest`] for the scope
+    /// rules; `req.no_trash` is ignored here.
+    pub fn writeback_with(
         &self,
-        volume_filter: Option<&str>,
-        asset_filter: Option<&str>,
-        asset_id_set: Option<&HashSet<String>>,
-        all: bool,
-        force: bool,
-        mirror_tags: bool,
-        dry_run: bool,
-        log: bool,
-        callback: Option<&dyn Fn(&str, &str)>,
+        req: &WritebackRequest<'_>,
+        on_event: &mut dyn FnMut(WritebackEvent<'_>),
     ) -> Result<WritebackResult> {
         // `maki writeback` is the explicit manual flush. It runs whether or
         // not `[writeback] enabled` is set — the config flag governs only
@@ -399,8 +400,7 @@ impl QueryEngine {
         // (and implies pending-filter off). The two compose: `force`
         // alone keeps any caller-supplied scope (asset/query/volume) and
         // re-writes everything in it; `all` ignores scope entirely.
-        let catalog = Catalog::open(&self.catalog_root)?;
-        let store = MetadataStore::new(&self.catalog_root);
+        let catalog = self.catalog()?;
         let registry = DeviceRegistry::new(&self.catalog_root);
         let volumes = registry.list()?;
         let online = DeviceRegistry::online_map_of(&volumes);
@@ -408,10 +408,9 @@ impl QueryEngine {
         // so the writeback summary can name offline drives the user
         // needs to reconnect.
         let volume_labels = DeviceRegistry::label_map_of(&volumes);
-        let content_store = ContentStore::new(&self.catalog_root);
 
         // Resolve volume filter to volume ID
-        let volume_id_filter: Option<String> = if let Some(label) = volume_filter {
+        let volume_id_filter: Option<String> = if let Some(label) = req.volume {
             let vol = volumes.iter().find(|v| v.label == label)
                 .ok_or_else(|| anyhow::anyhow!("unknown volume: {label}"))?;
             Some(vol.id.to_string())
@@ -423,12 +422,12 @@ impl QueryEngine {
         //   `all` / `force` — every xmp recipe in the catalog, optionally
         //               volume-filtered at SQL level. For `all`, the
         //               asset/query scope (if any) is applied later by
-        //               `writeback_process`; for `force`, the caller's
+        //               `writeback_recipes`; for `force`, the caller's
         //               scope is likewise re-applied there against the
-        //               in-memory `asset_id_set` (the membership test is
+        //               in-memory `asset_ids` (the membership test is
         //               O(1) per row, so we don't push it into SQL).
         //   default   — only recipes with `pending_writeback = 1`.
-        let pending_recipes: Vec<(String, String, String, String)> = if all || force {
+        let pending_recipes: Vec<(String, String, String, String)> = if req.all || req.force {
             let sql = if volume_id_filter.is_some() {
                 "SELECT r.id, v.asset_id, r.volume_id, r.relative_path \
                  FROM recipes r \
@@ -461,45 +460,44 @@ impl QueryEngine {
             catalog.list_pending_writeback_recipes(volume_id_filter.as_deref())?
         };
 
-        self.writeback_process(pending_recipes, &catalog, &store, &online, &volume_labels, &content_store, asset_filter, asset_id_set, mirror_tags, force, dry_run, log, callback)
+        self.writeback_recipes(pending_recipes, catalog, &online, &volume_labels, req, on_event)
     }
 
-    /// Process a list of recipes for writeback. Each tuple is (recipe_id, asset_id, volume_id, relative_path).
+    /// Flush a list of recipes — `(recipe_id, asset_id, volume_id,
+    /// relative_path)` — to their `.xmp` files on `catalog` (a connection
+    /// the caller holds; `sync-metadata` passes its own). The scope
+    /// filters of `req` (`asset_prefix`, `asset_ids`) and its modes
+    /// (`force`, `mirror_tags`, `dry_run`) apply; `volume` and `all` were
+    /// already applied by whoever selected `recipes`.
     ///
     /// `volume_labels` maps volume UUID → user-facing label across ALL
-    /// volumes (online + offline). Used to surface offline-volume names
-    /// in the result summary so users know which drives to reconnect
-    /// before re-running. Pass an empty map to fall back to UUIDs.
-    #[allow(clippy::too_many_arguments)]
-    pub fn writeback_process(
+    /// volumes (online + offline), so offline-volume names can be
+    /// surfaced; pass an empty map to fall back to UUIDs.
+    pub fn writeback_recipes(
         &self,
         recipes: Vec<(String, String, String, String)>,
         catalog: &Catalog,
-        store: &MetadataStore,
         online: &HashMap<uuid::Uuid, PathBuf>,
         volume_labels: &HashMap<uuid::Uuid, String>,
-        content_store: &ContentStore,
-        asset_filter: Option<&str>,
-        asset_id_set: Option<&HashSet<String>>,
-        mirror_tags: bool,
-        force: bool,
-        dry_run: bool,
-        log: bool,
-        callback: Option<&dyn Fn(&str, &str)>,
+        req: &WritebackRequest<'_>,
+        on_event: &mut dyn FnMut(WritebackEvent<'_>),
     ) -> Result<WritebackResult> {
+        let store = &self.meta_store;
+        let content_store = &self.content_store;
+        let (mirror_tags, force, dry_run) = (req.mirror_tags, req.force, req.dry_run);
         // No `config.writeback.enabled` gate: explicit manual flush always
-        // runs (see comment on `writeback`).
+        // runs (see comment on `writeback_with`).
         let mut result = WritebackResult { dry_run, ..Default::default() };
 
         // Group by asset_id
         let mut by_asset: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
         for (recipe_id, asset_id, volume_id, rel_path) in recipes {
-            if let Some(prefix) = asset_filter {
+            if let Some(prefix) = req.asset_prefix {
                 if !asset_id.starts_with(prefix) {
                     continue;
                 }
             }
-            if let Some(set) = asset_id_set {
+            if let Some(set) = req.asset_ids {
                 if !set.contains(&asset_id) {
                     continue;
                 }
@@ -551,9 +549,7 @@ impl QueryEngine {
                             .get(&vol_uuid)
                             .cloned()
                             .unwrap_or_else(|| vol_uuid.to_string());
-                        if log {
-                            eprintln!("{rel_path} — skipped (volume offline: {label})");
-                        }
+                        on_event(WritebackEvent::SkippedOffline { path: rel_path, volume: &label });
                         result.skipped_offline_volumes.insert(label);
                         continue;
                     }
@@ -562,20 +558,13 @@ impl QueryEngine {
                 let full_path = mount_point.join(rel_path);
                 if !full_path.exists() {
                     result.skipped += 1;
-                    if log {
-                        eprintln!("{rel_path} — skipped (file missing)");
-                    }
+                    on_event(WritebackEvent::SkippedMissing { path: rel_path });
                     continue;
                 }
 
                 if dry_run {
                     result.written += 1;
-                    if log {
-                        eprintln!("{rel_path} — would write back");
-                    }
-                    if let Some(cb) = callback {
-                        cb(rel_path, "would write back");
-                    }
+                    on_event(WritebackEvent::Written { path: rel_path, embedded: false, dry_run: true });
                     continue;
                 }
 
@@ -671,16 +660,13 @@ impl QueryEngine {
                             }
                         }
                         Err(e) => {
-                            eprintln!("Warning: could not re-hash {}: {e}", full_path.display());
+                            on_event(WritebackEvent::Warning(format!(
+                                "Warning: could not re-hash {}: {e}", full_path.display()
+                            )));
                         }
                     }
                     result.written += 1;
-                    if log {
-                        eprintln!("{rel_path} — written");
-                    }
-                    if let Some(cb) = callback {
-                        cb(rel_path, "written");
-                    }
+                    on_event(WritebackEvent::Written { path: rel_path, embedded: false, dry_run: false });
                 } else {
                     // file_changed=false reached this point only because every
                     // xmp_reader::update_* returned Ok(false) — the XMP on
@@ -713,17 +699,14 @@ impl QueryEngine {
                         }
                         Err(e) => {
                             // Hash failure here doesn't block the writeback — we
-                            // still clear pending below. Log so operators can see.
-                            eprintln!("Warning: could not re-hash {}: {e}", full_path.display());
+                            // still clear pending below. Report so operators can see.
+                            on_event(WritebackEvent::Warning(format!(
+                                "Warning: could not re-hash {}: {e}", full_path.display()
+                            )));
                         }
                     }
                     result.already_in_sync += 1;
-                    if log {
-                        eprintln!("{rel_path} — already in sync (no write)");
-                    }
-                    if let Some(cb) = callback {
-                        cb(rel_path, "already in sync");
-                    }
+                    on_event(WritebackEvent::AlreadyInSync { path: rel_path });
                 }
 
                 if let Err(e) = catalog.clear_pending_writeback(recipe_id) {
@@ -761,7 +744,9 @@ impl QueryEngine {
                 }
                 if any_changed {
                     if let Err(e) = store.save(&asset) {
-                        eprintln!("Warning: could not save sidecar for {asset_id}: {e}");
+                        on_event(WritebackEvent::Warning(format!(
+                            "Warning: could not save sidecar for {asset_id}: {e}"
+                        )));
                     }
                 }
             }
@@ -770,3 +755,4 @@ impl QueryEngine {
         Ok(result)
     }
 }
+

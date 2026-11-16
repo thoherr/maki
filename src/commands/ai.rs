@@ -2,12 +2,15 @@
 
 use super::*;
 
+#[cfg(feature = "ai")]
+use maki::model_manager::ModelManager;
+
 /// Dispatch `maki ai <subcommand>`.
 #[cfg(feature = "ai")]
-pub fn run_ai_command(cmd: AiCommands, ctx: CliContext) -> anyhow::Result<()> {
+pub fn run_ai_command(cmd: AiCommands, ctx: &CliContext) -> anyhow::Result<()> {
     match cmd {
         AiCommands::ExportVocabulary { output, default } => {
-            run_ai_export_vocabulary(output, default, ctx.json)
+            run_ai_export_vocabulary(output, default, ctx)
         }
     }
 }
@@ -16,7 +19,7 @@ pub fn run_ai_command(cmd: AiCommands, ctx: CliContext) -> anyhow::Result<()> {
 /// emit the AI vocabulary as YAML. See the `AiCommands::ExportVocabulary`
 /// doc-comment for behaviour.
 #[cfg(feature = "ai")]
-fn run_ai_export_vocabulary(output: Option<String>, default: bool, json: bool) -> anyhow::Result<()> {
+fn run_ai_export_vocabulary(output: Option<String>, default: bool, ctx: &CliContext) -> anyhow::Result<()> {
     use std::io::Write;
 
     const BUILTIN_DEFAULT: &str = include_str!("../default-vocabulary.yaml");
@@ -27,10 +30,10 @@ fn run_ai_export_vocabulary(output: Option<String>, default: bool, json: bool) -
         // Try to load the user's active config. If we're outside a
         // catalog (or there's no [ai].labels), fall back to the
         // built-in default — same content the runtime would use.
-        let active_path: Option<std::path::PathBuf> = maki::config::find_catalog_root()
+        let active_path: Option<std::path::PathBuf> = ctx
+            .catalog()
             .ok()
-            .and_then(|root| maki::config::CatalogConfig::load(&root).ok())
-            .and_then(|c| c.ai.labels.map(std::path::PathBuf::from));
+            .and_then(|(_, c)| c.ai.labels.clone().map(std::path::PathBuf::from));
 
         match active_path {
             Some(p) => {
@@ -58,7 +61,7 @@ fn run_ai_export_vocabulary(output: Option<String>, default: bool, json: bool) -
         Some(path) => {
             std::fs::write(&path, &content)
                 .map_err(|e| anyhow::anyhow!("write {path}: {e}"))?;
-            if json {
+            if ctx.json {
                 println!("{}", serde_json::json!({
                     "source": source, "bytes": content.len(), "output": path,
                 }));
@@ -67,7 +70,7 @@ fn run_ai_export_vocabulary(output: Option<String>, default: bool, json: bool) -
             }
         }
         None => {
-            if json {
+            if ctx.json {
                 // The YAML document is the payload; wrap it so stdout stays JSON.
                 println!("{}", serde_json::json!({
                     "source": source, "bytes": content.len(), "output": null, "yaml": content,
@@ -138,42 +141,16 @@ pub fn run_auto_tag_command(
     list_labels: bool,
     similar: Option<String>,
     asset_ids: Vec<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     let (query, asset) = merge_trailing_ids(query, asset, &asset_ids);
-    use maki::model_manager::ModelManager;
 
     // List labels can work without a catalog (uses defaults)
     if list_labels {
-        use maki::ai::{DEFAULT_LABELS, load_labels_from_file};
-
-        let label_list: Vec<String> = if let Some(ref path) = labels {
-            load_labels_from_file(std::path::Path::new(path))?
-        } else {
-            // Try config if catalog exists, fall back to defaults
-            let config_labels = maki::config::find_catalog_root()
-                .ok()
-                .and_then(|root| CatalogConfig::load(&root).ok())
-                .and_then(|c| c.ai.labels.clone());
-            if let Some(ref path) = config_labels {
-                load_labels_from_file(std::path::Path::new(path))?
-            } else {
-                DEFAULT_LABELS.iter().map(|s| s.to_string()).collect()
-            }
-        };
-
-        if ctx.json {
-            println!("{}", serde_json::to_string_pretty(&label_list)?);
-        } else {
-            for label in &label_list {
-                println!("{label}");
-            }
-            eprintln!("\n{} labels", label_list.len());
-        }
-        return Ok(());
+        return auto_tag_list_labels(labels.as_deref(), ctx);
     }
 
-    let (catalog_root, config) = maki::config::load_config()?;
+    let (catalog_root, config) = ctx.catalog()?;
 
     // Resolve model ID: CLI --model > config ai.model > default.
     // For --download/--remove-model, also accept the positional `query`
@@ -202,150 +179,20 @@ pub fn run_auto_tag_command(
 
     // Model management commands
     if download {
-        eprintln!("Downloading {} ...", mgr.spec().display_name);
-        mgr.ensure_model(|file, current, total| {
-            eprintln!("  [{current}/{total}] {file}");
-        })?;
-        let total = mgr.total_size();
-        if ctx.json {
-            println!("{}", serde_json::json!({
-                "status": "downloaded",
-                "model": model_id,
-                "model_dir": model_dir.display().to_string(),
-                "total_size": total,
-            }));
-        } else {
-            println!("Model downloaded to {}", model_dir.display());
-            println!("  Total size: {}", format_size(total));
-        }
-        return Ok(());
+        return auto_tag_download(&mgr, model_id, &model_dir, ctx);
     }
 
     if remove_model {
-        mgr.remove_model()?;
-        if ctx.json {
-            println!("{}", serde_json::json!({
-                "status": "removed",
-                "model": model_id,
-                "model_dir": model_dir.display().to_string(),
-            }));
-        } else {
-            println!("Model removed from {}", model_dir.display());
-        }
-        return Ok(());
+        return auto_tag_remove_model(&mgr, model_id, &model_dir, ctx);
     }
 
     if list_models {
-        // model_dir is `<model_base>/<model_id>`; recover model_base for
-        // listing siblings. Defaults to `.` if for some reason the path
-        // has no parent (shouldn't happen for normal config).
-        let model_base = model_dir.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
-        let models = ModelManager::list_available_models(&model_base);
-        if ctx.json {
-            let json_models: Vec<serde_json::Value> = models
-                .iter()
-                .map(|(spec, exists, size)| {
-                    serde_json::json!({
-                        "id": spec.id,
-                        "name": spec.display_name,
-                        "downloaded": exists,
-                        "size": size,
-                        "active": spec.id == model_id,
-                        "embedding_dim": spec.embedding_dim,
-                    })
-                })
-                .collect();
-            println!("{}", serde_json::json!({
-                "model_dir": model_base.display().to_string(),
-                "active_model": model_id,
-                "models": json_models,
-            }));
-        } else {
-            println!("Available models (directory: {}):", model_base.display());
-            for (spec, exists, size) in &models {
-                let status = if *exists {
-                    format!("downloaded ({})", format_size(*size))
-                } else {
-                    "not downloaded".to_string()
-                };
-                let active = if spec.id == model_id { " [active]" } else { "" };
-                println!("  {} — {}{active}", spec.display_name, status);
-                println!("    ID: {}  Embedding dim: {}  Image size: {}px", spec.id, spec.embedding_dim, spec.image_size);
-            }
-        }
-        return Ok(());
+        return auto_tag_list_models(model_id, &model_dir, ctx);
     }
 
     // Similar search mode
     if let Some(ref similar_id) = similar {
-        if !mgr.model_exists() {
-            anyhow::bail!(
-                "Model not downloaded. Run 'maki auto-tag --download --model {model_id}' first."
-            );
-        }
-
-        let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-        let emb_store = maki::embedding_store::EmbeddingStore::new(catalog.conn());
-
-        let full_id = catalog
-            .resolve_asset_id_required(similar_id)?;
-
-        let query_emb = match emb_store.get(&full_id, model_id)? {
-            Some(emb) => emb,
-            None => {
-                // No stored embedding — encode it now
-                let config_preview = &config.preview;
-                let service = AssetService::new(&catalog_root, ctx.verbosity, config_preview);
-                let mut ai_model = maki::ai::SigLipModel::load_with_provider(&model_dir, model_id, ctx.verbosity, &config.ai.execution_provider)?;
-                let registry = DeviceRegistry::new(&catalog_root);
-                let volumes = registry.list()?;
-                let online_volumes = maki::models::Volume::online_map(&volumes);
-                let preview_gen = maki::preview::PreviewGenerator::new(
-                    &catalog_root,
-                    ctx.verbosity,
-                    config_preview,
-                );
-                let details = catalog
-                    .load_asset_details(&full_id)?
-                    .ok_or_else(|| anyhow::anyhow!("asset not found"))?;
-                let image_path = service
-                    .find_image_for_ai(&details, &preview_gen, &online_volumes)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("no processable image for asset {}", &full_id[..8])
-                    })?;
-                let emb = ai_model.encode_image(&image_path)?;
-                emb_store.store(&full_id, &emb, model_id)?;
-                emb
-            }
-        };
-
-        let results = emb_store.find_similar(&query_emb, 20, Some(&full_id), model_id)?;
-
-        if ctx.json {
-            let json_results: Vec<serde_json::Value> = results
-                .iter()
-                .map(|(id, sim)| {
-                    serde_json::json!({
-                        "asset_id": id,
-                        "similarity": sim,
-                    })
-                })
-                .collect();
-            println!("{}", serde_json::to_string_pretty(&json_results)?);
-        } else if results.is_empty() {
-            println!("No similar assets found. Run 'maki auto-tag' on more assets to build embeddings.");
-        } else {
-            println!(
-                "Assets similar to {} ({} results):",
-                &full_id[..8],
-                results.len()
-            );
-            for (id, sim) in &results {
-                let short_id = &id[..8.min(id.len())];
-                println!("  {short_id}  similarity: {sim:.3}");
-            }
-        }
-        return Ok(());
+        return auto_tag_similar(similar_id, &mgr, model_id, &model_dir, &catalog_root, config, ctx);
     }
 
     // Main auto-tag flow — require at least one scope filter
@@ -383,7 +230,7 @@ pub fn run_auto_tag_command(
     };
 
     let prompt = &config.ai.prompt;
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
 
     let show_log = ctx.log;
     let result = service.auto_tag(
@@ -461,6 +308,215 @@ pub fn run_auto_tag_command(
     Ok(())
 }
 
+/// `maki auto-tag --list-labels` — print the active vocabulary (works
+/// without a catalog: falls back to the built-in default labels).
+#[cfg(feature = "ai")]
+fn auto_tag_list_labels(labels: Option<&str>, ctx: &CliContext) -> anyhow::Result<()> {
+    use maki::ai::{DEFAULT_LABELS, load_labels_from_file};
+
+    let label_list: Vec<String> = if let Some(ref path) = labels {
+        load_labels_from_file(std::path::Path::new(path))?
+    } else {
+        // Try config if catalog exists, fall back to defaults
+        let config_labels = ctx
+            .catalog()
+            .ok()
+            .and_then(|(_, c)| c.ai.labels.clone());
+        if let Some(ref path) = config_labels {
+            load_labels_from_file(std::path::Path::new(path))?
+        } else {
+            DEFAULT_LABELS.iter().map(|s| s.to_string()).collect()
+        }
+    };
+
+    if ctx.json {
+        println!("{}", serde_json::to_string_pretty(&label_list)?);
+    } else {
+        for label in &label_list {
+            println!("{label}");
+        }
+        eprintln!("\n{} labels", label_list.len());
+    }
+    Ok(())
+}
+
+/// `maki auto-tag --download` — fetch the model files.
+#[cfg(feature = "ai")]
+fn auto_tag_download(
+    mgr: &ModelManager,
+    model_id: &str,
+    model_dir: &std::path::Path,
+    ctx: &CliContext,
+) -> anyhow::Result<()> {
+    eprintln!("Downloading {} ...", mgr.spec().display_name);
+    mgr.ensure_model(|file, current, total| {
+        eprintln!("  [{current}/{total}] {file}");
+    })?;
+    let total = mgr.total_size();
+    if ctx.json {
+        println!("{}", serde_json::json!({
+            "status": "downloaded",
+            "model": model_id,
+            "model_dir": model_dir.display().to_string(),
+            "total_size": total,
+        }));
+    } else {
+        println!("Model downloaded to {}", model_dir.display());
+        println!("  Total size: {}", format_size(total));
+    }
+    Ok(())
+}
+
+/// `maki auto-tag --remove-model` — delete the downloaded model files.
+#[cfg(feature = "ai")]
+fn auto_tag_remove_model(
+    mgr: &ModelManager,
+    model_id: &str,
+    model_dir: &std::path::Path,
+    ctx: &CliContext,
+) -> anyhow::Result<()> {
+    mgr.remove_model()?;
+    if ctx.json {
+        println!("{}", serde_json::json!({
+            "status": "removed",
+            "model": model_id,
+            "model_dir": model_dir.display().to_string(),
+        }));
+    } else {
+        println!("Model removed from {}", model_dir.display());
+    }
+    Ok(())
+}
+
+/// `maki auto-tag --list-models` — list known models and their download state.
+#[cfg(feature = "ai")]
+fn auto_tag_list_models(
+    model_id: &str,
+    model_dir: &std::path::Path,
+    ctx: &CliContext,
+) -> anyhow::Result<()> {
+    // model_dir is `<model_base>/<model_id>`; recover model_base for
+    // listing siblings. Defaults to `.` if for some reason the path
+    // has no parent (shouldn't happen for normal config).
+    let model_base = model_dir.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+    let models = ModelManager::list_available_models(&model_base);
+    if ctx.json {
+        let json_models: Vec<serde_json::Value> = models
+            .iter()
+            .map(|(spec, exists, size)| {
+                serde_json::json!({
+                    "id": spec.id,
+                    "name": spec.display_name,
+                    "downloaded": exists,
+                    "size": size,
+                    "active": spec.id == model_id,
+                    "embedding_dim": spec.embedding_dim,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::json!({
+            "model_dir": model_base.display().to_string(),
+            "active_model": model_id,
+            "models": json_models,
+        }));
+    } else {
+        println!("Available models (directory: {}):", model_base.display());
+        for (spec, exists, size) in &models {
+            let status = if *exists {
+                format!("downloaded ({})", format_size(*size))
+            } else {
+                "not downloaded".to_string()
+            };
+            let active = if spec.id == model_id { " [active]" } else { "" };
+            println!("  {} — {}{active}", spec.display_name, status);
+            println!("    ID: {}  Embedding dim: {}  Image size: {}px", spec.id, spec.embedding_dim, spec.image_size);
+        }
+    }
+    Ok(())
+}
+
+/// `maki auto-tag --similar <ID>` — nearest neighbours by stored embedding
+/// (encoding the query asset on the fly when it has none).
+#[cfg(feature = "ai")]
+fn auto_tag_similar(
+    similar_id: &str,
+    mgr: &ModelManager,
+    model_id: &str,
+    model_dir: &std::path::Path,
+    catalog_root: &std::path::Path,
+    config: &maki::config::CatalogConfig,
+    ctx: &CliContext,
+) -> anyhow::Result<()> {
+    if !mgr.model_exists() {
+        anyhow::bail!(
+            "Model not downloaded. Run 'maki auto-tag --download --model {model_id}' first."
+        );
+    }
+
+    let catalog = maki::catalog::Catalog::open(catalog_root)?;
+    let emb_store = maki::embedding_store::EmbeddingStore::new(catalog.conn());
+
+    let full_id = catalog
+        .resolve_asset_id_required(similar_id)?;
+
+    let query_emb = match emb_store.get(&full_id, model_id)? {
+        Some(emb) => emb,
+        None => {
+            // No stored embedding — encode it now
+            let config_preview = &config.preview;
+            let service = AssetService::with_config(catalog_root, ctx.verbosity, ctx.config.clone());
+            let mut ai_model = maki::ai::SigLipModel::load_with_provider(model_dir, model_id, ctx.verbosity, &config.ai.execution_provider)?;
+            let registry = DeviceRegistry::new(catalog_root);
+            let volumes = registry.list()?;
+            let online_volumes = maki::models::Volume::online_map(&volumes);
+            let preview_gen = maki::preview::PreviewGenerator::new(
+                catalog_root,
+                ctx.verbosity,
+                config_preview,
+            );
+            let details = catalog
+                .load_asset_details(&full_id)?
+                .ok_or_else(|| anyhow::anyhow!("asset not found"))?;
+            let image_path = service
+                .find_image_for_ai(&details, &preview_gen, &online_volumes)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("no processable image for asset {}", &full_id[..8])
+                })?;
+            let emb = ai_model.encode_image(&image_path)?;
+            emb_store.store(&full_id, &emb, model_id)?;
+            emb
+        }
+    };
+
+    let results = emb_store.find_similar(&query_emb, 20, Some(&full_id), model_id)?;
+
+    if ctx.json {
+        let json_results: Vec<serde_json::Value> = results
+            .iter()
+            .map(|(id, sim)| {
+                serde_json::json!({
+                    "asset_id": id,
+                    "similarity": sim,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&json_results)?);
+    } else if results.is_empty() {
+        println!("No similar assets found. Run 'maki auto-tag' on more assets to build embeddings.");
+    } else {
+        println!(
+            "Assets similar to {} ({} results):",
+            &full_id[..8],
+            results.len()
+        );
+        for (id, sim) in &results {
+            let short_id = &id[..8.min(id.len())];
+            println!("  {short_id}  similarity: {sim:.3}");
+        }
+    }
+    Ok(())
+}
+
 /// Extracted body of `Commands::Embed`. See `run_import_command` for the
 /// extraction pattern.
 #[cfg(feature = "ai")]
@@ -472,13 +528,12 @@ pub fn run_embed_command(
         force: bool,
         export: bool,
         asset_ids: Vec<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     let (query, asset) = merge_trailing_ids(query, asset, &asset_ids);
-    use maki::model_manager::ModelManager;
 
     if export {
-        let catalog_root = maki::config::find_catalog_root()?;
+        let catalog_root = ctx.catalog_root()?;
         let catalog = maki::catalog::Catalog::open(&catalog_root)?;
         let emb_store = maki::embedding_store::EmbeddingStore::new(catalog.conn());
 
@@ -515,7 +570,7 @@ pub fn run_embed_command(
         );
     }
 
-    let (catalog_root, config) = maki::config::load_config()?;
+    let (catalog_root, config) = ctx.catalog()?;
 
     let model_id = model.as_deref().unwrap_or(&config.ai.model);
     let _spec = maki::ai::get_model_spec(model_id)
@@ -533,7 +588,7 @@ pub fn run_embed_command(
     }
 
     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-    let engine = QueryEngine::new(&catalog_root);
+    let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
 
     // Resolve target assets
     let asset_ids: Vec<String> = if let Some(ref id) = asset {
@@ -553,7 +608,7 @@ pub fn run_embed_command(
         results.into_iter().map(|r| r.asset_id).collect()
     };
 
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
     let result = service.embed_assets(
         &asset_ids,
         &model_dir,
@@ -610,11 +665,11 @@ pub fn run_auto_stack_command(
     min_size: Option<usize>,
     apply: bool,
     asset_ids: Vec<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     let (query, asset) = merge_trailing_ids(query, None, &asset_ids);
 
-    let (catalog_root, config) = maki::config::load_config()?;
+    let (catalog_root, config) = ctx.catalog()?;
     let threshold = threshold.unwrap_or(85);
     let min_size = min_size.unwrap_or(2);
     let model_id = &config.ai.model;
@@ -623,7 +678,7 @@ pub fn run_auto_stack_command(
         eprintln!("  Auto-stack: model={model_id}, threshold={threshold}%, min-size={min_size}");
     }
 
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
     let show_log = ctx.log;
     let result = service.auto_stack(
         query.as_deref(),
@@ -715,9 +770,9 @@ pub fn run_describe_command(
         dry_run: bool,
         check: bool,
         asset_ids: Vec<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let (catalog_root, config) = maki::config::load_config()?;
+    let (catalog_root, config) = ctx.catalog()?;
 
     let endpoint = endpoint.as_deref().unwrap_or(&config.vlm.endpoint);
     let model = model.as_deref().unwrap_or(&config.vlm.model);
@@ -807,41 +862,40 @@ pub fn run_describe_command(
         eprintln!("  VLM: max_tokens={}, timeout={}s, temperature={}, concurrency={}", vlm_params.max_tokens, vlm_params.timeout, vlm_params.temperature, config.vlm.concurrency);
     }
 
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
 
-    let show_log = ctx.log;
-    let result = service.describe(
-        query.as_deref(),
-        asset.as_deref(),
-        volume.as_deref(),
-        endpoint,
-        model,
-        &vlm_params,
-        vlm_mode,
+    let request = maki::asset_service::DescribeRequest {
+        scope: maki::asset_service::DescribeScope::Query { query, asset_id: asset, volume },
+        endpoint: endpoint.to_string(),
+        model: model.to_string(),
+        params: vlm_params.clone(),
+        mode: vlm_mode,
         apply,
         force,
         dry_run,
-        config.vlm.concurrency,
-        |id, status, elapsed| {
-            if show_log {
-                let short_id = &id[..8.min(id.len())];
-                match status {
-                    maki::vlm::DescribeStatus::Described => {
-                        eprintln!(
-                            "  {short_id} — described ({})",
-                            format_duration(elapsed)
-                        );
-                    }
-                    maki::vlm::DescribeStatus::Skipped(msg) => {
-                        eprintln!("  {short_id} — skipped: {msg}");
-                    }
-                    maki::vlm::DescribeStatus::Error(msg) => {
-                        eprintln!("  {short_id} — error: {msg}");
-                    }
+        concurrency: config.vlm.concurrency,
+    };
+    let show_log = ctx.log;
+    let result = service.describe_with(&request, |event| {
+        if show_log {
+            let id = event.asset_id;
+            let short_id = &id[..8.min(id.len())];
+            match event.status {
+                maki::vlm::DescribeStatus::Described => {
+                    eprintln!(
+                        "  {short_id} — described ({})",
+                        format_duration(event.elapsed)
+                    );
+                }
+                maki::vlm::DescribeStatus::Skipped(msg) => {
+                    eprintln!("  {short_id} — skipped: {msg}");
+                }
+                maki::vlm::DescribeStatus::Error(msg) => {
+                    eprintln!("  {short_id} — error: {msg}");
                 }
             }
-        },
-    )?;
+        }
+    })?;
 
     if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);

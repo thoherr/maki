@@ -375,15 +375,16 @@ struct CellData {
 /// Generate a contact sheet PDF.
 pub fn generate_contact_sheet(
     catalog_root: &Path,
+    catalog_config: std::sync::Arc<crate::config::CatalogConfig>,
     query: &str,
     output: &Path,
     config: &ContactSheetConfig,
     dry_run: bool,
     on_progress: impl Fn(&str, ContactSheetStatus, Duration),
 ) -> Result<ContactSheetResult> {
-    let engine = QueryEngine::new(catalog_root);
-    let preview_config = crate::config::PreviewConfig::default();
-    let preview_gen = PreviewGenerator::new(catalog_root, crate::Verbosity::quiet(), &preview_config);
+    let preview_gen =
+        PreviewGenerator::new(catalog_root, crate::Verbosity::quiet(), &catalog_config.preview);
+    let engine = QueryEngine::with_config(catalog_root, catalog_config);
 
     // Search for matching assets
     let results = engine.search(query)?;

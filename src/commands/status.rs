@@ -373,11 +373,11 @@ pub fn run_backup_status_command(
         volume: Option<String>,
         format: Option<String>,
         quiet: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     use maki::format::{self, OutputFormat};
 
-    let catalog_root = maki::config::find_catalog_root()?;
+    let catalog_root = ctx.catalog_root()?;
     let catalog = Catalog::open(&catalog_root)?;
     let registry = DeviceRegistry::new(&catalog_root);
     let vol_list = registry.list()?;
@@ -399,7 +399,7 @@ pub fn run_backup_status_command(
 
     // Scope: optional query → asset IDs
     let scope_ids: Option<Vec<String>> = if let Some(ref q) = query {
-        let engine = QueryEngine::new(&catalog_root);
+        let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
         let results = engine.search(q)?;
         let ids: Vec<String> = results.iter().map(|r| r.asset_id.clone()).collect();
         Some(ids)
@@ -535,10 +535,10 @@ pub fn run_backup_status_command(
 /// extraction pattern.
 pub fn run_status_command(
         min_copies: u64,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let (catalog_root, config) = maki::config::load_config()?;
-    let ai_enabled = cfg!(feature = "ai");
+    let (catalog_root, _) = ctx.catalog()?;
+    let ai_enabled = maki::features::AI;
     // The orphan-on-disk scan (cleanup passes 4-7) dominates runtime
     // on real catalogs — easily 30s+ on tens of thousands of files.
     // Emit a one-line "still alive" marker to stderr so the user
@@ -550,7 +550,7 @@ pub fn run_status_command(
     let report = maki::status::gather(
         &catalog_root,
         ctx.verbosity,
-        &config.preview,
+        ctx.config.clone(),
         min_copies,
         ai_enabled,
     )?;
@@ -567,9 +567,9 @@ pub fn run_stats_command(
         verified: bool,
         all: bool,
         limit: usize,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let catalog_root = maki::config::find_catalog_root()?;
+    let catalog_root = ctx.catalog_root()?;
     let catalog = Catalog::open(&catalog_root)?;
     let registry = DeviceRegistry::new(&catalog_root);
     let vol_list = registry.list()?;

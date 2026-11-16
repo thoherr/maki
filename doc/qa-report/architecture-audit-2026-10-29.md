@@ -31,7 +31,17 @@ One finding was a defect and is fixed in the same change as this report
   `collections.yaml`); a store mutator that joins an enclosing
   transaction writes its YAML before the outer COMMIT; the stack web
   routes still answer 400 for "already stacked" (web test fixes it).
-- Phases 2–3: open.
+- Phase 2 (structure): done, committed 2026-11-16 — pure `models` (`models::{format,
+  numeric_filter, geo}`), `QueryEngine` split into per-concern files with
+  one connection per engine (`with_catalog`, `search_in`, web pool feeds
+  the engine), `mutate_asset` behind every setter, service functions
+  phase-split behind request structs and typed events, web describe /
+  generate-previews / browse endpoints as adapters over the service,
+  `maki.toml` read once per invocation, `features` module. The Phase 1
+  residue on collection membership and the stack 409 is closed; still
+  open: a store mutator that joins an enclosing transaction writes its
+  YAML before the outer COMMIT. Exit criteria re-measured below.
+- Phase 3: open.
 
 ## Verdict in one paragraph
 
@@ -530,17 +540,17 @@ changelog entry beyond "internal"; the ones marked (behaviour) do.
 4. Documentation update of CLAUDE.md and the architecture overview to the
    measured layering, as each phase closes (F28).
 
-### Exit criteria (to re-measure after Phase 2)
+### Exit criteria (re-measured after Phase 2, 2026-11-16)
 
-| Measure | Now | Target |
-|---|---|---|
-| Transactions around multi-row writes | 1 | every writer in F2 |
-| `CatalogConfig::load` in library code | 15 | 0 |
-| `Catalog::open` in `query.rs` | 42 | 1 |
-| Functions over 300 lines | 13 | 0 |
-| Copies of the preview rule / session-root rule / resync | 3 / 2 / 4 | 1 / 1 / 1 |
-| Error-to-status substring sites | 10 | 0 |
-| `Ctx` shims in CLI handlers | 41 | 0 |
-| Raw `spawn_blocking` in web | 57 | 0 |
-| Duplicated JS escape helpers / colour-label maps | 12 / 11 | 1 / 1 |
-| Upward `use crate::` edges from models and catalog | 5 | 0 |
+| Measure | At audit | Target | After Phase 2 |
+|---|---|---|---|
+| Transactions around multi-row writes | 1 | every writer in F2 | done (Phase 1) |
+| `CatalogConfig::load` in library code | 15 | 0 | 0 outside `config.rs`, the web config editor and test-only constructors |
+| `Catalog::open` in `query.rs` | 42 | 1 | 1 |
+| Functions over 300 lines | 13 | 0 | 0 |
+| Copies of the preview rule / session-root rule / resync | 3 / 2 / 4 | 1 / 1 / 1 | 1 / 1 / 1 |
+| Error-to-status substring sites | 10 | 0 | 0 |
+| `Ctx` shims in CLI handlers | 41 | 0 | 0 |
+| Raw `spawn_blocking` in web | 57 | 0 | 3, each commented (job runner, the blocking helper, ZIP body streamer) |
+| Duplicated JS escape helpers / colour-label maps | 12 / 11 | 1 / 1 | 1 / 1 (Phase 0) |
+| Upward `use crate::` edges from models and catalog | 5 | 0 | 0 |

@@ -51,16 +51,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::catalog::Catalog;
-use crate::content_store::ContentStore;
 use crate::device_registry::DeviceRegistry;
 use crate::embedded_xmp_write;
-use crate::metadata_store::MetadataStore;
 use crate::models::Asset;
 use crate::trash::{Disposition, Trash};
 use crate::xmp_reader;
 
-use super::{EmbedWritebackResult, QueryEngine};
+use super::{EmbedWritebackResult, QueryEngine, WritebackEvent, WritebackRequest};
 
 /// Outcome of one JPEG file rewrite attempt.
 enum FileOutcome {
@@ -76,37 +73,35 @@ impl QueryEngine {
     /// Write catalog metadata (rating, label, description, tags) into
     /// the embedded XMP of every JPEG variant in scope. See the module
     /// docs for semantics; see [`EmbedWritebackResult`] for reporting.
-    #[allow(clippy::too_many_arguments)]
-    pub fn writeback_embedded(
+    /// Write catalog metadata (rating, label, description, tags) into
+    /// the embedded XMP of every JPEG variant in scope, reporting one
+    /// [`WritebackEvent`] per file to `on_event`. See the module docs for
+    /// semantics and [`EmbedWritebackResult`] for reporting;
+    /// `req.asset_prefix` is ignored here (scope by `asset_ids`).
+    pub fn writeback_embedded_with(
         &self,
-        volume_filter: Option<&str>,
-        asset_id_set: Option<&HashSet<String>>,
-        all: bool,
-        force: bool,
-        mirror_tags: bool,
-        no_trash: bool,
-        dry_run: bool,
-        log: bool,
-        callback: Option<&dyn Fn(&str, &str)>,
+        req: &WritebackRequest<'_>,
+        on_event: &mut dyn FnMut(WritebackEvent<'_>),
     ) -> Result<EmbedWritebackResult> {
-        let catalog = Catalog::open(&self.catalog_root)?;
-        let store = MetadataStore::new(&self.catalog_root);
+        let catalog = self.catalog()?;
+        let store = &self.meta_store;
         let registry = DeviceRegistry::new(&self.catalog_root);
         let volumes = registry.list()?;
         let online = DeviceRegistry::online_map_of(&volumes);
         let volume_labels = DeviceRegistry::label_map_of(&volumes);
-        let content_store = ContentStore::new(&self.catalog_root);
-        let trash = Trash::new_with(&self.catalog_root, &self.config.trash, no_trash);
+        let content_store = &self.content_store;
+        let trash = Trash::new_with(&self.catalog_root, &self.config.trash, req.no_trash);
         let config = &self.config;
         let previewer = crate::preview::PreviewGenerator::new(
             &self.catalog_root,
             crate::Verbosity::quiet(),
             &config.preview,
         );
+        let (force, mirror_tags, dry_run) = (req.force, req.mirror_tags, req.dry_run);
 
         // Resolve volume filter to a volume ID (restricts which file
         // locations get written).
-        let volume_id_filter: Option<uuid::Uuid> = if let Some(label) = volume_filter {
+        let volume_id_filter: Option<uuid::Uuid> = if let Some(label) = req.volume {
             let vol = volumes
                 .iter()
                 .find(|v| v.label == label)
@@ -119,8 +114,8 @@ impl QueryEngine {
         // Target assets. Default mirrors the sidecar flush: only assets
         // with staged (pending) recipe changes. `--all`/`--force` widen
         // to every asset; any explicit scope (query/--asset) still
-        // applies through `asset_id_set`.
-        let mut asset_ids: Vec<String> = if all || force {
+        // applies through `asset_ids`.
+        let mut asset_ids: Vec<String> = if req.all || req.force {
             let mut stmt = catalog.conn().prepare("SELECT id FROM assets")?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
             rows.collect::<Result<Vec<_>, _>>()?
@@ -133,7 +128,7 @@ impl QueryEngine {
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
-        if let Some(set) = asset_id_set {
+        if let Some(set) = req.asset_ids {
             asset_ids.retain(|id| set.contains(id));
         }
         asset_ids.sort();
@@ -196,14 +191,10 @@ impl QueryEngine {
                         }
                         result.skipped += 1;
                         let rel = loc.relative_path_str();
-                        if log {
-                            eprintln!(
-                                "{rel} — skipped (embedded write-back not supported for TIFF yet)"
-                            );
-                        }
-                        if let Some(cb) = callback {
-                            cb(&rel, "skipped (TIFF not supported)");
-                        }
+                        on_event(WritebackEvent::SkippedUnsupported {
+                            path: &rel,
+                            reason: "embedded write-back not supported for TIFF yet",
+                        });
                     }
                     continue;
                 }
@@ -227,9 +218,7 @@ impl QueryEngine {
                                 .get(&loc.volume_id)
                                 .cloned()
                                 .unwrap_or_else(|| loc.volume_id.to_string());
-                            if log {
-                                eprintln!("{rel} — skipped (volume offline: {label})");
-                            }
+                            on_event(WritebackEvent::SkippedOffline { path: &rel, volume: &label });
                             result.skipped_offline_volumes.insert(label);
                             continue;
                         }
@@ -237,9 +226,7 @@ impl QueryEngine {
                     let full_path = mount_point.join(&loc.relative_path);
                     if !full_path.exists() {
                         result.skipped += 1;
-                        if log {
-                            eprintln!("{rel} — skipped (file missing)");
-                        }
+                        on_event(WritebackEvent::SkippedMissing { path: &rel });
                         continue;
                     }
 
@@ -262,38 +249,18 @@ impl QueryEngine {
                     ) {
                         FileOutcome::Written => {
                             result.written += 1;
-                            let status = if dry_run {
-                                "would write (embedded)"
-                            } else {
-                                "written (embedded)"
-                            };
-                            if log {
-                                eprintln!("{rel} — {status}");
-                            }
-                            if let Some(cb) = callback {
-                                cb(&rel, status);
-                            }
+                            on_event(WritebackEvent::Written { path: &rel, embedded: true, dry_run });
                             if !dry_run {
                                 written_paths.push(full_path);
                             }
                         }
                         FileOutcome::AlreadyInSync => {
                             result.already_in_sync += 1;
-                            if log {
-                                eprintln!("{rel} — already in sync (no write)");
-                            }
-                            if let Some(cb) = callback {
-                                cb(&rel, "already in sync");
-                            }
+                            on_event(WritebackEvent::AlreadyInSync { path: &rel });
                         }
                         FileOutcome::Failed(msg) => {
                             result.failed += 1;
-                            if log {
-                                eprintln!("{rel} — FAILED");
-                            }
-                            if let Some(cb) = callback {
-                                cb(&rel, "failed");
-                            }
+                            on_event(WritebackEvent::Failed { path: &rel, message: &msg });
                             result.errors.push(msg);
                         }
                     }
@@ -543,7 +510,7 @@ mod tests {
     use crate::metadata_store::MetadataStore;
     use crate::models::volume::FileLocation;
     use crate::models::{Asset, AssetType, Variant, VariantRole};
-    use crate::query::QueryEngine;
+    use crate::query::{QueryEngine, WritebackRequest};
 
     /// Minimal JPEG with an embedded XMP packet carrying Rating=1.
     fn build_jpeg(xmp_xml: &str) -> Vec<u8> {
@@ -622,19 +589,13 @@ mod tests {
     fn run_embed(root: &Path, asset_id: &str, dry_run: bool) -> crate::query::EmbedWritebackResult {
         let engine = QueryEngine::new(root);
         let scope: HashSet<String> = HashSet::from([asset_id.to_string()]);
-        engine
-            .writeback_embedded(
-                None,
-                Some(&scope),
-                false,
-                true,  // force — the fixture has no pending recipes
-                false, // mirror_tags
-                false, // no_trash (trash stays on)
-                dry_run,
-                false,
-                None,
-            )
-            .unwrap()
+        let req = WritebackRequest {
+            asset_ids: Some(&scope),
+            force: true, // the fixture has no pending recipes
+            dry_run,
+            ..Default::default() // trash stays on
+        };
+        engine.writeback_embedded_with(&req, &mut |_| {}).unwrap()
     }
 
     #[test]
@@ -759,19 +720,13 @@ mod tests {
         let (_dir, root, asset, _jpeg_path) = setup_catalog_with_jpeg();
         let engine = QueryEngine::new(&root);
         let scope: HashSet<String> = HashSet::from([asset.id.to_string()]);
-        let result = engine
-            .writeback_embedded(
-                None,
-                Some(&scope),
-                false,
-                true,
-                false,
-                true, // no_trash
-                false,
-                false,
-                None,
-            )
-            .unwrap();
+        let req = WritebackRequest {
+            asset_ids: Some(&scope),
+            force: true,
+            no_trash: true,
+            ..Default::default()
+        };
+        let result = engine.writeback_embedded_with(&req, &mut |_| {}).unwrap();
         assert_eq!(result.written, 1, "errors: {:?}", result.errors);
         assert_eq!(result.trashed_originals, 0);
         assert!(crate::trash::Trash::list(&root).unwrap().is_empty());

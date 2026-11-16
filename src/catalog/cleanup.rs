@@ -133,9 +133,14 @@ impl Catalog {
     /// Remove every catalog row that belongs to an asset, in foreign-key
     /// order, inside one transaction: recipes and file locations of its
     /// variants, the variants, faces, embeddings, collection memberships,
-    /// and finally the asset row itself. Used for phantom rows (`doctor`:
-    /// a row whose sidecar is gone) and for the donors of a `group` merge
-    /// after their variants have been reassigned.
+    /// and finally the asset row itself.
+    ///
+    /// SQLite only: the collection memberships are removed from the
+    /// `collection_assets` rows but `collections.yaml` is not rewritten.
+    /// Callers that delete an asset for good use
+    /// [`Self::delete_asset_with_collections`], which does both; this
+    /// primitive is for the catalog-rebuild paths where the YAML is
+    /// re-imported afterwards.
     ///
     /// Errors when the asset row does not exist (so a caller that already
     /// removed it notices); stack membership columns disappear with the
@@ -149,6 +154,19 @@ impl Catalog {
             c.delete_embeddings_for_asset(asset_id)?;
             c.delete_collection_memberships_for_asset(asset_id)?;
             c.delete_asset(asset_id)
+        })
+    }
+
+    /// [`Self::delete_asset_rows`] for an asset that is gone for good:
+    /// its collection memberships are removed through the
+    /// `CollectionStore`, which persists `collections.yaml` (the source
+    /// of truth) in the same transaction, before the rows go. Used for
+    /// phantom rows (`doctor`: a row whose sidecar is gone) and for the
+    /// donors of a `group` merge after their variants were reassigned.
+    pub fn delete_asset_with_collections(&self, catalog_root: &Path, asset_id: &str) -> Result<()> {
+        self.with_tx(|c| {
+            crate::collection::CollectionStore::open(c.conn(), catalog_root).remove_asset(asset_id)?;
+            c.delete_asset_rows(asset_id)
         })
     }
 

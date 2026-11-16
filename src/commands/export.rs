@@ -16,7 +16,7 @@ pub fn run_export_command(
         dry_run: bool,
         overwrite: bool,
         zip: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     use maki::asset_service::{ExportLayout, ExportSource, ExportStatus};
 
@@ -34,8 +34,8 @@ pub fn run_export_command(
         ExportSource::Originals
     };
 
-    let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let (catalog_root, _) = ctx.catalog()?;
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
 
     let show_log = ctx.log;
     let log_callback = |path: &std::path::Path, status: &ExportStatus, elapsed: std::time::Duration| {
@@ -171,14 +171,14 @@ pub fn run_contact_sheet_command(
         quality: Option<u8>,
         copyright: Option<String>,
         dry_run: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     use maki::contact_sheet::{
         generate_contact_sheet, ContactSheetConfig, ContactSheetLayout,
         ContactSheetStatus, GroupByField, LabelStyle, MetadataField, PaperSize,
     };
 
-    let (catalog_root, config) = maki::config::load_config()?;
+    let (catalog_root, config) = ctx.catalog()?;
     let cs_defaults = &config.contact_sheet;
 
     let cs_layout: ContactSheetLayout = layout.parse()?;
@@ -236,6 +236,7 @@ pub fn run_contact_sheet_command(
 
     let result = generate_contact_sheet(
         &catalog_root,
+        ctx.config.clone(),
         &query,
         &output_path,
         &cs_config,
@@ -280,7 +281,7 @@ pub fn run_duplicates_command(
         volume: Option<String>,
         filter_format: Option<String>,
         path: Option<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     use maki::format::{self, OutputFormat};
 
@@ -288,7 +289,7 @@ pub fn run_duplicates_command(
         anyhow::bail!("--same-volume and --cross-volume are mutually exclusive");
     }
 
-    let catalog_root = maki::config::find_catalog_root()?;
+    let catalog_root = ctx.catalog_root()?;
     let catalog = Catalog::open(&catalog_root)?;
 
     // Resolve volume label → ID for the SQL filter (unknown volume → empty results)
@@ -456,51 +457,40 @@ pub fn run_dedup_command(
         min_copies: usize,
         apply: bool,
         no_trash: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let (catalog_root, config) = ctx.catalog()?;
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
 
     // CLI --prefer overrides config [dedup] prefer
-    let effective_prefer = prefer.or(config.dedup.prefer);
+    let effective_prefer = prefer.or(config.dedup.prefer.clone());
 
-    let show_log = ctx.log;
-    let result = if show_log {
-        use maki::asset_service::DedupStatus;
-        service.dedup(
-            volume.as_deref(),
-            filter_format.as_deref(),
-            path.as_deref(),
-            effective_prefer.as_deref(),
-            min_copies,
-            apply,
-            no_trash,
-            |filename, path, status, vol_label| {
-                match status {
-                    DedupStatus::Keep => {
-                        eprintln!("  {} — keep ({}, {})", filename, path, vol_label);
-                    }
-                    DedupStatus::Remove => {
-                        eprintln!("  {} — remove ({}, {})", filename, path, vol_label);
-                    }
-                    DedupStatus::Skipped => {
-                        eprintln!("  {} — skipped, min-copies ({}, {})", filename, path, vol_label);
-                    }
-                }
-            },
-        )?
-    } else {
-        service.dedup(
-            volume.as_deref(),
-            filter_format.as_deref(),
-            path.as_deref(),
-            effective_prefer.as_deref(),
-            min_copies,
-            apply,
-            no_trash,
-            |_, _, _, _| {},
-        )?
+    let options = maki::asset_service::DedupOptions {
+        volume,
+        format: filter_format,
+        path_prefix: path,
+        prefer: effective_prefer,
+        min_copies,
+        apply,
+        no_trash,
     };
+    let show_log = ctx.log;
+    let result = service.dedup_with(&options, |filename, path, status, vol_label| {
+        use maki::asset_service::DedupStatus;
+        if show_log {
+            match status {
+                DedupStatus::Keep => {
+                    eprintln!("  {} — keep ({}, {})", filename, path, vol_label);
+                }
+                DedupStatus::Remove => {
+                    eprintln!("  {} — remove ({}, {})", filename, path, vol_label);
+                }
+                DedupStatus::Skipped => {
+                    eprintln!("  {} — skipped, min-copies ({}, {})", filename, path, vol_label);
+                }
+            }
+        }
+    })?;
 
     if ctx.json {
         println!("{}", serde_json::to_string_pretty(&result)?);

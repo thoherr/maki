@@ -361,7 +361,7 @@ impl AppState {
         let preview_config = cfg.preview.clone();
         let preview_ext = preview_config.format.extension().to_string();
         let smart_on_demand = preview_config.generate_on_demand;
-        let vlm_enabled = cfg!(feature = "pro") && check_vlm_at_startup(&cfg.vlm);
+        let vlm_enabled = crate::features::PRO && check_vlm_at_startup(&cfg.vlm);
         let catalog_pool = Arc::new(CatalogPool::new(&catalog_root, 4).expect("Failed to open catalog pool"));
         let read_only = read_only || cfg.serve.read_only;
         let basic_auth = Self::resolve_basic_auth(&cfg.serve);
@@ -380,7 +380,7 @@ impl AppState {
             stroll_fanout: cfg.serve.stroll_fanout,
             stroll_fanout_max: cfg.serve.stroll_fanout_max,
             stroll_discover_pool: cfg.serve.stroll_discover_pool,
-            ai_enabled: cfg!(feature = "ai"),
+            ai_enabled: crate::features::AI,
             default_filter: cfg.browse.default_filter.clone(),
             slideshow_seconds: cfg.browse.slideshow_seconds.max(1),
             slideshow_loop: cfg.browse.slideshow_loop,
@@ -448,9 +448,11 @@ impl AppState {
         self.catalog_pool.get()
     }
 
-    /// Create a QueryEngine for this catalog, sharing the loaded config.
-    pub fn query_engine(&self) -> QueryEngine {
-        QueryEngine::with_config(&self.catalog_root, self.config())
+    /// A QueryEngine over a pooled connection, sharing the loaded config.
+    /// The engine is `!Sync`: build it inside the blocking closure that
+    /// uses it; the connection returns to the pool when it is dropped.
+    pub fn query_engine(&self) -> Result<QueryEngine> {
+        Ok(QueryEngine::with_catalog(&self.catalog_root, self.config(), self.catalog_pool.get()?))
     }
 
     /// Create a PreviewGenerator for checking preview existence.
@@ -559,11 +561,45 @@ impl AppState {
     }
 }
 
+/// The application router: the per-area route tables merged, the static
+/// assets, then the two middleware layers (request log inside, access
+/// guard outermost so auth and read-only run before anything else,
+/// including the static-asset and preview services).
 fn build_router(state: Arc<AppState>) -> Router {
-    let preview_dir = state.catalog_root.join("previews");
-
     #[allow(unused_mut)]
     let mut router = Router::new()
+        .merge(page_routes())
+        .merge(browse_api_routes())
+        .merge(asset_routes())
+        .merge(tag_routes())
+        .merge(batch_routes())
+        .merge(saved_search_routes())
+        .merge(collection_routes())
+        .merge(stack_routes())
+        .merge(volume_routes())
+        .merge(job_routes())
+        .merge(maintain_routes())
+        .merge(config_routes());
+
+    #[cfg(feature = "ai")]
+    {
+        router = router.merge(ai_routes(&state));
+    }
+
+    router
+        .merge(static_routes(&state))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), log_request))
+        // Outermost layer: auth + read-only run before anything else,
+        // including the static-asset and preview services.
+        .layer(axum::middleware::from_fn_with_state(state.clone(), guard_request))
+        .with_state(state)
+}
+
+type AppRouter = Router<Arc<AppState>>;
+
+/// Full HTML pages.
+fn page_routes() -> AppRouter {
+    Router::new()
         .route("/", axum::routing::get(routes::browse_page))
         .route("/asset/{id}", axum::routing::get(routes::asset_page))
         .route("/compare", axum::routing::get(routes::compare_page))
@@ -571,159 +607,133 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/stats", axum::routing::get(routes::stats_page))
         .route("/analytics", axum::routing::get(routes::analytics_page))
         .route("/backup", axum::routing::get(routes::backup_page))
+        .route("/saved-searches", axum::routing::get(routes::saved_searches_page))
+        .route("/collections", axum::routing::get(routes::collections_page))
+        .route("/duplicates", axum::routing::get(routes::duplicates_page))
+        .route("/volumes", axum::routing::get(routes::volumes_page))
+}
+
+/// The browse grid's data endpoints: search fragment, ID lists, facets,
+/// calendar/map, path completion, stats.
+fn browse_api_routes() -> AppRouter {
+    Router::new()
         .route("/api/search", axum::routing::get(routes::search_api))
+        .route("/api/stats", axum::routing::get(routes::stats_api))
+        .route("/api/calendar", axum::routing::get(routes::calendar_api))
+        .route("/api/map", axum::routing::get(routes::map_api))
+        .route("/api/facets", axum::routing::get(routes::facets_api))
+        .route("/api/paths", axum::routing::get(routes::paths_api))
+        .route("/api/page-ids", axum::routing::get(routes::page_ids_api))
+        .route("/api/all-ids", axum::routing::get(routes::all_ids_api))
+}
+
+/// Single-asset metadata edits and actions.
+fn asset_routes() -> AppRouter {
+    Router::new()
         .route(
             "/api/asset/{id}/tags",
-            axum::routing::post(routes::add_tags),
+            axum::routing::post(routes::add_tags).delete(routes::remove_tag),
         )
-        .route(
-            "/api/asset/{id}/tags",
-            axum::routing::delete(routes::remove_tag),
-        )
-        .route(
-            "/api/asset/{id}/tags/clear",
-            axum::routing::post(routes::clear_tags),
-        )
-        .route(
-            "/api/asset/{id}/rating",
-            axum::routing::put(routes::set_rating),
-        )
-        .route(
-            "/api/asset/{id}/description",
-            axum::routing::put(routes::set_description),
-        )
-        .route(
-            "/api/asset/{id}/name",
-            axum::routing::put(routes::set_name),
-        )
-        .route(
-            "/api/asset/{id}/label",
-            axum::routing::put(routes::set_label),
-        )
-        .route(
-            "/api/asset/{id}/date",
-            axum::routing::put(routes::set_date),
-        )
-        .route(
-            "/api/asset/{id}/preview",
-            axum::routing::post(routes::generate_preview),
-        )
-        .route(
-            "/api/asset/{id}/rotate",
-            axum::routing::post(routes::set_rotation),
-        )
-        .route(
-            "/api/asset/{id}/preview-variant",
-            axum::routing::post(routes::set_preview_variant),
-        )
-        .route(
-            "/api/asset/{id}/variant-role",
-            axum::routing::post(routes::set_variant_role),
-        )
-        .route(
-            "/api/asset/{id}/reimport-metadata",
-            axum::routing::post(routes::reimport_metadata),
-        )
-        .route(
-            "/api/asset/{id}/recipes-fragment",
-            axum::routing::get(routes::recipes_fragment),
-        )
+        .route("/api/asset/{id}/tags/clear", axum::routing::post(routes::clear_tags))
+        .route("/api/asset/{id}/rating", axum::routing::put(routes::set_rating))
+        .route("/api/asset/{id}/description", axum::routing::put(routes::set_description))
+        .route("/api/asset/{id}/name", axum::routing::put(routes::set_name))
+        .route("/api/asset/{id}/label", axum::routing::put(routes::set_label))
+        .route("/api/asset/{id}/date", axum::routing::put(routes::set_date))
+        .route("/api/asset/{id}/preview", axum::routing::post(routes::generate_preview))
+        .route("/api/asset/{id}/rotate", axum::routing::post(routes::set_rotation))
+        .route("/api/asset/{id}/preview-variant", axum::routing::post(routes::set_preview_variant))
+        .route("/api/asset/{id}/variant-role", axum::routing::post(routes::set_variant_role))
+        .route("/api/asset/{id}/reimport-metadata", axum::routing::post(routes::reimport_metadata))
+        .route("/api/asset/{id}/recipes-fragment", axum::routing::get(routes::recipes_fragment))
+        .route("/api/asset/{id}/split", axum::routing::post(routes::split_asset))
+        .route("/api/asset/{id}/writeback", axum::routing::post(routes::writeback_asset))
+        .route("/api/asset/{id}/vlm-describe", axum::routing::post(routes::vlm_describe_asset))
+        .route("/api/open-location", axum::routing::post(routes::open_location))
+        .route("/api/open-terminal", axum::routing::post(routes::open_terminal))
+}
+
+/// Tag vocabulary operations.
+fn tag_routes() -> AppRouter {
+    Router::new()
         .route("/api/tags", axum::routing::get(routes::tags_api))
         .route("/api/tags/export-vocabulary", axum::routing::get(routes::export_vocabulary_api))
         .route("/api/tag/rename", axum::routing::post(routes::rename_tag_api))
         .route("/api/tag/split", axum::routing::post(routes::split_tag_api))
         .route("/api/tag/delete", axum::routing::post(routes::delete_tag_api))
-        .route("/api/stats", axum::routing::get(routes::stats_api))
-        .route(
-            "/api/batch/rating",
-            axum::routing::put(routes::batch_set_rating),
-        )
-        .route(
-            "/api/batch/tags",
-            axum::routing::post(routes::batch_tags),
-        )
-        .route(
-            "/api/batch/label",
-            axum::routing::put(routes::batch_set_label),
-        )
+}
+
+/// Batch operations over the grid selection (the `ai` ones are in
+/// [`ai_routes`]).
+fn batch_routes() -> AppRouter {
+    Router::new()
+        .route("/api/batch/rating", axum::routing::put(routes::batch_set_rating))
+        .route("/api/batch/tags", axum::routing::post(routes::batch_tags))
+        .route("/api/batch/label", axum::routing::put(routes::batch_set_label))
+        .route("/api/batch/auto-group", axum::routing::post(routes::batch_auto_group))
+        .route("/api/batch/group", axum::routing::post(routes::batch_group))
+        .route("/api/batch/delete", axum::routing::post(routes::batch_delete))
+        .route("/api/batch/describe", axum::routing::post(routes::batch_vlm_describe))
+        .route("/api/batch/export", axum::routing::post(routes::export_zip))
+}
+
+fn saved_search_routes() -> AppRouter {
+    Router::new()
         .route(
             "/api/saved-searches",
-            axum::routing::get(routes::list_saved_searches)
-                .post(routes::create_saved_search),
+            axum::routing::get(routes::list_saved_searches).post(routes::create_saved_search),
         )
-        .route(
-            "/api/saved-searches/{name}",
-            axum::routing::delete(routes::delete_saved_search),
-        )
+        .route("/api/saved-searches/{name}", axum::routing::delete(routes::delete_saved_search))
         .route(
             "/api/saved-searches/{name}/favorite",
             axum::routing::put(routes::toggle_saved_search_favorite),
         )
-        .route(
-            "/api/saved-searches/{name}/rename",
-            axum::routing::put(routes::rename_saved_search),
-        )
-        .route(
-            "/saved-searches",
-            axum::routing::get(routes::saved_searches_page),
-        )
-        .route("/collections", axum::routing::get(routes::collections_page))
+        .route("/api/saved-searches/{name}/rename", axum::routing::put(routes::rename_saved_search))
+}
+
+fn collection_routes() -> AppRouter {
+    Router::new()
         .route(
             "/api/collections",
-            axum::routing::get(routes::list_collections_api)
-                .post(routes::create_collection_api),
+            axum::routing::get(routes::list_collections_api).post(routes::create_collection_api),
         )
         .route(
             "/api/batch/collection",
             axum::routing::post(routes::batch_add_to_collection)
                 .delete(routes::batch_remove_from_collection),
         )
-        .route(
-            "/api/batch/auto-group",
-            axum::routing::post(routes::batch_auto_group),
-        )
-        .route(
-            "/api/batch/group",
-            axum::routing::post(routes::batch_group),
-        )
-        .route(
-            "/api/asset/{id}/split",
-            axum::routing::post(routes::split_asset),
-        )
+}
+
+fn stack_routes() -> AppRouter {
+    Router::new()
         .route(
             "/api/batch/stack",
-            axum::routing::post(routes::batch_create_stack)
-                .delete(routes::batch_unstack),
+            axum::routing::post(routes::batch_create_stack).delete(routes::batch_unstack),
         )
-        .route(
-            "/api/batch/delete",
-            axum::routing::post(routes::batch_delete),
-        )
-        .route(
-            "/api/asset/{id}/stack-pick",
-            axum::routing::put(routes::set_stack_pick),
-        )
-        .route(
-            "/api/asset/{id}/stack",
-            axum::routing::delete(routes::dissolve_stack),
-        )
-        .route(
-            "/api/asset/{id}/stack-add",
-            axum::routing::post(routes::add_to_stack),
-        )
-        .route(
-            "/api/stack/{id}/members",
-            axum::routing::get(routes::stack_members_api),
-        )
-        .route("/duplicates", axum::routing::get(routes::duplicates_page))
+        .route("/api/asset/{id}/stack-pick", axum::routing::put(routes::set_stack_pick))
+        .route("/api/asset/{id}/stack", axum::routing::delete(routes::dissolve_stack))
+        .route("/api/asset/{id}/stack-add", axum::routing::post(routes::add_to_stack))
+        .route("/api/stack/{id}/members", axum::routing::get(routes::stack_members_api))
+}
+
+/// Volumes, duplicates and dedup resolution.
+fn volume_routes() -> AppRouter {
+    Router::new()
         .route("/api/dedup/resolve", axum::routing::post(routes::dedup_resolve_api))
         .route("/api/dedup/location", axum::routing::delete(routes::dedup_remove_location_api))
-        .route("/volumes", axum::routing::get(routes::volumes_page))
-        .route("/api/volumes", axum::routing::get(routes::list_volumes_api).post(routes::register_volume_api))
+        .route(
+            "/api/volumes",
+            axum::routing::get(routes::list_volumes_api).post(routes::register_volume_api),
+        )
         .route("/api/volumes/{id}/rename", axum::routing::put(routes::rename_volume_api))
         .route("/api/volumes/{id}/purpose", axum::routing::put(routes::set_volume_purpose_api))
         .route("/api/volumes/{id}/browse", axum::routing::get(routes::browse_volume_api))
         .route("/api/volumes/{id}", axum::routing::delete(routes::remove_volume_api))
+}
+
+/// Import and the job registry (status, SSE progress, results).
+fn job_routes() -> AppRouter {
+    Router::new()
         .route("/api/import", axum::routing::post(routes::start_import_api))
         .route("/api/import/profiles", axum::routing::get(routes::import_profiles_api))
         .route("/api/build-info", axum::routing::get(routes::build_info_api))
@@ -731,136 +741,82 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/jobs/{id}", axum::routing::get(routes::job_status_api))
         .route("/api/jobs/{id}/progress", axum::routing::get(routes::job_progress_sse))
         .route("/api/jobs/{id}/result", axum::routing::get(routes::job_result_api))
-        .route("/api/calendar", axum::routing::get(routes::calendar_api))
-        .route("/api/map", axum::routing::get(routes::map_api))
-        .route("/api/facets", axum::routing::get(routes::facets_api))
-        .route("/api/paths", axum::routing::get(routes::paths_api))
-        .route("/api/page-ids", axum::routing::get(routes::page_ids_api))
-        .route("/api/all-ids", axum::routing::get(routes::all_ids_api))
+}
+
+/// The Maintain dialog's background jobs.
+fn maintain_routes() -> AppRouter {
+    Router::new()
         .route("/api/maintain/writeback", axum::routing::post(routes::start_writeback_api))
         .route("/api/maintain/sync-metadata", axum::routing::post(routes::start_sync_metadata_api))
         .route("/api/maintain/verify", axum::routing::post(routes::start_verify_api))
-        .route("/api/maintain/generate-previews", axum::routing::post(routes::start_generate_previews_api))
+        .route(
+            "/api/maintain/generate-previews",
+            axum::routing::post(routes::start_generate_previews_api),
+        )
         .route("/api/maintain/sync", axum::routing::post(routes::start_sync_api))
         .route("/api/maintain/refresh", axum::routing::post(routes::start_refresh_api))
         .route("/api/maintain/cleanup", axum::routing::post(routes::start_cleanup_api))
-        .route("/api/config", axum::routing::get(routes::get_config_api).post(routes::save_config_api))
+}
+
+fn config_routes() -> AppRouter {
+    Router::new()
+        .route(
+            "/api/config",
+            axum::routing::get(routes::get_config_api).post(routes::save_config_api),
+        )
         .route("/api/config/schema", axum::routing::get(routes::get_config_schema_api))
-        .route("/api/open-location", axum::routing::post(routes::open_location))
-        .route("/api/open-terminal", axum::routing::post(routes::open_terminal))
-        .route(
-            "/api/asset/{id}/writeback",
-            axum::routing::post(routes::writeback_asset),
-        )
-        .route(
-            "/api/asset/{id}/vlm-describe",
-            axum::routing::post(routes::vlm_describe_asset),
-        )
-        .route(
-            "/api/batch/describe",
-            axum::routing::post(routes::batch_vlm_describe),
-        )
-        .route(
-            "/api/batch/export",
-            axum::routing::post(routes::export_zip),
-        );
+}
 
-    #[cfg(feature = "ai")]
-    {
-        let faces_dir = state.catalog_root.join("faces");
-        router = router
-            .route(
-                "/api/asset/{id}/suggest-tags",
-                axum::routing::post(routes::suggest_tags),
-            )
-            .route(
-                "/api/asset/{id}/similar",
-                axum::routing::post(routes::find_similar),
-            )
-            .route(
-                "/api/asset/{id}/stack-similar",
-                axum::routing::post(routes::stack_by_similarity),
-            )
-            // Search by query image: raw-body upload (own body limit —
-            // the axum default of 2 MiB is far below a camera JPEG).
-            .route(
-                "/api/query-image",
-                axum::routing::post(routes::upload_query_image).layer(
-                    axum::extract::DefaultBodyLimit::max(routes::QUERY_IMAGE_MAX_BYTES),
-                ),
-            )
-            .route(
-                "/api/query-image/{token}",
-                axum::routing::get(routes::query_image_info),
-            )
-            .route(
-                "/api/batch/auto-tag",
-                axum::routing::post(routes::batch_auto_tag),
-            )
-            .route(
-                "/api/maintain/suggest-tags-review",
-                axum::routing::post(routes::start_suggest_tags_review_api),
-            )
-            .route(
-                "/api/asset/{id}/embed",
-                axum::routing::post(routes::embed_asset),
-            )
-            .route(
-                "/api/batch/embed",
-                axum::routing::post(routes::batch_embed),
-            )
-            .route(
-                "/api/asset/{id}/faces",
-                axum::routing::get(routes::asset_faces),
-            )
-            .route(
-                "/api/asset/{id}/detect-faces",
-                axum::routing::post(routes::detect_faces_for_asset),
-            )
-            .route(
-                "/api/batch/detect-faces",
-                axum::routing::post(routes::batch_detect_faces),
-            )
-            .route(
-                "/api/faces/{face_id}/assign",
-                axum::routing::put(routes::assign_face),
-            )
-            .route(
-                "/api/faces/{face_id}/unassign",
-                axum::routing::delete(routes::unassign_face_api),
-            )
-            .route(
-                "/api/faces/{face_id}",
-                axum::routing::delete(routes::delete_face_api),
-            )
-            .route("/people", axum::routing::get(routes::people_page))
-            .route("/api/people", axum::routing::get(routes::list_people_api).post(routes::create_person_api))
-            .route(
-                "/api/people/{id}/name",
-                axum::routing::put(routes::name_person_api),
-            )
-            .route(
-                "/api/people/{id}/merge",
-                axum::routing::post(routes::merge_person_api),
-            )
-            .route(
-                "/api/people/merge-suggestions",
-                axum::routing::get(routes::merge_suggestions_api),
-            )
-            .route(
-                "/api/people/{id}",
-                axum::routing::delete(routes::delete_person_api),
-            )
-            .route(
-                "/api/faces/cluster",
-                axum::routing::post(routes::cluster_faces_api),
-            )
-            .route("/stroll", axum::routing::get(routes::stroll_page))
-            .route("/api/stroll/neighbors", axum::routing::get(routes::stroll_neighbors_api))
-            .nest_service("/face", ServeDir::new(faces_dir));
-    }
+/// Everything behind `--features ai`: suggestions, similarity, query
+/// image, embeddings, faces/people, stroll, and the face-crop files.
+#[cfg(feature = "ai")]
+fn ai_routes(state: &AppState) -> AppRouter {
+    let faces_dir = state.catalog_root.join("faces");
+    Router::new()
+        .route("/api/asset/{id}/suggest-tags", axum::routing::post(routes::suggest_tags))
+        .route("/api/asset/{id}/similar", axum::routing::post(routes::find_similar))
+        .route("/api/asset/{id}/stack-similar", axum::routing::post(routes::stack_by_similarity))
+        // Search by query image: raw-body upload (own body limit —
+        // the axum default of 2 MiB is far below a camera JPEG).
+        .route(
+            "/api/query-image",
+            axum::routing::post(routes::upload_query_image).layer(
+                axum::extract::DefaultBodyLimit::max(routes::QUERY_IMAGE_MAX_BYTES),
+            ),
+        )
+        .route("/api/query-image/{token}", axum::routing::get(routes::query_image_info))
+        .route("/api/batch/auto-tag", axum::routing::post(routes::batch_auto_tag))
+        .route(
+            "/api/maintain/suggest-tags-review",
+            axum::routing::post(routes::start_suggest_tags_review_api),
+        )
+        .route("/api/asset/{id}/embed", axum::routing::post(routes::embed_asset))
+        .route("/api/batch/embed", axum::routing::post(routes::batch_embed))
+        .route("/api/asset/{id}/faces", axum::routing::get(routes::asset_faces))
+        .route("/api/asset/{id}/detect-faces", axum::routing::post(routes::detect_faces_for_asset))
+        .route("/api/batch/detect-faces", axum::routing::post(routes::batch_detect_faces))
+        .route("/api/faces/{face_id}/assign", axum::routing::put(routes::assign_face))
+        .route("/api/faces/{face_id}/unassign", axum::routing::delete(routes::unassign_face_api))
+        .route("/api/faces/{face_id}", axum::routing::delete(routes::delete_face_api))
+        .route("/people", axum::routing::get(routes::people_page))
+        .route(
+            "/api/people",
+            axum::routing::get(routes::list_people_api).post(routes::create_person_api),
+        )
+        .route("/api/people/{id}/name", axum::routing::put(routes::name_person_api))
+        .route("/api/people/{id}/merge", axum::routing::post(routes::merge_person_api))
+        .route("/api/people/merge-suggestions", axum::routing::get(routes::merge_suggestions_api))
+        .route("/api/people/{id}", axum::routing::delete(routes::delete_person_api))
+        .route("/api/faces/cluster", axum::routing::post(routes::cluster_faces_api))
+        .route("/stroll", axum::routing::get(routes::stroll_page))
+        .route("/api/stroll/neighbors", axum::routing::get(routes::stroll_neighbors_api))
+        .nest_service("/face", ServeDir::new(faces_dir))
+}
 
-    router
+/// Embedded static assets, the preview directory and media streaming.
+fn static_routes(state: &AppState) -> AppRouter {
+    let preview_dir = state.catalog_root.join("previews");
+    Router::new()
         .route("/favicon.ico", axum::routing::get(static_assets::favicon))
         .route("/static/favicon.ico", axum::routing::get(static_assets::favicon))
         .route("/static/maki-icon.svg", axum::routing::get(static_assets::maki_icon))
@@ -880,11 +836,6 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/smart-preview/{prefix}/{file}", axum::routing::get(routes::serve_smart_preview))
         .route("/video/{hash}", axum::routing::get(routes::serve_video))
         .route("/audio/{hash}", axum::routing::get(routes::serve_video))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), log_request))
-        // Outermost layer: auth + read-only run before anything else,
-        // including the static-asset and preview services.
-        .layer(axum::middleware::from_fn_with_state(state.clone(), guard_request))
-        .with_state(state)
 }
 
 /// Access-guard middleware: HTTP Basic-Auth (when configured) and

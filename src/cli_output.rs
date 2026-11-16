@@ -3,14 +3,19 @@
 //! Centralizes patterns previously duplicated across `main.rs`, `model_manager.rs`,
 //! `web/templates.rs`, and `web/routes.rs`.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
-/// Cross-cutting CLI flags every command handler receives as its last
-/// parameter: `--json`, `--log`, and the `--verbose`/`--debug` pair.
+/// Cross-cutting CLI state every command handler receives as its last
+/// parameter: `--json`, `--log`, the `--verbose`/`--debug` pair, and the
+/// catalog the entry point resolved — its root and its `maki.toml`,
+/// loaded exactly once per invocation (`main` for one-shot commands, once
+/// per line in the shell).
 ///
 /// Replaces the former positional `json: bool, log: bool, verbosity`
-/// triple (and the per-handler `struct Ctx { json, log }` shims).
-#[derive(Clone, Copy, Default)]
+/// triple (and the per-handler `struct Ctx { json, log }` shims) and the
+/// per-handler `find_catalog_root()` / `load_config()` calls.
+#[derive(Clone, Default)]
 pub struct CliContext {
     /// `--json`: machine-readable JSON on stdout, messages on stderr.
     pub json: bool,
@@ -18,16 +23,57 @@ pub struct CliContext {
     pub log: bool,
     /// `--verbose` / `--debug`.
     pub verbosity: crate::Verbosity,
+    /// The catalog's `maki.toml`, loaded once by the entry point.
+    /// Defaults outside a catalog and when the file is unreadable —
+    /// handlers that must not run on defaults use [`Self::catalog`],
+    /// which surfaces the load error.
+    pub config: std::sync::Arc<crate::config::CatalogConfig>,
+    /// Catalog root as resolved by the entry point; `None` outside a catalog.
+    catalog_root: Option<PathBuf>,
+    /// Rendered load error when `maki.toml` exists but did not parse.
+    config_error: Option<String>,
 }
 
 impl CliContext {
     pub fn new(json: bool, log: bool, verbosity: crate::Verbosity) -> Self {
-        Self { json, log, verbosity }
+        Self { json, log, verbosity, ..Self::default() }
     }
 
-    /// Context with every flag off (tests, internal callers).
+    /// Context with every flag off and no catalog (tests, internal callers).
     pub fn quiet() -> Self {
         Self::default()
+    }
+
+    /// Attach the catalog the entry point resolved. `loaded` is the
+    /// outcome of reading its `maki.toml`: on `Err` the context carries
+    /// the defaults and [`Self::catalog`] reports the error, exactly as
+    /// the former per-handler `load_config()?` did.
+    pub fn with_catalog(mut self, catalog_root: PathBuf, loaded: anyhow::Result<crate::config::CatalogConfig>) -> Self {
+        self.catalog_root = Some(catalog_root);
+        match loaded {
+            Ok(config) => self.config = std::sync::Arc::new(config),
+            Err(e) => self.config_error = Some(format!("{e:#}")),
+        }
+        self
+    }
+
+    /// The catalog root, or the usual "no maki catalog found" error
+    /// when the entry point resolved none (`find_catalog_root()?`).
+    pub fn catalog_root(&self) -> anyhow::Result<PathBuf> {
+        match &self.catalog_root {
+            Some(root) => Ok(root.clone()),
+            None => crate::config::find_catalog_root(),
+        }
+    }
+
+    /// The catalog root and its configuration, failing when there is no
+    /// catalog or its `maki.toml` did not parse (`load_config()?`).
+    pub fn catalog(&self) -> anyhow::Result<(PathBuf, &crate::config::CatalogConfig)> {
+        let root = self.catalog_root()?;
+        if let Some(e) = &self.config_error {
+            anyhow::bail!("{e}");
+        }
+        Ok((root, &self.config))
     }
 
     /// True when verbose or debug output is enabled.
@@ -103,6 +149,45 @@ pub fn item_status(id: &str, verb: &str, elapsed: Option<Duration>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn context_without_catalog_reports_none() {
+        let ctx = CliContext::quiet();
+        // No catalog attached: both accessors fall back to the directory
+        // walk, which fails outside a catalog with the usual message.
+        let cwd = std::env::current_dir().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        let root = ctx.catalog_root();
+        let both = ctx.catalog().map(|(r, _)| r);
+        std::env::set_current_dir(cwd).unwrap();
+        assert!(root.unwrap_err().to_string().contains("no maki catalog found"));
+        assert!(both.unwrap_err().to_string().contains("no maki catalog found"));
+    }
+
+    #[test]
+    fn context_with_loaded_config_serves_it() {
+        let mut cfg = crate::config::CatalogConfig::default();
+        cfg.serve.port = 4242;
+        let ctx = CliContext::quiet().with_catalog(PathBuf::from("/cat"), Ok(cfg));
+        assert_eq!(ctx.catalog_root().unwrap(), PathBuf::from("/cat"));
+        let (root, config) = ctx.catalog().unwrap();
+        assert_eq!(root, PathBuf::from("/cat"));
+        assert_eq!(config.serve.port, 4242);
+        assert_eq!(ctx.config.serve.port, 4242);
+    }
+
+    #[test]
+    fn context_with_broken_config_keeps_defaults_and_surfaces_error() {
+        let ctx = CliContext::quiet()
+            .with_catalog(PathBuf::from("/cat"), Err(anyhow::anyhow!("bad toml")));
+        // The root is still known; `catalog()` fails like `load_config()?` did.
+        assert_eq!(ctx.catalog_root().unwrap(), PathBuf::from("/cat"));
+        let err = ctx.catalog().map(|(r, _)| r).unwrap_err();
+        assert_eq!(format!("{err:#}"), "bad toml");
+        // Handlers that tolerate a broken file run on defaults.
+        assert_eq!(ctx.config.serve.port, crate::config::CatalogConfig::default().serve.port);
+    }
 
     #[test]
     fn format_duration_sub_minute() {

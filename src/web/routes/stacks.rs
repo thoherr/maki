@@ -25,7 +25,7 @@ pub async fn split_asset(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let json = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let result = engine.split(&asset_id, &req.variant_hashes)?;
         Ok::<_, anyhow::Error>(serde_json::json!({
             "source_id": result.source_id,
@@ -57,7 +57,7 @@ pub async fn batch_create_stack(
             "stack_id": stack.id.to_string(),
             "member_count": stack.asset_ids.len(),
         }))
-    }, super::err::bad_request_prefixed)
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }
@@ -77,7 +77,7 @@ pub async fn add_to_stack(
         Ok::<_, anyhow::Error>(serde_json::json!({
             "added": added,
         }))
-    }, super::err::bad_request_prefixed)
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }
@@ -113,9 +113,8 @@ pub async fn batch_delete(
     Json(req): Json<BatchDeleteRequest>,
 ) -> Result<Response, Response> {
     let catalog_root = state.catalog_root.clone();
-    let preview_config = state.preview_config.clone();
     let json = super::spawn_catalog_blocking(move || {
-        let service = crate::asset_service::AssetService::new(&catalog_root, state.verbosity, &preview_config);
+        let service = crate::asset_service::AssetService::with_config(&catalog_root, state.verbosity, state.config());
         // no_trash = false: web batch delete always honors [trash] config
         let result = service.delete_assets(&req.asset_ids, true, req.remove_files, false, |_id, _status, _elapsed| {})?;
         Ok::<_, anyhow::Error>(serde_json::json!({
@@ -142,7 +141,7 @@ pub async fn set_stack_pick(
         let store = crate::stack::StackStore::open(catalog.conn(), &state.catalog_root);
         store.set_pick(&asset_id)?;
         Ok::<_, anyhow::Error>(serde_json::json!({ "pick": asset_id }))
-    }, super::err::bad_request_prefixed)
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }
@@ -158,7 +157,7 @@ pub async fn dissolve_stack(
         let store = crate::stack::StackStore::open(catalog.conn(), &state.catalog_root);
         store.dissolve(&asset_id)?;
         Ok::<_, anyhow::Error>(serde_json::json!({ "status": "dissolved" }))
-    }, super::err::bad_request_prefixed)
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }
@@ -264,7 +263,7 @@ pub async fn stack_members_api(
             }
         }
         Ok::<_, anyhow::Error>(serde_json::json!(members))
-    }, super::err::bad_request_prefixed)
+    }, super::err::mapped)
     .await?;
     Ok(Json(json).into_response())
 }

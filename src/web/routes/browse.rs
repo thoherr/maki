@@ -5,7 +5,10 @@
 //! BrowseFilters, SearchParams) live in the parent routes module so sibling
 //! submodules (calendar_map, media, assets, ai) can reuse them; the
 //! collection/person name → asset-ID resolution itself is shared with the
-//! CLI via `crate::query::resolve`.
+//! CLI via `crate::query::resolve`. The browse search itself —
+//! [`run_browse_search`] over a [`PreparedBrowse`] — lives here and is the
+//! one pipeline behind `/`, `/api/search`, `/api/all-ids`, `/api/page-ids`,
+//! `/api/facets` and `/api/batch/export`.
 
 use std::sync::Arc;
 
@@ -15,7 +18,7 @@ use axum::http::{HeaderMap, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 
-use crate::catalog::SearchSort;
+use crate::catalog::{Catalog, SearchRow, SearchSort};
 use crate::device_registry::DeviceRegistry;
 use crate::web::templates::{
     link_cards, AssetCard, AssetPage, BrowsePage, CollectionOption, FaceRow,
@@ -25,8 +28,8 @@ use crate::web::AppState;
 
 use super::stats::build_format_groups;
 use super::{
-    build_parsed_search, resolve_best_variant_idx, EmptyFilterPolicy, ResolvedSearch,
-    SearchParams,
+    build_parsed_search, resolve_best_variant_idx, BrowseFilters, EmptyFilterPolicy,
+    ResolvedSearch, SearchParams,
 };
 
 /// Pair of "would-be-larger if we relaxed this constraint" deltas surfaced
@@ -128,6 +131,280 @@ pub(super) fn compute_count_deltas(
     CountDeltas { in_stacks, filtered_by_default }
 }
 
+/// Steps 1–2 of the browse pipeline — parse the request's filter params
+/// and resolve them (collections, persons, `missing:`, AI text-query and
+/// `similar:`) — shared by [`run_browse_search`] and the facets endpoint,
+/// which runs its own aggregate over the same filter set.
+pub(super) struct PreparedBrowse {
+    pub(super) filters: BrowseFilters,
+    pub(super) resolved: ResolvedSearch,
+}
+
+impl PreparedBrowse {
+    pub(super) fn new(
+        state: &AppState,
+        catalog: &Catalog,
+        params: &SearchParams,
+        empty_filter_policy: EmptyFilterPolicy,
+    ) -> anyhow::Result<Self> {
+        let filters = build_parsed_search(params, state);
+        let mut resolved = ResolvedSearch::resolve(
+            catalog,
+            state,
+            &filters.parsed,
+            filters.volume.clone(),
+            filters.path_volume_id.clone(),
+            empty_filter_policy,
+        )?;
+        resolved.resolve_ai_filters(catalog, state, &filters.parsed)?;
+        Ok(Self { filters, resolved })
+    }
+
+    /// The resolved filter set as `SearchOptions` — stack collapse
+    /// applied, no sort or pagination yet.
+    pub(super) fn options(&self) -> crate::catalog::SearchOptions<'_> {
+        let mut opts = self.filters.parsed.to_search_options();
+        self.resolved.apply(&mut opts);
+        opts.collapse_stacks = self.filters.collapse_stacks;
+        opts
+    }
+}
+
+/// Which rows a handler wants from the shared browse search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BrowseScope {
+    /// The requested page at `[serve] per_page`. A similarity view is one
+    /// page sorted by score regardless of the page size.
+    Page,
+    /// Every match in one virtual page (select-all, export). SQLite's
+    /// LIMIT/OFFSET handles huge values fine; even a 100k-asset catalog
+    /// is a single sub-second query returning ~3 MB of UUID strings —
+    /// well under any browser-side memory ceiling we care about.
+    All,
+}
+
+/// How a handler consumes [`run_browse_search`].
+#[derive(Debug, Clone, Copy)]
+pub(super) struct BrowseQuery {
+    /// What an unresolvable collection/person filter matches.
+    pub empty_filter_policy: EmptyFilterPolicy,
+    pub scope: BrowseScope,
+    /// Run the count query: fills `total` / `total_pages` and clamps the
+    /// page to the last one when a delete / group / dedup shrank the
+    /// result set below the requested page (otherwise the user lands on
+    /// an empty grid where they'd expect the new last page).
+    pub count: bool,
+    /// Compute the "more matches exist behind this view" hints the grid
+    /// shows next to the result count (two extra count queries; see
+    /// [`compute_count_deltas`]).
+    pub count_deltas: bool,
+}
+
+impl BrowseQuery {
+    /// The browse grid (`/` and `/api/search`): one page, counted, with
+    /// the count hints.
+    pub(super) const GRID: Self = Self {
+        empty_filter_policy: EmptyFilterPolicy::Ignore,
+        scope: BrowseScope::Page,
+        count: true,
+        count_deltas: true,
+    };
+
+    /// One page of IDs for navigation (`/api/page-ids`): counted unless
+    /// the caller already knows the page count.
+    pub(super) const PAGE_IDS: Self = Self {
+        empty_filter_policy: EmptyFilterPolicy::Ignore,
+        scope: BrowseScope::Page,
+        count: true,
+        count_deltas: false,
+    };
+
+    /// Every matching row, counted (`/api/all-ids`).
+    pub(super) const ALL: Self = Self {
+        empty_filter_policy: EmptyFilterPolicy::Ignore,
+        scope: BrowseScope::All,
+        count: true,
+        count_deltas: false,
+    };
+}
+
+/// What the browse handlers render: the request's filter state, the
+/// matching rows in grid order, and the pagination the grid shows.
+pub(super) struct BrowseResult {
+    pub(super) filters: BrowseFilters,
+    /// Rows in the order the grid shows them (a similarity view is
+    /// re-ordered by score in memory, the SQL fallback for similarity
+    /// sorts being a meaningless id order).
+    pub(super) rows: Vec<SearchRow>,
+    /// `None` when the query skipped the count.
+    pub(super) total: Option<u64>,
+    /// Pages the grid would show at `[serve] per_page`: 1 in a similarity
+    /// view, `None` when the count was skipped.
+    pub(super) total_pages: Option<u32>,
+    /// The requested page, clamped to the last one when the count is known.
+    pub(super) page: u32,
+    /// Page size the query ran with: `[serve] per_page`, or `u32::MAX` for
+    /// [`BrowseScope::All`] and similarity views.
+    pub(super) per_page: u32,
+    /// The sort the grid actually used (see `SearchParams::effective_sort`).
+    pub(super) effective_sort: String,
+    pub(super) has_similarity: bool,
+    pub(super) deltas: CountDeltas,
+    pub(super) default_filter_active: bool,
+    #[cfg(feature = "ai")]
+    similarity_scores: std::collections::HashMap<String, f32>,
+}
+
+impl BrowseResult {
+    /// The rows as grid cards, similarity scores attached and linked.
+    pub(super) fn cards(&self, preview_ext: &str) -> Vec<AssetCard> {
+        let mut cards: Vec<AssetCard> =
+            self.rows.iter().map(|r| AssetCard::from_row(r, preview_ext)).collect();
+        #[cfg(feature = "ai")]
+        if !self.similarity_scores.is_empty() {
+            for card in &mut cards {
+                card.similarity = self.similarity_scores.get(&card.asset_id).copied();
+            }
+        }
+        link_cards(&mut cards);
+        cards
+    }
+
+    pub(super) fn ids(&self) -> Vec<String> {
+        self.rows.iter().map(|r| r.asset_id.clone()).collect()
+    }
+
+    /// The htmx results fragment for this result set.
+    fn results_partial(self, preview_ext: &str) -> ResultsPartial {
+        let cards = self.cards(preview_ext);
+        let f = self.filters;
+        ResultsPartial {
+            query: f.query,
+            asset_type: f.asset_type,
+            tag: f.tag,
+            format_filter: f.format_filter,
+            volume: f.volume,
+            rating: f.rating,
+            label: f.label,
+            collection: f.collection,
+            person: f.person,
+            path: f.path,
+            sort: self.effective_sort,
+            cards,
+            total: self.total.unwrap_or(0),
+            count_in_stacks: self.deltas.in_stacks,
+            count_filtered_by_default: self.deltas.filtered_by_default,
+            page: self.page,
+            per_page: self.per_page,
+            total_pages: self.total_pages.unwrap_or(0),
+            collapse_stacks: f.collapse_stacks,
+            has_similarity: self.has_similarity,
+        }
+    }
+}
+
+/// The one browse search behind `/`, `/api/search`, `/api/all-ids`,
+/// `/api/page-ids` and `/api/batch/export`: parse and resolve the filter
+/// params ([`PreparedBrowse`]), apply the grid's sort and pagination
+/// rules, count when asked, fetch the rows, and order a similarity view
+/// by score. Every endpoint that must mirror the grid's visible result
+/// set goes through here — skipping the AI filters in one of them was the
+/// v4.5.x "select-all on a text search selects the unfiltered set" trap.
+pub(super) fn run_browse_search(
+    state: &AppState,
+    catalog: &Catalog,
+    params: &SearchParams,
+    query: BrowseQuery,
+) -> anyhow::Result<BrowseResult> {
+    let prep = PreparedBrowse::new(state, catalog, params, query.empty_filter_policy)?;
+    let has_similarity = prep.resolved.has_similarity();
+    let single_page = has_similarity || query.scope == BrowseScope::All;
+    let per_page = if single_page { u32::MAX } else { state.per_page };
+    let effective_sort = params
+        .effective_sort(has_similarity, &prep.filters.sort_str)
+        .to_string();
+    let requested_page = prep.filters.page;
+
+    let mut opts = prep.options();
+    opts.sort = SearchSort::parse_key(&effective_sort);
+    opts.per_page = per_page;
+    opts.page = if single_page { 1 } else { requested_page };
+
+    let total = if query.count { Some(catalog.search_count(&opts)?) } else { None };
+    // A similarity view renders as a single page in the grid; report
+    // total_pages consistently (the select-all modal and the lightbox
+    // boundary prefetch rely on it) even when the count was skipped.
+    let total_pages = if has_similarity {
+        Some(1)
+    } else {
+        total.map(|t| {
+            if state.per_page > 0 {
+                ((t as f64) / state.per_page as f64).ceil() as u32
+            } else {
+                1
+            }
+        })
+    };
+    let page = match total_pages {
+        Some(tp) if tp > 0 && requested_page > tp => tp,
+        _ => requested_page,
+    };
+    if !single_page {
+        opts.page = page;
+    }
+    #[cfg_attr(not(feature = "ai"), allow(unused_mut))]
+    let mut rows = if total == Some(0) { Vec::new() } else { catalog.search_page(&opts)? };
+
+    #[cfg(feature = "ai")]
+    if has_similarity && matches!(opts.sort, SearchSort::SimilarityDesc | SearchSort::SimilarityAsc) {
+        let asc = matches!(opts.sort, SearchSort::SimilarityAsc);
+        let scores = &prep.resolved.similarity_scores;
+        rows.sort_by(|a, b| {
+            let sa = scores.get(&a.asset_id).copied().unwrap_or(0.0);
+            let sb = scores.get(&b.asset_id).copied().unwrap_or(0.0);
+            if asc { sa.total_cmp(&sb) } else { sb.total_cmp(&sa) }
+        });
+    }
+
+    let default_filter_active = !prep.filters.nodefault && state.default_filter.is_some();
+    let deltas = if query.count_deltas {
+        compute_count_deltas(catalog, &mut opts, &DeltaContext {
+            state,
+            params,
+            collection_ids: &prep.resolved.filters.collection_ids,
+            collection_exclude_ids: &prep.resolved.filters.collection_exclude_ids,
+            person_ids: &prep.resolved.filters.person_ids,
+            volume: &prep.filters.volume,
+            path_volume_id: prep.filters.path_volume_id.as_deref(),
+            effective_sort: &effective_sort,
+            page,
+            per_page,
+            collapse_stacks: prep.filters.collapse_stacks,
+            base_total: total.unwrap_or(0),
+            default_filter_active,
+            has_similarity,
+        })
+    } else {
+        CountDeltas::default()
+    };
+    drop(opts);
+
+    Ok(BrowseResult {
+        filters: prep.filters,
+        rows,
+        total,
+        total_pages,
+        page,
+        per_page,
+        effective_sort,
+        has_similarity,
+        deltas,
+        default_filter_active,
+        #[cfg(feature = "ai")]
+        similarity_scores: prep.resolved.similarity_scores,
+    })
+}
+
 /// GET / — browse page with initial results (full page for browser, partial for htmx).
 pub async fn browse_page(
     State(state): State<Arc<AppState>>,
@@ -139,123 +416,10 @@ pub async fn browse_page(
     let state = state.clone();
     let html = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
-
-        let bf = build_parsed_search(&params, &state);
-        let parsed = bf.parsed;
-        let sort_str = bf.sort_str;
-        let page = bf.page;
-        let collapse_stacks = bf.collapse_stacks;
-        let query = bf.query;
-        let asset_type = bf.asset_type;
-        let tag = bf.tag;
-        let format_filter = bf.format_filter;
-        let rating_str = bf.rating;
-        let label_str = bf.label;
-        let collection_str = bf.collection;
-        let path_str = bf.path;
-        let person_str = bf.person;
-        let nodefault = bf.nodefault;
-
-        let mut resolved = ResolvedSearch::resolve(
-            &catalog, &state, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
-        )?;
-        resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
-
-        let mut opts = parsed.to_search_options();
-        resolved.apply(&mut opts);
-
-        let has_similarity = resolved.has_similarity();
-
-        let per_page = if has_similarity { u32::MAX } else { state.per_page };
-        let effective_sort = params.effective_sort(has_similarity, &sort_str);
-        opts.sort = SearchSort::parse_key(effective_sort);
-        opts.page = if has_similarity { 1 } else { page };
-        opts.per_page = per_page;
-        opts.collapse_stacks = collapse_stacks;
-
-        let (mut rows, total) = catalog.search_paginated_with_count(&opts)?;
-        let display_per_page = state.per_page;
-        let total_pages = if has_similarity { 1 } else { ((total as f64) / display_per_page as f64).ceil() as u32 };
-
-        // Clamp page: if the user is on page N but a delete / group / dedup
-        // shrunk the result set so total_pages < N, redo the query at the
-        // last available page. Otherwise the user gets an empty grid where
-        // they'd expect to land on the new last page.
-        let page = if !has_similarity && total_pages > 0 && page > total_pages {
-            opts.page = total_pages;
-            rows = catalog.search_paginated_with_count(&opts)?.0;
-            total_pages
-        } else {
-            page
-        };
-
-        // Count-delta hints: surface "more matches exist behind this view"
-        // so the rendered count isn't silently smaller than what the tags
-        // page would suggest. See `compute_count_deltas` for what each
-        // delta means.
-        let deltas = compute_count_deltas(&catalog, &mut opts, &DeltaContext {
-            state: &state,
-            params: &params,
-            collection_ids: &resolved.filters.collection_ids,
-            collection_exclude_ids: &resolved.filters.collection_exclude_ids,
-            person_ids: &resolved.filters.person_ids,
-            volume: &resolved.volume,
-            path_volume_id: resolved.path_volume_id.as_deref(),
-            effective_sort,
-            page,
-            per_page,
-            collapse_stacks,
-            base_total: total,
-            default_filter_active: !nodefault && state.default_filter.is_some(),
-            has_similarity,
-        });
-
-        let mut cards: Vec<AssetCard> = rows.iter().map(|r| AssetCard::from_row(r, &preview_ext)).collect();
-
-        #[cfg(feature = "ai")]
-        if !resolved.similarity_scores.is_empty() {
-            for card in &mut cards {
-                card.similarity = resolved.similarity_scores.get(&card.asset_id).copied();
-            }
-            if matches!(opts.sort, SearchSort::SimilarityDesc | SearchSort::SimilarityAsc) {
-                cards.sort_by(|a, b| {
-                    let sa = a.similarity.unwrap_or(0.0);
-                    let sb = b.similarity.unwrap_or(0.0);
-                    if matches!(opts.sort, SearchSort::SimilarityAsc) {
-                        sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
-                    } else {
-                        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
-                    }
-                });
-            }
-        }
-
-        link_cards(&mut cards);
+        let result = run_browse_search(&state, &catalog, &params, BrowseQuery::GRID)?;
 
         if is_htmx {
-            let tmpl = ResultsPartial {
-                query: query.to_string(),
-                asset_type: asset_type.to_string(),
-                tag: tag.to_string(),
-                format_filter: format_filter.to_string(),
-                volume: resolved.volume.clone(),
-                rating: rating_str.to_string(),
-                label: label_str.to_string(),
-                collection: collection_str.to_string(),
-                person: person_str.to_string(),
-                path: path_str.to_string(),
-                sort: effective_sort.to_string(),
-                cards,
-                total,
-                count_in_stacks: deltas.in_stacks,
-                count_filtered_by_default: deltas.filtered_by_default,
-                page,
-                per_page,
-                total_pages,
-                collapse_stacks,
-                has_similarity,
-            };
-            return Ok::<_, anyhow::Error>(tmpl.render()?);
+            return Ok::<_, anyhow::Error>(result.results_partial(&preview_ext).render()?);
         }
 
         let all_tags: Vec<TagOption> = state.dropdown_cache.get_tags(&catalog)
@@ -294,38 +458,40 @@ pub async fn browse_page(
             })
             .collect();
 
+        let cards = result.cards(&preview_ext);
+        let f = result.filters;
         let tmpl = BrowsePage {
-            query: query.to_string(),
-            asset_type: asset_type.to_string(),
-            tag: tag.to_string(),
-            format_filter: format_filter.to_string(),
-            volume: resolved.volume.clone(),
-            rating: rating_str.to_string(),
-            label: label_str.to_string(),
-            sort: effective_sort.to_string(),
+            query: f.query,
+            asset_type: f.asset_type,
+            tag: f.tag,
+            format_filter: f.format_filter,
+            volume: f.volume,
+            rating: f.rating,
+            label: f.label,
+            sort: result.effective_sort,
             cards,
-            total,
-            count_in_stacks: deltas.in_stacks,
-            count_filtered_by_default: deltas.filtered_by_default,
-            page,
-            per_page,
-            total_pages,
+            total: result.total.unwrap_or(0),
+            count_in_stacks: result.deltas.in_stacks,
+            count_filtered_by_default: result.deltas.filtered_by_default,
+            page: result.page,
+            per_page: result.per_page,
+            total_pages: result.total_pages.unwrap_or(0),
             all_tags,
             format_groups,
             all_volumes,
             all_collections,
             all_people,
-            collection: collection_str.to_string(),
-            path: path_str.to_string(),
-            person: person_str.to_string(),
+            collection: f.collection,
+            path: f.path,
+            person: f.person,
             saved_searches,
-            collapse_stacks,
+            collapse_stacks: f.collapse_stacks,
             ai_enabled: state.ai_enabled,
             vlm_enabled: state.vlm_enabled,
             vlm_models: state.vlm_config.available_models(),
             default_filter: state.default_filter.clone().unwrap_or_default(),
-            default_filter_active: !nodefault && state.default_filter.is_some(),
-            has_similarity,
+            default_filter_active: result.default_filter_active,
+            has_similarity: result.has_similarity,
         };
         Ok::<_, anyhow::Error>(tmpl.render()?)
     })
@@ -359,117 +525,8 @@ pub async fn search_api(
     let state = state.clone();
     let html = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
-
-        let bf = build_parsed_search(&params, &state);
-        let parsed = bf.parsed;
-        let sort_str = bf.sort_str;
-        let page = bf.page;
-        let collapse_stacks = bf.collapse_stacks;
-        let nodefault = bf.nodefault;
-        let query = bf.query;
-        let asset_type = bf.asset_type;
-        let tag = bf.tag;
-        let format_filter = bf.format_filter;
-        let rating_str = bf.rating;
-        let label_str = bf.label;
-        let collection_str = bf.collection;
-        let person_str = bf.person;
-        let path_str = bf.path;
-
-        let mut resolved = ResolvedSearch::resolve(
-            &catalog, &state, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
-        )?;
-        resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
-
-        let mut opts = parsed.to_search_options();
-        resolved.apply(&mut opts);
-
-        let has_similarity = resolved.has_similarity();
-
-        let per_page = if has_similarity { u32::MAX } else { state.per_page };
-        let effective_sort = params.effective_sort(has_similarity, &sort_str);
-        opts.sort = SearchSort::parse_key(effective_sort);
-        opts.page = if has_similarity { 1 } else { page };
-        opts.per_page = per_page;
-        opts.collapse_stacks = collapse_stacks;
-
-        let (mut rows, total) = catalog.search_paginated_with_count(&opts)?;
-        let display_per_page = state.per_page;
-        let total_pages = if has_similarity { 1 } else { ((total as f64) / display_per_page as f64).ceil() as u32 };
-
-        // Clamp page: if a delete/group/dedup shrank total_pages below the
-        // requested page, re-issue the search at the new last page so the
-        // user doesn't land on an empty grid.
-        let page = if !has_similarity && total_pages > 0 && page > total_pages {
-            opts.page = total_pages;
-            rows = catalog.search_paginated_with_count(&opts)?.0;
-            total_pages
-        } else {
-            page
-        };
-
-        let deltas = compute_count_deltas(&catalog, &mut opts, &DeltaContext {
-            state: &state,
-            params: &params,
-            collection_ids: &resolved.filters.collection_ids,
-            collection_exclude_ids: &resolved.filters.collection_exclude_ids,
-            person_ids: &resolved.filters.person_ids,
-            volume: &resolved.volume,
-            path_volume_id: resolved.path_volume_id.as_deref(),
-            effective_sort,
-            page,
-            per_page,
-            collapse_stacks,
-            base_total: total,
-            default_filter_active: !nodefault && state.default_filter.is_some(),
-            has_similarity,
-        });
-
-        let mut cards: Vec<AssetCard> = rows.iter().map(|r| AssetCard::from_row(r, &preview_ext)).collect();
-
-        #[cfg(feature = "ai")]
-        if !resolved.similarity_scores.is_empty() {
-            for card in &mut cards {
-                card.similarity = resolved.similarity_scores.get(&card.asset_id).copied();
-            }
-            if matches!(opts.sort, SearchSort::SimilarityDesc | SearchSort::SimilarityAsc) {
-                cards.sort_by(|a, b| {
-                    let sa = a.similarity.unwrap_or(0.0);
-                    let sb = b.similarity.unwrap_or(0.0);
-                    if matches!(opts.sort, SearchSort::SimilarityAsc) {
-                        sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
-                    } else {
-                        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
-                    }
-                });
-            }
-        }
-
-        link_cards(&mut cards);
-
-        let tmpl = ResultsPartial {
-            query,
-            asset_type,
-            tag,
-            format_filter,
-            volume: resolved.volume.clone(),
-            rating: rating_str,
-            label: label_str,
-            collection: collection_str,
-            person: person_str,
-            path: path_str,
-            sort: effective_sort.to_string(),
-            cards,
-            total,
-            count_in_stacks: deltas.in_stacks,
-            count_filtered_by_default: deltas.filtered_by_default,
-            page,
-            per_page,
-            total_pages,
-            collapse_stacks,
-            has_similarity,
-        };
-        Ok::<_, anyhow::Error>(tmpl.render()?)
+        let result = run_browse_search(&state, &catalog, &params, BrowseQuery::GRID)?;
+        Ok::<_, anyhow::Error>(result.results_partial(&preview_ext).render()?)
     })
     .await?;
     Ok(Html(html).into_response())
@@ -482,7 +539,7 @@ pub async fn search_api(
 /// client-side selection set so all batch toolbar operations (embed, tag,
 /// auto-tag, detect-faces, describe, delete, …) work unchanged.
 ///
-/// Response shape: `{ "ids": [...], "total": N, "total_pages": M }`.
+/// Response shape: `{ "ids": [...], "total": N, "total_pages": M, "per_page": P }`.
 /// `total_pages` is computed from `[serve] per_page` so the modal can say
 /// "Select 487 matching assets across 9 pages?" without a second request.
 pub async fn all_ids_api(
@@ -492,52 +549,12 @@ pub async fn all_ids_api(
     let state = state.clone();
     let json = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
-
-        let bf = build_parsed_search(&params, &state);
-        let parsed = bf.parsed;
-        let sort_str = bf.sort_str;
-        let collapse_stacks = bf.collapse_stacks;
-
-        // Select-all must see exactly the set the grid shows — including
-        // the AI text-query / similar: filters. Before v4.6.0 this
-        // endpoint skipped resolve_ai_filters, so select-all on a text
-        // search seeded the batch toolbar with the UNFILTERED result set.
-        let mut resolved = ResolvedSearch::resolve(
-            &catalog, &state, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
-        )?;
-        resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
-
-        let mut opts = parsed.to_search_options();
-        resolved.apply(&mut opts);
-
-        let per_page = state.per_page;
-        opts.sort = SearchSort::parse_key(&sort_str);
-        opts.collapse_stacks = collapse_stacks;
-        // Single virtual page that covers the entire result set. SQLite's
-        // LIMIT/OFFSET handles huge values fine; even a 100k-asset catalog
-        // is a single sub-second query returning ~3 MB of UUID strings —
-        // well under any browser-side memory ceiling we care about.
-        opts.page = 1;
-        opts.per_page = u32::MAX;
-
-        let total = catalog.search_count(&opts)?;
-        // A similarity view renders as a single page in the grid; report
-        // total_pages consistently so the confirmation modal matches.
-        let total_pages = if resolved.has_similarity() {
-            1
-        } else if per_page > 0 {
-            ((total as f64) / per_page as f64).ceil() as u32
-        } else {
-            1
-        };
-        let rows = catalog.search_paginated(&opts)?;
-        let ids: Vec<String> = rows.iter().map(|r| r.asset_id.clone()).collect();
-
+        let result = run_browse_search(&state, &catalog, &params, BrowseQuery::ALL)?;
         Ok::<_, anyhow::Error>(serde_json::json!({
-            "ids": ids,
-            "total": total,
-            "total_pages": total_pages,
-            "per_page": per_page,
+            "ids": result.ids(),
+            "total": result.total.unwrap_or(0),
+            "total_pages": result.total_pages.unwrap_or(1),
+            "per_page": state.per_page,
         }))
     })
     .await?;
@@ -561,85 +578,24 @@ impl PageIdsOpts {
     }
 }
 
-/// GET /api/page-ids — returns asset IDs for a given page.
+/// GET /api/page-ids — returns asset IDs for a given page, in grid order
+/// (the lightbox and keyboard navigation walk the set the grid shows).
+///
+/// Response shape: `{ "ids": [...], "page": N, "total_pages": M | null }`.
 pub async fn page_ids_api(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SearchParams>,
     Query(page_opts): Query<PageIdsOpts>,
 ) -> Result<Response, Response> {
     let state = state.clone();
-    let skip_count = page_opts.skip_count();
+    let query = BrowseQuery { count: !page_opts.skip_count(), ..BrowseQuery::PAGE_IDS };
     let json = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
-
-        let bf = build_parsed_search(&params, &state);
-        let parsed = bf.parsed;
-        let sort_str = bf.sort_str;
-        let page = bf.page;
-        let collapse_stacks = bf.collapse_stacks;
-
-        // Same AI-filter parity as all_ids_api: page ID lists feed the
-        // lightbox and keyboard navigation, which must walk the set the
-        // grid actually shows.
-        let mut resolved = ResolvedSearch::resolve(
-            &catalog, &state, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
-        )?;
-        resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
-        let has_similarity = resolved.has_similarity();
-
-        let mut opts = parsed.to_search_options();
-        resolved.apply(&mut opts);
-
-        let per_page = state.per_page;
-        // A similarity view renders as a single page sorted by score —
-        // mirror browse_page so navigation order matches the grid.
-        let effective_sort = params.effective_sort(has_similarity, &sort_str);
-        opts.sort = SearchSort::parse_key(effective_sort);
-        opts.page = if has_similarity { 1 } else { page };
-        opts.per_page = if has_similarity { u32::MAX } else { per_page };
-        opts.collapse_stacks = collapse_stacks;
-
-        let total_pages: Option<u32> = if has_similarity {
-            Some(1)
-        } else if skip_count {
-            None
-        } else {
-            let total = catalog.search_count(&opts)?;
-            Some(((total as f64) / per_page as f64).ceil() as u32)
-        };
-        // Clamp page to the last available so callers (lightbox / browse-imported
-        // links / external bookmarks) don't get an empty page after deletions.
-        let page = match total_pages {
-            Some(tp) if tp > 0 && page > tp => tp,
-            _ => page,
-        };
-        opts.page = if has_similarity { 1 } else { page };
-        // The count (when wanted) already ran above; fetch the page alone.
-        #[cfg_attr(not(feature = "ai"), allow(unused_mut))]
-        let mut rows = catalog.search_page(&opts)?;
-
-        // In-memory similarity ordering, same as browse_page's card sort.
-        #[cfg(feature = "ai")]
-        if has_similarity
-            && matches!(opts.sort, SearchSort::SimilarityDesc | SearchSort::SimilarityAsc)
-        {
-            let asc = matches!(opts.sort, SearchSort::SimilarityAsc);
-            rows.sort_by(|a, b| {
-                let sa = resolved.similarity_scores.get(&a.asset_id).copied().unwrap_or(0.0);
-                let sb = resolved.similarity_scores.get(&b.asset_id).copied().unwrap_or(0.0);
-                if asc {
-                    sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
-                } else {
-                    sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
-                }
-            });
-        }
-        let ids: Vec<String> = rows.iter().map(|r| r.asset_id.clone()).collect();
-
+        let result = run_browse_search(&state, &catalog, &params, query)?;
         Ok::<_, anyhow::Error>(serde_json::json!({
-            "ids": ids,
-            "page": page,
-            "total_pages": total_pages,
+            "ids": result.ids(),
+            "page": result.page,
+            "total_pages": result.total_pages,
         }))
     })
     .await?;
@@ -814,23 +770,11 @@ pub async fn facets_api(
             stacks: params.stacks.clone(),
             nodefault: params.nodefault.clone(),
         };
-        let bf = build_parsed_search(&search_params, &state);
-        let parsed = bf.parsed;
-        let collapse_stacks = bf.collapse_stacks;
-
         // Facet counts describe the result set the grid shows, so the AI
         // text-query / similar: filters must be included — otherwise the
         // dropdown counts contradict the visible results on a text search.
-        let mut resolved = ResolvedSearch::resolve(
-            &catalog, &state, &parsed, bf.volume, bf.path_volume_id, EmptyFilterPolicy::Ignore,
-        )?;
-        resolved.resolve_ai_filters(&catalog, &state, &parsed)?;
-
-        let mut opts = parsed.to_search_options();
-        resolved.apply(&mut opts);
-        opts.collapse_stacks = collapse_stacks;
-
-        let facets = catalog.facet_counts(&opts)?;
+        let prep = PreparedBrowse::new(&state, &catalog, &search_params, EmptyFilterPolicy::Ignore)?;
+        let facets = catalog.facet_counts(&prep.options())?;
         Ok::<_, anyhow::Error>(serde_json::json!(facets))
     })
     .await?;

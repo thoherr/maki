@@ -387,6 +387,10 @@ where
     tokio::spawn(async move {
         let state3 = state2.clone();
         let job_inner = job_for_task.clone();
+        // The one raw `spawn_blocking` in the web layer: the job runner is
+        // not a request handler — a failed join (worker panic) must become
+        // the job's terminal event, not an HTTP response, which is what
+        // `routes::spawn_catalog_blocking` would turn it into.
         let result = tokio::task::spawn_blocking(move || run(&state3, &job_inner)).await;
 
         let error_terminal = |msg: String| match error_phase {

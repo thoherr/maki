@@ -30,7 +30,7 @@ pub async fn set_rating(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let html = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let rating = form.rating.filter(|&r| r > 0);
         let new_rating = engine.set_rating(&asset_id, rating)?;
         let tmpl = RatingFragment {
@@ -56,7 +56,7 @@ pub async fn set_description(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let html = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let description = form.description.filter(|s| !s.trim().is_empty());
         let new_desc = engine.set_description(&asset_id, description)?;
         let tmpl = DescriptionFragment {
@@ -82,7 +82,7 @@ pub async fn set_name(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let html = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let name = form.name.filter(|s| !s.trim().is_empty());
         let new_name = engine.set_name(&asset_id, name)?;
 
@@ -117,7 +117,7 @@ pub async fn set_date(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let html = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let dt = crate::query::parse_date_input(&form.date)?;
         let date_str = engine.set_date(&asset_id, dt)?;
         let tmpl = DateFragment {
@@ -161,7 +161,7 @@ pub async fn batch_set_rating(
     let state = state.clone();
     let batch = super::spawn_catalog_blocking(move || {
         let start = std::time::Instant::now();
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let rating = req.rating.filter(|&r| r > 0);
         let results = engine.batch_set_rating(&req.asset_ids, rating);
         let mut succeeded = 0u32;
@@ -198,7 +198,7 @@ pub async fn generate_preview(
     let state = state.clone();
     let html = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let details = engine.show(&asset_id)?;
 
         let best_idx = resolve_best_variant_idx(&catalog, &asset_id, &details.variants)?;
@@ -367,7 +367,7 @@ pub async fn set_rotation(
     let preview_ext = state.preview_ext.clone();
     let state = state.clone();
     let html = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let catalog = state.catalog()?;
 
         let details = engine.show(&asset_id)?;
@@ -501,7 +501,7 @@ pub async fn set_preview_variant(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let json = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let content_hash = body.get("content_hash").and_then(|v| v.as_str());
         engine.set_preview_variant(&asset_id, content_hash)?;
         Ok::<_, anyhow::Error>(serde_json::json!({"ok": true}))
@@ -518,7 +518,7 @@ pub async fn set_variant_role(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let json = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let content_hash = body.get("content_hash").and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing content_hash"))?;
         let role = body.get("role").and_then(|v| v.as_str())
@@ -540,7 +540,7 @@ pub async fn recipes_fragment(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let html = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let details = engine.show(&asset_id)?;
         let registry = DeviceRegistry::new(&state.catalog_root);
         let volume_online: std::collections::HashMap<String, bool> = registry
@@ -563,7 +563,7 @@ pub async fn reimport_metadata(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let html = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let tags = engine.reimport_metadata(&asset_id)?;
         state.dropdown_cache.invalidate_tags();
         // Reimport reports the new tag list; fetch the provenance map for
@@ -592,7 +592,7 @@ pub async fn set_label(
 ) -> Result<Response, Response> {
     let state = state.clone();
     let html = super::spawn_catalog_blocking(move || {
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let label_str = form.label.filter(|s| !s.trim().is_empty());
         let validated = match label_str {
             Some(ref s) => match crate::models::Asset::validate_color_label(s) {
@@ -628,7 +628,7 @@ pub async fn batch_set_label(
     let state = state.clone();
     let batch = super::spawn_catalog_blocking(move || {
         let start = std::time::Instant::now();
-        let engine = state.query_engine();
+        let engine = state.query_engine()?;
         let label_str = req.label.filter(|s| !s.trim().is_empty());
         let validated = match label_str {
             Some(ref s) => match crate::models::Asset::validate_color_label(s) {

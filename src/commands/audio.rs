@@ -8,12 +8,12 @@ pub fn run_audio_analyze_command(
         query: String,
         force: bool,
         dry_run: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     use maki::asset_service::AudioAnalyzeStatus;
 
-    let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let (catalog_root, config) = ctx.catalog()?;
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
 
     let show_log = ctx.log;
     let result = service.audio_analyze(

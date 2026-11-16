@@ -7,89 +7,12 @@ use anyhow::Context as _;
 /// Extracted body of `Commands::RebuildCatalog`.
 pub fn run_rebuild_catalog_command(
     asset: Option<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let catalog_root = maki::config::find_catalog_root()?;
+    let catalog_root = ctx.catalog_root()?;
 
     if let Some(ref asset_id) = asset {
-        // Per-asset rebuild: delete and re-insert a single asset from its sidecar
-        let catalog = Catalog::open(&catalog_root)?;
-        let store = MetadataStore::new(&catalog_root);
-
-        // Resolve asset ID (try as UUID first, then prefix match in catalog)
-        let uuid: uuid::Uuid = if let Ok(u) = asset_id.parse() {
-            u
-        } else if let Some(full) = catalog.resolve_asset_id(asset_id)? {
-            full.parse()?
-        } else {
-            // Not in SQLite — try loading sidecar directly
-            anyhow::bail!("asset '{}' not found in catalog. For new assets, use 'maki refresh --reimport --asset {}'", asset_id, asset_id);
-        };
-
-        let asset_obj = store.load(uuid)?;
-        let id_str = uuid.to_string();
-
-        // Volume rows must exist before file locations can reference them.
-        let registry = DeviceRegistry::new(&catalog_root);
-        for volume in registry.list()? {
-            catalog.ensure_volume(&volume)?;
-        }
-
-        // Asset row, variants, file locations, recipes and the denormalized
-        // columns — the one shared resync routine (also behind `doctor
-        // --repair`, `refresh --reimport` and `undo`), one transaction.
-        // Stack / collection membership is not derived from the sidecar
-        // and survives untouched.
-        catalog.resync_asset_from_sidecar(&asset_obj)?;
-
-        // Faces and embeddings have their own sources of truth (faces.yaml,
-        // embeddings/<model>/<shard>/<id>.bin): drop this asset's rows and
-        // restore them from the files, atomically with the face columns.
-        #[cfg(feature = "ai")]
-        {
-            let emb_base = catalog_root.join("embeddings");
-            let faces_file = maki::face_store::load_faces_yaml(&catalog_root)
-                .context("could not read faces.yaml")?;
-            let asset_faces = maki::face_store::FacesFile {
-                faces: faces_file.faces.into_iter().filter(|f| f.asset_id == id_str).collect(),
-            };
-            let embeddings = load_asset_embedding_binaries(&emb_base, &id_str)?;
-            let face_embeddings = load_face_embedding_binaries(&emb_base, &asset_faces)?;
-
-            catalog.with_tx(|c| {
-                let emb_store = maki::embedding_store::EmbeddingStore::new(c.conn());
-                c.delete_embeddings_for_asset(&id_str)?;
-                for (model, embedding) in &embeddings {
-                    emb_store.store(&id_str, embedding, model)
-                        .with_context(|| format!("could not restore {model} embedding"))?;
-                }
-
-                let face_store = maki::face_store::FaceStore::new(c.conn());
-                c.delete_faces_for_asset(&id_str)?;
-                face_store.import_faces_from_yaml(&asset_faces)
-                    .context("could not restore faces from faces.yaml")?;
-                for (face_id, embedding) in &face_embeddings {
-                    face_store.import_face_embedding(face_id, embedding)
-                        .with_context(|| format!("could not restore embedding of face {face_id}"))?;
-                }
-                // Denormalized face columns (count + legacy scan-status backfill)
-                c.update_face_count(&id_str)?;
-                c.backfill_face_scan_status(&id_str)?;
-                Ok(())
-            })?;
-        }
-
-        if ctx.json {
-            println!("{}", serde_json::json!({
-                "asset_id": id_str,
-                "variants": asset_obj.variants.len(),
-                "recipes": asset_obj.recipes.len(),
-            }));
-        } else {
-            println!("Rebuilt asset {}: {} variant(s), {} recipe(s)",
-                &id_str[..8], asset_obj.variants.len(), asset_obj.recipes.len());
-        }
-        return Ok(());
+        return rebuild_single_asset(asset_id, &catalog_root, ctx);
     }
 
     let catalog = Catalog::open(&catalog_root)?;
@@ -106,7 +29,11 @@ pub fn run_rebuild_catalog_command(
 
     // Sync sidecar files into catalog
     let store = MetadataStore::new(&catalog_root);
-    let result = store.sync_to_catalog_with_log(&catalog, ctx.log)?;
+    let result = store.sync_to_catalog_with(&catalog, |asset| {
+        if ctx.log {
+            eprintln!("  {}  {}", asset.id, asset.name.as_deref().unwrap_or("-"));
+        }
+    })?;
 
     // Restore collections from YAML. A file that cannot be read or
     // imported fails the rebuild: silently finishing without the
@@ -303,6 +230,93 @@ pub fn run_rebuild_catalog_command(
     Ok(())
 }
 
+/// `maki rebuild-catalog --asset <ID>` — delete and re-insert one asset
+/// from its sidecar (plus its faces and embeddings from their files).
+fn rebuild_single_asset(
+    asset_id: &str,
+    catalog_root: &std::path::Path,
+    ctx: &CliContext,
+) -> anyhow::Result<()> {
+    // Per-asset rebuild: delete and re-insert a single asset from its sidecar
+    let catalog = Catalog::open(catalog_root)?;
+    let store = MetadataStore::new(catalog_root);
+
+    // Resolve asset ID (try as UUID first, then prefix match in catalog)
+    let uuid: uuid::Uuid = if let Ok(u) = asset_id.parse() {
+        u
+    } else if let Some(full) = catalog.resolve_asset_id(asset_id)? {
+        full.parse()?
+    } else {
+        // Not in SQLite — try loading sidecar directly
+        anyhow::bail!("asset '{}' not found in catalog. For new assets, use 'maki refresh --reimport --asset {}'", asset_id, asset_id);
+    };
+
+    let asset_obj = store.load(uuid)?;
+    let id_str = uuid.to_string();
+
+    // Volume rows must exist before file locations can reference them.
+    let registry = DeviceRegistry::new(catalog_root);
+    for volume in registry.list()? {
+        catalog.ensure_volume(&volume)?;
+    }
+
+    // Asset row, variants, file locations, recipes and the denormalized
+    // columns — the one shared resync routine (also behind `doctor
+    // --repair`, `refresh --reimport` and `undo`), one transaction.
+    // Stack / collection membership is not derived from the sidecar
+    // and survives untouched.
+    catalog.resync_asset_from_sidecar(&asset_obj)?;
+
+    // Faces and embeddings have their own sources of truth (faces.yaml,
+    // embeddings/<model>/<shard>/<id>.bin): drop this asset's rows and
+    // restore them from the files, atomically with the face columns.
+    #[cfg(feature = "ai")]
+    {
+        let emb_base = catalog_root.join("embeddings");
+        let faces_file = maki::face_store::load_faces_yaml(catalog_root)
+            .context("could not read faces.yaml")?;
+        let asset_faces = maki::face_store::FacesFile {
+            faces: faces_file.faces.into_iter().filter(|f| f.asset_id == id_str).collect(),
+        };
+        let embeddings = load_asset_embedding_binaries(&emb_base, &id_str)?;
+        let face_embeddings = load_face_embedding_binaries(&emb_base, &asset_faces)?;
+
+        catalog.with_tx(|c| {
+            let emb_store = maki::embedding_store::EmbeddingStore::new(c.conn());
+            c.delete_embeddings_for_asset(&id_str)?;
+            for (model, embedding) in &embeddings {
+                emb_store.store(&id_str, embedding, model)
+                    .with_context(|| format!("could not restore {model} embedding"))?;
+            }
+
+            let face_store = maki::face_store::FaceStore::new(c.conn());
+            c.delete_faces_for_asset(&id_str)?;
+            face_store.import_faces_from_yaml(&asset_faces)
+                .context("could not restore faces from faces.yaml")?;
+            for (face_id, embedding) in &face_embeddings {
+                face_store.import_face_embedding(face_id, embedding)
+                    .with_context(|| format!("could not restore embedding of face {face_id}"))?;
+            }
+            // Denormalized face columns (count + legacy scan-status backfill)
+            c.update_face_count(&id_str)?;
+            c.backfill_face_scan_status(&id_str)?;
+            Ok(())
+        })?;
+    }
+
+    if ctx.json {
+        println!("{}", serde_json::json!({
+            "asset_id": id_str,
+            "variants": asset_obj.variants.len(),
+            "recipes": asset_obj.recipes.len(),
+        }));
+    } else {
+        println!("Rebuilt asset {}: {} variant(s), {} recipe(s)",
+            &id_str[..8], asset_obj.variants.len(), asset_obj.recipes.len());
+    }
+    Ok(())
+}
+
 /// Read every `<emb_base>/<model>/<shard>/<asset_id>.bin` (all model
 /// directories except `arcface`) as `(model, embedding)`. A missing
 /// directory yields nothing; an unreadable one is an error.
@@ -353,11 +367,11 @@ pub fn run_fix_recipes_command(
         asset: Option<String>,
         apply: bool,
         asset_ids: Vec<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
-    let engine = maki::query::QueryEngine::new(&catalog_root);
+    let (catalog_root, _) = ctx.catalog()?;
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
+    let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
 
     // Resolve scope (query/asset/asset_ids) to individual asset IDs
     let scope = engine.resolve_scope(query.as_deref(), asset.as_deref(), &asset_ids)?;
@@ -433,11 +447,11 @@ pub fn run_fix_dates_command(
         asset: Option<String>,
         apply: bool,
         asset_ids: Vec<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
-    let engine = maki::query::QueryEngine::new(&catalog_root);
+    let (catalog_root, _) = ctx.catalog()?;
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
+    let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
 
     // Resolve scope (query/asset/asset_ids) to individual asset IDs
     let scope = engine.resolve_scope(query.as_deref(), asset.as_deref(), &asset_ids)?;
@@ -535,10 +549,10 @@ pub fn run_fix_roles_command(
         volume: Option<String>,
         asset: Option<String>,
         apply: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let (catalog_root, _) = ctx.catalog()?;
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
 
     let canonical_paths: Vec<PathBuf> = paths
         .iter()
@@ -613,16 +627,12 @@ pub fn run_generate_previews_command(
         force: bool,
         upgrade: bool,
         smart: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    use maki::asset_service::FileTypeFilter;
+    use maki::asset_service::{FileTypeFilter, PreviewOptions, PreviewScope, PreviewStatus};
 
-    let (catalog_root, config) = maki::config::load_config()?;
-    let preview_gen = maki::preview::PreviewGenerator::new(&catalog_root, ctx.verbosity, &config.preview);
-    let metadata_store = MetadataStore::new(&catalog_root);
-    let registry = maki::device_registry::DeviceRegistry::new(&catalog_root);
-    let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-    let volumes = registry.list()?;
+    let catalog_root = ctx.catalog_root()?;
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
 
     // Build file type filter
     let mut filter = FileTypeFilter::default();
@@ -641,15 +651,6 @@ pub fn run_generate_previews_command(
         filter.skip(group)?;
     }
 
-    let mut generated = 0usize;
-    let mut skipped = 0usize;
-    let mut failed = 0usize;
-    let mut upgraded = 0usize;
-    // Volumes that held the only locations of variants we couldn't
-    // process because they're offline. Surfaced at the end so the user
-    // knows which disk to mount instead of seeing a silent skip.
-    let mut offline_blockers: std::collections::HashSet<String> = std::collections::HashSet::new();
-
     // Canonicalize input paths
     let canonical_paths: Vec<PathBuf> = paths
         .iter()
@@ -659,232 +660,68 @@ pub fn run_generate_previews_command(
         })
         .collect();
 
-    if !canonical_paths.is_empty() {
-        // PATHS mode: resolve files, look up each in catalog
-        let files = maki::asset_service::resolve_files(&canonical_paths, &config.import.exclude);
-        let content_store = maki::content_store::ContentStore::new(&catalog_root);
-
-        for file_path in &files {
-            // Filter by extension
-            let ext = file_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
-            if !ext.is_empty() && !filter.is_importable(ext) {
-                continue;
-            }
-
-            // Look up variant in catalog: try volume+path first, fall back to content hash
-            let lookup = {
-                let vol = volumes.iter().find(|v| file_path.starts_with(&v.mount_point));
-                if let Some(v) = vol {
-                    let relative_path = file_path
-                        .strip_prefix(&v.mount_point)
-                        .unwrap_or(file_path);
-                    catalog.find_variant_by_volume_and_path(
-                        &v.id.to_string(),
-                        &relative_path.to_string_lossy(),
-                    )?
-                } else {
-                    None
-                }
-            };
-            // Fall back to hashing the file and looking up by content hash
-            let lookup = match lookup {
-                Some(v) => Some(v),
-                None => {
-                    let hash = content_store.hash_file(file_path)?;
-                    catalog.get_variant_format(&hash)?.map(|fmt| (hash, fmt))
-                }
-            };
-
-            if let Some((content_hash, format)) = lookup {
-                let file_start = std::time::Instant::now();
-                // Generate regular preview (always)
-                let result = if force {
-                    preview_gen.regenerate(&content_hash, file_path, &format)
-                } else {
-                    preview_gen.generate(&content_hash, file_path, &format)
-                };
-                // Also generate smart preview when --smart is set
-                let smart_result = if smart {
-                    Some(if force { preview_gen.regenerate_smart(&content_hash, file_path, &format) }
-                    else { preview_gen.generate_smart(&content_hash, file_path, &format) })
-                } else {
-                    None
-                };
-                let file_elapsed = file_start.elapsed();
-                let name = file_path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or_else(|| file_path.to_str().unwrap_or("?"));
-                let regular_ok = result.is_ok();
-                match result {
-                    Ok(Some(_)) => {
-                        generated += 1;
-                        if ctx.log { item_status(name, "generated", Some(file_elapsed)); }
-                    }
-                    Ok(None) => {
-                        skipped += 1;
-                        if ctx.log { item_status(name, "skipped", Some(file_elapsed)); }
-                    }
-                    Err(e) => {
-                        eprintln!("  Failed for {}: {e:#} ({})", file_path.display(), format_duration(file_elapsed));
-                        failed += 1;
-                    }
-                }
-                // A failed smart preview counts the file as failed once
-                // (not twice when the regular preview already failed).
-                if let Some(Err(e)) = smart_result {
-                    eprintln!("  Smart preview failed for {}: {e:#}", file_path.display());
-                    if regular_ok { failed += 1; }
-                }
-            }
-        }
+    // PATHS mode looks each file up in the catalog; otherwise one asset
+    // or the whole catalog.
+    let scope = if !canonical_paths.is_empty() {
+        PreviewScope::Paths(canonical_paths)
+    } else if let Some(asset_id) = asset {
+        PreviewScope::Asset(asset_id)
     } else {
-        // Catalog mode: iterate assets
-        let volume_filter = match &volume {
-            Some(label) => Some(registry.resolve_volume(label)?),
-            None => None,
-        };
+        PreviewScope::All
+    };
+    let options = PreviewOptions { volume, filter, force, upgrade, smart };
 
-        let assets = if let Some(asset_id) = &asset {
-            let engine = QueryEngine::new(&catalog_root);
-            let details = engine.show(asset_id)?;
-            let uuid: uuid::Uuid = details.id.parse()?;
-            vec![metadata_store.load(uuid)?]
-        } else {
-            let summaries = metadata_store.list()?;
-            summaries
-                .iter()
-                .map(|s| metadata_store.load(s.id))
-                .collect::<Result<Vec<_>, _>>()?
-        };
-
-        for asset_data in &assets {
-            // Select the best variant for preview generation (respects user override)
-            let idx = asset_data.preview_variant.as_ref()
-                .and_then(|h| asset_data.variants.iter().position(|v| &v.content_hash == h))
-                .or_else(|| maki::models::variant::best_preview_index(&asset_data.variants))
-                .unwrap_or(0);
-            if let Some(variant) = asset_data.variants.get(idx) {
-                // In --upgrade mode, skip assets where the best variant is already the first
-                if upgrade && idx == 0 {
-                    skipped += 1;
-                    continue;
-                }
-
-                // Apply format filter
-                let ext = &variant.format;
-                if !ext.is_empty() && !filter.is_importable(ext) {
-                    skipped += 1;
-                    continue;
-                }
-
-                // Try to find a reachable file for this variant
-                let source_path = variant.locations.iter().find_map(|loc| {
-                    // Apply volume filter
-                    if let Some(ref vf) = volume_filter {
-                        if loc.volume_id != vf.id {
-                            return None;
-                        }
-                    }
-                    volumes.iter().find_map(|v| {
-                        if v.id == loc.volume_id && v.is_online {
-                            let full = v.mount_point.join(&loc.relative_path);
-                            if full.exists() { Some(full) } else { None }
-                        } else {
-                            None
-                        }
-                    })
-                });
-
-                // If we couldn't reach the file, record any offline volume
-                // that held a location — so the end-of-run hint can tell
-                // the user which disk to mount.
-                if source_path.is_none() {
-                    for loc in &variant.locations {
-                        if let Some(v) = volumes.iter().find(|v| v.id == loc.volume_id) {
-                            if !v.is_online {
-                                offline_blockers.insert(v.label.clone());
-                            }
-                        }
-                    }
-                }
-
-                if let Some(path) = source_path {
-                    // Backfill video/audio metadata if missing
-                    let variant_type = maki::asset_service::determine_asset_type(&variant.format);
-                    if variant_type == maki::models::AssetType::Video
-                        && !variant.source_metadata.contains_key("video_duration")
-                    {
-                        let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
-                        if let Err(e) = service.backfill_video_metadata(&asset_data.id.to_string(), &variant.content_hash, &path) {
-                            eprintln!("  Video metadata backfill failed for {}: {e:#}", asset_data.id);
-                            failed += 1;
-                        }
-                    } else if variant_type == maki::models::AssetType::Audio
-                        && !variant.source_metadata.contains_key("audio_duration")
-                    {
-                        let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
-                        if let Err(e) = service.backfill_audio_metadata(&asset_data.id.to_string(), &variant.content_hash, &path) {
-                            eprintln!("  Audio metadata backfill failed for {}: {e:#}", asset_data.id);
-                            failed += 1;
-                        }
-                    }
-
-                    let file_start = std::time::Instant::now();
-                    let rotation = asset_data.preview_rotation;
-                    // Generate regular preview (always)
-                    let result = if force || upgrade {
-                        preview_gen.regenerate_with_rotation(&variant.content_hash, &path, &variant.format, rotation)
-                    } else {
-                        preview_gen.generate(&variant.content_hash, &path, &variant.format)
-                    };
-                    // Also generate smart preview when --smart is set
-                    let smart_result = if smart {
-                        Some(if force || upgrade {
-                            preview_gen.regenerate_smart_with_rotation(&variant.content_hash, &path, &variant.format, rotation)
-                        } else {
-                            preview_gen.generate_smart(&variant.content_hash, &path, &variant.format)
-                        })
-                    } else {
-                        None
-                    };
-                    let file_elapsed = file_start.elapsed();
-                    let name = path.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or_else(|| path.to_str().unwrap_or("?"));
-                    let regular_ok = result.is_ok();
-                    match result {
-                        Ok(Some(_)) => {
-                            generated += 1;
-                            if upgrade { upgraded += 1; }
-                            if ctx.log { item_status(name, if upgrade { "upgraded" } else { "generated" }, Some(file_elapsed)); }
-                        }
-                        Ok(None) => {
-                            skipped += 1;
-                            if ctx.log { item_status(name, "skipped", Some(file_elapsed)); }
-                        }
-                        Err(e) => {
-                            eprintln!("  Failed for {}: {e:#} ({})", asset_data.id, format_duration(file_elapsed));
-                            failed += 1;
-                        }
-                    }
-                    // A failed smart preview counts the asset as failed once
-                    // (not twice when the regular preview already failed).
-                    if let Some(Err(e)) = smart_result {
-                        eprintln!("  Smart preview failed for {}: {e:#}", asset_data.id);
-                        if regular_ok { failed += 1; }
-                    }
-                } else {
-                    skipped += 1;
-                }
-            } else {
-                skipped += 1;
+    let log = ctx.log;
+    let result = service.generate_previews(&scope, &options, |event| {
+        // Failures name the asset (catalog scopes) or the file (PATHS
+        // mode); `--log` lines name the file.
+        let subject = event
+            .asset_id
+            .map(str::to_string)
+            .or_else(|| event.path.map(|p| p.display().to_string()))
+            .unwrap_or_default();
+        let name = event
+            .path
+            .and_then(|p| p.file_name().and_then(|n| n.to_str()).or_else(|| p.to_str()))
+            .unwrap_or("?");
+        match &event.status {
+            PreviewStatus::Generated => {
+                if log { item_status(name, "generated", Some(event.elapsed)); }
             }
+            PreviewStatus::Upgraded => {
+                if log { item_status(name, "upgraded", Some(event.elapsed)); }
+            }
+            PreviewStatus::Skipped => {
+                if log { item_status(name, "skipped", Some(event.elapsed)); }
+            }
+            PreviewStatus::Failed(e) => {
+                eprintln!("  Failed for {subject}: {e} ({})", format_duration(event.elapsed));
+            }
+            PreviewStatus::SmartFailed(e) => {
+                eprintln!("  Smart preview failed for {subject}: {e}");
+            }
+            PreviewStatus::MetadataBackfillFailed(e) => {
+                let kind = match event
+                    .path
+                    .and_then(|p| p.extension())
+                    .and_then(|x| x.to_str())
+                    .map(maki::asset_service::determine_asset_type)
+                {
+                    Some(maki::models::AssetType::Audio) => "Audio",
+                    _ => "Video",
+                };
+                eprintln!("  {kind} metadata backfill failed for {subject}: {e}");
+            }
+            PreviewStatus::NoVariant
+            | PreviewStatus::Filtered
+            | PreviewStatus::NotUpgradable
+            | PreviewStatus::Unreachable
+            | PreviewStatus::NotInCatalog => {}
         }
-    }
+    })?;
 
+    let (generated, skipped, failed, upgraded) =
+        (result.generated, result.skipped, result.failed, result.upgraded);
     let preview_label = if smart { "smart preview(s)" } else { "preview(s)" };
     if ctx.json {
         let mut result = serde_json::json!({
@@ -913,13 +750,11 @@ pub fn run_generate_previews_command(
         }
         // Tell the user which volumes blocked some skips so they don't
         // wonder why a file count looks low.
-        if !offline_blockers.is_empty() {
-            let mut labels: Vec<String> = offline_blockers.into_iter().collect();
-            labels.sort();
+        if !result.offline_blockers.is_empty() {
             println!(
                 "  Tip: some assets were skipped because their files \
                  live on offline volume(s): {}. Mount and re-run.",
-                labels.join(", ")
+                result.offline_blockers.join(", ")
             );
         }
     }
@@ -933,10 +768,10 @@ pub fn run_update_location_command(
         from: String,
         to: String,
         volume: Option<String>,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let (catalog_root, _) = ctx.catalog()?;
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
 
     let to_path = std::fs::canonicalize(&to)
         .unwrap_or_else(|_| PathBuf::from(&to));
@@ -968,10 +803,10 @@ pub fn run_cleanup_command(
         path: Option<String>,
         list: bool,
         apply: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let (catalog_root, _) = ctx.catalog()?;
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
 
     // If --path is given without --volume, try to auto-detect the volume
     let volume = if volume.is_none() && path.is_some() {
@@ -1173,13 +1008,13 @@ pub fn run_refresh_command(
         media: bool,
         reimport: bool,
         exif_only: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
     if reimport || exif_only {
         // --reimport: clear and re-extract all metadata from source files
         // --exif-only: re-extract only EXIF, leave tags/description/rating/label
-        let catalog_root = maki::config::find_catalog_root()?;
-        let engine = QueryEngine::new(&catalog_root);
+        let catalog_root = ctx.catalog_root()?;
+        let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
 
         if asset.is_none() && paths.is_empty() {
             anyhow::bail!("--reimport/--exif-only requires --asset <ID> or asset IDs as arguments");
@@ -1220,7 +1055,7 @@ pub fn run_refresh_command(
         return Ok(());
     }
 
-    let (catalog_root, config) = maki::config::load_config()?;
+    let (catalog_root, config) = ctx.catalog()?;
     let registry = DeviceRegistry::new(&catalog_root);
 
     let canonical_paths: Vec<PathBuf> = paths
@@ -1248,7 +1083,7 @@ pub fn run_refresh_command(
         None
     };
 
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
     let result = if ctx.log {
         use maki::asset_service::RefreshStatus;
         service.refresh(
@@ -1327,14 +1162,14 @@ pub fn run_relocate_command(
         remove_source: bool,
         create_sidecars: bool,
         dry_run: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let (catalog_root, config) = maki::config::load_config()?;
-    let service = AssetService::new(&catalog_root, ctx.verbosity, &config.preview);
+    let (catalog_root, _) = ctx.catalog()?;
+    let service = AssetService::with_config(&catalog_root, ctx.verbosity, ctx.config.clone());
 
     // Resolve asset IDs: --query, positional args, or stdin
     let ids: Vec<String> = if let Some(ref q) = query {
-        let engine = QueryEngine::new(&catalog_root);
+        let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
         engine.search(q)?.into_iter().map(|r| r.asset_id).collect()
     } else if asset_ids.is_empty() {
         use std::io::BufRead;
@@ -1473,8 +1308,8 @@ pub fn run_relocate_command(
 
 /// Extracted body of `Commands::Trash`. See `run_import_command` for the
 /// extraction pattern.
-pub fn run_trash_command(cmd: TrashCommands, ctx: CliContext) -> anyhow::Result<()> {
-    let (catalog_root, config) = maki::config::load_config()?;
+pub fn run_trash_command(cmd: TrashCommands, ctx: &CliContext) -> anyhow::Result<()> {
+    let (catalog_root, config) = ctx.catalog()?;
     match cmd {
         TrashCommands::List => {
             let entries = maki::trash::Trash::list(&catalog_root)?;
@@ -1539,9 +1374,9 @@ pub fn run_trash_command(cmd: TrashCommands, ctx: CliContext) -> anyhow::Result<
 pub fn run_doctor_command(
     sample: Option<usize>,
     repair: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let (catalog_root, _config) = maki::config::load_config()?;
+    let (catalog_root, _config) = ctx.catalog()?;
 
     let report = maki::doctor::run_doctor(&catalog_root, sample, repair, |asset_id, issue| {
         if ctx.log {
@@ -1690,11 +1525,11 @@ fn describe_asset_change(before: &maki::models::Asset, after: &maki::models::Ass
 pub fn run_undo_command(
     dry_run: bool,
     force: bool,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let catalog_root = maki::config::find_catalog_root()?;
-    let history = maki::history::HistoryStore::from_config(&catalog_root);
-    let engine = QueryEngine::new(&catalog_root);
+    let catalog_root = ctx.catalog_root()?;
+    let history = maki::history::HistoryStore::new_with(&catalog_root, &ctx.config.history);
+    let engine = QueryEngine::with_config(&catalog_root, ctx.config.clone());
 
     let op = match history.newest_active()? {
         Some(op) => op,
@@ -1808,10 +1643,10 @@ pub fn run_undo_command(
 pub fn run_history_command(
     asset: Option<String>,
     limit: usize,
-    ctx: CliContext,
+    ctx: &CliContext,
 ) -> anyhow::Result<()> {
-    let catalog_root = maki::config::find_catalog_root()?;
-    let history = maki::history::HistoryStore::from_config(&catalog_root);
+    let catalog_root = ctx.catalog_root()?;
+    let history = maki::history::HistoryStore::new_with(&catalog_root, &ctx.config.history);
 
     match asset {
         Some(prefix) => {
@@ -1872,8 +1707,8 @@ pub fn run_history_command(
 
 /// `maki migrate` — run schema migrations, initialise the AI stores,
 /// and repair sidecar ratings left as MicrosoftPhoto percentages.
-pub fn run_migrate_command(ctx: CliContext) -> anyhow::Result<()> {
-    let catalog_root = maki::config::find_catalog_root()?;
+pub fn run_migrate_command(ctx: &CliContext) -> anyhow::Result<()> {
+    let catalog_root = ctx.catalog_root()?;
     // `open_and_migrate` = `open` + `run_migrations()?` + the post-migration
     // YAML sync. Each version block runs in its own transaction and the
     // version is stamped only on success, so the propagated error names

@@ -21,6 +21,10 @@ impl AssetService {
     /// one transaction. A failure in the catalog step leaves the sidecar ahead
     /// of the catalog, which `maki doctor` / `rebuild-catalog` reconcile; a
     /// failure never leaves half of an asset's rows updated.
+    ///
+    /// Phases: [`plan_relocation`] (pure), then on a [`RelocateRun`] the
+    /// copy, the metadata/catalog apply (with optional sidecar creation),
+    /// and the source removal.
     pub fn relocate(
         &self,
         asset_id: &str,
@@ -37,7 +41,7 @@ impl AssetService {
         // Resolve asset
         let full_id = catalog.resolve_asset_id_required(asset_id)?;
         let asset_uuid: Uuid = full_id.parse()?;
-        let mut asset = metadata_store.load(asset_uuid)?;
+        let asset = metadata_store.load(asset_uuid)?;
 
         // Resolve target volume
         let target_volume = registry.resolve_volume(target_volume_label)?;
@@ -47,66 +51,7 @@ impl AssetService {
 
         // Get all volumes for resolving source paths
         let volumes = registry.list()?;
-        let find_volume = |vol_id: Uuid| -> Option<Volume> {
-            volumes.iter().find(|v| v.id == vol_id).cloned()
-        };
-
-        // Build copy plan
-        let mut plan: Vec<FileCopyPlan> = Vec::new();
-
-        // Plan variant file copies
-        for variant in &asset.variants {
-            for loc in &variant.locations {
-                if loc.volume_id == target_volume.id {
-                    continue; // Already on target
-                }
-                let source_vol = find_volume(loc.volume_id)
-                    .ok_or_else(|| anyhow::anyhow!(
-                        "Source volume {} not found in registry", loc.volume_id
-                    ))?;
-                if !source_vol.mount_point.exists() {
-                    return Err(offline_mount_point(&source_vol).into());
-                }
-
-                let source_path = source_vol.mount_point.join(&loc.relative_path);
-                let target_path = target_volume.mount_point.join(&loc.relative_path);
-
-                plan.push(FileCopyPlan {
-                    content_hash: variant.content_hash.clone(),
-                    source_path,
-                    target_path,
-                    kind: FileCopyKind::Variant,
-                    source_volume_id: loc.volume_id,
-                    source_relative_path: loc.relative_path.clone(),
-                });
-            }
-        }
-
-        // Plan recipe file copies
-        for recipe in &asset.recipes {
-            if recipe.location.volume_id == target_volume.id {
-                continue; // Already on target
-            }
-            let source_vol = find_volume(recipe.location.volume_id)
-                .ok_or_else(|| anyhow::anyhow!(
-                    "Source volume {} not found in registry", recipe.location.volume_id
-                ))?;
-            if !source_vol.mount_point.exists() {
-                return Err(offline_mount_point(&source_vol).into());
-            }
-
-            let source_path = source_vol.mount_point.join(&recipe.location.relative_path);
-            let target_path = target_volume.mount_point.join(&recipe.location.relative_path);
-
-            plan.push(FileCopyPlan {
-                content_hash: recipe.content_hash.clone(),
-                source_path,
-                target_path,
-                kind: FileCopyKind::Recipe { recipe_id: recipe.id },
-                source_volume_id: recipe.location.volume_id,
-                source_relative_path: recipe.location.relative_path.clone(),
-            });
-        }
+        let plan = plan_relocation(&asset, &target_volume, &volumes)?;
 
         // Early return if nothing to do
         if plan.is_empty() {
@@ -118,227 +63,39 @@ impl AssetService {
             });
         }
 
+        let mut run = RelocateRun {
+            catalog,
+            metadata_store,
+            content_store,
+            target_volume,
+            asset,
+            result: RelocateResult {
+                copied: 0,
+                skipped: 0,
+                removed: 0,
+                actions: Vec::new(),
+            },
+        };
+
         // Dry run: report what would happen
         if dry_run {
-            let mut actions = Vec::new();
-            let mut would_copy = 0usize;
-            let mut would_skip = 0usize;
-
-            for entry in &plan {
-                if entry.target_path.exists() {
-                    let existing_hash = content_store.hash_file(&entry.target_path)?;
-                    if existing_hash == entry.content_hash {
-                        actions.push(format!(
-                            "SKIP {} (already exists with matching hash)",
-                            entry.source_relative_path.display()
-                        ));
-                        would_skip += 1;
-                        continue;
-                    }
-                }
-                let verb = if remove_source { "MOVE" } else { "COPY" };
-                actions.push(format!(
-                    "{} {} -> {}",
-                    verb,
-                    entry.source_path.display(),
-                    entry.target_path.display()
-                ));
-                would_copy += 1;
-            }
-
-            return Ok(RelocateResult {
-                copied: would_copy,
-                skipped: would_skip,
-                removed: if remove_source { would_copy } else { 0 },
-                actions,
-            });
+            run.preview(&plan, remove_source)?;
+            return Ok(run.result);
         }
 
         // Phase 1: Copy all files (no metadata changes yet)
-        let mut copied = 0usize;
-        let mut skipped = 0usize;
-        let mut actions = Vec::new();
+        run.copy_files(&plan)?;
 
-        for entry in &plan {
-            if entry.target_path.exists() {
-                let existing_hash = content_store.hash_file(&entry.target_path)?;
-                if existing_hash == entry.content_hash {
-                    actions.push(format!(
-                        "Skipped {} (already exists on target)",
-                        entry.source_relative_path.display()
-                    ));
-                    skipped += 1;
-                    continue;
-                }
-            }
-            content_store
-                .copy_and_verify(&entry.source_path, &entry.target_path, &entry.content_hash)
-                .with_context(|| format!(
-                    "Failed to copy {} to {}",
-                    entry.source_path.display(),
-                    entry.target_path.display()
-                ))?;
-            actions.push(format!(
-                "Copied {} -> {}",
-                entry.source_relative_path.display(),
-                target_volume.label
-            ));
-            copied += 1;
-        }
+        // Phase 2 + 2.5: locations, sidecars, catalog rows
+        let naming = self.config.writeback.sidecar_naming;
+        run.apply_locations(&plan, create_sidecars.then_some(naming))?;
 
-        // Phase 2: Apply the new locations to the in-memory asset and collect
-        // the catalog row changes they imply (applied together below).
-        let mut new_locations: Vec<(String, FileLocation)> = Vec::new();
-        let mut recipe_moves: Vec<(Uuid, PathBuf)> = Vec::new();
-
-        for entry in &plan {
-            match &entry.kind {
-                FileCopyKind::Variant => {
-                    let new_loc = FileLocation {
-                        volume_id: target_volume.id,
-                        relative_path: entry.source_relative_path.clone(),
-                        verified_at: None,
-                    };
-                    if let Some(variant) = asset.variants.iter_mut().find(|v| v.content_hash == entry.content_hash) {
-                        let already_has = variant.locations.iter().any(|l| {
-                            l.volume_id == target_volume.id
-                                && l.relative_path == entry.source_relative_path
-                        });
-                        if !already_has {
-                            variant.locations.push(new_loc.clone());
-                            new_locations.push((entry.content_hash.clone(), new_loc));
-                        }
-                    }
-                }
-                FileCopyKind::Recipe { recipe_id } => {
-                    if let Some(recipe) = asset.recipes.iter_mut().find(|r| r.id == *recipe_id) {
-                        recipe.location.volume_id = target_volume.id;
-                        recipe.location.relative_path = entry.source_relative_path.clone();
-                    }
-                    recipe_moves.push((*recipe_id, entry.source_relative_path.clone()));
-                }
-            }
-        }
-
-        // Phase 2.5 + persist. `create_missing_sidecars` writes XMP files and
-        // inserts their recipe rows itself, so it runs inside the transaction;
-        // the sidecar save (source of truth) precedes the location/recipe rows,
-        // and any row failure rolls every row change back.
-        let mut created_here = Vec::new();
-        catalog.with_tx(|c| {
-            c.ensure_volume(&target_volume)?;
-
-            if create_sidecars {
-                let naming = self.config.writeback.sidecar_naming;
-                let online: HashMap<Uuid, PathBuf> =
-                    [(target_volume.id, target_volume.mount_point.clone())].into_iter().collect();
-                create_missing_sidecars(
-                    &mut asset,
-                    c,
-                    &content_store,
-                    &online,
-                    Some(target_volume.id),
-                    naming,
-                    true,
-                    |path, status| {
-                        let rel = path
-                            .strip_prefix(&target_volume.mount_point)
-                            .unwrap_or(path)
-                            .display()
-                            .to_string();
-                        match status {
-                            SidecarStatus::Created => created_here.push(format!("Created sidecar {rel}")),
-                            SidecarStatus::ExistsUnregistered => created_here.push(format!(
-                                "Skipped sidecar {rel} (file exists on disk, not imported)"
-                            )),
-                            SidecarStatus::WouldCreate => {}
-                        }
-                    },
-                )?;
-            }
-
-            metadata_store.save(&asset)?;
-
-            for (content_hash, loc) in &new_locations {
-                c.insert_file_location(content_hash, loc)?;
-            }
-            for (recipe_id, relative_path) in &recipe_moves {
-                c.update_recipe_location(
-                    &recipe_id.to_string(),
-                    &target_volume.id.to_string(),
-                    &relative_path.to_string_lossy(),
-                )?;
-            }
-            Ok(())
-        })?;
-        copied += created_here.iter().filter(|a| a.starts_with("Created")).count();
-        actions.extend(created_here);
-
-        // Phase 3: Remove sources (only if --remove-source). Files are removed
-        // one by one; whatever was removed before a failure is reflected in
-        // the sidecar and the catalog (one transaction) before the error is
-        // returned, so the stores never claim a file that is gone.
-        let mut removed = 0usize;
+        // Phase 3: Remove sources (only if --remove-source)
         if remove_source {
-            let mut removed_entries: Vec<&FileCopyPlan> = Vec::new();
-            let mut removal_error: Option<anyhow::Error> = None;
-            for entry in &plan {
-                if entry.source_path.exists() {
-                    if let Err(e) = std::fs::remove_file(&entry.source_path) {
-                        removal_error = Some(anyhow::Error::new(e).context(format!(
-                            "Failed to remove source file {}",
-                            entry.source_path.display()
-                        )));
-                        break;
-                    }
-                }
-                removed_entries.push(entry);
-            }
-
-            for entry in &removed_entries {
-                if let FileCopyKind::Variant = entry.kind {
-                    if let Some(variant) = asset.variants.iter_mut().find(|v| v.content_hash == entry.content_hash) {
-                        variant.locations.retain(|l| {
-                            !(l.volume_id == entry.source_volume_id
-                                && l.relative_path == entry.source_relative_path)
-                        });
-                    }
-                }
-                // Recipe locations were already moved to the target in Phase 2.
-            }
-
-            metadata_store.save(&asset)?;
-            catalog.with_tx(|c| {
-                for entry in &removed_entries {
-                    if let FileCopyKind::Variant = entry.kind {
-                        c.delete_file_location(
-                            &entry.content_hash,
-                            &entry.source_volume_id.to_string(),
-                            &entry.source_relative_path.to_string_lossy(),
-                        )?;
-                    }
-                }
-                Ok(())
-            })?;
-
-            if let Some(e) = removal_error {
-                return Err(e);
-            }
-            removed = removed_entries.len();
-
-            // Update action messages
-            actions = actions
-                .into_iter()
-                .map(|a| a.replace("Copied", "Moved"))
-                .collect();
+            run.remove_sources(&plan)?;
         }
 
-        Ok(RelocateResult {
-            copied,
-            skipped,
-            removed,
-            actions,
-        })
+        Ok(run.result)
     }
 
     /// Update a file's location in the catalog after it was moved on disk.
@@ -515,6 +272,301 @@ impl AssetService {
         }
     }
 
+}
+
+/// Plan the file copies a relocation needs: every variant location and
+/// recipe that is not already on the target volume. Pure: reads the asset
+/// and the registry snapshot, touches nothing. Fails when a source volume
+/// is unknown or offline.
+fn plan_relocation(
+    asset: &Asset,
+    target_volume: &Volume,
+    volumes: &[Volume],
+) -> Result<Vec<FileCopyPlan>> {
+    let find_volume = |vol_id: Uuid| -> Result<Volume> {
+        let source_vol = volumes
+            .iter()
+            .find(|v| v.id == vol_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Source volume {} not found in registry", vol_id))?;
+        if !source_vol.mount_point.exists() {
+            return Err(offline_mount_point(&source_vol).into());
+        }
+        Ok(source_vol)
+    };
+
+    let mut plan: Vec<FileCopyPlan> = Vec::new();
+
+    // Plan variant file copies
+    for variant in &asset.variants {
+        for loc in &variant.locations {
+            if loc.volume_id == target_volume.id {
+                continue; // Already on target
+            }
+            let source_vol = find_volume(loc.volume_id)?;
+            plan.push(FileCopyPlan {
+                content_hash: variant.content_hash.clone(),
+                source_path: source_vol.mount_point.join(&loc.relative_path),
+                target_path: target_volume.mount_point.join(&loc.relative_path),
+                kind: FileCopyKind::Variant,
+                source_volume_id: loc.volume_id,
+                source_relative_path: loc.relative_path.clone(),
+            });
+        }
+    }
+
+    // Plan recipe file copies
+    for recipe in &asset.recipes {
+        if recipe.location.volume_id == target_volume.id {
+            continue; // Already on target
+        }
+        let source_vol = find_volume(recipe.location.volume_id)?;
+        plan.push(FileCopyPlan {
+            content_hash: recipe.content_hash.clone(),
+            source_path: source_vol.mount_point.join(&recipe.location.relative_path),
+            target_path: target_volume.mount_point.join(&recipe.location.relative_path),
+            kind: FileCopyKind::Recipe { recipe_id: recipe.id },
+            source_volume_id: recipe.location.volume_id,
+            source_relative_path: recipe.location.relative_path.clone(),
+        });
+    }
+
+    Ok(plan)
+}
+
+/// One relocation in progress: the stores, the target volume, the asset
+/// being moved (its locations are updated in place) and the result under
+/// construction.
+struct RelocateRun {
+    catalog: Catalog,
+    metadata_store: MetadataStore,
+    content_store: ContentStore,
+    target_volume: Volume,
+    asset: Asset,
+    result: RelocateResult,
+}
+
+impl RelocateRun {
+    /// Whether the target already holds this entry's exact content.
+    fn present_on_target(&self, entry: &FileCopyPlan) -> Result<bool> {
+        if !entry.target_path.exists() {
+            return Ok(false);
+        }
+        let existing_hash = self.content_store.hash_file(&entry.target_path)?;
+        Ok(existing_hash == entry.content_hash)
+    }
+
+    /// Dry run: list what would be copied, moved or skipped.
+    fn preview(&mut self, plan: &[FileCopyPlan], remove_source: bool) -> Result<()> {
+        for entry in plan {
+            if self.present_on_target(entry)? {
+                self.result.actions.push(format!(
+                    "SKIP {} (already exists with matching hash)",
+                    entry.source_relative_path.display()
+                ));
+                self.result.skipped += 1;
+                continue;
+            }
+            let verb = if remove_source { "MOVE" } else { "COPY" };
+            self.result.actions.push(format!(
+                "{} {} -> {}",
+                verb,
+                entry.source_path.display(),
+                entry.target_path.display()
+            ));
+            self.result.copied += 1;
+        }
+        if remove_source {
+            self.result.removed = self.result.copied;
+        }
+        Ok(())
+    }
+
+    /// Phase 1: copy every planned file, verifying each copy's hash.
+    fn copy_files(&mut self, plan: &[FileCopyPlan]) -> Result<()> {
+        for entry in plan {
+            if self.present_on_target(entry)? {
+                self.result.actions.push(format!(
+                    "Skipped {} (already exists on target)",
+                    entry.source_relative_path.display()
+                ));
+                self.result.skipped += 1;
+                continue;
+            }
+            self.content_store
+                .copy_and_verify(&entry.source_path, &entry.target_path, &entry.content_hash)
+                .with_context(|| format!(
+                    "Failed to copy {} to {}",
+                    entry.source_path.display(),
+                    entry.target_path.display()
+                ))?;
+            self.result.actions.push(format!(
+                "Copied {} -> {}",
+                entry.source_relative_path.display(),
+                self.target_volume.label
+            ));
+            self.result.copied += 1;
+        }
+        Ok(())
+    }
+
+    /// Phase 2: apply the new locations to the in-memory asset and collect
+    /// the catalog row changes they imply; Phase 2.5: persist. With
+    /// `create_sidecars = Some(naming)`, `create_missing_sidecars` writes
+    /// XMP files and inserts their recipe rows itself, so it runs inside
+    /// the transaction; the sidecar save (source of truth) precedes the
+    /// location/recipe rows, and any row failure rolls every row change
+    /// back.
+    fn apply_locations(
+        &mut self,
+        plan: &[FileCopyPlan],
+        create_sidecars: Option<crate::config::SidecarNaming>,
+    ) -> Result<()> {
+        let target_volume = &self.target_volume;
+        let asset = &mut self.asset;
+        let mut new_locations: Vec<(String, FileLocation)> = Vec::new();
+        let mut recipe_moves: Vec<(Uuid, PathBuf)> = Vec::new();
+
+        for entry in plan {
+            match &entry.kind {
+                FileCopyKind::Variant => {
+                    let new_loc = FileLocation {
+                        volume_id: target_volume.id,
+                        relative_path: entry.source_relative_path.clone(),
+                        verified_at: None,
+                    };
+                    if let Some(variant) = asset.variants.iter_mut().find(|v| v.content_hash == entry.content_hash) {
+                        let already_has = variant.locations.iter().any(|l| {
+                            l.volume_id == target_volume.id
+                                && l.relative_path == entry.source_relative_path
+                        });
+                        if !already_has {
+                            variant.locations.push(new_loc.clone());
+                            new_locations.push((entry.content_hash.clone(), new_loc));
+                        }
+                    }
+                }
+                FileCopyKind::Recipe { recipe_id } => {
+                    if let Some(recipe) = asset.recipes.iter_mut().find(|r| r.id == *recipe_id) {
+                        recipe.location.volume_id = target_volume.id;
+                        recipe.location.relative_path = entry.source_relative_path.clone();
+                    }
+                    recipe_moves.push((*recipe_id, entry.source_relative_path.clone()));
+                }
+            }
+        }
+
+        let mut created_here = Vec::new();
+        let content_store = &self.content_store;
+        let metadata_store = &self.metadata_store;
+        self.catalog.with_tx(|c| {
+            c.ensure_volume(target_volume)?;
+
+            if let Some(naming) = create_sidecars {
+                let online: HashMap<Uuid, PathBuf> =
+                    [(target_volume.id, target_volume.mount_point.clone())].into_iter().collect();
+                create_missing_sidecars(
+                    asset,
+                    c,
+                    content_store,
+                    &online,
+                    Some(target_volume.id),
+                    naming,
+                    true,
+                    |path, status| {
+                        let rel = path
+                            .strip_prefix(&target_volume.mount_point)
+                            .unwrap_or(path)
+                            .display()
+                            .to_string();
+                        match status {
+                            SidecarStatus::Created => created_here.push(format!("Created sidecar {rel}")),
+                            SidecarStatus::ExistsUnregistered => created_here.push(format!(
+                                "Skipped sidecar {rel} (file exists on disk, not imported)"
+                            )),
+                            SidecarStatus::WouldCreate => {}
+                        }
+                    },
+                )?;
+            }
+
+            metadata_store.save(asset)?;
+
+            for (content_hash, loc) in &new_locations {
+                c.insert_file_location(content_hash, loc)?;
+            }
+            for (recipe_id, relative_path) in &recipe_moves {
+                c.update_recipe_location(
+                    &recipe_id.to_string(),
+                    &target_volume.id.to_string(),
+                    &relative_path.to_string_lossy(),
+                )?;
+            }
+            Ok(())
+        })?;
+        self.result.copied += created_here.iter().filter(|a| a.starts_with("Created")).count();
+        self.result.actions.extend(created_here);
+        Ok(())
+    }
+
+    /// Phase 3: remove the source files. They are removed one by one;
+    /// whatever was removed before a failure is reflected in the sidecar
+    /// and the catalog (one transaction) before the error is returned, so
+    /// the stores never claim a file that is gone.
+    fn remove_sources(&mut self, plan: &[FileCopyPlan]) -> Result<()> {
+        let mut removed_entries: Vec<&FileCopyPlan> = Vec::new();
+        let mut removal_error: Option<anyhow::Error> = None;
+        for entry in plan {
+            if entry.source_path.exists() {
+                if let Err(e) = std::fs::remove_file(&entry.source_path) {
+                    removal_error = Some(anyhow::Error::new(e).context(format!(
+                        "Failed to remove source file {}",
+                        entry.source_path.display()
+                    )));
+                    break;
+                }
+            }
+            removed_entries.push(entry);
+        }
+
+        for entry in &removed_entries {
+            if let FileCopyKind::Variant = entry.kind {
+                if let Some(variant) = self.asset.variants.iter_mut().find(|v| v.content_hash == entry.content_hash) {
+                    variant.locations.retain(|l| {
+                        !(l.volume_id == entry.source_volume_id
+                            && l.relative_path == entry.source_relative_path)
+                    });
+                }
+            }
+            // Recipe locations were already moved to the target in Phase 2.
+        }
+
+        self.metadata_store.save(&self.asset)?;
+        self.catalog.with_tx(|c| {
+            for entry in &removed_entries {
+                if let FileCopyKind::Variant = entry.kind {
+                    c.delete_file_location(
+                        &entry.content_hash,
+                        &entry.source_volume_id.to_string(),
+                        &entry.source_relative_path.to_string_lossy(),
+                    )?;
+                }
+            }
+            Ok(())
+        })?;
+
+        if let Some(e) = removal_error {
+            return Err(e);
+        }
+        self.result.removed = removed_entries.len();
+
+        // Update action messages
+        self.result.actions = std::mem::take(&mut self.result.actions)
+            .into_iter()
+            .map(|a| a.replace("Copied", "Moved"))
+            .collect();
+        Ok(())
+    }
 }
 
 /// The typed error for a volume whose mount point is not present

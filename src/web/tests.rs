@@ -477,6 +477,52 @@ async fn all_ids_returns_seeded_asset() {
         .collect();
     assert!(ids.contains(&srv.asset_id), "ids: {ids:?}");
     assert_eq!(json["total"], 1);
+    // The select-all modal sizes itself from these two.
+    assert_eq!(json["total_pages"], 1, "{json}");
+    assert_eq!(json["per_page"], 60, "{json}");
+
+    // Filters apply through the same pipeline as the grid.
+    let (status, _, body) = srv.get("/api/all-ids?type=video").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["ids"].as_array().unwrap().len(), 0, "{json}");
+    assert_eq!(json["total"], 0, "{json}");
+    assert_eq!(json["total_pages"], 0, "{json}");
+}
+
+/// `/api/batch/export` with `filters` runs the browse search ("Export all
+/// matches the grid"): no match is a 400, a match streams a ZIP whose
+/// skip counts travel in headers.
+#[tokio::test]
+async fn export_zip_filters_through_the_browse_search() {
+    let srv = TestServer::new();
+
+    let (status, _, body) = srv
+        .json(Method::POST, "/api/batch/export", r#"{"filters": {"type": "video"}}"#)
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+    assert_eq!(body, "No assets matched");
+
+    // A preview file makes the seeded asset exportable without a volume.
+    let preview = srv.state.preview_generator().preview_path("sha256:webtest1");
+    std::fs::create_dir_all(preview.parent().unwrap()).unwrap();
+    std::fs::write(&preview, b"not really a jpeg").unwrap();
+
+    let (status, headers, body) = srv
+        .json(
+            Method::POST,
+            "/api/batch/export",
+            r#"{"filters": {"q": "sunset"}, "source": "previews"}"#,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(
+        headers.get("content-type").map(|v| v.to_str().unwrap()),
+        Some("application/zip")
+    );
+    assert_eq!(headers.get("x-maki-exported").map(|v| v.to_str().unwrap()), Some("1"));
+    assert_eq!(headers.get("x-maki-skipped").map(|v| v.to_str().unwrap()), Some("0"));
+    assert!(body.starts_with("PK"), "body must be a ZIP archive");
 }
 
 // ─── Access guards: read-only mode + basic auth ─────────────────────
@@ -1365,9 +1411,11 @@ async fn stack_members_after_batch_stack() {
     let (_, row) = srv.asset_from_both_stores();
     assert_eq!(row.stack_id.as_deref(), Some(stack_id.as_str()));
 
-    // Stacking an already-stacked asset again is refused.
+    // Stacking an already-stacked asset again is a typed conflict (409,
+    // `MakiError::Conflict` through `err::mapped`), not bad input.
     let (status, _, resp) = srv.json(Method::POST, "/api/batch/stack", &body).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {resp}");
+    assert_eq!(status, StatusCode::CONFLICT, "body: {resp}");
+    assert!(resp.contains("already in stack"), "body: {resp}");
 
     // Unstack both: the stack disappears.
     let (status, _, resp) = srv.json(Method::DELETE, "/api/batch/stack", &body).await;

@@ -108,9 +108,10 @@ impl HistoryStore {
         }
     }
 
-    /// [`Self::new_with`] over a freshly loaded `maki.toml`. Thin wrapper
-    /// for callers that have no config at hand (the CLI `undo`/`history`
-    /// handlers); the engine passes its own config.
+    /// Test fixture: [`Self::new_with`] over the catalog's `maki.toml`
+    /// (defaults when missing). The engine and the CLI pass their own
+    /// loaded config.
+    #[cfg(test)]
     pub fn from_config(catalog_root: &Path) -> Self {
         let cfg = crate::config::CatalogConfig::load(catalog_root).unwrap_or_default();
         Self::new_with(catalog_root, &cfg.history)

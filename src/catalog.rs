@@ -47,7 +47,7 @@ use std::path::Path;
 use anyhow::Result;
 use rusqlite::Connection;
 
-use crate::query::NumericFilter;
+use crate::models::NumericFilter;
 
 use crate::models::{Asset, FileLocation, Recipe, Variant};
 
@@ -162,29 +162,7 @@ impl AssetDetails {
     }
 }
 
-/// Variant details within an `AssetDetails`.
-#[derive(Debug, serde::Serialize)]
-pub struct VariantDetails {
-    pub content_hash: String,
-    pub role: String,
-    pub format: String,
-    pub file_size: u64,
-    pub original_filename: String,
-    pub source_metadata: std::collections::HashMap<String, String>,
-    pub locations: Vec<LocationDetails>,
-}
-
-/// File location details within a `VariantDetails`.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct LocationDetails {
-    pub volume_label: String,
-    pub volume_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub volume_purpose: Option<String>,
-    pub relative_path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verified_at: Option<String>,
-}
+pub use crate::models::variant::{LocationDetails, VariantDetails};
 
 /// A variant that exists in multiple file locations.
 #[derive(Debug, serde::Serialize)]

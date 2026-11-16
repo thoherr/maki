@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::volume::FileLocation;
-use crate::catalog::VariantDetails;
+use super::format::is_raw_extension;
+use super::geo::parse_dms_string;
 
 /// The role a variant plays within an asset group.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,7 +146,7 @@ pub fn compute_best_variant_hash_with_override(
 pub fn compute_primary_format(variants: &[Variant]) -> Option<String> {
     // First: any Original variant that is RAW
     if let Some(v) = variants.iter().find(|v| {
-        v.role == VariantRole::Original && crate::asset_service::is_raw_extension(&v.format)
+        v.role == VariantRole::Original && is_raw_extension(&v.format)
     }) {
         return Some(v.format.clone());
     }
@@ -186,8 +187,8 @@ pub fn compute_gps_from_variants(variants: &[Variant]) -> (Option<f64>, Option<f
             v.source_metadata.get("gps_longitude"),
         ) {
             if let (Some(lat), Some(lon)) = (
-                crate::exif_reader::parse_dms_string(lat_str),
-                crate::exif_reader::parse_dms_string(lon_str),
+                parse_dms_string(lat_str),
+                parse_dms_string(lon_str),
             ) {
                 return (Some(lat), Some(lon));
             }
@@ -422,4 +423,33 @@ mod tests {
             Some("sha256:jpg_5000000")
         );
     }
+}
+
+// ═══ DETAILS VIEW TYPES ═══
+//
+// Serialisable read models returned by `Catalog::get_asset_details`;
+// plain data, so they live beside `Variant`.
+
+/// Variant details within an `AssetDetails`.
+#[derive(Debug, serde::Serialize)]
+pub struct VariantDetails {
+    pub content_hash: String,
+    pub role: String,
+    pub format: String,
+    pub file_size: u64,
+    pub original_filename: String,
+    pub source_metadata: std::collections::HashMap<String, String>,
+    pub locations: Vec<LocationDetails>,
+}
+
+/// File location details within a `VariantDetails`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LocationDetails {
+    pub volume_label: String,
+    pub volume_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_purpose: Option<String>,
+    pub relative_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verified_at: Option<String>,
 }
