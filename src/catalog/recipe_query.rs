@@ -586,3 +586,513 @@ impl Catalog {
     }
 
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::catalog::test_support::*;
+    use crate::catalog::*;
+
+    #[test]
+    fn list_file_locations_for_asset_works() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:loctest");
+        let asset_id = asset.id.to_string();
+        catalog.insert_asset(&asset).unwrap();
+
+        let variant = test_variant(asset.id, "sha256:loctest", "test.jpg");
+        catalog.insert_variant(&variant).unwrap();
+
+        let volume = crate::models::Volume::new(
+            "test-vol".to_string(),
+            std::path::PathBuf::from("/mnt/test"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+
+        let loc = crate::models::FileLocation {
+            volume_id: volume.id,
+            relative_path: std::path::PathBuf::from("photos/test.jpg"),
+            verified_at: None,
+        };
+        catalog
+            .insert_file_location("sha256:loctest", &loc)
+            .unwrap();
+
+        let locs = catalog.list_file_locations_for_asset(&asset_id).unwrap();
+        assert_eq!(locs.len(), 1);
+        assert_eq!(locs[0].0, "sha256:loctest");
+        assert_eq!(locs[0].1, "photos/test.jpg");
+        assert_eq!(locs[0].2, volume.id.to_string());
+
+        // Non-existent asset returns empty
+        let empty = catalog
+            .list_file_locations_for_asset("nonexistent")
+            .unwrap();
+        assert!(empty.is_empty());
+    }
+
+    /// Helper to set up a catalog with a volume, asset, variant, and recipe for recipe tests.
+    fn setup_recipe_catalog() -> (Catalog, crate::models::Volume, crate::models::Asset, String) {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let volume = crate::models::Volume::new(
+            "vol".to_string(),
+            std::path::PathBuf::from("/mnt/vol"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:rectest");
+        catalog.insert_asset(&asset).unwrap();
+
+        let variant = test_variant(asset.id, "sha256:rectest", "photo.nef");
+        catalog.insert_variant(&variant).unwrap();
+
+        let loc = crate::models::FileLocation {
+            volume_id: volume.id,
+            relative_path: std::path::PathBuf::from("photos/photo.nef"),
+            verified_at: None,
+        };
+        catalog.insert_file_location("sha256:rectest", &loc).unwrap();
+
+        let recipe_id = uuid::Uuid::new_v4();
+        let recipe = crate::models::Recipe {
+            id: recipe_id,
+            variant_hash: "sha256:rectest".to_string(),
+            software: "Adobe/CaptureOne".to_string(),
+            recipe_type: crate::models::RecipeType::Sidecar,
+            content_hash: "sha256:recipe_old".to_string(),
+            location: crate::models::FileLocation {
+                volume_id: volume.id,
+                relative_path: std::path::PathBuf::from("photos/photo.xmp"),
+                verified_at: None,
+            },
+            pending_writeback: false,
+        };
+        catalog.insert_recipe(&recipe).unwrap();
+
+        (catalog, volume, asset, recipe_id.to_string())
+    }
+
+    #[test]
+    fn insert_recipe_preserves_pending_writeback_flag() {
+        // Regression for v4.5.15 bug: `insert_recipe` previously omitted
+        // `pending_writeback` from its column list, so every catalog
+        // write (rebuild-catalog, reimport, sync) silently reset the
+        // flag back to the schema default (0), even when the in-memory
+        // recipe (loaded from YAML) carried `pending_writeback: true`.
+        // YAML and SQLite would then diverge silently — the symptom
+        // being `maki writeback --asset <id>` reporting "0 written"
+        // while the YAML sidecar still carried `pending_writeback: true`.
+        let (catalog, volume, _asset, recipe_id) = setup_recipe_catalog();
+
+        // Recipe starts un-pending (setup creates it with the default).
+        catalog.mark_pending_writeback(&recipe_id).unwrap();
+        assert_eq!(
+            catalog.list_pending_writeback_recipes(None).unwrap().len(),
+            1,
+            "recipe should be pending after mark"
+        );
+
+        // Reload the YAML sidecar's view of the recipe (with pending=true)
+        // and re-insert it — simulates rebuild-catalog / reimport.
+        let recipe = crate::models::Recipe {
+            id: recipe_id.parse().unwrap(),
+            variant_hash: "sha256:rectest".to_string(),
+            software: "Adobe/CaptureOne".to_string(),
+            recipe_type: crate::models::RecipeType::Sidecar,
+            content_hash: "sha256:recipe_old".to_string(),
+            location: crate::models::FileLocation {
+                volume_id: volume.id,
+                relative_path: std::path::PathBuf::from("photos/photo.xmp"),
+                verified_at: None,
+            },
+            pending_writeback: true,
+        };
+        catalog.insert_recipe(&recipe).unwrap();
+
+        // After re-insert, SQLite must still report pending.
+        assert_eq!(
+            catalog.list_pending_writeback_recipes(None).unwrap().len(),
+            1,
+            "pending_writeback must survive insert_recipe — \
+             v4.5.14-and-earlier reset it to the schema default (0)"
+        );
+    }
+
+    #[test]
+    fn asset_has_recipe_true_when_recipe_attached() {
+        let (catalog, _vol, asset, _recipe_id) = setup_recipe_catalog();
+        assert!(catalog.asset_has_recipe(&asset.id.to_string()).unwrap());
+    }
+
+    #[test]
+    fn asset_has_recipe_false_when_only_variants() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:noxmp");
+        catalog.insert_asset(&asset).unwrap();
+        let variant = test_variant(asset.id, "sha256:noxmp", "noxmp.jpg");
+        catalog.insert_variant(&variant).unwrap();
+
+        assert!(!catalog.asset_has_recipe(&asset.id.to_string()).unwrap());
+    }
+
+    #[test]
+    fn find_recipe_by_location_returns_match() {
+        let (catalog, volume, _, recipe_id) = setup_recipe_catalog();
+        let result = catalog
+            .find_recipe_by_location(
+                "sha256:rectest",
+                &volume.id.to_string(),
+                "photos/photo.xmp",
+            )
+            .unwrap();
+        assert!(result.is_some());
+        let (id, hash) = result.unwrap();
+        assert_eq!(id, recipe_id);
+        assert_eq!(hash, "sha256:recipe_old");
+    }
+
+    #[test]
+    fn pending_writeback_mark_and_clear() {
+        let (catalog, _volume, _asset, recipe_id) = setup_recipe_catalog();
+
+        // Initially no pending writebacks
+        let pending = catalog.list_pending_writeback_recipes(None).unwrap();
+        assert!(pending.is_empty());
+
+        // Mark as pending
+        catalog.mark_pending_writeback(&recipe_id).unwrap();
+        let pending = catalog.list_pending_writeback_recipes(None).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0, recipe_id);
+
+        // Clear
+        catalog.clear_pending_writeback(&recipe_id).unwrap();
+        let pending = catalog.list_pending_writeback_recipes(None).unwrap();
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn pending_writeback_volume_filter() {
+        let (catalog, volume, _asset, recipe_id) = setup_recipe_catalog();
+
+        catalog.mark_pending_writeback(&recipe_id).unwrap();
+
+        // Filter by correct volume
+        let pending = catalog
+            .list_pending_writeback_recipes(Some(&volume.id.to_string()))
+            .unwrap();
+        assert_eq!(pending.len(), 1);
+
+        // Filter by wrong volume
+        let pending = catalog
+            .list_pending_writeback_recipes(Some(&uuid::Uuid::nil().to_string()))
+            .unwrap();
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn find_recipe_by_location_returns_none() {
+        let (catalog, volume, _, _) = setup_recipe_catalog();
+        let result = catalog
+            .find_recipe_by_location(
+                "sha256:rectest",
+                &volume.id.to_string(),
+                "photos/other.xmp",
+            )
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn update_recipe_content_hash_works() {
+        let (catalog, volume, _, recipe_id) = setup_recipe_catalog();
+        catalog
+            .update_recipe_content_hash(&recipe_id, "sha256:recipe_new")
+            .unwrap();
+
+        let result = catalog
+            .find_recipe_by_location(
+                "sha256:rectest",
+                &volume.id.to_string(),
+                "photos/photo.xmp",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.1, "sha256:recipe_new");
+    }
+
+    #[test]
+    fn find_recipe_by_volume_and_path_works() {
+        let (catalog, volume, _, recipe_id) = setup_recipe_catalog();
+        let result = catalog
+            .find_recipe_by_volume_and_path(
+                &volume.id.to_string(),
+                "photos/photo.xmp",
+            )
+            .unwrap();
+        assert!(result.is_some());
+        let (id, hash, variant_hash) = result.unwrap();
+        assert_eq!(id, recipe_id);
+        assert_eq!(hash, "sha256:recipe_old");
+        assert_eq!(variant_hash, "sha256:rectest");
+
+        // Non-existent path returns None
+        let result = catalog
+            .find_recipe_by_volume_and_path(
+                &volume.id.to_string(),
+                "photos/nonexistent.xmp",
+            )
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn update_recipe_verified_at_works() {
+        let (catalog, volume, _, _) = setup_recipe_catalog();
+        catalog
+            .update_recipe_verified_at(
+                "sha256:rectest",
+                &volume.id.to_string(),
+                "photos/photo.xmp",
+            )
+            .unwrap();
+
+        let verified: Option<String> = catalog
+            .conn
+            .query_row(
+                "SELECT verified_at FROM recipes WHERE variant_hash = ?1 AND volume_id = ?2 AND relative_path = ?3",
+                rusqlite::params!["sha256:rectest", volume.id.to_string(), "photos/photo.xmp"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(verified.is_some());
+    }
+
+    #[test]
+    fn find_variant_hash_by_stem_and_directory_works() {
+        let (catalog, volume, _, _) = setup_recipe_catalog();
+
+        // "photo" stem in "photos" directory should match "photos/photo.nef"
+        let result = catalog
+            .find_variant_hash_by_stem_and_directory(
+                "photo",
+                "photos",
+                &volume.id.to_string(),
+                None,
+            )
+            .unwrap();
+        assert!(result.is_some());
+        let (hash, _asset_id) = result.unwrap();
+        assert_eq!(hash, "sha256:rectest");
+
+        // Wrong stem returns None
+        let result = catalog
+            .find_variant_hash_by_stem_and_directory(
+                "other",
+                "photos",
+                &volume.id.to_string(),
+                None,
+            )
+            .unwrap();
+        assert!(result.is_none());
+
+        // Wrong directory returns None
+        let result = catalog
+            .find_variant_hash_by_stem_and_directory(
+                "photo",
+                "other_dir",
+                &volume.id.to_string(),
+                None,
+            )
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn list_recipe_only_assets_finds_standalone_xmp() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        // Create an "other" asset with a single xmp variant
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Other, "sha256:xmponly");
+        asset.variants.push(test_variant(asset.id, "sha256:xmponly", "DSC_001.xmp"));
+        catalog.insert_asset(&asset).unwrap();
+        catalog.insert_variant(&asset.variants[0]).unwrap();
+
+        let results = catalog.list_recipe_only_assets(None, None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, asset.id.to_string());
+        assert_eq!(results[0].1, "sha256:xmponly");
+        assert_eq!(results[0].2, "xmp");
+    }
+
+    #[test]
+    fn list_recipe_only_assets_ignores_multi_variant() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        // Asset with 2 variants should not be returned
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Other, "sha256:multi1");
+        asset.variants.push(test_variant(asset.id, "sha256:multi1", "DSC_001.xmp"));
+        asset.variants.push(crate::models::Variant {
+            content_hash: "sha256:multi2".to_string(),
+            asset_id: asset.id,
+            role: crate::models::VariantRole::Export,
+            format: "jpg".to_string(),
+            file_size: 5000,
+            original_filename: "DSC_001.jpg".to_string(),
+            source_metadata: Default::default(),
+            locations: vec![],
+        });
+        catalog.insert_asset(&asset).unwrap();
+        catalog.insert_variant(&asset.variants[0]).unwrap();
+        catalog.insert_variant(&asset.variants[1]).unwrap();
+
+        let results = catalog.list_recipe_only_assets(None, None).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn list_recipe_only_assets_ignores_non_recipe() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        // Single-variant asset with jpg format should not be returned
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:jpgonly");
+        asset.variants.push(crate::models::Variant { file_size: 5000, ..test_variant(asset.id, "sha256:jpgonly", "photo.jpg") });
+        catalog.insert_asset(&asset).unwrap();
+        catalog.insert_variant(&asset.variants[0]).unwrap();
+
+        let results = catalog.list_recipe_only_assets(None, None).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn find_asset_ids_by_volume_and_path_prefixes_basic() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let volume = crate::models::Volume::new(
+            "vol1".to_string(),
+            std::path::PathBuf::from("/mnt/vol1"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:aaa");
+        asset.variants.push(test_variant(asset.id, "sha256:aaa", "DSC_001.ARW"));
+        catalog.insert_asset(&asset).unwrap();
+        catalog.insert_variant(&asset.variants[0]).unwrap();
+        catalog
+            .insert_file_location(
+                "sha256:aaa",
+                &crate::models::FileLocation {
+                    volume_id: volume.id,
+                    relative_path: std::path::PathBuf::from("session/Capture/DSC_001.ARW"),
+                    verified_at: None,
+                },
+            )
+            .unwrap();
+
+        // Prefix "session" should match
+        let ids = catalog
+            .find_asset_ids_by_volume_and_path_prefixes(
+                &volume.id.to_string(),
+                &["session".to_string()],
+            )
+            .unwrap();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0], asset.id.to_string());
+
+        // Prefix "other" should not match
+        let ids = catalog
+            .find_asset_ids_by_volume_and_path_prefixes(
+                &volume.id.to_string(),
+                &["other".to_string()],
+            )
+            .unwrap();
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn find_asset_ids_by_volume_and_path_prefixes_wrong_volume() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let volume = crate::models::Volume::new(
+            "vol1".to_string(),
+            std::path::PathBuf::from("/mnt/vol1"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:bbb");
+        asset.variants.push(crate::models::Variant { file_size: 500, ..test_variant(asset.id, "sha256:bbb", "photo.jpg") });
+        catalog.insert_asset(&asset).unwrap();
+        catalog.insert_variant(&asset.variants[0]).unwrap();
+        catalog
+            .insert_file_location(
+                "sha256:bbb",
+                &crate::models::FileLocation {
+                    volume_id: volume.id,
+                    relative_path: std::path::PathBuf::from("photos/photo.jpg"),
+                    verified_at: None,
+                },
+            )
+            .unwrap();
+
+        // Query with a fake volume ID — should return empty
+        let ids = catalog
+            .find_asset_ids_by_volume_and_path_prefixes(
+                "00000000-0000-0000-0000-000000000000",
+                &["photos".to_string()],
+            )
+            .unwrap();
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn find_asset_ids_by_volume_and_path_prefixes_empty_prefix() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let volume = crate::models::Volume::new(
+            "vol1".to_string(),
+            std::path::PathBuf::from("/mnt/vol1"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ccc");
+        asset.variants.push(crate::models::Variant { file_size: 500, ..test_variant(asset.id, "sha256:ccc", "photo.jpg") });
+        catalog.insert_asset(&asset).unwrap();
+        catalog.insert_variant(&asset.variants[0]).unwrap();
+        catalog
+            .insert_file_location(
+                "sha256:ccc",
+                &crate::models::FileLocation {
+                    volume_id: volume.id,
+                    relative_path: std::path::PathBuf::from("deep/nested/photo.jpg"),
+                    verified_at: None,
+                },
+            )
+            .unwrap();
+
+        // Empty prefix matches everything on the volume
+        let ids = catalog
+            .find_asset_ids_by_volume_and_path_prefixes(
+                &volume.id.to_string(),
+                &[String::new()],
+            )
+            .unwrap();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0], asset.id.to_string());
+    }
+}

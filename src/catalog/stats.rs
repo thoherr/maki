@@ -450,3 +450,181 @@ impl Catalog {
     }
 
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::catalog::test_support::*;
+    use crate::catalog::*;
+
+    #[test]
+    fn stats_overview_empty_catalog() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let (assets, variants, recipes, size, _locs) = catalog.stats_overview().unwrap();
+        assert_eq!(assets, 0);
+        assert_eq!(variants, 0);
+        assert_eq!(recipes, 0);
+        assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn stats_overview_with_data() {
+        let catalog = setup_search_catalog();
+
+        let (assets, variants, recipes, size, _locs) = catalog.stats_overview().unwrap();
+        assert_eq!(assets, 2);
+        assert_eq!(variants, 2);
+        assert_eq!(recipes, 0);
+        assert_eq!(size, 105_000); // 5000 + 100_000
+    }
+
+    #[test]
+    fn stats_asset_types_groups_correctly() {
+        let catalog = setup_search_catalog();
+
+        let types = catalog.stats_asset_types().unwrap();
+        assert_eq!(types.len(), 2);
+        // Both should be present (image, video)
+        let type_names: Vec<&str> = types.iter().map(|t| t.0.as_str()).collect();
+        assert!(type_names.contains(&"image"));
+        assert!(type_names.contains(&"video"));
+    }
+
+    #[test]
+    fn stats_variant_formats_respects_limit() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        // Insert 3 variants with different formats
+        for (i, fmt) in ["jpg", "png", "tiff"].iter().enumerate() {
+            let hash = format!("sha256:limit{i}");
+            let asset = crate::models::Asset::new(crate::models::AssetType::Image, &hash);
+            catalog.insert_asset(&asset).unwrap();
+            let variant = crate::models::Variant {
+                content_hash: hash,
+                asset_id: asset.id,
+                role: crate::models::VariantRole::Original,
+                format: fmt.to_string(),
+                file_size: 100,
+                original_filename: format!("file.{fmt}"),
+                source_metadata: Default::default(),
+                locations: vec![],
+            };
+            catalog.insert_variant(&variant).unwrap();
+        }
+
+        let formats = catalog.stats_variant_formats(2).unwrap();
+        assert_eq!(formats.len(), 2); // limited to 2
+    }
+
+    #[test]
+    fn stats_tag_coverage_counts_correctly() {
+        let catalog = setup_search_catalog();
+
+        let (tagged, untagged) = catalog.stats_tag_coverage().unwrap();
+        // setup_search_catalog: asset1 has tags, asset2 has empty tags
+        assert_eq!(tagged, 1);
+        assert_eq!(untagged, 1);
+    }
+
+    #[test]
+    fn stats_per_volume_computes_directories() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let volume = crate::models::Volume::new(
+            "vol".to_string(),
+            std::path::PathBuf::from("/mnt/vol"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:dirs1");
+        catalog.insert_asset(&asset).unwrap();
+
+        // Two variants in different directories
+        for (i, path) in ["photos/a.jpg", "archive/b.jpg"].iter().enumerate() {
+            let hash = format!("sha256:dirs{}", i + 1);
+            if i > 0 {
+                let a2 = crate::models::Asset::new(crate::models::AssetType::Image, &hash);
+                catalog.insert_asset(&a2).unwrap();
+                let v = crate::models::Variant { file_size: 100, ..test_variant(a2.id, &hash, "b.jpg") };
+                catalog.insert_variant(&v).unwrap();
+            } else {
+                let v = crate::models::Variant { file_size: 100, ..test_variant(asset.id, &hash, "a.jpg") };
+                catalog.insert_variant(&v).unwrap();
+            }
+            let loc = crate::models::FileLocation {
+                volume_id: volume.id,
+                relative_path: std::path::PathBuf::from(path),
+                verified_at: None,
+            };
+            catalog.insert_file_location(&format!("sha256:dirs{}", i + 1), &loc).unwrap();
+        }
+
+        let raw = catalog.stats_per_volume().unwrap();
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].directories, 2); // "photos" and "archive"
+        assert_eq!(raw[0].total_locations, 2);
+    }
+
+    #[test]
+    fn stats_verification_overview_correct() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let volume = crate::models::Volume::new(
+            "vol".to_string(),
+            std::path::PathBuf::from("/mnt/vol"),
+            crate::models::VolumeType::Local,
+        );
+        catalog.ensure_volume(&volume).unwrap();
+
+        // Two variants, one with verified_at set
+        let a1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:v1");
+        catalog.insert_asset(&a1).unwrap();
+        let v1 = crate::models::Variant { file_size: 100, ..test_variant(a1.id, "sha256:v1", "a.jpg") };
+        catalog.insert_variant(&v1).unwrap();
+        let loc1 = crate::models::FileLocation {
+            volume_id: volume.id,
+            relative_path: std::path::PathBuf::from("a.jpg"),
+            verified_at: Some(chrono::Utc::now()),
+        };
+        catalog.insert_file_location("sha256:v1", &loc1).unwrap();
+
+        let a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:v2");
+        catalog.insert_asset(&a2).unwrap();
+        let v2 = crate::models::Variant { file_size: 200, ..test_variant(a2.id, "sha256:v2", "b.jpg") };
+        catalog.insert_variant(&v2).unwrap();
+        let loc2 = crate::models::FileLocation {
+            volume_id: volume.id,
+            relative_path: std::path::PathBuf::from("b.jpg"),
+            verified_at: None,
+        };
+        catalog.insert_file_location("sha256:v2", &loc2).unwrap();
+
+        let (total, verified, oldest, newest) = catalog.stats_verification_overview().unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(verified, 1);
+        assert!(oldest.is_some());
+        assert!(newest.is_some());
+    }
+
+    #[test]
+    fn build_stats_empty_catalog() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let stats = catalog.build_stats(&[], true, true, true, true, 20).unwrap();
+        assert_eq!(stats.overview.assets, 0);
+        assert_eq!(stats.overview.variants, 0);
+        assert_eq!(stats.overview.recipes, 0);
+        assert_eq!(stats.overview.total_size, 0);
+        assert_eq!(stats.overview.volumes_total, 0);
+        assert!(stats.types.unwrap().asset_types.is_empty());
+        assert!(stats.volumes.unwrap().is_empty());
+        assert_eq!(stats.tags.as_ref().unwrap().unique_tags, 0);
+        assert_eq!(stats.verified.as_ref().unwrap().total_locations, 0);
+    }
+}

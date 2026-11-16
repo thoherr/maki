@@ -49,10 +49,13 @@ One finding was a defect and is fixed in the same change as this report
   step); crate-wide `src/test_support.rs` (`TempCatalog`, `memory_catalog`,
   `test_asset` builder, `test_variant`, `insert_rows`) adopted by the
   query, doctor, web and catalog tests, about 600 fewer test lines net.
-  Still private: the six `setup_*` catalogs in `catalog.rs`, the
-  hand-written minimal schemas in the `stack`/`collection` tests and
-  `asset_service`'s `setup_catalog`. Open: per-section unit tests and
-  service-operation unit tests; `browse.html` JS modules; `Catalog::conn()`
+  The 145 tests in `catalog.rs` moved into the section file whose
+  functions they exercise (`catalog.rs` 4,995 → 1,015 lines; 12 tests of
+  root-level helpers stay), shared fixtures in `catalog/test_support.rs`.
+  Still private: the hand-written minimal schemas in the
+  `stack`/`collection` tests and `asset_service`'s `setup_catalog`.
+  Open: service-operation unit tests, Windows-path, pool-concurrency and
+  migration-fixture tests; `browse.html` JS modules; `Catalog::conn()`
   visibility and the public-API decision.
 
 ## Verdict in one paragraph

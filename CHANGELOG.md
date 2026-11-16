@@ -24,6 +24,11 @@ All notable changes to the Digital Asset Manager are documented here.
   (`TempCatalog`, `memory_catalog`, the `test_asset` builder) replaces
   private setup helpers and about 75 hand-written variant literals
   across the unit tests; about 600 fewer test lines net, no test dropped.
+- **Catalog tests next to their code.** The 145 unit tests that lived in
+  `catalog.rs` now sit in the section file whose functions they exercise
+  (`src/catalog/search_exec.rs`, `lookup.rs`, `recipe_query.rs`, …), with
+  shared fixtures in `src/catalog/test_support.rs`; `catalog.rs` shrinks
+  from about 5,000 to 1,000 lines.
 
 ## v4.13.1 (2026-11-16)
 

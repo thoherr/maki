@@ -912,3 +912,385 @@ impl Catalog {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::catalog::test_support::*;
+    use crate::catalog::*;
+
+    #[test]
+    fn initialize_creates_all_tables() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let tables: Vec<String> = catalog
+            .conn
+            .prepare(
+                "SELECT name FROM sqlite_master \
+                 WHERE type='table' AND name NOT LIKE 'sqlite_%' \
+                 AND name NOT LIKE 'assets_fts%' \
+                 AND name NOT LIKE 'assets_tags_fts%' \
+                 ORDER BY name",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        // The face and embedding tables are part of the versioned schema
+        // (v13) on every build, so a catalog created by a standard build is
+        // ready for a Pro build. The assets_fts FTS5 virtual table and its
+        // shadow tables are filtered out above (their internal layout is
+        // SQLite's business); its presence is asserted separately.
+        let expected = vec!["assets", "collection_assets", "collections", "embeddings", "faces", "file_locations", "people", "recipes", "schema_version", "stacks", "variants", "volumes"];
+        assert_eq!(tables, expected);
+
+        let fts_exists: i64 = catalog
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assets_fts'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_exists, 1, "assets_fts virtual table must exist");
+        let tags_fts_exists: i64 = catalog
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assets_tags_fts'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tags_fts_exists, 1, "assets_tags_fts virtual table must exist (v12)");
+    }
+
+    #[test]
+    fn initialize_is_idempotent() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        catalog.initialize().unwrap(); // should not error
+    }
+
+    /// A failing migration step must roll back and leave the stored
+    /// version at the previous value, with the error naming the step.
+    #[test]
+    fn failed_migration_step_is_not_stamped() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        // Simulate a v11 catalog whose tag index was replaced by a plain
+        // table with the wrong shape: v12's CREATE IF NOT EXISTS passes,
+        // the backfill INSERT fails.
+        catalog
+            .conn
+            .execute_batch(
+                "DROP TRIGGER assets_tags_fts_insert; DROP TRIGGER assets_tags_fts_update; \
+                 DROP TRIGGER assets_tags_fts_delete; DROP TABLE assets_tags_fts; \
+                 CREATE TABLE assets_tags_fts (wrong TEXT); \
+                 DELETE FROM schema_version; INSERT INTO schema_version VALUES (11);",
+            )
+            .unwrap();
+        let err = catalog.run_migrations().unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("schema migration v12"), "{text}");
+        assert_eq!(catalog.schema_version(), 11, "a failed step must not advance the version");
+        assert!(catalog.conn.is_autocommit(), "the failed transaction must be rolled back");
+    }
+
+    /// Migration steps are self-contained: a catalog stuck at any older
+    /// version reaches the current one, and a second run is a no-op.
+    #[test]
+    fn migrations_resume_from_every_version() {
+        for start in 0..SCHEMA_VERSION {
+            let catalog = Catalog::open_in_memory().unwrap();
+            catalog.initialize().unwrap();
+            catalog
+                .conn
+                .execute(
+                    "UPDATE schema_version SET version = ?1",
+                    rusqlite::params![start],
+                )
+                .unwrap();
+            catalog.run_migrations().unwrap_or_else(|e| panic!("resuming from v{start}: {e:#}"));
+            assert_eq!(catalog.schema_version(), SCHEMA_VERSION, "from v{start}");
+        }
+    }
+
+    /// v13 adopts the face/embedding tables. A catalog that never ran the
+    /// lazy AI initialisers gets them; one that carries the original
+    /// single-primary-key `embeddings` table is rebuilt with its rows kept
+    /// and gains the composite key.
+    #[test]
+    fn migration_v13_converts_single_pk_embeddings_table() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        catalog
+            .conn
+            .execute_batch(
+                "DROP TABLE embeddings; DROP TABLE faces; DROP TABLE people;
+                 CREATE TABLE embeddings (
+                     asset_id TEXT PRIMARY KEY,
+                     embedding BLOB NOT NULL,
+                     model TEXT NOT NULL DEFAULT 'siglip-vit-b16-256'
+                 );
+                 INSERT INTO embeddings (asset_id, embedding) VALUES ('a1', x'0000003f');
+                 DELETE FROM schema_version; INSERT INTO schema_version VALUES (12);",
+            )
+            .unwrap();
+        catalog.run_migrations().unwrap();
+        assert_eq!(catalog.schema_version(), SCHEMA_VERSION);
+        assert!(catalog.table_exists("faces").unwrap());
+        assert!(catalog.table_exists("people").unwrap());
+        assert!(catalog.has_column("faces", "recognition_model").unwrap());
+        // Row survived with the default model.
+        let (model, blob): (String, Vec<u8>) = catalog
+            .conn
+            .query_row("SELECT model, embedding FROM embeddings WHERE asset_id = 'a1'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(model, "siglip-vit-b16-256");
+        assert_eq!(blob, vec![0, 0, 0, 0x3f]);
+        // Composite key: a second model for the same asset is allowed.
+        catalog
+            .conn
+            .execute(
+                "INSERT INTO embeddings (asset_id, model, embedding) VALUES ('a1', 'other', x'00')",
+                [],
+            )
+            .unwrap();
+        let pk_cols: i64 = catalog
+            .conn
+            .query_row("SELECT COUNT(*) FROM pragma_table_info('embeddings') WHERE pk > 0", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(pk_cols, 2);
+    }
+
+    #[test]
+    fn initialize_stamps_schema_version_13_with_audio_columns() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        assert_eq!(catalog.schema_version(), SCHEMA_VERSION);
+        assert_eq!(SCHEMA_VERSION, 13);
+        // v11: shared duration column (renamed from video_duration) and
+        // typed audio columns exist.
+        let cols: Vec<String> = {
+            let mut stmt = catalog.conn.prepare("PRAGMA table_info(assets)").unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, String>(1)).unwrap();
+            rows.map(|r| r.unwrap()).collect()
+        };
+        assert!(cols.contains(&"duration_seconds".to_string()));
+        assert!(!cols.contains(&"video_duration".to_string()));
+        for c in ["audio_sample_rate", "audio_channels", "audio_bitrate", "audio_key", "audio_bpm"] {
+            assert!(cols.contains(&c.to_string()), "missing column {c}");
+        }
+        // v10 column exists and defaults to an empty JSON object.
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:v10");
+        catalog.insert_asset(&asset).unwrap();
+        let stored: String = catalog
+            .conn
+            .query_row(
+                "SELECT tag_sources FROM assets WHERE id = ?1",
+                rusqlite::params![asset.id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "{}");
+    }
+
+    /// The v11 backfill must not touch rows that have nothing to backfill:
+    /// every row an UPDATE processes fires the FTS5 trigram triggers (full
+    /// re-tokenization of the source_metadata blob), so an unguarded
+    /// whole-table UPDATE turns migration into hours of no-op FTS rewrites
+    /// on large catalogs. A temp trigger counts the rows actually updated.
+    #[test]
+    fn migration_v11_backfill_touches_only_audio_assets_with_audio_metadata() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        // Photo asset — the overwhelming majority in a real catalog.
+        let mut photo = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:mig11a");
+        let photo_variant = crate::models::Variant { file_size: 100, ..test_variant(photo.id, "sha256:mig11a", "photo.jpg") };
+        photo.variants.push(photo_variant.clone());
+        catalog.insert_asset(&photo).unwrap();
+        catalog.insert_variant(&photo_variant).unwrap();
+
+        // Audio asset whose variant carries audio_* keys (backfill target).
+        let mut track = crate::models::Asset::new(crate::models::AssetType::Audio, "sha256:mig11b");
+        let mut meta = std::collections::BTreeMap::new();
+        meta.insert("audio_duration".to_string(), "180.0".to_string());
+        meta.insert("audio_key".to_string(), "Am".to_string());
+        let track_variant = crate::models::Variant {
+            content_hash: "sha256:mig11b".to_string(),
+            asset_id: track.id,
+            role: crate::models::VariantRole::Original,
+            format: "mp3".to_string(),
+            file_size: 100,
+            original_filename: "track.mp3".to_string(),
+            source_metadata: meta,
+            locations: vec![],
+        };
+        track.variants.push(track_variant.clone());
+        catalog.insert_asset(&track).unwrap();
+        catalog.insert_variant(&track_variant).unwrap();
+
+        // Simulate an interrupted / pre-v11 state: columns empty, version 10.
+        catalog.conn.execute_batch(
+            "UPDATE assets SET duration_seconds = NULL, audio_key = NULL;
+             DELETE FROM schema_version; INSERT INTO schema_version VALUES (10);",
+        ).unwrap();
+
+        // Count every assets row the migration UPDATEs (temp trigger fires
+        // per processed row, exactly like the FTS triggers would).
+        catalog.conn.execute_batch(
+            "CREATE TEMP TABLE touched (id TEXT);
+             CREATE TEMP TRIGGER count_asset_updates AFTER UPDATE ON assets
+             BEGIN INSERT INTO touched VALUES (new.id); END;",
+        ).unwrap();
+
+        catalog.run_migrations().unwrap();
+
+        let touched: Vec<String> = {
+            let mut stmt = catalog.conn.prepare("SELECT id FROM touched").unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+            rows.map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(
+            touched,
+            vec![track.id.to_string()],
+            "v11 backfill must update exactly the audio asset with audio metadata — \
+             touching anything else re-tokenizes the FTS index for no reason"
+        );
+
+        // And the backfill itself worked.
+        let (dur, key): (Option<f64>, Option<String>) = catalog.conn.query_row(
+            "SELECT duration_seconds, audio_key FROM assets WHERE id = ?1",
+            rusqlite::params![track.id.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!(dur, Some(180.0));
+        assert_eq!(key.as_deref(), Some("Am"));
+        assert_eq!(catalog.schema_version(), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn tags_fts_follows_inserts_updates_and_deletes() {
+        let catalog = catalog_with_tags(vec!["alpha".to_string()], "tagsfts1");
+        let id = catalog.conn.query_row("SELECT id FROM assets", [], |r| r.get::<_, String>(0)).unwrap();
+        let fts_tags = |cat: &Catalog| -> Option<String> {
+            cat.conn.query_row("SELECT tags FROM assets_tags_fts WHERE asset_id = ?1", [&id], |r| r.get(0)).ok()
+        };
+        assert_eq!(fts_tags(&catalog).as_deref(), Some("[\"alpha\"]"));
+        assert_eq!(catalog.search_assets(None, None, Some("alpha"), None, None, None).unwrap().len(), 1);
+
+        // Upsert through insert_asset (the only tag write path) → update trigger.
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:tagsfts1");
+        asset.tags = vec!["beta".to_string()];
+        asset.variants.push(test_variant(asset.id, "sha256:tagsfts1", "tagsfts1.jpg"));
+        catalog.insert_asset(&asset).unwrap();
+        assert_eq!(fts_tags(&catalog).as_deref(), Some("[\"beta\"]"));
+        assert_eq!(catalog.search_assets(None, None, Some("alpha"), None, None, None).unwrap().len(), 0);
+        assert_eq!(catalog.search_assets(None, None, Some("beta"), None, None, None).unwrap().len(), 1);
+
+        // Delete → delete trigger (variants reference the asset, so they go first).
+        catalog.conn.execute("DELETE FROM variants WHERE asset_id = ?1", [&id]).unwrap();
+        catalog.delete_asset(&id).unwrap();
+        assert_eq!(fts_tags(&catalog), None);
+        let n: i64 = catalog.conn.query_row("SELECT COUNT(*) FROM assets_tags_fts", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn migration_v12_backfills_tags_fts() {
+        let catalog = catalog_with_tags(vec!["event|festival".to_string()], "tagsfts2");
+        // Simulate a v11 catalog: index empty, version 11.
+        catalog.conn.execute_batch(
+            "DELETE FROM assets_tags_fts; DELETE FROM schema_version; INSERT INTO schema_version VALUES (11);",
+        ).unwrap();
+        catalog.run_migrations().unwrap();
+        assert_eq!(catalog.schema_version(), SCHEMA_VERSION);
+        let n: i64 = catalog.conn.query_row("SELECT COUNT(*) FROM assets_tags_fts", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        let tags: String = catalog.conn.query_row("SELECT tags FROM assets_tags_fts", [], |r| r.get(0)).unwrap();
+        assert_eq!(tags, "[\"event|festival\"]");
+    }
+
+    #[test]
+    fn backfill_metadata_from_json() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        // First initialize without metadata columns by creating a minimal schema
+        catalog.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS assets (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                created_at TEXT NOT NULL,
+                asset_type TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '[]',
+                description TEXT,
+                rating INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS variants (
+                content_hash TEXT PRIMARY KEY,
+                asset_id TEXT NOT NULL REFERENCES assets(id),
+                role TEXT NOT NULL,
+                format TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                original_filename TEXT NOT NULL,
+                source_metadata TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE TABLE IF NOT EXISTS file_locations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content_hash TEXT NOT NULL REFERENCES variants(content_hash),
+                volume_id TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                verified_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS volumes (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                mount_point TEXT NOT NULL,
+                volume_type TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS recipes (
+                id TEXT PRIMARY KEY,
+                variant_hash TEXT NOT NULL REFERENCES variants(content_hash),
+                software TEXT NOT NULL,
+                recipe_type TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                volume_id TEXT,
+                relative_path TEXT,
+                verified_at TEXT
+            );"
+        ).unwrap();
+
+        // Insert an asset and variant using old schema (no metadata columns)
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:old1");
+        catalog.conn.execute(
+            "INSERT INTO assets (id, name, created_at, asset_type, tags) VALUES (?1, NULL, ?2, 'image', '[]')",
+            rusqlite::params![asset.id.to_string(), asset.created_at.to_rfc3339()],
+        ).unwrap();
+
+        catalog.conn.execute(
+            "INSERT INTO variants (content_hash, asset_id, role, format, file_size, original_filename, source_metadata) \
+             VALUES ('sha256:old1', ?1, 'original', 'nef', 30000000, 'OLD.NEF', \
+             '{\"camera_model\":\"D850\",\"iso\":\"800\",\"focal_length\":\"70 mm\",\"f_number\":\"2.8\"}')",
+            rusqlite::params![asset.id.to_string()],
+        ).unwrap();
+
+        // Now run initialize() which should add columns and backfill
+        catalog.initialize().unwrap();
+
+        let row: (Option<String>, Option<i64>, Option<f64>, Option<f64>) =
+            catalog.conn.query_row(
+                "SELECT camera_model, iso, focal_length_mm, f_number FROM variants WHERE content_hash = 'sha256:old1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            ).unwrap();
+
+        assert_eq!(row.0.as_deref(), Some("D850"));
+        assert_eq!(row.1, Some(800));
+        assert!((row.2.unwrap() - 70.0).abs() < 0.01);
+        assert!((row.3.unwrap() - 2.8).abs() < 0.01);
+    }
+}

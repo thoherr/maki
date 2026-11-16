@@ -357,6 +357,7 @@ impl Catalog {
 
 #[cfg(test)]
 mod tests {
+    use crate::catalog::test_support::*;
     use super::*;
     use crate::models::{AssetType, VariantRole};
 
@@ -549,5 +550,121 @@ mod tests {
         asset.variants[0].source_metadata.insert("audio_duration".into(), "200".into());
         catalog.update_denormalized_variant_columns(&asset).unwrap();
         assert_eq!(media_row(&catalog, &id).0, Some(200.0));
+    }
+
+    #[test]
+    fn insert_asset_persists_tag_sources_column() {
+        use crate::models::TagSource;
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:prov-col");
+        asset.add_tags_with_source(&["robo".to_string()], TagSource::Vlm);
+        asset.add_tags_with_source(&["manual".to_string()], TagSource::User);
+        catalog.insert_asset(&asset).unwrap();
+
+        let details = catalog
+            .load_asset_details(&asset.id.to_string())
+            .unwrap()
+            .unwrap();
+        assert_eq!(details.tag_sources.get("robo"), Some(&TagSource::Vlm));
+        assert!(!details.tag_sources.contains_key("manual"));
+
+        // Upsert path keeps the column in sync.
+        asset.remove_tags(&["robo".to_string()]);
+        catalog.insert_asset(&asset).unwrap();
+        let details = catalog
+            .load_asset_details(&asset.id.to_string())
+            .unwrap()
+            .unwrap();
+        assert!(details.tag_sources.is_empty(), "{:?}", details.tag_sources);
+    }
+
+    #[test]
+    fn insert_and_query_asset() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:test1");
+        catalog.insert_asset(&asset).unwrap();
+
+        let count: i64 = catalog
+            .conn
+            .query_row("SELECT COUNT(*) FROM assets", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn tagcount_updates_when_tags_change() {
+        // Regression guard: the denormalised column must stay in sync
+        // with tag mutations (add, remove, rename) because every tag
+        // write path goes through insert_asset. If someone adds a new
+        // SQL-only write path, this test will catch the drift.
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:tc1");
+        asset.name = Some("x".to_string());
+        let v = crate::models::Variant { file_size: 100, ..test_variant(asset.id, "sha256:tc1", "x.jpg") };
+        asset.variants.push(v.clone());
+
+        // Start with zero tags.
+        catalog.insert_asset(&asset).unwrap();
+        catalog.insert_variant(&v).unwrap();
+
+        fn lookup(catalog: &Catalog, asset_id: &str) -> i64 {
+            catalog
+                .conn()
+                .query_row(
+                    "SELECT leaf_tag_count FROM assets WHERE id = ?1",
+                    rusqlite::params![asset_id],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap()
+        }
+
+        assert_eq!(lookup(&catalog, &asset.id.to_string()), 0);
+
+        // Add one leaf tag (with ancestor expansion → 3 stored, 1 leaf).
+        asset.tags = vec![
+            "subject".to_string(),
+            "subject|nature".to_string(),
+            "subject|nature|landscape".to_string(),
+        ];
+        catalog.insert_asset(&asset).unwrap();
+        assert_eq!(lookup(&catalog, &asset.id.to_string()), 1);
+
+        // Add a second leaf in the same hierarchy.
+        asset.tags.push("subject|nature|forest".to_string());
+        catalog.insert_asset(&asset).unwrap();
+        assert_eq!(lookup(&catalog, &asset.id.to_string()), 2);
+
+        // Clear all tags.
+        asset.tags.clear();
+        catalog.insert_asset(&asset).unwrap();
+        assert_eq!(lookup(&catalog, &asset.id.to_string()), 0);
+    }
+
+    #[test]
+    fn face_scan_status_default_is_null() {
+        // Newly-inserted assets start with face_scan_status = NULL so the first
+        // `faces detect` run will scan them.
+        let catalog = setup_search_catalog();
+        let rows = catalog.search_assets(None, None, None, None, None, None).unwrap();
+        let aid = &rows[0].asset_id;
+        assert!(!catalog.is_face_scan_done(aid), "new asset should be unscanned");
+    }
+
+    #[test]
+    fn mark_face_scan_done_roundtrips() {
+        let catalog = setup_search_catalog();
+        let rows = catalog.search_assets(None, None, None, None, None, None).unwrap();
+        let aid = &rows[0].asset_id;
+        assert!(!catalog.is_face_scan_done(aid));
+        catalog.mark_face_scan_done(aid).unwrap();
+        assert!(catalog.is_face_scan_done(aid), "should be marked done after mark_face_scan_done");
+        catalog.clear_face_scan_status(aid).unwrap();
+        assert!(!catalog.is_face_scan_done(aid), "should be unscanned after clear_face_scan_status");
     }
 }

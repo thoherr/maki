@@ -207,3 +207,30 @@ impl Catalog {
     }
 
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::catalog::test_support::*;
+    use crate::catalog::*;
+
+    #[test]
+    fn has_variant_returns_false_when_empty() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        assert!(!catalog.has_variant("sha256:abc123").unwrap());
+    }
+
+    #[test]
+    fn has_variant_returns_true_after_insert() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+
+        let asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:test2");
+        catalog.insert_asset(&asset).unwrap();
+
+        let variant = crate::models::Variant { file_size: 100, ..test_variant(asset.id, "sha256:abc123", "test.txt") };
+        catalog.insert_variant(&variant).unwrap();
+
+        assert!(catalog.has_variant("sha256:abc123").unwrap());
+    }
+}

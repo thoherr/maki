@@ -1066,3 +1066,85 @@ impl Catalog {
     }
 
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::catalog::*;
+
+    #[test]
+    fn tag_index_and_scan_paths_agree() {
+        // A few assets with hierarchical tags; every tag mode must return
+        // the same ids whether the entry is served from the trigram index
+        // (small catalog → always below the probe limit) or by the scan
+        // (limit forced to 0 → never indexed).
+        let catalog = Catalog::open_in_memory().unwrap();
+        catalog.initialize().unwrap();
+        let sets: Vec<(&str, Vec<&str>)> = vec![
+            ("tp1", vec!["event|festival|jazz", "year|2026"]),
+            ("tp2", vec!["event|festival", "Jazz"]),
+            ("tp3", vec!["festival", "location|Denmark|Legoland"]),
+            ("tp4", vec!["Legoland", "event"]),
+            ("tp5", vec!["\"Sir\" Oliver Mally", "fest"]),
+        ];
+        for (suffix, tags) in &sets {
+            let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, &format!("sha256:{suffix}"));
+            asset.tags = tags.iter().map(|t| t.to_string()).collect();
+            let variant = crate::models::Variant {
+                content_hash: format!("sha256:{suffix}"),
+                asset_id: asset.id,
+                role: crate::models::VariantRole::Original,
+                format: "jpg".to_string(),
+                file_size: 1,
+                original_filename: format!("{suffix}.jpg"),
+                source_metadata: Default::default(),
+                locations: vec![],
+            };
+            asset.variants.push(variant.clone());
+            catalog.insert_asset(&asset).unwrap();
+            catalog.insert_variant(&variant).unwrap();
+        }
+        let queries: Vec<(Vec<&str>, Vec<&str>)> = vec![
+            (vec!["festival"], vec![]),
+            (vec!["jazz"], vec![]),
+            (vec!["^Jazz"], vec![]),
+            (vec!["/festival"], vec![]),
+            (vec!["=Legoland"], vec![]),
+            (vec!["=/festival"], vec![]),
+            (vec!["|fest"], vec![]),
+            (vec!["event", "festival"], vec![]),
+            (vec!["festival,Legoland"], vec![]),
+            (vec!["\"Sir\" Oliver Mally"], vec![]),
+            (vec![], vec!["event"]),
+            (vec!["festival"], vec!["jazz"]),
+            (vec![], vec!["Legoland,fest"]),
+        ];
+        for (tags, excl) in &queries {
+            let tags: Vec<String> = tags.iter().map(|s| s.to_string()).collect();
+            let excl: Vec<String> = excl.iter().map(|s| s.to_string()).collect();
+            let opts = SearchOptions { tags: &tags, tags_exclude: &excl, per_page: 100, ..Default::default() };
+            let run = |limit: u32| -> Vec<String> {
+                catalog.tag_index_memo.borrow_mut().clear();
+                catalog.tag_index_limit.set(limit);
+                let mut ids: Vec<String> = catalog.search_paginated(&opts).unwrap().into_iter().map(|r| r.asset_id).collect();
+                ids.sort();
+                ids
+            };
+            let scanned = run(0);
+            let indexed = run(TAG_INDEX_MAX_MATCHES);
+            assert_eq!(scanned, indexed, "tag:{tags:?} -tag:{excl:?} differ between scan and index paths");
+            // Plan sanity: limit 0 never indexes, the default always does here.
+            catalog.tag_index_memo.borrow_mut().clear();
+            catalog.tag_index_limit.set(0);
+            let plan = catalog.plan_tag_index(&opts);
+            assert!(tags.iter().chain(excl.iter()).all(|e| !plan.is_indexed(e)));
+            catalog.tag_index_memo.borrow_mut().clear();
+            catalog.tag_index_limit.set(TAG_INDEX_MAX_MATCHES);
+            let plan = catalog.plan_tag_index(&opts);
+            assert!(tags.iter().chain(excl.iter()).all(|e| plan.is_indexed(e)));
+            // The queries above are expected to hit something, except the ones
+            // that are deliberately empty.
+            assert!(!scanned.is_empty() || tags.is_empty() || tags == ["=/festival"], "query {tags:?} returned nothing");
+        }
+        catalog.tag_index_limit.set(TAG_INDEX_MAX_MATCHES);
+    }
+}
