@@ -729,9 +729,11 @@ pub fn normalize_path_for_search(
     for v in volumes {
         // On Windows, volume mount points may also have \\?\ prefix
         #[cfg(windows)]
-        let mount = std::path::PathBuf::from(
+        let mount_stripped = std::path::PathBuf::from(
             v.mount_point.to_string_lossy().strip_prefix(r"\\?\").unwrap_or(&v.mount_point.to_string_lossy())
         );
+        #[cfg(windows)]
+        let mount = &mount_stripped;
         #[cfg(unix)]
         let mount = &v.mount_point;
         if p.starts_with(mount) {

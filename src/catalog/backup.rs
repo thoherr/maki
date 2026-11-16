@@ -148,7 +148,7 @@ impl Catalog {
                 asset_percentage: pct,
             });
         }
-        purpose_coverage.sort_by(|a, b| b.asset_count.cmp(&a.asset_count));
+        purpose_coverage.sort_by_key(|a| std::cmp::Reverse(a.asset_count));
 
         // Build volume gaps from the per-volume counts (no extra queries)
         let mut volume_gaps = Vec::new();
@@ -164,7 +164,7 @@ impl Catalog {
                 });
             }
         }
-        volume_gaps.sort_by(|a, b| a.missing_count.cmp(&b.missing_count));
+        volume_gaps.sort_by_key(|a| a.missing_count);
 
         // Volume detail: for --volume target
         let volume_detail = if let Some(target_vid) = target_volume_id {

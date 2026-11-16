@@ -156,6 +156,12 @@ adapters over the service, and `maki.toml` read once per invocation.
   asset is already in a stack, like `POST /api/batch/stack`; an unknown
   asset is 404. Other failures stay 400 with the `{"error"}` body.
 
+- **Builds on Windows and under current stable clippy.** A Windows-only
+  borrow error in the search path normalisation (introduced by the
+  Phase 2 lint cleanup, invisible on macOS/Linux) is fixed, and the lints
+  new in Rust 1.100 are addressed (`result_large_err` allowed crate-wide:
+  a web handler's error *is* the finished response).
+
 ### Phase 1 — correctness
 
 #### Changed (behaviour)

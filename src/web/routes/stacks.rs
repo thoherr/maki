@@ -191,7 +191,7 @@ pub async fn stack_by_similarity(
         let query_emb = emb_store
             .get(&full_id, model_id)?
             .ok_or_else(|| anyhow::anyhow!(
-                "No embedding for this asset. Run `maki embed --asset {}` first.", &full_id
+                "No embedding for this asset. Run `maki embed --asset {}` first.", full_id
             ))?;
 
         let threshold = params.threshold.unwrap_or(85.0).clamp(0.0, 100.0) / 100.0;

@@ -74,3 +74,6 @@ strip = true
 [lints.clippy]
 too_many_arguments = "allow"
 type_complexity = "allow"
+# Web handlers return `Result<Response, Response>`: the error *is* the
+# finished HTTP response (axum convention), so boxing it buys nothing.
+result_large_err = "allow"

@@ -7755,7 +7755,7 @@ fn stack_set_pick() {
         .args(["stack", "show", &ids[0]])
         .assert()
         .success()
-        .stdout(predicate::str::contains(format!("{} [pick]", &ids[0])));
+        .stdout(predicate::str::contains(format!("{} [pick]", ids[0])));
 
     // Change pick to ids[1]
     maki()
@@ -7771,7 +7771,7 @@ fn stack_set_pick() {
         .args(["stack", "show", &ids[1]])
         .assert()
         .success()
-        .stdout(predicate::str::contains(format!("{} [pick]", &ids[1])));
+        .stdout(predicate::str::contains(format!("{} [pick]", ids[1])));
 }
 
 #[test]

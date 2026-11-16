@@ -1570,10 +1570,8 @@ fn handle_open_tag(
                             data.source_metadata.insert("rating".to_string(), val);
                         }
                     }
-                    b"Label" => {
-                        if !val.is_empty() {
-                            data.source_metadata.insert("label".to_string(), val);
-                        }
+                    b"Label" if !val.is_empty() => {
+                        data.source_metadata.insert("label".to_string(), val);
                     }
                     _ => {}
                 }
@@ -1596,11 +1594,9 @@ fn handle_open_tag(
                 text_buf.clear();
             }
         }
-        b"li" => {
-            if *context != Context::None {
-                *in_li = true;
-                text_buf.clear();
-            }
+        b"li" if *context != Context::None => {
+            *in_li = true;
+            text_buf.clear();
         }
         _ => {}
     }

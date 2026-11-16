@@ -76,8 +76,7 @@ pub fn run_search(
     }
 
     // Normalize path prefixes: ~, ./, ../, /absolute → volume-relative + volume filter
-    let path_volume_id: Option<String>;
-    if !parsed.path_prefixes.is_empty() {
+    let path_volume_id: Option<String> = if !parsed.path_prefixes.is_empty() {
         let registry = DeviceRegistry::new(scope.catalog_root);
         let volumes = registry.list()?;
         let cwd = std::env::current_dir().ok();
@@ -88,10 +87,10 @@ pub fn run_search(
             cwd.as_deref(),
         );
         parsed.path_prefixes[0] = normalized;
-        path_volume_id = vol_id;
+        vol_id
     } else {
-        path_volume_id = None;
-    }
+        None
+    };
 
     // Session root pattern from config for the scattered: filter
     let session_pattern = &scope.config.group.session_root_pattern;
