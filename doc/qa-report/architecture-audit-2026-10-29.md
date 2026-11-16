@@ -46,7 +46,12 @@ One finding was a defect and is fixed in the same change as this report
 - Phase 3 (strategic, ongoing): started 2026-11-16. Done so far:
   `tests/cli.rs` split into `tests/cli/` — `main.rs`, `common.rs` and 20
   per-command modules, one test binary, same 297 / 344 tests (F26, first
-  step). Open: crate-wide `test_support`, per-section unit tests and
+  step); crate-wide `src/test_support.rs` (`TempCatalog`, `memory_catalog`,
+  `test_asset` builder, `test_variant`, `insert_rows`) adopted by the
+  query, doctor, web and catalog tests, about 600 fewer test lines net.
+  Still private: the six `setup_*` catalogs in `catalog.rs`, the
+  hand-written minimal schemas in the `stack`/`collection` tests and
+  `asset_service`'s `setup_catalog`. Open: per-section unit tests and
   service-operation unit tests; `browse.html` JS modules; `Catalog::conn()`
   visibility and the public-API decision.
 

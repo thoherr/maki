@@ -1742,32 +1742,15 @@ mod tests {
     /// Set up a catalog with volumes registered for relocate tests.
     /// Returns (catalog_dir, vol1_dir, vol2_dir, vol1, vol2).
     fn setup_relocate() -> (
-        tempfile::TempDir,
+        crate::test_support::TempCatalog,
         tempfile::TempDir,
         tempfile::TempDir,
         Volume,
         Volume,
     ) {
-        let catalog_dir = tempfile::tempdir().unwrap();
-        setup_catalog(catalog_dir.path());
-        crate::device_registry::DeviceRegistry::init(catalog_dir.path()).unwrap();
-
-        let vol1_dir = tempfile::tempdir().unwrap();
-        let vol2_dir = tempfile::tempdir().unwrap();
-
-        let registry = crate::device_registry::DeviceRegistry::new(catalog_dir.path());
-        let vol1 = registry
-            .register("vol1", vol1_dir.path(), crate::models::VolumeType::Local, None)
-            .unwrap();
-        let vol2 = registry
-            .register("vol2", vol2_dir.path(), crate::models::VolumeType::Local, None)
-            .unwrap();
-
-        // Ensure volumes are in the catalog DB too
-        let catalog = crate::catalog::Catalog::open(catalog_dir.path()).unwrap();
-        catalog.ensure_volume(&vol1).unwrap();
-        catalog.ensure_volume(&vol2).unwrap();
-
+        let catalog_dir = crate::test_support::TempCatalog::new();
+        let (vol1_dir, vol1) = catalog_dir.add_volume("vol1");
+        let (vol2_dir, vol2) = catalog_dir.add_volume("vol2");
         (catalog_dir, vol1_dir, vol2_dir, vol1, vol2)
     }
 

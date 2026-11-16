@@ -430,9 +430,7 @@ mod tests {
 
     /// A real in-memory catalog so the v13 `embeddings` table exists.
     fn setup_db() -> crate::catalog::Catalog {
-        let catalog = crate::catalog::Catalog::open_in_memory().unwrap();
-        catalog.initialize().unwrap();
-        catalog
+        crate::test_support::memory_catalog()
     }
 
     #[test]

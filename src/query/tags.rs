@@ -1050,35 +1050,10 @@ mod tests {
 
     // ── tag rename tests ───────────────────────────────────
 
-    fn setup_tag_rename_catalog(tags: &[&str]) -> (tempfile::TempDir, String) {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("metadata")).unwrap();
-        crate::config::CatalogConfig::default().save(root).unwrap();
-        crate::device_registry::DeviceRegistry::init(root).unwrap();
-        let catalog = crate::catalog::Catalog::open(root).unwrap();
-        catalog.initialize().unwrap();
-
-        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:rename_test");
-        asset.tags = tags.iter().map(|t| t.to_string()).collect();
-        let variant = crate::models::Variant {
-            content_hash: "sha256:rename_test".to_string(),
-            asset_id: asset.id,
-            role: crate::models::VariantRole::Original,
-            format: "jpg".to_string(),
-            file_size: 100,
-            original_filename: "test.jpg".to_string(),
-            source_metadata: Default::default(),
-            locations: vec![],
-        };
-        asset.variants.push(variant.clone());
-        catalog.insert_asset(&asset).unwrap();
-        catalog.insert_variant(&variant).unwrap();
-        let store = crate::metadata_store::MetadataStore::new(root);
-        store.save(&asset).unwrap();
-
-        let asset_id = asset.id.to_string();
-        (dir, asset_id)
+    fn setup_tag_rename_catalog(tags: &[&str]) -> (TempCatalog, String) {
+        let cat = TempCatalog::new();
+        let seeded = cat.seed(test_asset("sha256:rename_test").file("test.jpg").size(100).tags(tags));
+        (cat, seeded.id.to_string())
     }
 
     #[test]
@@ -1156,16 +1131,7 @@ mod tests {
 
         let mut a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:rt2");
         a2.tags = vec!["landscape".to_string()];
-        let v2 = crate::models::Variant {
-            content_hash: "sha256:rt2".to_string(),
-            asset_id: a2.id,
-            role: crate::models::VariantRole::Original,
-            format: "jpg".to_string(),
-            file_size: 100,
-            original_filename: "rt2.jpg".to_string(),
-            source_metadata: Default::default(),
-            locations: vec![],
-        };
+        let v2 = crate::models::Variant { file_size: 100, ..test_variant(a2.id, "sha256:rt2", "rt2.jpg") };
         a2.variants.push(v2.clone());
         let a2_id = a2.id.to_string();
         let catalog = Catalog::open(dir.path()).unwrap();
@@ -1202,12 +1168,7 @@ mod tests {
         // Asset 1: has descendant → not a leaf
         let mut a1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ren1");
         a1.tags = vec!["location|Germany|Bayern".to_string(), "location|Germany".to_string()];
-        let v1 = crate::models::Variant {
-            content_hash: "sha256:ren1".to_string(), asset_id: a1.id,
-            role: crate::models::VariantRole::Original, format: "jpg".to_string(),
-            file_size: 100, original_filename: "a1.jpg".to_string(),
-            source_metadata: Default::default(), locations: vec![],
-        };
+        let v1 = crate::models::Variant { file_size: 100, ..test_variant(a1.id, "sha256:ren1", "a1.jpg") };
         a1.variants.push(v1.clone());
         catalog.insert_asset(&a1).unwrap();
         catalog.insert_variant(&v1).unwrap();
@@ -1217,12 +1178,7 @@ mod tests {
         // Asset 2: leaf only
         let mut a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ren2");
         a2.tags = vec!["location|Germany".to_string()];
-        let v2 = crate::models::Variant {
-            content_hash: "sha256:ren2".to_string(), asset_id: a2.id,
-            role: crate::models::VariantRole::Original, format: "jpg".to_string(),
-            file_size: 100, original_filename: "a2.jpg".to_string(),
-            source_metadata: Default::default(), locations: vec![],
-        };
+        let v2 = crate::models::Variant { file_size: 100, ..test_variant(a2.id, "sha256:ren2", "a2.jpg") };
         a2.variants.push(v2.clone());
         catalog.insert_asset(&a2).unwrap();
         catalog.insert_variant(&v2).unwrap();
@@ -1260,12 +1216,7 @@ mod tests {
         // Asset 1: has "Animals" but also descendants → not a leaf → skipped
         let mut a1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ec1");
         a1.tags = vec!["Animals|Cats".to_string(), "animals|Birds".to_string(), "Animals".to_string()];
-        let v1 = crate::models::Variant {
-            content_hash: "sha256:ec1".to_string(), asset_id: a1.id,
-            role: crate::models::VariantRole::Original, format: "jpg".to_string(),
-            file_size: 100, original_filename: "a1.jpg".to_string(),
-            source_metadata: Default::default(), locations: vec![],
-        };
+        let v1 = crate::models::Variant { file_size: 100, ..test_variant(a1.id, "sha256:ec1", "a1.jpg") };
         a1.variants.push(v1.clone());
         catalog.insert_asset(&a1).unwrap();
         catalog.insert_variant(&v1).unwrap();
@@ -1275,12 +1226,7 @@ mod tests {
         // Asset 2: standalone "Animals" only (leaf) — this is the one to rename
         let mut a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ec2");
         a2.tags = vec!["Animals".to_string()];
-        let v2 = crate::models::Variant {
-            content_hash: "sha256:ec2".to_string(), asset_id: a2.id,
-            role: crate::models::VariantRole::Original, format: "jpg".to_string(),
-            file_size: 100, original_filename: "a2.jpg".to_string(),
-            source_metadata: Default::default(), locations: vec![],
-        };
+        let v2 = crate::models::Variant { file_size: 100, ..test_variant(a2.id, "sha256:ec2", "a2.jpg") };
         a2.variants.push(v2.clone());
         catalog.insert_asset(&a2).unwrap();
         catalog.insert_variant(&v2).unwrap();
@@ -1322,12 +1268,7 @@ mod tests {
         // — this simulates the cleanup-out-of-band scenario the user hit.
         let mut a1 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ms1");
         a1.tags = vec!["Foo".to_string()];
-        let v1 = crate::models::Variant {
-            content_hash: "sha256:ms1".to_string(), asset_id: a1.id,
-            role: crate::models::VariantRole::Original, format: "jpg".to_string(),
-            file_size: 100, original_filename: "ms1.jpg".to_string(),
-            source_metadata: Default::default(), locations: vec![],
-        };
+        let v1 = crate::models::Variant { file_size: 100, ..test_variant(a1.id, "sha256:ms1", "ms1.jpg") };
         a1.variants.push(v1.clone());
         catalog.insert_asset(&a1).unwrap();
         catalog.insert_variant(&v1).unwrap();
@@ -1335,12 +1276,7 @@ mod tests {
 
         let mut a2 = crate::models::Asset::new(crate::models::AssetType::Image, "sha256:ms2");
         a2.tags = vec!["Foo".to_string()];
-        let v2 = crate::models::Variant {
-            content_hash: "sha256:ms2".to_string(), asset_id: a2.id,
-            role: crate::models::VariantRole::Original, format: "jpg".to_string(),
-            file_size: 100, original_filename: "ms2.jpg".to_string(),
-            source_metadata: Default::default(), locations: vec![],
-        };
+        let v2 = crate::models::Variant { file_size: 100, ..test_variant(a2.id, "sha256:ms2", "ms2.jpg") };
         a2.variants.push(v2.clone());
         catalog.insert_asset(&a2).unwrap();
         catalog.insert_variant(&v2).unwrap();

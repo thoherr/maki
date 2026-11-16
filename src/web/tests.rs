@@ -15,6 +15,7 @@
 //! coverage, not exhaustive coverage — new web features should add their
 //! tests here against `TestServer`.
 
+use crate::test_support::{insert_rows, test_asset, test_variant};
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -24,7 +25,7 @@ use tower::ServiceExt;
 
 use crate::catalog::Catalog;
 use crate::metadata_store::MetadataStore;
-use crate::models::{Asset, AssetType, Variant, VariantRole};
+use crate::models::{Asset, AssetType, Variant};
 
 use super::{build_router, AppState, ServeOptions};
 
@@ -70,16 +71,7 @@ impl TestServer {
                 &["festival".to_string()],
                 crate::models::TagSource::Vlm,
             );
-            let variant = Variant {
-                content_hash: "sha256:webtest1".to_string(),
-                asset_id: asset.id,
-                role: VariantRole::Original,
-                format: "jpg".to_string(),
-                file_size: 5000,
-                original_filename: "sunset_beach.jpg".to_string(),
-                source_metadata: Default::default(),
-                locations: vec![],
-            };
+            let variant = Variant { file_size: 5000, ..test_variant(asset.id, "sha256:webtest1", "sunset_beach.jpg") };
             asset.variants.push(variant.clone());
 
             let store = MetadataStore::new(&root);
@@ -197,22 +189,9 @@ impl TestServer {
     /// (so a query-image upload with those bytes is a content-hash hit,
     /// and so stack/batch tests have a second member).
     fn seed_asset_with_hash(&self, hash: &str) -> String {
-        let catalog = Catalog::open_fast(&self.root).unwrap();
-        let mut asset = Asset::new(AssetType::Image, hash);
-        asset.name = Some("the original".to_string());
-        asset.variants.push(Variant {
-            content_hash: hash.to_string(),
-            asset_id: asset.id,
-            role: VariantRole::Original,
-            format: "jpg".to_string(),
-            file_size: 11,
-            original_filename: "original.jpg".to_string(),
-            source_metadata: Default::default(),
-            locations: vec![],
-        });
+        let asset = test_asset(hash).file("original.jpg").size(11).name("the original").build();
         MetadataStore::new(&self.root).save(&asset).unwrap();
-        catalog.insert_asset(&asset).unwrap();
-        catalog.insert_variant(&asset.variants[0]).unwrap();
+        insert_rows(&Catalog::open_fast(&self.root).unwrap(), &asset);
         asset.id.to_string()
     }
 

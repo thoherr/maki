@@ -349,27 +349,12 @@ mod tests {
     /// a collection "Favs" = {a1}, "Picks" = {a2}.
     /// With the `ai` feature: person Alice on {a1, a2}, Bob on {a2, a3}.
     fn setup_catalog() -> (Catalog, Vec<String>) {
-        let catalog = Catalog::open_in_memory().unwrap();
-        catalog.initialize().unwrap();
+        let catalog = crate::test_support::memory_catalog();
 
         let mut ids = Vec::new();
         for i in 1..=3 {
-            let hash = format!("sha256:resolve{i}");
-            let mut asset =
-                crate::models::Asset::new(crate::models::AssetType::Image, &hash);
-            let variant = crate::models::Variant {
-                content_hash: hash,
-                asset_id: asset.id,
-                role: crate::models::VariantRole::Original,
-                format: "jpg".to_string(),
-                file_size: 1000,
-                original_filename: format!("resolve{i}.jpg"),
-                source_metadata: Default::default(),
-                locations: vec![],
-            };
-            asset.variants.push(variant.clone());
-            catalog.insert_asset(&asset).unwrap();
-            catalog.insert_variant(&variant).unwrap();
+            let asset = crate::test_support::test_asset(&format!("sha256:resolve{i}")).build();
+            crate::test_support::insert_rows(&catalog, &asset);
             ids.push(asset.id.to_string());
         }
 

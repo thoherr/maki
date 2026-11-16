@@ -799,7 +799,7 @@ mod tests {
     use super::*;
     use crate::catalog::Catalog;
     use crate::metadata_store::MetadataStore;
-    use crate::models::{Asset, AssetType, Variant, VariantRole};
+    use crate::models::{Asset, AssetType, Variant};
     use crate::query::test_support::*;
 
     #[test]
@@ -954,16 +954,7 @@ mod tests {
         let mut asset1 = Asset::new(AssetType::Image, "sha256:rate1");
         asset1.created_at = chrono::Utc::now() - chrono::Duration::hours(2);
         asset1.rating = Some(3);
-        let v1 = Variant {
-            content_hash: "sha256:rate1".to_string(),
-            asset_id: asset1.id,
-            role: VariantRole::Original,
-            format: "arw".to_string(),
-            file_size: 25_000_000,
-            original_filename: "DSC_001.ARW".to_string(),
-            source_metadata: Default::default(),
-            locations: vec![],
-        };
+        let v1 = Variant { file_size: 25_000_000, ..test_variant(asset1.id, "sha256:rate1", "DSC_001.ARW") };
         asset1.variants.push(v1.clone());
         catalog.insert_asset(&asset1).unwrap();
         catalog.insert_variant(&v1).unwrap();
@@ -974,16 +965,7 @@ mod tests {
         asset2.rating = Some(5);
         asset2.color_label = Some("Red".to_string());
         asset2.description = Some("Great shot".to_string());
-        let v2 = Variant {
-            content_hash: "sha256:rate2".to_string(),
-            asset_id: asset2.id,
-            role: VariantRole::Original,
-            format: "jpg".to_string(),
-            file_size: 5_000_000,
-            original_filename: "DSC_001.JPG".to_string(),
-            source_metadata: Default::default(),
-            locations: vec![],
-        };
+        let v2 = Variant { file_size: 5_000_000, ..test_variant(asset2.id, "sha256:rate2", "DSC_001.JPG") };
         asset2.variants.push(v2.clone());
         catalog.insert_asset(&asset2).unwrap();
         catalog.insert_variant(&v2).unwrap();
@@ -1016,16 +998,7 @@ mod tests {
         asset1.rating = Some(5);
         asset1.color_label = Some("Blue".to_string());
         asset1.description = Some("Target desc".to_string());
-        let v1 = Variant {
-            content_hash: "sha256:keep1".to_string(),
-            asset_id: asset1.id,
-            role: VariantRole::Original,
-            format: "arw".to_string(),
-            file_size: 25_000_000,
-            original_filename: "IMG_001.ARW".to_string(),
-            source_metadata: Default::default(),
-            locations: vec![],
-        };
+        let v1 = Variant { file_size: 25_000_000, ..test_variant(asset1.id, "sha256:keep1", "IMG_001.ARW") };
         asset1.variants.push(v1.clone());
         catalog.insert_asset(&asset1).unwrap();
         catalog.insert_variant(&v1).unwrap();
@@ -1036,16 +1009,7 @@ mod tests {
         asset2.rating = Some(2);
         asset2.color_label = Some("Red".to_string());
         asset2.description = Some("Donor desc".to_string());
-        let v2 = Variant {
-            content_hash: "sha256:keep2".to_string(),
-            asset_id: asset2.id,
-            role: VariantRole::Original,
-            format: "jpg".to_string(),
-            file_size: 5_000_000,
-            original_filename: "IMG_001.JPG".to_string(),
-            source_metadata: Default::default(),
-            locations: vec![],
-        };
+        let v2 = Variant { file_size: 5_000_000, ..test_variant(asset2.id, "sha256:keep2", "IMG_001.JPG") };
         asset2.variants.push(v2.clone());
         catalog.insert_asset(&asset2).unwrap();
         catalog.insert_variant(&v2).unwrap();
@@ -1183,32 +1147,14 @@ mod tests {
         let store = MetadataStore::new(catalog_root);
 
         let mut asset1 = Asset::new(AssetType::Image, "sha256:aaa");
-        let v1 = Variant {
-            content_hash: "sha256:aaa".to_string(),
-            asset_id: asset1.id,
-            role: VariantRole::Original,
-            format: "jpg".to_string(),
-            file_size: 1000,
-            original_filename: "IMG_001.JPG".to_string(),
-            source_metadata: Default::default(),
-            locations: vec![],
-        };
+        let v1 = test_variant(asset1.id, "sha256:aaa", "IMG_001.JPG");
         asset1.variants.push(v1.clone());
         catalog.insert_asset(&asset1).unwrap();
         catalog.insert_variant(&v1).unwrap();
         store.save(&asset1).unwrap();
 
         let mut asset2 = Asset::new(AssetType::Image, "sha256:bbb");
-        let v2 = Variant {
-            content_hash: "sha256:bbb".to_string(),
-            asset_id: asset2.id,
-            role: VariantRole::Original,
-            format: "jpg".to_string(),
-            file_size: 2000,
-            original_filename: "IMG_002.JPG".to_string(),
-            source_metadata: Default::default(),
-            locations: vec![],
-        };
+        let v2 = Variant { file_size: 2000, ..test_variant(asset2.id, "sha256:bbb", "IMG_002.JPG") };
         asset2.variants.push(v2.clone());
         catalog.insert_asset(&asset2).unwrap();
         catalog.insert_variant(&v2).unwrap();
@@ -1281,20 +1227,9 @@ mod tests {
         filename: &str,
         format: &str,
     ) -> String {
-        let mut asset = Asset::new(AssetType::Image, hash);
-        let v = Variant {
-            content_hash: hash.to_string(),
-            asset_id: asset.id,
-            role: VariantRole::Original,
-            format: format.to_string(),
-            file_size: 1000,
-            original_filename: filename.to_string(),
-            source_metadata: Default::default(),
-            locations: vec![],
-        };
-        asset.variants.push(v.clone());
-        catalog.insert_asset(&asset).unwrap();
-        catalog.insert_variant(&v).unwrap();
+        let mut asset = test_asset(hash).file(filename).build();
+        asset.variants[0].format = format.to_string();
+        insert_rows(catalog, &asset);
         store.save(&asset).unwrap();
         asset.id.to_string()
     }
@@ -1426,42 +1361,15 @@ mod tests {
 
     // ── split tests ────────────────────────────────────────
 
-    fn setup_split_catalog(variant_hashes: &[&str]) -> (tempfile::TempDir, String) {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("metadata")).unwrap();
-        crate::config::CatalogConfig::default().save(root).unwrap();
-        crate::device_registry::DeviceRegistry::init(root).unwrap();
-        let catalog = crate::catalog::Catalog::open(root).unwrap();
-        catalog.initialize().unwrap();
-
-        // First hash determines the asset ID (use full sha256: prefix)
-        let first_full = format!("sha256:{}", variant_hashes[0]);
-        let mut asset = crate::models::Asset::new(crate::models::AssetType::Image, &first_full);
-        asset.tags = vec!["landscape".to_string()];
-        asset.rating = Some(4);
-        for hash in variant_hashes {
-            let variant = crate::models::Variant {
-                content_hash: format!("sha256:{hash}"),
-                asset_id: asset.id,
-                role: crate::models::VariantRole::Original,
-                format: "jpg".to_string(),
-                file_size: 1000,
-                original_filename: format!("{hash}.jpg"),
-                source_metadata: Default::default(),
-                locations: vec![],
-            };
-            asset.variants.push(variant.clone());
+    fn setup_split_catalog(variant_hashes: &[&str]) -> (TempCatalog, String) {
+        let cat = TempCatalog::new();
+        // The first hash determines the asset ID.
+        let mut builder = test_asset(&format!("sha256:{}", variant_hashes[0])).tags(&["landscape"]).rating(4);
+        for hash in &variant_hashes[1..] {
+            builder = builder.variant(&format!("sha256:{hash}"), &format!("{hash}.jpg"));
         }
-        // Insert asset first (variants reference it via FK)
-        catalog.insert_asset(&asset).unwrap();
-        for variant in &asset.variants {
-            catalog.insert_variant(variant).unwrap();
-        }
-        let store = crate::metadata_store::MetadataStore::new(root);
-        store.save(&asset).unwrap();
-
-        (dir, asset.id.to_string())
+        let seeded = cat.seed(builder);
+        (cat, seeded.id.to_string())
     }
 
     #[test]

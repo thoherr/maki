@@ -11,6 +11,10 @@ All notable changes to the Digital Asset Manager are documented here.
   area under `main.rs`, shared helpers in `common.rs`, still a single
   test binary (`cargo test --test cli`, unchanged counts). One area can
   be run alone, e.g. `cargo test --test cli search::`.
+- **Shared unit-test fixtures.** New test-only `src/test_support.rs`
+  (`TempCatalog`, `memory_catalog`, the `test_asset` builder) replaces
+  private setup helpers and about 75 hand-written variant literals
+  across the unit tests; about 600 fewer test lines net, no test dropped.
 
 ## v4.13.1 (2026-11-16)
 

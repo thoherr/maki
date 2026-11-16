@@ -288,6 +288,7 @@ impl QueryImageSessions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::test_variant;
 
     fn session(created: Instant) -> QueryImageSession {
         QueryImageSession {
@@ -351,7 +352,7 @@ mod tests {
 
     #[test]
     fn hash_and_lookup_finds_exact_variant() {
-        use crate::models::{Asset, AssetType, Variant, VariantRole};
+        use crate::models::{Asset, AssetType, Variant};
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("q.bin");
         std::fs::write(&file, b"query bytes").unwrap();
@@ -360,16 +361,7 @@ mod tests {
         let catalog = Catalog::open(dir.path()).unwrap();
         catalog.initialize().unwrap();
         let mut asset = Asset::new(AssetType::Image, &hash);
-        asset.variants.push(Variant {
-            content_hash: hash.clone(),
-            asset_id: asset.id,
-            role: VariantRole::Original,
-            format: "jpg".to_string(),
-            file_size: 11,
-            original_filename: "q.jpg".to_string(),
-            source_metadata: Default::default(),
-            locations: vec![],
-        });
+        asset.variants.push(Variant { file_size: 11, ..test_variant(asset.id, &hash, "q.jpg") });
         catalog.insert_asset(&asset).unwrap();
         catalog.insert_variant(&asset.variants[0]).unwrap();
 
@@ -387,7 +379,7 @@ mod tests {
 
     #[test]
     fn resolve_tolerates_model_failure_only_with_exact_match() {
-        use crate::models::{Asset, AssetType, Variant, VariantRole};
+        use crate::models::{Asset, AssetType, Variant};
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("q.bin");
         std::fs::write(&file, b"query bytes").unwrap();
@@ -400,16 +392,7 @@ mod tests {
         assert!(resolve_query_image(&catalog, &file, failing).is_err());
 
         let mut asset = Asset::new(AssetType::Image, &hash);
-        asset.variants.push(Variant {
-            content_hash: hash.clone(),
-            asset_id: asset.id,
-            role: VariantRole::Original,
-            format: "jpg".to_string(),
-            file_size: 11,
-            original_filename: "q.jpg".to_string(),
-            source_metadata: Default::default(),
-            locations: vec![],
-        });
+        asset.variants.push(Variant { file_size: 11, ..test_variant(asset.id, &hash, "q.jpg") });
         catalog.insert_asset(&asset).unwrap();
         catalog.insert_variant(&asset.variants[0]).unwrap();
 

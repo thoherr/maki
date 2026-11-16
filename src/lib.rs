@@ -76,6 +76,8 @@ pub mod stack;
 pub mod status;
 pub mod tag_util;
 pub mod trash;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub(crate) mod tx;
 pub mod vlm;
 pub mod vocabulary;

@@ -85,7 +85,7 @@ Rating, tag, description, and label changes are written back to `.xmp` recipe fi
 - Front end: `src/web/static/maki-core.js` (embedded by `base.html`) owns `MAKI.escHtml/escAttr/toast/api/dialog/pathAutocomplete/attachJobStream/quoteFilterValue` and the colour-label maps; the vocabulary itself is `models::asset::COLOR_LABELS`.
 
 ### Test Helpers
-CLI integration tests live in `tests/cli/` (one module per command area under `main.rs`, shared helpers in `common.rs`, one binary: `cargo test --test cli`). The catalog unit tests' private `setup_search_catalog()` / `setup_metadata_catalog()` (in `catalog.rs` tests) require `asset.variants` populated before `catalog.insert_asset()` (because of denormalized columns); query-engine tests share `query/test_support.rs`; a crate-wide `test_support` module is a Phase 3 item of the architecture audit.
+CLI integration tests live in `tests/cli/` (one module per command area under `main.rs`, shared helpers in `common.rs`, one binary: `cargo test --test cli`). The catalog unit tests' private `setup_search_catalog()` / `setup_metadata_catalog()` (in `catalog.rs` tests) require `asset.variants` populated before `catalog.insert_asset()` (because of denormalized columns); unit tests share `src/test_support.rs` (`TempCatalog::new()` + `cat.seed(test_asset(hash).file(..).tags(..))`, `memory_catalog()`, `insert_rows`, `test_variant`); `query/test_support.rs` re-exports it and adds the query fixtures. Build test assets with these, not hand-written `Variant { … }` literals.
 
 ## Configuration (`maki.toml`)
 

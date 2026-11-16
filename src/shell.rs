@@ -1124,6 +1124,7 @@ Blocked commands (use outside the shell):
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::test_variant;
 
     fn dummy_executor(ids: Vec<String>) -> impl Fn(Vec<String>) -> Result<Vec<String>> {
         move |_args: Vec<String>| -> Result<Vec<String>> { Ok(ids.clone()) }
@@ -1220,22 +1221,13 @@ mod tests {
         // Regression: the loader used to open `<root>/.maki/catalog.db`
         // (which the opener turned into `…/catalog.db/catalog.db`), so
         // catalog tags never reached completion.
-        use crate::models::{Asset, AssetType, Variant, VariantRole};
+        use crate::models::{Asset, AssetType, Variant};
         let dir = tempfile::tempdir().unwrap();
         let catalog = crate::catalog::Catalog::open(dir.path()).unwrap();
         catalog.initialize().unwrap();
         let mut asset = Asset::new(AssetType::Image, "sha256:shellcomp");
         asset.tags = vec!["completion-probe".to_string()];
-        asset.variants.push(Variant {
-            content_hash: "sha256:shellcomp".to_string(),
-            asset_id: asset.id,
-            role: VariantRole::Original,
-            format: "jpg".to_string(),
-            file_size: 1,
-            original_filename: "x.jpg".to_string(),
-            source_metadata: Default::default(),
-            locations: vec![],
-        });
+        asset.variants.push(Variant { file_size: 1, ..test_variant(asset.id, "sha256:shellcomp", "x.jpg") });
         catalog.insert_asset(&asset).unwrap();
         drop(catalog);
 

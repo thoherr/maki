@@ -458,37 +458,19 @@ fn delete_phantom_rows(catalog: &Catalog, catalog_root: &Path, asset_id: &str) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{AssetType, Variant, VariantRole};
+    use crate::models::{Variant, VariantRole};
+    use crate::test_support::*;
 
-    fn setup() -> (tempfile::TempDir, std::path::PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_path_buf();
-        let catalog = Catalog::open(&root).unwrap();
-        catalog.initialize().unwrap();
-        (dir, root)
+    fn setup() -> (TempCatalog, std::path::PathBuf) {
+        let cat = TempCatalog::new();
+        let root = cat.path().to_path_buf();
+        (cat, root)
     }
 
     fn seed_asset(root: &Path, hash: &str, name: &str) -> Asset {
-        let mut asset = Asset::new(AssetType::Image, hash);
-        asset.name = Some(name.to_string());
-        asset.tags = vec!["alpha".to_string()];
-        asset.rating = Some(3);
-        let variant = Variant {
-            content_hash: hash.to_string(),
-            asset_id: asset.id,
-            role: VariantRole::Original,
-            format: "jpg".to_string(),
-            file_size: 100,
-            original_filename: format!("{name}.jpg"),
-            source_metadata: Default::default(),
-            locations: vec![],
-        };
-        asset.variants.push(variant.clone());
-        let store = MetadataStore::new(root);
-        store.save(&asset).unwrap();
-        let catalog = Catalog::open_fast(root).unwrap();
-        catalog.insert_asset(&asset).unwrap();
-        catalog.insert_variant(&variant).unwrap();
+        let asset = test_asset(hash).file(&format!("{name}.jpg")).size(100).name(name).tags(&["alpha"]).rating(3).build();
+        MetadataStore::new(root).save(&asset).unwrap();
+        insert_rows(&Catalog::open_fast(root).unwrap(), &asset);
         asset
     }
 
@@ -577,16 +559,7 @@ mod tests {
         let mut asset = seed_asset(&root, "sha256:doc-best-jpg", "pair");
         asset.variants[0].role = VariantRole::Alternate;
         asset.variants[0].file_size = 400_000;
-        let raw = Variant {
-            content_hash: "sha256:doc-best-raw".to_string(),
-            asset_id: asset.id,
-            role: VariantRole::Original,
-            format: "nef".to_string(),
-            file_size: 50_000_000,
-            original_filename: "pair.nef".to_string(),
-            source_metadata: Default::default(),
-            locations: vec![],
-        };
+        let raw = Variant { file_size: 50_000_000, ..test_variant(asset.id, "sha256:doc-best-raw", "pair.nef") };
         asset.variants.push(raw.clone());
         let store = MetadataStore::new(&root);
         store.save(&asset).unwrap();
