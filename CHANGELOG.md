@@ -4,6 +4,15 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- **Undo order for edits made within the same millisecond.** The
+  edit-history journal orders operations by a millisecond timestamp in
+  the file name; two operations recorded in the same millisecond (shell
+  scripts, the web UI) were ordered by their random ID, so `maki undo`
+  could revert the older one first. An operation is now always stamped
+  after the newest one in the journal.
+
 ### Internal
 
 - **Architecture audit Phase 3 started: CLI test suite split.** The

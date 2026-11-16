@@ -129,14 +129,24 @@ impl HistoryStore {
     /// Filename for an operation: zero-padded epoch-millis prefix so a
     /// lexicographic sort is chronological, plus the opid for uniqueness.
     fn file_name(op: &Operation) -> String {
-        // Parse the stored RFC 3339 timestamp back to epoch millis. Fall
-        // back to "now" if it somehow doesn't parse (never expected — we
-        // wrote it ourselves) so we always produce a sortable name.
-        let millis = chrono::DateTime::parse_from_rfc3339(&op.timestamp)
-            .map(|dt| dt.timestamp_millis())
-            .unwrap_or_else(|_| chrono::Local::now().timestamp_millis());
         // 15 digits comfortably covers epoch-millis well past year 33000.
-        format!("{millis:015}-{}.json", op.id)
+        format!("{:015}-{}.json", Self::millis_of(op), op.id)
+    }
+
+    /// The operation's timestamp as epoch millis. Falls back to "now" if
+    /// the stored RFC 3339 text somehow doesn't parse (never expected — we
+    /// wrote it ourselves) so we always produce a sortable name.
+    fn millis_of(op: &Operation) -> i64 {
+        chrono::DateTime::parse_from_rfc3339(&op.timestamp)
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or_else(|_| chrono::Local::now().timestamp_millis())
+    }
+
+    /// Epoch-millis prefix of the newest active operation file, if any.
+    fn newest_active_millis(&self) -> Result<Option<i64>> {
+        Ok(self.active_files()?.last().and_then(|path| {
+            path.file_name()?.to_str()?.split('-').next()?.parse::<i64>().ok()
+        }))
     }
 
     /// Record an operation. Writes `history/<ts>-<opid>.json` atomically
@@ -149,6 +159,19 @@ impl HistoryStore {
         }
         std::fs::create_dir_all(&self.history_dir)
             .with_context(|| format!("creating history dir {}", self.history_dir.display()))?;
+
+        // Two operations inside the same millisecond would sort by their
+        // random opid, making undo order arbitrary. Keep the journal
+        // strictly ordered: an operation is never stamped at or before the
+        // newest active one.
+        let mut op = op;
+        if let Some(newest) = self.newest_active_millis()? {
+            if Self::millis_of(&op) <= newest {
+                if let Some(bumped) = chrono::DateTime::from_timestamp_millis(newest + 1) {
+                    op.timestamp = bumped.with_timezone(&chrono::Local).to_rfc3339();
+                }
+            }
+        }
 
         let name = Self::file_name(&op);
         let target = self.history_dir.join(&name);
@@ -307,6 +330,26 @@ mod tests {
                 after,
             }],
         )
+    }
+
+    #[test]
+    fn operations_in_the_same_millisecond_keep_recording_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = HistoryStore::new(dir.path().join("history"), true, 100);
+        let stamp = chrono::Local::now().to_rfc3339();
+        let mut ids = Vec::new();
+        for _ in 0..20 {
+            let mut o = op(None, Some(3));
+            o.timestamp = stamp.clone();
+            ids.push(o.id.clone());
+            store.record(o).unwrap();
+        }
+        // Newest-first undo walks the operations in reverse recording order.
+        for id in ids.iter().rev() {
+            let newest = store.newest_active().unwrap().unwrap();
+            assert_eq!(&newest.id, id);
+            store.mark_undone(&newest.id).unwrap();
+        }
     }
 
     #[test]
