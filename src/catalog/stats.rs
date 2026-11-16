@@ -9,6 +9,104 @@ use super::*;
 impl Catalog {
     // ═══ STATS ═══
 
+    /// Number of assets.
+    pub fn count_assets(&self) -> Result<u64> {
+        Ok(self.conn.query_row("SELECT COUNT(*) FROM assets", [], |r| r.get(0))?)
+    }
+
+    /// Number of recipe rows, optionally on one volume.
+    pub fn count_recipes(&self, volume_id: Option<&str>) -> Result<usize> {
+        let count = match volume_id {
+            Some(vid) => self.conn.query_row(
+                "SELECT COUNT(*) FROM recipes WHERE volume_id = ?1",
+                rusqlite::params![vid],
+                |r| r.get(0),
+            )?,
+            None => self.conn.query_row("SELECT COUNT(*) FROM recipes", [], |r| r.get(0))?,
+        };
+        Ok(count)
+    }
+
+    /// Number of assets that have an embedding of any model.
+    pub fn count_assets_with_embeddings(&self) -> Result<u64> {
+        Ok(self.conn.query_row("SELECT COUNT(DISTINCT asset_id) FROM embeddings", [], |r| r.get(0))?)
+    }
+
+    /// Number of assets never scanned for faces (or still pending).
+    pub fn count_assets_without_face_scan(&self) -> Result<u64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM assets WHERE face_scan_status IS NULL OR face_scan_status = 'pending'",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Number of file locations of one variant, across all volumes.
+    pub fn count_locations_of_variant(&self, content_hash: &str) -> Result<u64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM file_locations WHERE content_hash = ?1",
+            rusqlite::params![content_hash],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Assets and bytes on one volume: (distinct assets, summed variant sizes).
+    pub fn volume_usage(&self, volume_id: &str) -> Result<(u64, u64)> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(DISTINCT v.asset_id), COALESCE(SUM(v.file_size), 0) \
+             FROM variants v \
+             JOIN file_locations fl ON fl.content_hash = v.content_hash \
+             WHERE fl.volume_id = ?1",
+            rusqlite::params![volume_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
+    }
+
+    /// The best-variant hash of every asset that has one (the hashes
+    /// previews are stored under).
+    pub fn list_best_variant_hashes(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT best_variant_hash FROM assets \
+             WHERE best_variant_hash IS NOT NULL AND best_variant_hash != ''",
+        )?;
+        let hashes = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(hashes)
+    }
+
+    /// IDs of the assets that carry a rating.
+    pub fn list_rated_asset_ids(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM assets WHERE rating IS NOT NULL")?;
+        let ids = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(ids)
+    }
+
+    /// The stored preview rotation of an asset (`None` = unrotated or unknown asset).
+    pub fn preview_rotation(&self, asset_id: &str) -> Result<Option<u16>> {
+        use rusqlite::OptionalExtension;
+        let rotation: Option<Option<i64>> = self
+            .conn
+            .query_row("SELECT preview_rotation FROM assets WHERE id = ?1", [asset_id], |r| r.get(0))
+            .optional()?;
+        Ok(rotation.flatten().map(|v| v as u16))
+    }
+
+    /// IDs of every face, or of the faces of one asset.
+    pub fn list_face_ids(&self, asset_id: Option<&str>) -> Result<Vec<String>> {
+        let ids = match asset_id {
+            Some(id) => {
+                let mut stmt = self.conn.prepare("SELECT id FROM faces WHERE asset_id = ?1")?;
+                let rows = stmt.query_map(rusqlite::params![id], |r| r.get(0))?;
+                rows.collect::<rusqlite::Result<Vec<String>>>()?
+            }
+            None => {
+                let mut stmt = self.conn.prepare("SELECT id FROM faces")?;
+                let rows = stmt.query_map([], |r| r.get(0))?;
+                rows.collect::<rusqlite::Result<Vec<String>>>()?
+            }
+        };
+        Ok(ids)
+    }
+
     /// Core overview counts: (assets, variants, recipes, total_size).
     pub fn stats_overview(&self) -> Result<(u64, u64, u64, u64, u64)> {
         self.conn.query_row(

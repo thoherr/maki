@@ -82,14 +82,20 @@ impl<'a> CollectionStore<'a> {
     /// the mutators return an error. Use [`CollectionStore::open`]
     /// wherever a user operation changes collections. The tables are
     /// created by the schema migrations (v13), never here.
-    pub fn new(conn: &'a rusqlite::Connection) -> Self {
+    pub fn new(catalog: &'a crate::catalog::Catalog) -> Self {
+        Self::on(catalog.conn())
+    }
+
+    /// Read-only handle on a bare connection (the YAML export runs on the
+    /// connection of the committing transaction).
+    fn on(conn: &'a rusqlite::Connection) -> Self {
         Self { conn, catalog_root: None }
     }
 
     /// Full handle bound to the catalog root that holds
     /// `collections.yaml`; mutators persist to it (see the module docs).
-    pub fn open(conn: &'a rusqlite::Connection, catalog_root: &Path) -> Self {
-        Self { conn, catalog_root: Some(catalog_root.to_path_buf()) }
+    pub fn open(catalog: &'a crate::catalog::Catalog, catalog_root: &Path) -> Self {
+        Self { conn: catalog.conn(), catalog_root: Some(catalog_root.to_path_buf()) }
     }
 
     /// Write `collections.yaml` from the current SQLite rows (atomic
@@ -101,7 +107,7 @@ impl<'a> CollectionStore<'a> {
             anyhow!("CollectionStore opened without a catalog root (CollectionStore::new); use CollectionStore::open to change collections")
         })?;
         crate::tx::export_at_commit(self.conn, "collections", root, |conn, root| {
-            save_yaml(root, &CollectionStore::new(conn).export_all()?)
+            save_yaml(root, &CollectionStore::on(conn).export_all()?)
         })
     }
 
@@ -382,39 +388,15 @@ impl<'a> CollectionStore<'a> {
 mod tests {
     use super::*;
 
-    fn setup_db() -> (rusqlite::Connection, tempfile::TempDir) {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        // Minimal schema for tests
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS assets (
-                id TEXT PRIMARY KEY,
-                name TEXT,
-                created_at TEXT NOT NULL,
-                asset_type TEXT NOT NULL,
-                tags TEXT NOT NULL DEFAULT '[]',
-                description TEXT
-            );
-            CREATE TABLE IF NOT EXISTS collections (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
-                description TEXT,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS collection_assets (
-                collection_id TEXT NOT NULL REFERENCES collections(id),
-                asset_id TEXT NOT NULL REFERENCES assets(id),
-                added_at TEXT NOT NULL,
-                PRIMARY KEY (collection_id, asset_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_collection_assets_asset
-                ON collection_assets(asset_id);",
-        )
-        .unwrap();
-        (conn, tempfile::tempdir().unwrap())
+    /// A real in-memory catalog (so the tables are the migrated ones)
+    /// plus a temp dir standing in for the catalog root that receives the
+    /// YAML file.
+    fn setup_db() -> (crate::catalog::Catalog, tempfile::TempDir) {
+        (crate::test_support::memory_catalog(), tempfile::tempdir().unwrap())
     }
 
-    fn insert_test_asset(conn: &rusqlite::Connection, id: &str) {
-        conn.execute(
+    fn insert_test_asset(conn: &crate::catalog::Catalog, id: &str) {
+        conn.conn().execute(
             "INSERT INTO assets (id, created_at, asset_type) VALUES (?1, '2026-01-01T00:00:00Z', 'image')",
             rusqlite::params![id],
         )
@@ -563,7 +545,7 @@ mod tests {
 
         // Wipe and reimport through a root-less handle (rebuild's shape).
         // A member whose asset row is gone is skipped, not an error.
-        conn.execute_batch("DELETE FROM collection_assets; DELETE FROM collections;").unwrap();
+        conn.conn().execute_batch("DELETE FROM collection_assets; DELETE FROM collections;").unwrap();
         assert!(store.list().unwrap().is_empty());
         exported.collections[0].asset_ids.push("vanished".into());
 

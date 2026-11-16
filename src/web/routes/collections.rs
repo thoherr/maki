@@ -15,7 +15,7 @@ pub async fn collections_page(State(state): State<Arc<AppState>>) -> Result<Resp
     let state = state.clone();
     let html = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
-        let col_store = crate::collection::CollectionStore::new(catalog.conn());
+        let col_store = crate::collection::CollectionStore::new(&catalog);
         let collections = col_store.list()?;
         let tmpl = crate::web::templates::CollectionsPage {
             collections,
@@ -47,7 +47,7 @@ pub async fn create_collection_api(
         }
         let description = req.description.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
         let catalog = state.catalog()?;
-        let col_store = crate::collection::CollectionStore::open(catalog.conn(), &state.catalog_root);
+        let col_store = crate::collection::CollectionStore::open(&catalog, &state.catalog_root);
         let collection = col_store.create(&name, description)?;
         state.dropdown_cache.invalidate_collections();
         Ok::<_, anyhow::Error>(serde_json::json!({
@@ -65,7 +65,7 @@ pub async fn list_collections_api(State(state): State<Arc<AppState>>) -> Result<
     let state = state.clone();
     let collections = super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
-        let col_store = crate::collection::CollectionStore::new(catalog.conn());
+        let col_store = crate::collection::CollectionStore::new(&catalog);
         let collections = col_store.list()?;
         Ok::<_, anyhow::Error>(collections)
     })
@@ -87,7 +87,7 @@ pub async fn batch_remove_from_collection(
     let state = state.clone();
     let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let col_store = crate::collection::CollectionStore::open(catalog.conn(), &state.catalog_root);
+        let col_store = crate::collection::CollectionStore::open(&catalog, &state.catalog_root);
         let removed = col_store.remove_assets(&req.collection, &req.asset_ids)?;
         state.dropdown_cache.invalidate_collections();
         Ok::<_, anyhow::Error>(serde_json::json!({
@@ -107,7 +107,7 @@ pub async fn batch_add_to_collection(
     let state = state.clone();
     let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let col_store = crate::collection::CollectionStore::open(catalog.conn(), &state.catalog_root);
+        let col_store = crate::collection::CollectionStore::open(&catalog, &state.catalog_root);
         let added = col_store.add_assets(&req.collection, &req.asset_ids)?;
         state.dropdown_cache.invalidate_collections();
         Ok::<_, anyhow::Error>(serde_json::json!({

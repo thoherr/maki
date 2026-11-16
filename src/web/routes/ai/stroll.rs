@@ -70,7 +70,7 @@ fn stroll_page_inner(
     let preview_ext = &state.preview_ext;
     let model_id = &state.ai_config.model;
 
-    let emb_store = crate::embedding_store::EmbeddingStore::new(catalog.conn());
+    let emb_store = crate::embedding_store::EmbeddingStore::new(&catalog);
 
     let center_id = if let Some(id_prefix) = asset_id {
         super::super::resolve_asset_id_or_err(&catalog, id_prefix).map_err(|e| format!("{e:#}"))?

@@ -279,17 +279,10 @@ impl<F: Fn(&Path, VerifyStatus, Duration)> VerifyRun<'_, F> {
             // Count skipped locations: total (file_locations + recipes) minus stale
             let total_fl = catalog.count_file_locations(vol_filter.as_deref())?;
             let stale_fl = catalog.count_stale_locations(days, vol_filter.as_deref())?;
-            let total_recipes: usize = if let Some(vid) = vol_filter.as_deref() {
-                catalog.conn().query_row(
-                    "SELECT COUNT(*) FROM recipes WHERE volume_id = ?1",
-                    rusqlite::params![vid], |r| r.get(0)
-                ).unwrap_or(0)
-            } else {
-                catalog.conn().query_row("SELECT COUNT(*) FROM recipes", [], |r| r.get(0)).unwrap_or(0)
-            };
+            let total_recipes = catalog.count_recipes(vol_filter.as_deref())?;
             // File locations that are recent + all recipes for recently-verified assets
             let stale_asset_count = stale_ids.len();
-            let total_assets = catalog.conn().query_row("SELECT COUNT(*) FROM assets", [], |r| r.get::<_, usize>(0)).unwrap_or(0);
+            let total_assets = catalog.count_assets()? as usize;
             let recent_recipes = if total_assets > 0 && stale_asset_count < total_assets {
                 // Proportional estimate of recipe locations for recently-verified assets
                 total_recipes.saturating_sub(

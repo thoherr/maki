@@ -23,8 +23,8 @@ pub struct EmbeddingStore<'a> {
 impl<'a> EmbeddingStore<'a> {
     /// Create a new EmbeddingStore backed by the given connection. The
     /// `embeddings` table is guaranteed by the catalog schema (v13).
-    pub fn new(conn: &'a Connection) -> Self {
-        Self { conn }
+    pub fn new(catalog: &'a crate::catalog::Catalog) -> Self {
+        Self { conn: catalog.conn() }
     }
 
     /// Store an embedding for an asset with a specific model (insert or replace).
@@ -436,8 +436,8 @@ mod tests {
     #[test]
     fn store_and_retrieve() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
 
         let emb = vec![0.1f32; 768];
         store.store("asset-1", &emb, TEST_MODEL).unwrap();
@@ -450,16 +450,16 @@ mod tests {
     #[test]
     fn get_nonexistent() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
         assert!(store.get("nonexistent", TEST_MODEL).unwrap().is_none());
     }
 
     #[test]
     fn has_embedding_true() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
         store.store("asset-1", &vec![0.0; 768], TEST_MODEL).unwrap();
         assert!(store.has_embedding("asset-1", TEST_MODEL));
     }
@@ -467,24 +467,24 @@ mod tests {
     #[test]
     fn has_embedding_false() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
         assert!(!store.has_embedding("asset-1", TEST_MODEL));
     }
 
     #[test]
     fn count_empty() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
         assert_eq!(store.count(), 0);
     }
 
     #[test]
     fn count_after_insert() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
         store.store("a", &vec![0.0; 768], TEST_MODEL).unwrap();
         store.store("b", &vec![0.0; 768], TEST_MODEL).unwrap();
         assert_eq!(store.count(), 2);
@@ -493,8 +493,8 @@ mod tests {
     #[test]
     fn remove_embedding() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
         store.store("asset-1", &vec![0.0; 768], TEST_MODEL).unwrap();
         store.remove("asset-1", TEST_MODEL).unwrap();
         assert!(!store.has_embedding("asset-1", TEST_MODEL));
@@ -503,8 +503,8 @@ mod tests {
     #[test]
     fn store_replaces_existing() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
         store.store("asset-1", &vec![1.0; 768], TEST_MODEL).unwrap();
         store.store("asset-1", &vec![2.0; 768], TEST_MODEL).unwrap();
 
@@ -516,8 +516,8 @@ mod tests {
     #[test]
     fn find_similar_basic() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
 
         let base = vec![1.0f32; 768];
         let similar = vec![0.9f32; 768];
@@ -537,8 +537,8 @@ mod tests {
     #[test]
     fn find_similar_respects_limit() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
 
         for i in 0..10 {
             store
@@ -554,8 +554,8 @@ mod tests {
     #[test]
     fn multi_model_embeddings() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
 
         let emb_b = vec![1.0f32; 768];
         let emb_l = vec![2.0f32; 1024];
@@ -604,7 +604,7 @@ mod tests {
     fn index_load_and_search() {
         let catalog = setup_db();
         let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let store = EmbeddingStore::new(&catalog);
 
         // Store some normalized embeddings (dim=4 for simplicity)
         let a = vec![1.0f32, 0.0, 0.0, 0.0];
@@ -631,7 +631,7 @@ mod tests {
     fn index_upsert() {
         let catalog = setup_db();
         let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let store = EmbeddingStore::new(&catalog);
         store.store("a", &[1.0, 0.0, 0.0], TEST_MODEL).unwrap();
 
         let mut index = EmbeddingIndex::load(conn, TEST_MODEL, 3).unwrap();
@@ -664,7 +664,7 @@ mod tests {
     fn index_skips_wrong_dim() {
         let catalog = setup_db();
         let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let store = EmbeddingStore::new(&catalog);
         store.store("a", &vec![1.0; 768], TEST_MODEL).unwrap();
         store.store("b", &vec![1.0; 1024], TEST_MODEL).unwrap(); // wrong dim for 768 index
 
@@ -732,8 +732,8 @@ mod tests {
     #[test]
     fn list_models_empty() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
         let models = store.list_models().unwrap();
         assert!(models.is_empty());
     }
@@ -741,8 +741,8 @@ mod tests {
     #[test]
     fn list_models_returns_distinct_sorted() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
 
         store.store("a1", &vec![1.0; 768], "siglip-vit-b16-256").unwrap();
         store.store("a2", &vec![1.0; 768], "siglip-vit-b16-256").unwrap();
@@ -755,8 +755,8 @@ mod tests {
     #[test]
     fn all_embeddings_for_model_empty() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
         let results = store.all_embeddings_for_model(TEST_MODEL).unwrap();
         assert!(results.is_empty());
     }
@@ -764,8 +764,8 @@ mod tests {
     #[test]
     fn all_embeddings_for_model_returns_correct_data() {
         let catalog = setup_db();
-        let conn = catalog.conn();
-        let store = EmbeddingStore::new(conn);
+        let _conn = catalog.conn();
+        let store = EmbeddingStore::new(&catalog);
 
         let emb1 = vec![1.0f32; 768];
         let emb2 = vec![2.0f32; 768];

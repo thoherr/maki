@@ -170,7 +170,7 @@ pub fn auto_stack_catalog(
     }
     let threshold = threshold_pct as f32 / 100.0;
 
-    let emb_store = EmbeddingStore::new(catalog.conn());
+    let emb_store = EmbeddingStore::new(catalog);
 
     // Candidates: unstacked assets with a stored embedding for this model.
     let mut candidates: Vec<Candidate> = {
@@ -314,7 +314,7 @@ pub fn auto_stack_catalog(
     // Apply: one stack per cluster, member order = pick first.
     if apply {
         // `create` persists stacks.yaml itself (StackStore::open).
-        let store = StackStore::open(catalog.conn(), catalog_root);
+        let store = StackStore::open(catalog, catalog_root);
         for cluster in &mut clusters {
             let ids: Vec<String> =
                 cluster.members.iter().map(|m| m.asset_id.clone()).collect();
@@ -383,7 +383,7 @@ mod tests {
     /// Returns (catalog, cluster_a_ids, cluster_b_ids, singleton_id, stacked_id).
     fn setup_two_clusters() -> (Catalog, Vec<String>, Vec<String>, String, String) {
         let catalog = setup();
-        let emb_store = EmbeddingStore::new(catalog.conn());
+        let emb_store = EmbeddingStore::new(&catalog);
 
         // Cluster A: three near-identical vectors around the x axis.
         let a1 = add_asset(&catalog, "a1", None, "2026-01-03T00:00:00Z");
@@ -480,7 +480,7 @@ mod tests {
     #[test]
     fn pick_prefers_rating_then_created_then_id() {
         let catalog = setup();
-        let emb_store = EmbeddingStore::new(catalog.conn());
+        let emb_store = EmbeddingStore::new(&catalog);
         let tmp = tempfile::tempdir().unwrap();
 
         // p2 has the highest rating → pick despite later created_at.
@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn pick_ties_broken_by_lowest_asset_id() {
         let catalog = setup();
-        let emb_store = EmbeddingStore::new(catalog.conn());
+        let emb_store = EmbeddingStore::new(&catalog);
         let tmp = tempfile::tempdir().unwrap();
 
         // Identical rating and created_at → lowest asset ID wins.
@@ -540,7 +540,7 @@ mod tests {
     #[test]
     fn threshold_gates_edges() {
         let catalog = setup();
-        let emb_store = EmbeddingStore::new(catalog.conn());
+        let emb_store = EmbeddingStore::new(&catalog);
         let tmp = tempfile::tempdir().unwrap();
 
         // Two vectors with similarity ~0.926 (cos of larger angle).
@@ -601,7 +601,7 @@ mod tests {
     #[test]
     fn warns_when_one_cluster_swallows_majority() {
         let catalog = setup();
-        let emb_store = EmbeddingStore::new(catalog.conn());
+        let emb_store = EmbeddingStore::new(&catalog);
         let tmp = tempfile::tempdir().unwrap();
 
         // Four near-identical vectors — single component = all candidates.
@@ -629,7 +629,7 @@ mod tests {
 
         // Stacks exist in the StackStore and members carry stack_id with
         // the pick at position 0.
-        let store = StackStore::new(catalog.conn());
+        let store = StackStore::new(&catalog);
         for cluster in &result.clusters {
             let (stack_id, members) = store
                 .stack_for_asset(&cluster.pick)

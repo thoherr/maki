@@ -49,7 +49,7 @@ fn find_similar_inner(
     }
 
     let catalog = state.catalog().map_err(|e| format!("{e:#}"))?;
-    let emb_store = EmbeddingStore::new(catalog.conn());
+    let emb_store = EmbeddingStore::new(&catalog);
 
     let stored_emb = emb_store.get(asset_id, model_id).map_err(|e| format!("{e:#}"))?;
 

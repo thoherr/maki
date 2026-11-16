@@ -202,7 +202,7 @@ fn plan_similarity(
         }
         let full_id = catalog.resolve_asset_id_required(similar_ref)?;
         let model_id = &config.ai.model;
-        let emb_store = crate::embedding_store::EmbeddingStore::new(catalog.conn());
+        let emb_store = crate::embedding_store::EmbeddingStore::new(catalog);
         let query_emb = emb_store
             .get(&full_id, model_id)?
             .ok_or_else(|| anyhow::anyhow!(

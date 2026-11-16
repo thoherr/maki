@@ -248,7 +248,7 @@ impl<'a> SuggestContext<'a> {
             let short = &asset_id[..8.min(asset_id.len())];
             match crate::catalog::Catalog::open_fast(&self.state.catalog_root) {
                 Ok(catalog) => {
-                    let emb_store = crate::embedding_store::EmbeddingStore::new(catalog.conn());
+                    let emb_store = crate::embedding_store::EmbeddingStore::new(&catalog);
                     if let Err(e) = emb_store.store(asset_id, &image_emb, &model_id) {
                         eprintln!("Warning: {short}: caching embedding row: {e:#}");
                     }

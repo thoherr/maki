@@ -142,9 +142,9 @@ impl ResolvedFilterIds {
             None
         };
 
-        let collection_ids = resolve_collection_ids(&parsed.collections, catalog.conn());
+        let collection_ids = resolve_collection_ids(&parsed.collections, catalog);
         let collection_exclude_ids =
-            resolve_collection_ids(&parsed.collections_exclude, catalog.conn());
+            resolve_collection_ids(&parsed.collections_exclude, catalog);
 
         #[cfg(feature = "ai")]
         let (person_ids, person_exclude_ids) = (
@@ -264,11 +264,11 @@ pub fn resolve_missing_asset_ids(catalog: &Catalog, catalog_root: &Path) -> Resu
 /// agrees on this). Unknown collection names contribute nothing. Returns a
 /// Vec of distinct asset IDs in arbitrary order; empty when `entries` is
 /// empty or nothing matched.
-fn resolve_collection_ids(entries: &[String], conn: &rusqlite::Connection) -> Vec<String> {
+fn resolve_collection_ids(entries: &[String], catalog: &Catalog) -> Vec<String> {
     if entries.is_empty() {
         return Vec::new();
     }
-    let store = crate::collection::CollectionStore::new(conn);
+    let store = crate::collection::CollectionStore::new(catalog);
     union_name_groups(entries, |name| {
         store.asset_ids_for_collection(name).unwrap_or_default()
     })
@@ -283,7 +283,7 @@ fn resolve_person_ids(catalog: &Catalog, entries: &[String], exclude: bool) -> V
     if entries.is_empty() {
         return Vec::new();
     }
-    let face_store = crate::face_store::FaceStore::new(catalog.conn());
+    let face_store = crate::face_store::FaceStore::new(catalog);
     let lookup = |name: &str| face_store.find_person_asset_ids(name).unwrap_or_default();
     if exclude {
         union_name_groups(entries, lookup)
@@ -362,7 +362,7 @@ mod tests {
         // catalog; the resolver only reads the SQLite rows, so a scratch
         // root that lives for the duration of the setup is enough.
         let col_root = tempfile::tempdir().unwrap();
-        let store = crate::collection::CollectionStore::open(catalog.conn(), col_root.path());
+        let store = crate::collection::CollectionStore::open(&catalog, col_root.path());
         store.create("Favs", None).unwrap();
         store.add_assets("Favs", &[ids[0].clone()]).unwrap();
         store.create("Picks", None).unwrap();
@@ -374,7 +374,7 @@ mod tests {
             // catalog; the resolver only reads the SQLite rows, so a scratch
             // root that lives for the duration of the setup is enough.
             let root = tempfile::tempdir().unwrap();
-            let faces = crate::face_store::FaceStore::open(catalog.conn(), root.path());
+            let faces = crate::face_store::FaceStore::open(&catalog, root.path());
             let alice = faces.create_person(Some("Alice")).unwrap();
             let bob = faces.create_person(Some("Bob")).unwrap();
             let emb = [0.5f32; 4];

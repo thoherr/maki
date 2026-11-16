@@ -182,7 +182,7 @@ pub fn run_stack_command(
     let catalog_root = ctx.catalog_root()?;
     let catalog = Catalog::open(&catalog_root)?;
     // Mutators persist stacks.yaml themselves (StackStore::open).
-    let store = maki::stack::StackStore::open(catalog.conn(), &catalog_root);
+    let store = maki::stack::StackStore::open(&catalog, &catalog_root);
     match cmd {
         StackCommands::Create { asset_ids } => {
             let stack = store.create(&asset_ids)?;
@@ -323,7 +323,7 @@ pub fn run_collection_command(
     let catalog_root = ctx.catalog_root()?;
     let catalog = Catalog::open(&catalog_root)?;
     // Mutators persist collections.yaml themselves (CollectionStore::open).
-    let store = maki::collection::CollectionStore::open(catalog.conn(), &catalog_root);
+    let store = maki::collection::CollectionStore::open(&catalog, &catalog_root);
     match cmd {
         CollectionCommands::Create { name, description } => {
             let col = store.create(&name, description.as_deref())?;

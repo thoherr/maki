@@ -644,10 +644,10 @@ pub async fn asset_page(
             }
         });
 
-        let col_store = crate::collection::CollectionStore::new(catalog.conn());
+        let col_store = crate::collection::CollectionStore::new(&catalog);
         let collections = col_store.collections_for_asset(&full_id).unwrap_or_default();
 
-        let stack_store = crate::stack::StackStore::new(catalog.conn());
+        let stack_store = crate::stack::StackStore::new(&catalog);
         let (stack_members, is_stack_pick) = match stack_store.stack_for_asset(&full_id).unwrap_or(None) {
             Some((_sid, member_ids)) => {
                 let is_pick = member_ids.first() == Some(&full_id);
@@ -681,7 +681,7 @@ pub async fn asset_page(
         let (faces, all_people_detail) = {
             #[cfg(feature = "ai")]
             {
-                let face_store = crate::face_store::FaceStore::new(catalog.conn());
+                let face_store = crate::face_store::FaceStore::new(&catalog);
                 let stored_faces = face_store.faces_for_asset(&full_id).unwrap_or_default();
                 let face_rows: Vec<FaceRow> = stored_faces.iter().map(|f| {
                     let crop_url = if crate::face::face_crop_exists(&f.id, &state.catalog_root) {

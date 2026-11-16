@@ -42,7 +42,7 @@ pub fn run_rebuild_catalog_command(
         let col_file = maki::collection::load_yaml(&catalog_root)
             .context("could not read collections.yaml")?;
         if !col_file.collections.is_empty() {
-            let col_store = maki::collection::CollectionStore::new(catalog.conn());
+            let col_store = maki::collection::CollectionStore::new(&catalog);
             col_store.import_from_yaml(&col_file)
                 .context("could not restore collections from collections.yaml")?
         } else {
@@ -55,7 +55,7 @@ pub fn run_rebuild_catalog_command(
         let stacks_file = maki::stack::load_yaml(&catalog_root)
             .context("could not read stacks.yaml")?;
         if !stacks_file.stacks.is_empty() {
-            let stack_store = maki::stack::StackStore::new(catalog.conn());
+            let stack_store = maki::stack::StackStore::new(&catalog);
             stack_store.import_from_yaml(&stacks_file)
                 .context("could not restore stacks from stacks.yaml")?
         } else {
@@ -69,7 +69,7 @@ pub fn run_rebuild_catalog_command(
     // counted in `ai_restore_errors` and reported, not fatal.
     #[cfg(feature = "ai")]
     let (people_restored, faces_restored, face_embeddings_restored, embeddings_restored, ai_restore_errors) = {
-        let face_store = maki::face_store::FaceStore::new(catalog.conn());
+        let face_store = maki::face_store::FaceStore::new(&catalog);
         let mut ai_restore_errors = 0u64;
 
         // Import people first (faces reference people via FK)
@@ -110,7 +110,7 @@ pub fn run_rebuild_catalog_command(
 
         // Restore SigLIP embeddings from binary files
         let mut embeddings_restored = 0u32;
-        let emb_store = maki::embedding_store::EmbeddingStore::new(catalog.conn());
+        let emb_store = maki::embedding_store::EmbeddingStore::new(&catalog);
         // Scan all model directories under embeddings/ (skip "arcface")
         let emb_base = catalog_root.join("embeddings");
         if emb_base.exists() {
@@ -199,12 +199,8 @@ pub fn run_rebuild_catalog_command(
         // returns empty / face cluster is missing recent assets.
         #[cfg(feature = "ai")]
         {
-            let total_assets = catalog.conn().query_row(
-                "SELECT COUNT(*) FROM assets", [], |r| r.get::<_, i64>(0)
-            ).unwrap_or(0);
-            let with_embeddings = catalog.conn().query_row(
-                "SELECT COUNT(DISTINCT asset_id) FROM embeddings", [], |r| r.get::<_, i64>(0)
-            ).unwrap_or(0);
+            let total_assets = catalog.count_assets()? as i64;
+            let with_embeddings = catalog.count_assets_with_embeddings()? as i64;
             let missing_embeddings = (total_assets - with_embeddings).max(0);
             if missing_embeddings > 0 {
                 println!(
@@ -213,11 +209,7 @@ pub fn run_rebuild_catalog_command(
                     missing_embeddings
                 );
             }
-            let unscanned_for_faces = catalog.conn().query_row(
-                "SELECT COUNT(*) FROM assets \
-                 WHERE (face_scan_status IS NULL OR face_scan_status = 'pending')",
-                [], |r| r.get::<_, i64>(0)
-            ).unwrap_or(0);
+            let unscanned_for_faces = catalog.count_assets_without_face_scan()?;
             if unscanned_for_faces > 0 {
                 println!(
                     "  Tip: {} asset(s) haven't been scanned for faces. \
@@ -282,14 +274,14 @@ fn rebuild_single_asset(
         let face_embeddings = load_face_embedding_binaries(&emb_base, &asset_faces)?;
 
         catalog.with_tx(|c| {
-            let emb_store = maki::embedding_store::EmbeddingStore::new(c.conn());
+            let emb_store = maki::embedding_store::EmbeddingStore::new(c);
             c.delete_embeddings_for_asset(&id_str)?;
             for (model, embedding) in &embeddings {
                 emb_store.store(&id_str, embedding, model)
                     .with_context(|| format!("could not restore {model} embedding"))?;
             }
 
-            let face_store = maki::face_store::FaceStore::new(c.conn());
+            let face_store = maki::face_store::FaceStore::new(c);
             c.delete_faces_for_asset(&id_str)?;
             face_store.import_faces_from_yaml(&asset_faces)
                 .context("could not restore faces from faces.yaml")?;
@@ -1722,12 +1714,7 @@ pub fn run_migrate_command(ctx: &CliContext) -> anyhow::Result<()> {
     // Fix sidecar YAML files with MicrosoftPhoto:Rating percentage values
     let store = maki::metadata_store::MetadataStore::new(&catalog_root);
     let mut fixed_sidecars = 0u32;
-    let mut stmt = catalog.conn().prepare(
-        "SELECT id FROM assets WHERE rating IS NOT NULL",
-    )?;
-    let ids: Vec<String> = stmt.query_map([], |row| row.get::<_, String>(0))?
-        .collect::<Result<_, _>>()?;
-    drop(stmt);
+    let ids = catalog.list_rated_asset_ids()?;
     for id_str in &ids {
         if let Ok(uuid) = id_str.parse::<uuid::Uuid>() {
             if let Ok(mut asset) = store.load_raw(uuid) {

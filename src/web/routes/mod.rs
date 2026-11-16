@@ -305,7 +305,7 @@ fn resolve_similar_filter(
             }
         } else {
             let full_id = resolve_asset_id_or_err(catalog, similar_ref)?;
-            let emb_store = crate::embedding_store::EmbeddingStore::new(catalog.conn());
+            let emb_store = crate::embedding_store::EmbeddingStore::new(catalog);
             let emb = emb_store.get(&full_id, model_id)?.ok_or_else(|| {
                 anyhow::anyhow!(
                     "No embedding for '{similar_ref}'. Run `maki embed --asset {full_id}` first."

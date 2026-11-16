@@ -198,23 +198,8 @@ pub fn gather(
 
     let (assets_without_embedding, assets_without_face_scan) = if ai_enabled {
         let total = assets as i64;
-        let with_emb: i64 = catalog
-            .conn()
-            .query_row(
-                "SELECT COUNT(DISTINCT asset_id) FROM embeddings",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
-        let no_face_scan: i64 = catalog
-            .conn()
-            .query_row(
-                "SELECT COUNT(*) FROM assets \
-                 WHERE face_scan_status IS NULL OR face_scan_status = 'pending'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
+        let with_emb = catalog.count_assets_with_embeddings()? as i64;
+        let no_face_scan = catalog.count_assets_without_face_scan()? as i64;
         (
             Some((total - with_emb).max(0) as u64),
             Some(no_face_scan.max(0) as u64),
@@ -273,24 +258,14 @@ pub fn gather(
         let vol_id = v.id.to_string();
         // Per-volume asset count + size: distinct assets that have at least
         // one variant location on this volume.
-        let (count, size): (i64, i64) = catalog
-            .conn()
-            .query_row(
-                "SELECT COUNT(DISTINCT v.asset_id), COALESCE(SUM(v.file_size), 0) \
-                 FROM variants v \
-                 JOIN file_locations fl ON fl.content_hash = v.content_hash \
-                 WHERE fl.volume_id = ?1",
-                rusqlite::params![&vol_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap_or((0, 0));
+        let (count, size) = catalog.volume_usage(&vol_id)?;
         volume_rows.push(VolumeRow {
             label: v.label.clone(),
             mount_point: v.mount_point.to_string_lossy().to_string(),
             purpose: v.purpose.as_ref().map(|p| p.as_str().to_string()),
             is_online: v.is_online,
-            asset_count: count.max(0) as u64,
-            size_bytes: size.max(0) as u64,
+            asset_count: count,
+            size_bytes: size,
         });
     }
     // Online first, then offline; alpha within each.
@@ -359,14 +334,7 @@ fn count_missing_previews(
         std::collections::HashSet::new()
     };
 
-    let mut stmt = catalog.conn().prepare(
-        "SELECT best_variant_hash FROM assets \
-         WHERE best_variant_hash IS NOT NULL AND best_variant_hash != ''",
-    )?;
-    let expected: Vec<String> = stmt
-        .query_map([], |r| r.get::<_, String>(0))?
-        .filter_map(|r| r.ok())
-        .collect();
+    let expected = catalog.list_best_variant_hashes()?;
 
     let mut missing_previews = 0usize;
     let mut missing_smart = 0usize;

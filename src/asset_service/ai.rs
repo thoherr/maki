@@ -82,7 +82,7 @@ impl AssetService {
             suggestions: Vec::new(),
         };
 
-        let emb_store = EmbeddingStore::new(catalog.conn());
+        let emb_store = EmbeddingStore::new(catalog);
 
         for aid in &asset_ids {
             let asset_start = Instant::now();
@@ -249,7 +249,7 @@ impl AssetService {
         use crate::preview::PreviewGenerator;
 
         let catalog = Catalog::open(&self.catalog_root)?;
-        let emb_store = EmbeddingStore::new(catalog.conn());
+        let emb_store = EmbeddingStore::new(&catalog);
         let preview_gen = PreviewGenerator::new(&self.catalog_root, self.verbosity, &self.preview_config);
         let registry = DeviceRegistry::new(&self.catalog_root);
         let volumes = registry.list()?;
@@ -439,7 +439,7 @@ impl AssetService {
     ) -> Result<DetectFacesResult> {
         let engine = self.query_engine_on(crate::catalog::Catalog::open(&self.catalog_root)?);
         let catalog = engine.catalog()?;
-        let face_store = crate::face_store::FaceStore::open(catalog.conn(), &self.catalog_root);
+        let face_store = crate::face_store::FaceStore::open(catalog, &self.catalog_root);
         let metadata_store = crate::metadata_store::MetadataStore::new(&self.catalog_root);
         let preview_gen = crate::preview::PreviewGenerator::new(&self.catalog_root, crate::Verbosity::quiet(), &self.preview_config);
         let registry = crate::device_registry::DeviceRegistry::new(&self.catalog_root);

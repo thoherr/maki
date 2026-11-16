@@ -165,7 +165,7 @@ impl Catalog {
     /// donors of a `group` merge after their variants were reassigned.
     pub fn delete_asset_with_collections(&self, catalog_root: &Path, asset_id: &str) -> Result<()> {
         self.with_tx(|c| {
-            crate::collection::CollectionStore::open(c.conn(), catalog_root).remove_asset(asset_id)?;
+            crate::collection::CollectionStore::open(c, catalog_root).remove_asset(asset_id)?;
             c.delete_asset_rows(asset_id)
         })
     }
@@ -360,7 +360,7 @@ mod tests {
         let asset_id = asset.id.to_string();
         catalog.insert_asset(&asset).unwrap();
 
-        let store = crate::collection::CollectionStore::open(&catalog.conn, root.path());
+        let store = crate::collection::CollectionStore::open(&catalog, root.path());
         store.create("TestCol", None).unwrap();
         store.add_assets("TestCol", std::slice::from_ref(&asset_id)).unwrap();
 

@@ -454,7 +454,7 @@ fn auto_tag_similar(
     }
 
     let catalog = maki::catalog::Catalog::open(catalog_root)?;
-    let emb_store = maki::embedding_store::EmbeddingStore::new(catalog.conn());
+    let emb_store = maki::embedding_store::EmbeddingStore::new(&catalog);
 
     let full_id = catalog
         .resolve_asset_id_required(similar_id)?;
@@ -535,7 +535,7 @@ pub fn run_embed_command(
     if export {
         let catalog_root = ctx.catalog_root()?;
         let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-        let emb_store = maki::embedding_store::EmbeddingStore::new(catalog.conn());
+        let emb_store = maki::embedding_store::EmbeddingStore::new(&catalog);
 
         let mut total = 0u32;
         let models = emb_store.list_models()?;

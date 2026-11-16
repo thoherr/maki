@@ -82,19 +82,29 @@ impl<'a> FaceStore<'a> {
     /// Use [`FaceStore::open`] wherever a user operation changes faces or
     /// people. The tables themselves are created by the schema migrations
     /// (v13), never here.
-    pub fn new(conn: &'a Connection) -> Self {
+    pub fn new(catalog: &'a crate::catalog::Catalog) -> Self {
+        Self::on(catalog.conn())
+    }
+
+    /// Read-only handle on a bare connection (the YAML export runs on the
+    /// connection of the committing transaction).
+    fn on(conn: &'a Connection) -> Self {
         Self { conn, catalog_root: None }
     }
 
     /// Full handle bound to the catalog root that holds `faces.yaml` and
     /// `people.yaml`; mutators persist to it (see the module docs).
-    pub fn open(conn: &'a Connection, catalog_root: &Path) -> Self {
-        Self { conn, catalog_root: Some(catalog_root.to_path_buf()) }
+    pub fn open(catalog: &'a crate::catalog::Catalog, catalog_root: &Path) -> Self {
+        Self { conn: catalog.conn(), catalog_root: Some(catalog_root.to_path_buf()) }
     }
 
-    /// Access the underlying database connection.
-    pub fn conn(&self) -> &Connection {
-        self.conn
+    /// IDs of the faces whose ID starts with `prefix`.
+    pub fn face_ids_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM faces WHERE id LIKE ?1")?;
+        let ids = stmt
+            .query_map(rusqlite::params![format!("{prefix}%")], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
     }
 
     /// Write `faces.yaml` and `people.yaml` from the current SQLite rows
@@ -107,7 +117,7 @@ impl<'a> FaceStore<'a> {
             anyhow!("FaceStore opened without a catalog root (FaceStore::new); use FaceStore::open to persist faces.yaml / people.yaml")
         })?;
         crate::tx::export_at_commit(self.conn, "faces", root, |conn, root| {
-            let store = FaceStore::new(conn);
+            let store = FaceStore::on(conn);
             save_faces_yaml(root, &store.export_all_faces()?)?;
             save_people_yaml(root, &store.export_all_people()?)
         })
@@ -1142,14 +1152,14 @@ mod tests {
     #[test]
     fn mutators_persist_yaml_and_handle_without_root_refuses() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
         let pid = store.create_person(Some("Alice")).unwrap();
         let people = load_people_yaml(dir.path()).unwrap();
         assert_eq!(people.people.len(), 1, "create_person must write people.yaml");
         store.name_person(&pid, "Alicia").unwrap();
         assert_eq!(load_people_yaml(dir.path()).unwrap().people[0].name.as_deref(), Some("Alicia"));
 
-        let readonly = FaceStore::new(catalog.conn());
+        let readonly = FaceStore::new(&catalog);
         let err = readonly.name_person(&pid, "Nope").unwrap_err();
         assert!(format!("{err:#}").contains("FaceStore::open"), "{err:#}");
         // The refused mutation was rolled back with the failed persist.
@@ -1159,7 +1169,7 @@ mod tests {
     #[test]
     fn mutators_report_not_found() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
         let err = store.name_person("missing", "x").unwrap_err();
         assert!(matches!(crate::error::classify(&err), Some(MakiError::NotFound { kind: "person", .. })), "{err:#}");
         let err = store.unassign_face("missing").unwrap_err();
@@ -1169,7 +1179,7 @@ mod tests {
     #[test]
     fn store_and_retrieve_face() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         let emb = vec![0.1f32; 512];
         store
@@ -1186,7 +1196,7 @@ mod tests {
     #[test]
     fn has_faces_true_false() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         assert!(!store.has_faces("asset-1"));
 
@@ -1201,7 +1211,7 @@ mod tests {
     #[test]
     fn face_count() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         assert_eq!(store.face_count("asset-1"), 0);
 
@@ -1218,7 +1228,7 @@ mod tests {
     #[test]
     fn get_face_embedding() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         let emb = vec![0.5f32; 512];
         store
@@ -1233,14 +1243,14 @@ mod tests {
     #[test]
     fn get_face_embedding_nonexistent() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
         assert!(store.get_face_embedding("nonexistent").unwrap().is_none());
     }
 
     #[test]
     fn create_and_get_person() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         let pid = store.create_person(Some("Alice")).unwrap();
         let person = store.get_person(&pid).unwrap().unwrap();
@@ -1251,7 +1261,7 @@ mod tests {
     #[test]
     fn name_person() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         let pid = store.create_person(None).unwrap();
         assert!(store.get_person(&pid).unwrap().unwrap().name.is_none());
@@ -1266,7 +1276,7 @@ mod tests {
     #[test]
     fn assign_face_to_person() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         store
             .store_face("f1", "asset-1", 0.0, 0.0, 0.5, 0.5, &vec![0.0; 512], 0.9, crate::face::RECOGNITION_MODEL.id)
@@ -1281,7 +1291,7 @@ mod tests {
     #[test]
     fn list_people() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         store.create_person(Some("Alice")).unwrap();
         store.create_person(Some("Bob")).unwrap();
@@ -1295,7 +1305,7 @@ mod tests {
     #[test]
     fn merge_people() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         let pid1 = store.create_person(Some("Alice")).unwrap();
         let pid2 = store.create_person(Some("Also Alice")).unwrap();
@@ -1323,7 +1333,7 @@ mod tests {
     #[test]
     fn delete_faces_for_asset() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         store
             .store_face("f1", "asset-1", 0.0, 0.0, 0.3, 0.3, &vec![0.0; 512], 0.9, crate::face::RECOGNITION_MODEL.id)
@@ -1340,7 +1350,7 @@ mod tests {
     #[test]
     fn delete_person_unassigns_faces() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         let pid = store.create_person(Some("Alice")).unwrap();
         store
@@ -1358,7 +1368,7 @@ mod tests {
     #[test]
     fn total_counts() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         assert_eq!(store.total_faces(), 0);
         assert_eq!(store.total_people(), 0);
@@ -1455,7 +1465,7 @@ mod tests {
     #[test]
     fn export_import_round_trip() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         // Create test data
         let emb = vec![0.5f32; 512];
@@ -1519,7 +1529,7 @@ mod tests {
     #[test]
     fn persist_writes_both_yaml_files() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         let emb = vec![0.5f32; 512];
         // Batch primitive: not persisted until persist().
@@ -1561,7 +1571,7 @@ mod tests {
     #[test]
     fn cluster_groups_similar_faces_into_distinct_clusters() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         // Three distinct "people" along different embedding axes — each with
         // three near-duplicate faces (small variation).
@@ -1593,7 +1603,7 @@ mod tests {
     #[test]
     fn cluster_respects_min_confidence_filter() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         // Two high-confidence faces (cluster candidates) and one low-confidence face.
         let emb_a = synth_embedding(0, 0.01);
@@ -1610,7 +1620,7 @@ mod tests {
     #[test]
     fn cluster_ignores_already_assigned_faces() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         let emb = synth_embedding(0, 0.0);
         store.store_face("f1", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();
@@ -1626,7 +1636,7 @@ mod tests {
     #[test]
     fn suggest_merges_surfaces_similar_clusters() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         // Person A: two tightly-clustered faces.
         let emb_a1 = synth_embedding(0, 0.01);
@@ -1666,7 +1676,7 @@ mod tests {
     #[test]
     fn suggest_merges_skips_pairs_below_threshold() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         let emb_a = synth_embedding(0, 0.0);
         let emb_b = synth_embedding(200, 0.0);
@@ -1686,7 +1696,7 @@ mod tests {
     #[test]
     fn delete_unassigned_faces_only_removes_unassigned() {
         let (catalog, dir) = setup_db();
-        let store = FaceStore::open(catalog.conn(), dir.path());
+        let store = FaceStore::open(&catalog, dir.path());
 
         let emb = vec![0.1f32; 512];
         store.store_face("kept", "asset-1", 0.0, 0.0, 0.1, 0.1, &emb, 0.95, crate::face::RECOGNITION_MODEL.id).unwrap();

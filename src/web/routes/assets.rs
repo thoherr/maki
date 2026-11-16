@@ -371,14 +371,7 @@ pub async fn set_rotation(
         let catalog = state.catalog()?;
 
         let details = engine.show(&asset_id)?;
-        let current: Option<u16> = catalog.conn().query_row(
-            "SELECT preview_rotation FROM assets WHERE id = ?1",
-            [&details.id],
-            |r| {
-                let val: Option<i64> = r.get(0)?;
-                Ok(val.map(|v| v as u16))
-            },
-        ).unwrap_or(None);
+        let current = catalog.preview_rotation(&details.id)?;
 
         let new_rotation = match current {
             None | Some(0) => Some(90u16),

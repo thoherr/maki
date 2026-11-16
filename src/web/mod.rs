@@ -176,7 +176,7 @@ impl DropdownCache {
         if let Some(cached) = w.collections.as_ref() {
             return cached.clone();
         }
-        let col_store = crate::collection::CollectionStore::new(catalog.conn());
+        let col_store = crate::collection::CollectionStore::new(catalog);
         let collections: Vec<String> = col_store
             .list()
             .unwrap_or_default()
@@ -196,7 +196,7 @@ impl DropdownCache {
         if let Some(cached) = w.people.as_ref() {
             return cached.clone();
         }
-        let face_store = crate::face_store::FaceStore::new(catalog.conn());
+        let face_store = crate::face_store::FaceStore::new(catalog);
         let people: Vec<(String, String)> = face_store
             .list_people()
             .unwrap_or_default()

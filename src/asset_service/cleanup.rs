@@ -127,8 +127,8 @@ impl AssetService {
         // Stack and collection memberships: the stores persist their YAML
         // inside the per-asset transaction below (audit F6); nothing is
         // saved after the loop.
-        let stack_store = crate::stack::StackStore::open(catalog.conn(), &self.catalog_root);
-        let col_store = crate::collection::CollectionStore::open(catalog.conn(), &self.catalog_root);
+        let stack_store = crate::stack::StackStore::open(&catalog, &self.catalog_root);
+        let col_store = crate::collection::CollectionStore::open(&catalog, &self.catalog_root);
 
         let mut result = DeleteResult {
             deleted: 0,
@@ -245,14 +245,8 @@ impl AssetService {
                     stack_store.remove(std::slice::from_ref(&asset_id))?;
                     col_store.remove_asset(&asset_id)?;
                     let face_ids = list_face_ids(c, &asset_id);
-                    c.conn().execute(
-                        "DELETE FROM faces WHERE asset_id = ?1",
-                        rusqlite::params![&asset_id],
-                    )?;
-                    c.conn().execute(
-                        "DELETE FROM embeddings WHERE asset_id = ?1",
-                        rusqlite::params![&asset_id],
-                    )?;
+                    c.delete_faces_for_asset(&asset_id)?;
+                    c.delete_embeddings_for_asset(&asset_id)?;
                     c.delete_recipes_for_asset(&asset_id)?;
                     c.delete_file_locations_for_asset(&asset_id)?;
                     c.delete_variants_for_asset(&asset_id)?;
@@ -346,24 +340,15 @@ impl AssetService {
         asset_id: &str,
     ) -> Result<PurgedAsset> {
         // Collect variant hashes and face IDs before deleting DB records
-        let variant_hashes: Vec<String> = catalog.conn()
-            .prepare("SELECT content_hash FROM variants WHERE asset_id = ?1")
-            .and_then(|mut s| s.query_map(rusqlite::params![asset_id], |r| r.get(0))
-                .and_then(|rows| rows.collect()))?;
+        let variant_hashes = catalog.list_variant_hashes_for_asset(asset_id)?;
         let face_ids = list_face_ids(catalog, asset_id);
 
         // Remove from stacks, collections, faces, and embeddings before
         // deleting the asset
-        crate::stack::StackStore::open(catalog.conn(), &self.catalog_root).remove(&[asset_id.to_string()])?;
-        crate::collection::CollectionStore::open(catalog.conn(), &self.catalog_root).remove_asset(asset_id)?;
-        catalog.conn().execute(
-            "DELETE FROM faces WHERE asset_id = ?1",
-            rusqlite::params![asset_id],
-        )?;
-        catalog.conn().execute(
-            "DELETE FROM embeddings WHERE asset_id = ?1",
-            rusqlite::params![asset_id],
-        )?;
+        crate::stack::StackStore::open(catalog, &self.catalog_root).remove(&[asset_id.to_string()])?;
+        crate::collection::CollectionStore::open(catalog, &self.catalog_root).remove_asset(asset_id)?;
+        catalog.delete_faces_for_asset(asset_id)?;
+        catalog.delete_embeddings_for_asset(asset_id)?;
 
         catalog.delete_recipes_for_asset(asset_id)?;
         catalog.delete_file_locations_for_asset(asset_id)?;
@@ -447,11 +432,7 @@ pub(super) struct PurgedAsset {
 /// Face IDs of an asset. A read: a catalog without the `faces` table
 /// (never ran face detection) simply has none.
 fn list_face_ids(catalog: &Catalog, asset_id: &str) -> Vec<String> {
-    catalog.conn()
-        .prepare("SELECT id FROM faces WHERE asset_id = ?1")
-        .and_then(|mut s| s.query_map(rusqlite::params![asset_id], |r| r.get(0))
-            .and_then(|rows| rows.collect()))
-        .unwrap_or_default()
+    catalog.list_face_ids(Some(asset_id)).unwrap_or_default()
 }
 
 /// One `cleanup` in progress: stores, the apply flag, the result under
@@ -741,11 +722,8 @@ impl<F: Fn(&Path, CleanupStatus, Duration)> CleanupRun<'_, F> {
         }
 
         // Pass 7: Orphaned face crop thumbnails (face_id.jpg under faces/)
-        let face_ids_set: HashSet<String> = self.catalog.conn()
-            .prepare("SELECT id FROM faces")
-            .and_then(|mut s| s.query_map([], |r| r.get(0))
-                .and_then(|rows| rows.collect()))
-            .unwrap_or_default();
+        let face_ids_set: HashSet<String> =
+            self.catalog.list_face_ids(None).unwrap_or_default().into_iter().collect();
         scan_orphaned_sharded_files(
             &catalog_root.join("faces"),
             |stem| face_ids_set.contains(stem),

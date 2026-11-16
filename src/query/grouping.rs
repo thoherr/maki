@@ -713,7 +713,7 @@ impl QueryEngine {
         };
 
         // `create` persists stacks.yaml itself (StackStore::open).
-        let store = crate::stack::StackStore::open(catalog.conn(), &self.catalog_root);
+        let store = crate::stack::StackStore::open(catalog, &self.catalog_root);
 
         for tag in &matching_tags {
             let assets = catalog.assets_with_exact_tag(tag)?;
@@ -1074,7 +1074,7 @@ mod tests {
         let root = dir.path();
         {
             let catalog = Catalog::open(root).unwrap();
-            let collections = crate::collection::CollectionStore::open(catalog.conn(), root);
+            let collections = crate::collection::CollectionStore::open(&catalog, root);
             collections.create("keepers", None).unwrap();
             collections.add_assets("keepers", &[id1.clone(), id2.clone()]).unwrap();
         }

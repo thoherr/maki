@@ -854,7 +854,7 @@ impl Catalog {
         #[cfg(feature = "ai")]
         if previous_version < 6 {
             use anyhow::Context as _;
-            crate::face_store::FaceStore::open(&self.conn, catalog_root)
+            crate::face_store::FaceStore::open(self, catalog_root)
                 .persist()
                 .context("re-exporting faces.yaml / people.yaml after the v6 migration")?;
         }
@@ -894,8 +894,11 @@ impl Catalog {
         Self::open(catalog_root)
     }
 
-    /// Access the underlying SQLite connection.
-    pub fn conn(&self) -> &Connection {
+    /// The underlying SQLite connection, for the stores and library code
+    /// that still carry their own SQL. Not part of the public API: the
+    /// binary and other crates go through named `Catalog` methods and the
+    /// store handles (`StackStore::new(&catalog)` …).
+    pub(crate) fn conn(&self) -> &Connection {
         &self.conn
     }
 

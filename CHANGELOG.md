@@ -36,6 +36,13 @@ All notable changes to the Digital Asset Manager are documented here.
   binary), plus: migration of a frozen pre-versioning catalog, stored
   paths `/`-separated through import and sync, and pool readers against
   a concurrent writer.
+- **`Catalog::conn()` is no longer public.** The face, stack, collection
+  and embedding stores take the catalog instead of a raw connection, the
+  CLI binary no longer touches SQLite directly, and the SQL that sat in
+  verify, cleanup, status, `rebuild-catalog` and two web handlers moved
+  into named `Catalog` methods. No behaviour change, except that a failing
+  count query in `status` or the `rebuild-catalog` tips is now reported
+  instead of being shown as zero.
 
 ## v4.13.1 (2026-11-16)
 

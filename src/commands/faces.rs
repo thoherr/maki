@@ -52,7 +52,7 @@ fn faces_status(ctx: &CliContext) -> anyhow::Result<()> {
     println!("Current recognition model: {current_model}");
 
     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-    let store = maki::face_store::FaceStore::new(catalog.conn());
+    let store = maki::face_store::FaceStore::new(&catalog);
     println!("Total faces detected: {}", store.total_faces());
     println!("Total people: {}", store.total_people());
 
@@ -214,7 +214,7 @@ fn faces_cluster(
 ) -> anyhow::Result<()> {
     let (catalog_root, config) = ctx.catalog()?;
     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-    let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
+    let face_store = maki::face_store::FaceStore::open(&catalog, &catalog_root);
 
     // CLI threshold/min_confidence args are f32 (clap default for `--threshold`);
     // config carries f64 since v4.5.5 (for clean TOML round-trips). Cast to f32
@@ -284,7 +284,7 @@ fn faces_cluster(
 fn faces_people(ctx: &CliContext) -> anyhow::Result<()> {
     let (catalog_root, _) = ctx.catalog()?;
     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-    let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
+    let face_store = maki::face_store::FaceStore::open(&catalog, &catalog_root);
 
     let people = face_store.list_people()?;
     if ctx.json {
@@ -316,7 +316,7 @@ fn faces_people(ctx: &CliContext) -> anyhow::Result<()> {
 fn faces_name(person_id: String, name: String, ctx: &CliContext) -> anyhow::Result<()> {
     let (catalog_root, _) = ctx.catalog()?;
     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-    let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
+    let face_store = maki::face_store::FaceStore::open(&catalog, &catalog_root);
 
     // Resolve person ID prefix
     let full_id = resolve_person_id(&face_store, &person_id)?;
@@ -330,7 +330,7 @@ fn faces_name(person_id: String, name: String, ctx: &CliContext) -> anyhow::Resu
 fn faces_merge(target_id: String, source_id: String, ctx: &CliContext) -> anyhow::Result<()> {
     let (catalog_root, _) = ctx.catalog()?;
     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-    let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
+    let face_store = maki::face_store::FaceStore::open(&catalog, &catalog_root);
 
     let target = resolve_person_id(&face_store, &target_id)?;
     let source = resolve_person_id(&face_store, &source_id)?;
@@ -345,7 +345,7 @@ fn faces_merge(target_id: String, source_id: String, ctx: &CliContext) -> anyhow
 fn faces_delete_person(person_id: String, ctx: &CliContext) -> anyhow::Result<()> {
     let (catalog_root, _) = ctx.catalog()?;
     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-    let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
+    let face_store = maki::face_store::FaceStore::open(&catalog, &catalog_root);
 
     let full_id = resolve_person_id(&face_store, &person_id)?;
     face_store.delete_person(&full_id)?;
@@ -358,7 +358,7 @@ fn faces_delete_person(person_id: String, ctx: &CliContext) -> anyhow::Result<()
 fn faces_unassign(face_id: String, ctx: &CliContext) -> anyhow::Result<()> {
     let (catalog_root, _) = ctx.catalog()?;
     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-    let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
+    let face_store = maki::face_store::FaceStore::open(&catalog, &catalog_root);
 
     // Resolve face ID prefix
     let full_id = resolve_face_id(&face_store, &face_id)?;
@@ -372,7 +372,7 @@ fn faces_unassign(face_id: String, ctx: &CliContext) -> anyhow::Result<()> {
 fn faces_clean(apply: bool, ctx: &CliContext) -> anyhow::Result<()> {
     let (catalog_root, _) = ctx.catalog()?;
     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-    let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
+    let face_store = maki::face_store::FaceStore::open(&catalog, &catalog_root);
 
     let count = face_store.count_unassigned_faces()?;
     if ctx.json {
@@ -496,7 +496,7 @@ fn faces_similarity(
 ) -> anyhow::Result<()> {
     let (catalog_root, _) = ctx.catalog()?;
     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-    let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
+    let face_store = maki::face_store::FaceStore::open(&catalog, &catalog_root);
 
     // Resolve scope (same pattern as cluster)
     let scoped_ids: Option<Vec<String>> = if query.is_some() || asset.is_some() || volume.is_some() {
@@ -651,7 +651,7 @@ fn faces_similarity(
 fn faces_export(ctx: &CliContext) -> anyhow::Result<()> {
     let (catalog_root, _) = ctx.catalog()?;
     let catalog = maki::catalog::Catalog::open(&catalog_root)?;
-    let face_store = maki::face_store::FaceStore::open(catalog.conn(), &catalog_root);
+    let face_store = maki::face_store::FaceStore::open(&catalog, &catalog_root);
 
     // Export faces + people YAML
     face_store.persist()?;
@@ -708,11 +708,7 @@ pub fn resolve_face_id(face_store: &maki::face_store::FaceStore, prefix: &str) -
         return Ok(prefix.to_string());
     }
     // Fall back to prefix search via all faces
-    let conn = face_store.conn();
-    let mut stmt = conn.prepare("SELECT id FROM faces WHERE id LIKE ?1")?;
-    let ids: Vec<String> = stmt
-        .query_map(rusqlite::params![format!("{prefix}%")], |row| row.get(0))?
-        .collect::<Result<Vec<_>, _>>()?;
+    let ids = face_store.face_ids_with_prefix(prefix)?;
     match ids.len() {
         0 => Err(maki::error::MakiError::not_found("face", prefix).into()),
         1 => Ok(ids[0].clone()),

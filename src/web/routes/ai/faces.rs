@@ -24,7 +24,7 @@ pub async fn asset_faces(
 ) -> Result<Response, Response> {
     let faces = super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let face_store = crate::face_store::FaceStore::open(catalog.conn(), &state.catalog_root);
+        let face_store = crate::face_store::FaceStore::open(&catalog, &state.catalog_root);
         let faces = face_store.faces_for_asset(&asset_id)?;
         let result: Vec<serde_json::Value> = faces.iter().map(|f| {
             let crop_url = if crate::face::face_crop_exists(&f.id, &state.catalog_root) {
@@ -167,7 +167,7 @@ pub async fn assign_face(
 
     match super::super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
-        let face_store = crate::face_store::FaceStore::open(catalog.conn(), &state.catalog_root);
+        let face_store = crate::face_store::FaceStore::open(&catalog, &state.catalog_root);
         face_store.assign_face_to_person(&face_id, &person_id)?;
         state.dropdown_cache.invalidate_people();
         Ok(())
@@ -184,7 +184,7 @@ pub async fn unassign_face_api(
 ) -> Response {
     match super::super::spawn_catalog_blocking(move || {
         let catalog = state.catalog()?;
-        let face_store = crate::face_store::FaceStore::open(catalog.conn(), &state.catalog_root);
+        let face_store = crate::face_store::FaceStore::open(&catalog, &state.catalog_root);
         face_store.unassign_face(&face_id)?;
         state.dropdown_cache.invalidate_people();
         Ok(())
@@ -202,7 +202,7 @@ pub async fn delete_face_api(
     let catalog_root = state.catalog_root.clone();
     super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let face_store = crate::face_store::FaceStore::open(catalog.conn(), &state.catalog_root);
+        let face_store = crate::face_store::FaceStore::open(&catalog, &state.catalog_root);
         if let Some(asset_id) = face_store.delete_face(&face_id)? {
             catalog.update_face_count(&asset_id)?;
             let prefix = &face_id[..2.min(face_id.len())];
@@ -223,7 +223,7 @@ pub async fn people_page(
 ) -> Result<Response, Response> {
     let html = super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let face_store = crate::face_store::FaceStore::open(catalog.conn(), &state.catalog_root);
+        let face_store = crate::face_store::FaceStore::open(&catalog, &state.catalog_root);
         let people_list = face_store.list_people()?;
 
         let people: Vec<PersonCard> = people_list.into_iter().map(|(p, count)| {
@@ -258,7 +258,7 @@ pub async fn list_people_api(
 ) -> Result<Response, Response> {
     let json = super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let face_store = crate::face_store::FaceStore::open(catalog.conn(), &state.catalog_root);
+        let face_store = crate::face_store::FaceStore::open(&catalog, &state.catalog_root);
         let people = face_store.list_people()?;
         let json: Vec<serde_json::Value> = people.into_iter().map(|(p, count)| {
             serde_json::json!({
@@ -284,7 +284,7 @@ pub async fn create_person_api(
     }
     let json = super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let face_store = crate::face_store::FaceStore::open(catalog.conn(), &state.catalog_root);
+        let face_store = crate::face_store::FaceStore::open(&catalog, &state.catalog_root);
         let id = face_store.create_person(Some(&name))?;
         Ok::<_, anyhow::Error>(serde_json::json!({"id": id, "name": name}))
     }, super::super::err::mapped_json).await?;
@@ -304,7 +304,7 @@ pub async fn name_person_api(
 
     super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let face_store = crate::face_store::FaceStore::open(catalog.conn(), &state.catalog_root);
+        let face_store = crate::face_store::FaceStore::open(&catalog, &state.catalog_root);
         face_store.name_person(&person_id, &name)?;
         state.dropdown_cache.invalidate_people();
         Ok::<_, anyhow::Error>(())
@@ -331,7 +331,7 @@ pub async fn merge_person_api(
 
     let (moved, n) = super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let face_store = crate::face_store::FaceStore::open(catalog.conn(), &state.catalog_root);
+        let face_store = crate::face_store::FaceStore::open(&catalog, &state.catalog_root);
         let moved = face_store.merge_people_batch(&target_id, &source_ids)?;
         state.dropdown_cache.invalidate_people();
         Ok::<_, anyhow::Error>((moved, source_ids.len()))
@@ -346,7 +346,7 @@ pub async fn delete_person_api(
 ) -> Result<Response, Response> {
     super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let face_store = crate::face_store::FaceStore::open(catalog.conn(), &state.catalog_root);
+        let face_store = crate::face_store::FaceStore::open(&catalog, &state.catalog_root);
         face_store.delete_person(&person_id)?;
         state.dropdown_cache.invalidate_people();
         Ok::<_, anyhow::Error>(())
@@ -364,7 +364,7 @@ pub async fn merge_suggestions_api(
 
     let items = super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let face_store = crate::face_store::FaceStore::open(catalog.conn(), &state.catalog_root);
+        let face_store = crate::face_store::FaceStore::open(&catalog, &state.catalog_root);
         let pairs = face_store.suggest_person_merges(threshold, limit)?;
 
         let people = face_store.list_people()?;
@@ -411,7 +411,7 @@ pub async fn cluster_faces_api(
 ) -> Result<Response, Response> {
     let result = super::super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
-        let face_store = crate::face_store::FaceStore::open(catalog.conn(), &state.catalog_root);
+        let face_store = crate::face_store::FaceStore::open(&catalog, &state.catalog_root);
         let threshold = state.ai_config.face_cluster_threshold as f32;
         let min_confidence = state.ai_config.face_min_confidence as f32;
         let result = face_store.auto_cluster(threshold, min_confidence, None)?;

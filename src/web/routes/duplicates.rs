@@ -158,11 +158,7 @@ pub async fn dedup_remove_location_api(
     let json = super::spawn_blocking_with(move || {
         let catalog = state.catalog()?;
 
-        let location_count: u64 = catalog.conn().query_row(
-            "SELECT COUNT(*) FROM file_locations WHERE content_hash = ?1",
-            rusqlite::params![req.content_hash],
-            |row| row.get(0),
-        )?;
+        let location_count = catalog.count_locations_of_variant(&req.content_hash)?;
         if location_count <= 1 {
             return Err(MakiError::Conflict("cannot remove the last copy of a file".into()).into());
         }

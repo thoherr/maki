@@ -80,14 +80,20 @@ impl<'a> StackStore<'a> {
     /// the mutators return an error. Use [`StackStore::open`] wherever a
     /// user operation changes stacks. The tables are created by the
     /// schema migrations (v13), never here.
-    pub fn new(conn: &'a rusqlite::Connection) -> Self {
+    pub fn new(catalog: &'a crate::catalog::Catalog) -> Self {
+        Self::on(catalog.conn())
+    }
+
+    /// Read-only handle on a bare connection (the YAML export runs on the
+    /// connection of the committing transaction).
+    fn on(conn: &'a rusqlite::Connection) -> Self {
         Self { conn, catalog_root: None }
     }
 
     /// Full handle bound to the catalog root that holds `stacks.yaml`;
     /// mutators persist to it (see the module docs).
-    pub fn open(conn: &'a rusqlite::Connection, catalog_root: &Path) -> Self {
-        Self { conn, catalog_root: Some(catalog_root.to_path_buf()) }
+    pub fn open(catalog: &'a crate::catalog::Catalog, catalog_root: &Path) -> Self {
+        Self { conn: catalog.conn(), catalog_root: Some(catalog_root.to_path_buf()) }
     }
 
     /// Write `stacks.yaml` from the current SQLite rows (atomic temp file
@@ -98,7 +104,7 @@ impl<'a> StackStore<'a> {
             anyhow!("StackStore opened without a catalog root (StackStore::new); use StackStore::open to change stacks")
         })?;
         crate::tx::export_at_commit(self.conn, "stacks", root, |conn, root| {
-            save_yaml(root, &StackStore::new(conn).export_all()?)
+            save_yaml(root, &StackStore::on(conn).export_all()?)
         })
     }
 
@@ -423,31 +429,15 @@ impl<'a> StackStore<'a> {
 mod tests {
     use super::*;
 
-    fn setup_db() -> (rusqlite::Connection, tempfile::TempDir) {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS assets (
-                id TEXT PRIMARY KEY,
-                name TEXT,
-                created_at TEXT NOT NULL,
-                asset_type TEXT NOT NULL,
-                tags TEXT NOT NULL DEFAULT '[]',
-                description TEXT,
-                stack_id TEXT,
-                stack_position INTEGER
-            );
-            CREATE TABLE IF NOT EXISTS stacks (
-                id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL,
-                member_count INTEGER NOT NULL DEFAULT 0
-            );",
-        )
-        .unwrap();
-        (conn, tempfile::tempdir().unwrap())
+    /// A real in-memory catalog (so the tables are the migrated ones)
+    /// plus a temp dir standing in for the catalog root that receives the
+    /// YAML file.
+    fn setup_db() -> (crate::catalog::Catalog, tempfile::TempDir) {
+        (crate::test_support::memory_catalog(), tempfile::tempdir().unwrap())
     }
 
-    fn insert_test_asset(conn: &rusqlite::Connection, id: &str) {
-        conn.execute(
+    fn insert_test_asset(conn: &crate::catalog::Catalog, id: &str) {
+        conn.conn().execute(
             "INSERT INTO assets (id, created_at, asset_type) VALUES (?1, '2026-01-01T00:00:00Z', 'image')",
             rusqlite::params![id],
         )
@@ -541,7 +531,7 @@ mod tests {
 
         // The mutator joins an outer transaction that fails afterwards:
         // neither the rows nor stacks.yaml change.
-        let r: Result<()> = crate::tx::run(&conn, || {
+        let r: Result<()> = crate::tx::run(conn.conn(), || {
             store.create(&["a1".into(), "a2".into()])?;
             assert!(!yaml_path.exists(), "export waits for the outer commit");
             anyhow::bail!("a later step of the enclosing operation fails")
@@ -552,7 +542,7 @@ mod tests {
 
         // The same work committed: rows and YAML agree, including the
         // second mutation made inside the transaction.
-        crate::tx::run(&conn, || {
+        crate::tx::run(conn.conn(), || {
             store.create(&["a1".into(), "a2".into()])?;
             store.add("a1", &["a3".into()])?;
             Ok(())
@@ -734,7 +724,7 @@ mod tests {
         assert_eq!(exported.stacks[0].asset_ids, vec!["a1", "a2"]);
 
         // Wipe and reimport through a root-less handle (rebuild's shape).
-        conn.execute_batch("UPDATE assets SET stack_id = NULL, stack_position = NULL; DELETE FROM stacks;").unwrap();
+        conn.conn().execute_batch("UPDATE assets SET stack_id = NULL, stack_position = NULL; DELETE FROM stacks;").unwrap();
         assert!(store.list().unwrap().is_empty());
 
         let importer = StackStore::new(&conn);

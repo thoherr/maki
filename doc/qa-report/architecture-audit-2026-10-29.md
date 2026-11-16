@@ -60,11 +60,17 @@ One finding was a defect and is fixed in the same change as this report
   closed: a frozen pre-versioning catalog migrated to the current schema,
   stored paths asserted `/`-separated through import and sync (the
   Windows CI job is where it bites), pool readers against a concurrent
-  writer. Still private: the hand-written minimal schemas in the
-  `stack`/`collection` tests. Without unit tests: refresh,
-  sync-metadata, fix-recipes, describe, the AI operations.
-  Open: `browse.html` JS modules; `Catalog::conn()`
-  visibility and the public-API decision.
+  writer. Without unit tests: refresh, sync-metadata, fix-recipes,
+  describe, the AI operations.
+  `Catalog::conn()` is `pub(crate)` (F15): the stores take `&Catalog`
+  (103 call sites), the binary uses no connection, raw SQL in verify,
+  cleanup, status, `rebuild-catalog` and two web routes became named
+  `Catalog` methods; about 110 production uses went down to 15 inside
+  the library (doctor's row comparison, auto-stack candidates, writeback
+  recipe lists, the embedding index loader, path completion). The
+  `stack`/`collection` tests run on the real schema.
+  Open: `browse.html` JS modules; the remaining library SQL outside
+  `catalog/`; the public-API decision (F27).
 
 ## Verdict in one paragraph
 
