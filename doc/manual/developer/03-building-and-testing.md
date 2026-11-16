@@ -55,7 +55,7 @@ Both feature matrices must pass before a release. The suite consists of four tar
 | Target | Command | Standard build | `--features pro` |
 |--------|---------|----------------|------------------|
 | Unit tests (`src/**`, incl. the web harness) | `cargo test --lib` | 1066 | 1206 |
-| CLI integration tests (`tests/cli.rs`) | `cargo test --test cli` | 297 | 344 |
+| CLI integration tests (`tests/cli/`) | `cargo test --test cli` | 297 | 344 |
 | XMP property tests (`tests/xmp_proptest.rs`) | `cargo test --test xmp_proptest` | 7 | 7 |
 | Doc tests | `cargo test --doc` | 14 | 14 |
 
@@ -77,7 +77,7 @@ cargo test --lib web::
 cargo test --test cli
 ```
 
-Runs the integration tests defined in `tests/cli.rs`. These tests exercise the full system through the CLI binary and library API, using temporary catalogs and volumes.
+Runs the integration tests in `tests/cli/`: one module per command area (`search.rs`, `tag.rs`, `stack.rs`, …) under `main.rs`, compiled into a single test binary, with shared helpers (`maki()`, `init_catalog`, `create_test_file`, …) in `common.rs`. Add a test to the module of the command it exercises, and a helper to `common.rs` only when more than one module needs it. Run one area with `cargo test --test cli search::`. These tests exercise the full system through the CLI binary and library API, using temporary catalogs and volumes.
 
 ### XMP Property Tests
 

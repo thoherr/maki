@@ -43,7 +43,12 @@ One finding was a defect and is fixed in the same change as this report
   `stack-similar`), and the stores' YAML exports are deferred to the
   commit of the outermost transaction (`src/tx.rs`). Exit criteria
   re-measured below.
-- Phase 3: open.
+- Phase 3 (strategic, ongoing): started 2026-11-16. Done so far:
+  `tests/cli.rs` split into `tests/cli/` — `main.rs`, `common.rs` and 20
+  per-command modules, one test binary, same 297 / 344 tests (F26, first
+  step). Open: crate-wide `test_support`, per-section unit tests and
+  service-operation unit tests; `browse.html` JS modules; `Catalog::conn()`
+  visibility and the public-API decision.
 
 ## Verdict in one paragraph
 

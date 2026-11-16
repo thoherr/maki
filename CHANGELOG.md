@@ -2,6 +2,16 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
+## Unreleased
+
+### Internal
+
+- **Architecture audit Phase 3 started: CLI test suite split.** The
+  13,000-line `tests/cli.rs` is now `tests/cli/`: one module per command
+  area under `main.rs`, shared helpers in `common.rs`, still a single
+  test binary (`cargo test --test cli`, unchanged counts). One area can
+  be run alone, e.g. `cargo test --test cli search::`.
+
 ## v4.13.1 (2026-11-16)
 
 Tag provenance follow-up to v4.13.0. No schema migration.
