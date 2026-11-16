@@ -1,6 +1,6 @@
 [package]
 name = "maki"
-version = "4.12.3"
+version = "4.13.0"
 edition = "2021"
 # Enforced floor for every feature set; `ort` (ai/pro) declares 1.92 and the
 # standard build has no reason to lag behind it (see doc/qa-report F27).

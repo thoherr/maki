@@ -2,10 +2,17 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## Unreleased
+## v4.13.0 (2026-11-16)
 
-Phases 1 and 2 of the October 2026 architecture audit
-(`doc/qa-report/architecture-audit-2026-10-29.md`). Phase 1,
+Architecture release: Phases 0–2 of the October 2026 architecture audit
+(`doc/qa-report/architecture-audit-2026-10-29.md`). Almost entirely
+internal, with a handful of deliberate behaviour changes listed under
+"Changed (behaviour)" in each phase. **Schema v13: run `maki migrate`
+once after upgrading** (every other command exits with a hint until
+then). Scripts can now tell "not found" (exit code 3) and "volume
+offline" (4) from general failures, and `maki doctor` exits non-zero
+when it leaves issues unrepaired. Phase 0, "quick wins": shared helpers,
+config injection and a clippy gate. Phase 1,
 "correctness": the catalog's multi-row writers become transactional,
 migrations stop swallowing failures, the four copies of "rebuild an
 asset's rows" become one, the YAML side files are written atomically and
@@ -149,7 +156,7 @@ adapters over the service, and `maki.toml` read once per invocation.
   asset is already in a stack, like `POST /api/batch/stack`; an unknown
   asset is 404. Other failures stay 400 with the `{"error"}` body.
 
-### Phase 1 — correctness (committed abd5bf2)
+### Phase 1 — correctness
 
 #### Changed (behaviour)
 
@@ -245,7 +252,7 @@ adapters over the service, and `maki.toml` read once per invocation.
   `panic!`/`unwrap`, and malformed rows are errors instead of being
   dropped by `filter_map(|r| r.ok())` (also in doctor, rebuild, writeback).
 
-### Phase 0 — quick wins (committed a1192c6)
+### Phase 0 — quick wins
 
 Phase 0 of the October 2026 architecture audit
 (`doc/qa-report/architecture-audit-2026-10-29.md`): behaviour-preserving

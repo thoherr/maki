@@ -961,7 +961,7 @@ maki search -q "similar:72a0bb4b"                       # just IDs, for scriptin
 
 **Behavior:** Looks up the stored embedding for the reference asset, loads all embeddings into an in-memory index, and performs a dot-product similarity search. If no embedding exists for the reference asset, exits with an error suggesting `maki embed --asset <id>`. The result set can be further filtered by all other search filters (AND logic). Results come back sorted by similarity, with the score shown as a badge in the web UI and appended to CLI short/full output (`92%`); JSON rows carry `similarity`.
 
-`similar:`, `min_sim:`, `text:` and `--image` are Pro features: in a standard build these tokens are consumed without effect (the query runs as if they were not there).
+`similar:`, `min_sim:`, `text:` and `--image` are Pro features. A standard build rejects `similar:`, `text:` and `--image` with an error (`the similar: filter requires a build with the ai feature`) instead of running the query without them; `min_sim:` on its own has no effect.
 
 ---
 
