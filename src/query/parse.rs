@@ -1731,7 +1731,7 @@ mod tests {
     fn normalize_windows_absolute_path_matching_volume() {
         let vol = make_volume("Photos", r"D:\Photos");
         let (rel, vid) = normalize_path_for_search(
-            r"D:\Photos\Capture\2026", &[vol.clone()], None,
+            r"D:\Photos\Capture\2026", std::slice::from_ref(&vol), None,
         );
         assert_eq!(rel, "Capture/2026");
         assert_eq!(vid, Some(vol.id.to_string()));
@@ -1757,7 +1757,7 @@ mod tests {
         let cwd = std::path::Path::new(r"C:\Temp");
 
         let (rel, vid) = normalize_path_for_search(
-            "~/Photos/2026", &[vol.clone()], Some(cwd),
+            "~/Photos/2026", std::slice::from_ref(&vol), Some(cwd),
         );
         assert_eq!(rel, "Photos/2026");
         assert_eq!(vid, Some(vol.id.to_string()));
@@ -1770,7 +1770,7 @@ mod tests {
         let cwd = std::path::Path::new(r"D:\Photos\Capture");
 
         let (rel, vid) = normalize_path_for_search(
-            "./2026-02-22", &[vol.clone()], Some(cwd),
+            "./2026-02-22", std::slice::from_ref(&vol), Some(cwd),
         );
         assert_eq!(rel, "Capture/2026-02-22");
         assert_eq!(vid, Some(vol.id.to_string()));
@@ -1783,7 +1783,7 @@ mod tests {
         let cwd = std::path::Path::new(r"D:\Photos\Capture\2026");
 
         let (rel, vid) = normalize_path_for_search(
-            "../2025", &[vol.clone()], Some(cwd),
+            "../2025", std::slice::from_ref(&vol), Some(cwd),
         );
         assert_eq!(rel, "Capture/2025");
         assert_eq!(vid, Some(vol.id.to_string()));
