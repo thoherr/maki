@@ -6,6 +6,10 @@ All notable changes to the Digital Asset Manager are documented here.
 
 ### Fixed
 
+- **Facet sidebar no longer jumps to the top.** The list stays in place
+  (dimmed) while counts refresh, and the row you clicked keeps its
+  position, also when rows above it drop out of the narrower result.
+
 - **Undo order for edits made within the same millisecond.** The
   edit-history journal orders operations by a millisecond timestamp in
   the file name; two operations recorded in the same millisecond (shell

@@ -220,7 +220,7 @@ The faceted sidebar shows what's *in* the current result set — broken down by 
 | Volume | Sets the volume dropdown to that volume. |
 | Geotagged | Appends `geotagged:1` to the search box. |
 
-Rows are keyboard-accessible: Tab to focus, Enter or Space to activate. Clicking a tag that's already in the active filter is a no-op (de-duplicated). After every click the panel re-fetches against the new filter, so the next layer of facets is computed live.
+Rows are keyboard-accessible: Tab to focus, Enter or Space to activate. Clicking a tag that's already in the active filter is a no-op (de-duplicated). After every click the panel re-fetches against the new filter, so the next layer of facets is computed live. The list stays in place while it refreshes: the row you clicked keeps its position in the sidebar instead of the panel jumping back to the top.
 
 #### Worked example: exploring a festival
 

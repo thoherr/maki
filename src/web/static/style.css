@@ -3839,6 +3839,8 @@ body.has-batch-toolbar { padding-bottom: 60px; }
 }
 .facet-close-btn:hover { color: var(--text); }
 .facet-loading { color: var(--text-muted); padding: 1rem 0; text-align: center; }
+/* Old counts stay in place, dimmed, while a refresh is in flight. */
+#facet-content.facet-refreshing { opacity: 0.6; transition: opacity 0.15s; }
 .facet-section { border-bottom: 1px solid var(--border); }
 .facet-section:last-child { border-bottom: none; }
 .facet-section summary {

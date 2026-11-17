@@ -13,6 +13,10 @@ window.damFacets = (function() {
     var sidebar = document.getElementById('facet-sidebar');
     var content = document.getElementById('facet-content');
     var fetchController = null;
+    // The facet row the user last activated, with its distance from the top
+    // of the sidebar's viewport: the next render scrolls it back to the
+    // same place. Used once, then dropped.
+    var anchor = null;
 
     function isOpen() {
         return document.documentElement.getAttribute('data-sidebar') === 'open';
@@ -47,6 +51,12 @@ window.damFacets = (function() {
         if (!row) return;
         var type = row.getAttribute('data-facet-type');
         var value = row.getAttribute('data-facet-value');
+        anchor = {
+            type: type,
+            value: value,
+            offset: row.getBoundingClientRect().top - sidebar.getBoundingClientRect().top,
+            focus: document.activeElement === row,
+        };
         switch (type) {
             case 'tag':
                 if (window.damTags && window.damTags.addTagAndSearch) {
@@ -116,10 +126,20 @@ window.damFacets = (function() {
         fetchController = new AbortController();
         var params = getFilterParams();
         var qs = Object.keys(params).map(function(k) { return k + '=' + encodeURIComponent(params[k]); }).join('&');
-        content.innerHTML = '<div class="facet-loading">Loading\u2026</div>';
+        // Keep the current list (dimmed) while the new counts load, so the
+        // sidebar neither jumps to the top nor flashes on every refresh.
+        if (content.querySelector('.facet-section')) {
+            content.classList.add('facet-refreshing');
+        } else {
+            content.innerHTML = '<div class="facet-loading">Loading\u2026</div>';
+        }
         MAKI.api.get('/api/facets?' + qs, { signal: fetchController.signal })
             .then(function(data) { render(data); })
-            .catch(function(e) { if (e.name !== 'AbortError') content.innerHTML = '<div class="facet-loading">Error loading facets</div>'; });
+            .catch(function(e) {
+                if (e.name === 'AbortError') return;
+                content.classList.remove('facet-refreshing');
+                content.innerHTML = '<div class="facet-loading">Error loading facets</div>';
+            });
     }
 
     var labelColors = MAKI.labelColors;
@@ -329,8 +349,29 @@ window.damFacets = (function() {
             html += '</div></div>';
         }
 
+        var scrollTop = sidebar.scrollTop;
         content.innerHTML = html;
+        content.classList.remove('facet-refreshing');
         restoreCollapseStates();
+        restoreScroll(scrollTop);
+    }
+
+    // Put the sidebar back where it was. When the row the user just
+    // activated is still in the list, it lands at the same height as
+    // before, even if rows above it disappeared with the narrower result.
+    function restoreScroll(scrollTop) {
+        sidebar.scrollTop = scrollTop;
+        var a = anchor;
+        anchor = null;
+        if (!a) return;
+        var row = null;
+        content.querySelectorAll('[data-facet-type="' + a.type + '"]').forEach(function(el) {
+            if (!row && el.getAttribute('data-facet-value') === a.value) row = el;
+        });
+        if (!row) return;
+        var offset = row.getBoundingClientRect().top - sidebar.getBoundingClientRect().top;
+        sidebar.scrollTop += offset - a.offset;
+        if (a.focus) row.focus({ preventScroll: true });
     }
 
     function facetSection(key, title, contentFn) {
