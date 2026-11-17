@@ -208,6 +208,8 @@ The faceted sidebar shows what's *in* the current result set — broken down by 
 
 **Tag hierarchy**: tags render as an indented tree, not a flat list. MAKI auto-expands every hierarchical tag to its ancestor paths on storage, so the panel can reshape that flat data back into the original hierarchy. Counts on parent rows reflect the union of all descendants — `event` showing 2,419 means "any photo with anything under `event`". Clicking a node always applies the **full path**, so picking `2024` under `Holzkirchner Blues- und Jazztage` filters to that specific year of that specific festival, not every photo from 2024 across the catalog.
 
+**Expanding and collapsing**: a tag with children has a small chevron in front of its name. Click the chevron to expand or collapse that branch; click the name (or anywhere else on the row) to filter by the tag. The tree starts with only the top level showing, and the branches you expand are remembered per browser. A tag you filter by opens automatically, together with its ancestors, so its children are there to drill into; you can still collapse it, and a collapsed branch that hides a selected tag shows its chevron in the accent color. With the keyboard, Right-arrow expands the focused row and Left-arrow collapses it.
+
 **Click-to-narrow**: every facet row is a toggle. The first click applies the filter, a second click on the same row takes it out again:
 
 | Facet | First click | Second click |
@@ -229,15 +231,15 @@ Rows are keyboard-accessible: Tab to focus, Enter or Space to activate. After ev
 Suppose you want to see what's left under-tagged at the *Holzkirchner Blues- und Jazztage*, a recurring festival you've shot 13 years running.
 
 1. Open the browse page with no filters. The Tags section shows top-level facets: `event`, `person`, `subject`, `location`, etc.
-2. Click `event` → results narrow to all photos tagged as some kind of event. The panel re-fetches; tag tree now shows `event > anniversary`, `event > concert`, `event > festival`, …
-3. Click `event > festival > Holzkirchner Blues- und Jazztage` → narrows to all 13 years. The Tags section now lists `…|2026`, `…|2025`, `…|2024`, … with per-year counts. The Years section also shows the matching calendar years.
+2. Click `event` → results narrow to all photos tagged as some kind of event. The panel re-fetches and `event` opens; the tag tree now shows `event > anniversary`, `event > concert`, `event > festival`, …
+3. Expand `festival` with its chevron and click `Holzkirchner Blues- und Jazztage` → narrows to all 13 years. The Tags section now lists `…|2026`, `…|2025`, `…|2024`, … with per-year counts. The Years section also shows the matching calendar years.
 4. Click a Years row, say `2018`. The query box gains `date:2018` — and you discover the asset count there *is greater than* the festival's `…|2018` row count: those extra photos are likely festival photos missing the festival tag. Use the result grid to spot-check and re-tag them.
 
 This is the "what other tags appear in the same result set?" exploration mode — useful for both navigation (find a specific year/band) and audit (find inconsistently tagged photos).
 
 #### Tip: combine with chips
 
-Each click adds a filter; the chips at the top of the filter bar show your current path. Click a chip's `×` to back out one step without rebuilding the query. The browser back button works too — every filter change updates the URL.
+Each click adds a filter; the chips at the top of the filter bar show your current path. Click a chip's `×` — or the marked row in the sidebar again — to back out one step without rebuilding the query. The browser back button works too — every filter change updates the URL.
 
 ### Sorting
 

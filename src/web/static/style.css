@@ -3900,6 +3900,31 @@ body.has-batch-toolbar { padding-bottom: 60px; }
 .facet-item.facet-tag-row {
     padding-left: calc(0.3rem + var(--depth, 0) * 0.85rem);
 }
+/* Chevron in front of a tag that has children: it expands or collapses
+   the branch, the rest of the row filters. Leaves get a spacer of the
+   same width so names line up. */
+.facet-tag-toggle,
+.facet-tag-toggle-spacer {
+    flex: 0 0 0.9rem;
+    width: 0.9rem;
+    height: 1.1rem;
+    margin: 0 -0.15rem 0 -0.1rem;
+}
+.facet-tag-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    color: var(--text-muted);
+}
+.facet-tag-toggle::before {
+    content: "\25B8";
+    font-size: 0.75rem;
+    transition: transform 0.15s;
+}
+.facet-tag-row[aria-expanded="true"] > .facet-tag-toggle::before { transform: rotate(90deg); }
+.facet-tag-toggle:hover { color: var(--primary); background: var(--border); }
+.facet-tag-row.facet-hides-selected > .facet-tag-toggle { color: var(--primary); }
 .facet-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .facet-count {
     color: var(--text-muted);

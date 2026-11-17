@@ -19,6 +19,16 @@ window.damFacets = (function() {
     // of the sidebar's viewport: the next render scrolls it back to the
     // same place. Used once, then dropped.
     var anchor = null;
+    // The facet counts last rendered: expanding or collapsing a tag
+    // re-renders from these without asking the server again.
+    var lastData = null;
+    // Tag-tree state. A tag with children is open when the user expanded
+    // it (`openTags`, remembered per browser) or when the filter selects it
+    // or one of its descendants (so the next level is there to stroll
+    // into) -- unless the user collapsed it since (`closedTags`, this page
+    // only; dropped again when the tag is clicked as a filter).
+    var openTags = loadOpenTags();
+    var closedTags = {};
 
     function isOpen() {
         return document.documentElement.getAttribute('data-sidebar') === 'open';
@@ -37,11 +47,18 @@ window.damFacets = (function() {
         // for consistency with the existing widgets.
         content.addEventListener('click', handleFacetClick);
         content.addEventListener('keydown', function(e) {
+            var row = e.target.closest && e.target.closest('[data-facet-type]');
+            if (!row) return;
             if (e.key === 'Enter' || e.key === ' ') {
-                if (e.target.closest && e.target.closest('[data-facet-type]')) {
-                    e.preventDefault();
-                    handleFacetClick(e);
-                }
+                e.preventDefault();
+                handleFacetClick(e);
+            } else if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && row.hasAttribute('aria-expanded')) {
+                // Tree convention: right opens, left closes. Kept away from
+                // the grid's arrow-key navigation.
+                e.preventDefault();
+                e.stopPropagation();
+                var open = row.getAttribute('aria-expanded') === 'true';
+                if (open !== (e.key === 'ArrowRight')) toggleTag(row);
             }
         });
         // Restore section collapse states
@@ -51,6 +68,11 @@ window.damFacets = (function() {
     function handleFacetClick(e) {
         var row = e.target.closest('[data-facet-type]');
         if (!row) return;
+        // The chevron expands or collapses; the rest of the row filters.
+        if (e.target.closest('.facet-tag-toggle')) {
+            toggleTag(row);
+            return;
+        }
         var type = row.getAttribute('data-facet-type');
         var value = row.getAttribute('data-facet-value');
         anchor = {
@@ -64,6 +86,7 @@ window.damFacets = (function() {
         var on = isSelected(type, value);
         switch (type) {
             case 'tag':
+                delete closedTags[value];
                 if (window.damTags && window.damTags.toggleTagAndSearch) {
                     window.damTags.toggleTagAndSearch(value);
                 }
@@ -223,17 +246,75 @@ window.damFacets = (function() {
         return root;
     }
 
+    function loadOpenTags() {
+        try { return JSON.parse(localStorage.getItem('maki-facet-tags-open') || '{}') || {}; }
+        catch(e) { return {}; }
+    }
+
+    function saveOpenTags() {
+        try { localStorage.setItem('maki-facet-tags-open', JSON.stringify(openTags)); } catch(e) {}
+    }
+
+    // Paths the filter opens by itself: every included tag and its ancestors.
+    function autoOpenTags() {
+        var auto = {};
+        var names = (window.damTags && window.damTags.includedTagNames) ? window.damTags.includedTagNames() : [];
+        names.forEach(function(name) {
+            var parts = name.split('|');
+            var acc = '';
+            for (var i = 0; i < parts.length; i++) {
+                acc = i === 0 ? parts[i] : (acc + '|' + parts[i]);
+                auto[acc] = true;
+            }
+        });
+        return auto;
+    }
+
+    // Expand or collapse the tag row and re-render from the counts in hand.
+    function toggleTag(row) {
+        var path = row.getAttribute('data-facet-value');
+        var open = row.getAttribute('aria-expanded') === 'true';
+        if (open) {
+            delete openTags[path];
+            closedTags[path] = true;
+        } else {
+            openTags[path] = 1;
+            delete closedTags[path];
+        }
+        saveOpenTags();
+        anchor = {
+            type: 'tag',
+            value: path,
+            offset: row.getBoundingClientRect().top - sidebar.getBoundingClientRect().top,
+            focus: document.activeElement === row,
+        };
+        if (lastData) render(lastData);
+    }
+
+    // Only the rows of open branches are rendered: a collapsed tag stands
+    // for its whole subtree (its count already covers every descendant).
     function renderTagTree(root) {
         var h = '';
+        var auto = autoOpenTags();
         function walk(node, depth) {
             node._order.forEach(function(k) {
                 var c = node.children[k];
-                h += rowAttrs('tag', c.fullPath, c.fullPath + ' — click to narrow', 'facet-tag-row') +
+                var hasChildren = c._order.length > 0;
+                var open = hasChildren && !closedTags[c.fullPath] && (!!openTags[c.fullPath] || !!auto[c.fullPath]);
+                // A collapsed branch that hides a selected tag says so.
+                var hidesSelected = hasChildren && !open && !!auto[c.fullPath] && !isSelected('tag', c.fullPath);
+                h += rowAttrs('tag', c.fullPath, c.fullPath + ' — click to narrow',
+                              'facet-tag-row' + (hidesSelected ? ' facet-hides-selected' : '')) +
+                     (hasChildren ? ' aria-expanded="' + (open ? 'true' : 'false') + '"' : '') +
                      ' style="--depth: ' + depth + '">';
+                h += hasChildren
+                    ? '<span class="facet-tag-toggle" title="' +
+                      (open ? 'Collapse' : (hidesSelected ? 'Expand — a selected tag is inside' : 'Expand')) + '"></span>'
+                    : '<span class="facet-tag-toggle-spacer"></span>';
                 h += '<span class="facet-label">' + MAKI.escHtml(c.name) + '</span>';
                 h += '<span class="facet-count">' + c.count + '</span>';
                 h += '</div>';
-                walk(c, depth + 1);
+                if (open) walk(c, depth + 1);
             });
         }
         walk(root, 0);
@@ -245,6 +326,7 @@ window.damFacets = (function() {
     // touch rarely after initial setup). Ratings/labels stay near the top
     // because the star/dot UI in the filter row makes them headline filters.
     function render(data) {
+        lastData = data;
         var html = '';
 
         // Rating section — clicking a row mirrors the star widget.

@@ -11,6 +11,12 @@ All notable changes to the Digital Asset Manager are documented here.
   label, year, volume, geotagged; formats already did). Rows the current
   filter selects are shown in bold with an accent bar and a `×`, whether
   the filter was set in the sidebar or in the filter bar.
+- **Facet sidebar: the tag tree collapses and expands.** Tags with
+  children get a chevron: the chevron opens or closes the branch, the
+  name filters as before. The tree starts with the top level only;
+  expanded branches are remembered per browser, and a tag you filter by
+  opens with its ancestors so the next level is visible. Right/Left
+  arrow expand and collapse the focused row.
 
 ### Fixed
 
