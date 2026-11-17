@@ -66,6 +66,14 @@ ignore = [
     # upstream would have to switch to `toml`. Revisit on the next askama
     # release.
     "RUSTSEC-2026-0374",
+    # chrono — unmaintained (RUSTSEC-2026-0543, dated 2026-09-14, in the
+    # advisory database since 2026-11-17), all
+    # versions, no safe upgrade. A direct dependency: timestamps throughout
+    # the models, the sidecars and the catalog. No vulnerability. Replacing
+    # it (jiff or time) must keep the stored timestamp format and is tracked
+    # on the roadmap; a real chrono vulnerability gets its own advisory ID
+    # and fails this check again.
+    "RUSTSEC-2026-0543",
 ]
 
 # ── Bans ──────────────────────────────────────────────────────────────
