@@ -53,7 +53,8 @@ All notable changes to the Digital Asset Manager are documented here.
   `browse.html` (1,200 of its 3,400 lines) is now
   `src/web/static/browse/batch.js`, served at `/static/browse/batch.js`
   with a content fingerprint in the URL and cached by the browser instead
-  of being re-sent with every page. Further sections follow one at a time.
+  of being re-sent with every page. Keyboard navigation followed as
+  `keyboard.js` (310 lines); further sections move one at a time.
 - **The crate is marked `publish = false`.** MAKI is distributed as
   release binaries; the library target has no stable API and cannot be
   published to crates.io by accident.

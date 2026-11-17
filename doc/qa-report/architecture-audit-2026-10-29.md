@@ -75,8 +75,9 @@ One finding was a defect and is fixed in the same change as this report
   `browse.html` modules (F22.3): the mechanism is in place
   (`static_assets::BROWSE_MODULES`, `/static/browse/<name>`, the
   `browse_module_url` filter with a content fingerprint) and the first
-  section, batch selection, is `static/browse/batch.js` (browse.html
-  3,380 → 2,176 lines). The move exposed one cross-section call that
+  section, batch selection, is `static/browse/batch.js`; keyboard
+  navigation followed as `keyboard.js` (browse.html 3,380 → 1,862
+  lines). The move exposed one cross-section call that
   never resolved (`bustChangedPreviews`), fixed.
   Open: the other `browse.html` sections, one at a time; the remaining
   library SQL outside `catalog/`.

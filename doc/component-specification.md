@@ -457,7 +457,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 - `GET /smart-preview/{prefix}/{file}` — smart preview, generated on demand when configured
 - `GET /video/{hash}`, `GET /audio/{hash}` — range-capable streaming of the original file
 - `/face/…` *(ai)* — `ServeDir` on `<catalog>/faces/` (crop thumbnails)
-- `GET /favicon.ico`, `GET /static/{favicon.ico, maki-icon.svg, htmx.min.js, style.css, leaflet.min.js, leaflet.css, leaflet.markercluster.min.js, MarkerCluster.css, MarkerCluster.Default.css, images/marker-icon.png, images/marker-icon-2x.png, images/marker-shadow.png, images/layers.png, images/layers-2x.png}` — embedded assets; `GET /static/browse/{name}` — browse-page script modules (`batch.js`), fingerprinted URL, immutable cache
+- `GET /favicon.ico`, `GET /static/{favicon.ico, maki-icon.svg, htmx.min.js, style.css, leaflet.min.js, leaflet.css, leaflet.markercluster.min.js, MarkerCluster.css, MarkerCluster.Default.css, images/marker-icon.png, images/marker-icon-2x.png, images/marker-shadow.png, images/layers.png, images/layers-2x.png}` — embedded assets; `GET /static/browse/{name}` — browse-page script modules (`batch.js`, `keyboard.js`), fingerprinted URL, immutable cache
 
 **Catalog extensions** (in `src/catalog/`):
 - `SearchOptions` / `SearchSort` / `SearchPage` — paginated search with dynamic filters and sort; `build_search_where()` joins `variants` / `file_locations` only when a filter needs them

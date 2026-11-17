@@ -11,7 +11,10 @@ use axum::http::StatusCode;
 /// Browse-page script modules (`src/web/static/browse/*.js`), served at
 /// `/static/browse/<name>`: the sections of the former inline script of
 /// `browse.html`, one file each (architecture audit F22.3).
-pub(crate) const BROWSE_MODULES: &[(&str, &str)] = &[("batch.js", include_str!("static/browse/batch.js"))];
+pub(crate) const BROWSE_MODULES: &[(&str, &str)] = &[
+    ("batch.js", include_str!("static/browse/batch.js")),
+    ("keyboard.js", include_str!("static/browse/keyboard.js")),
+];
 
 /// URL of a browse module with a content fingerprint as its query, so the
 /// response can be cached forever and a new binary is never paired with
