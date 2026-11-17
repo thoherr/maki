@@ -43,6 +43,9 @@ All notable changes to the Digital Asset Manager are documented here.
   into named `Catalog` methods. No behaviour change, except that a failing
   count query in `status` or the `rebuild-catalog` tips is now reported
   instead of being shown as zero.
+- **The crate is marked `publish = false`.** MAKI is distributed as
+  release binaries; the library target has no stable API and cannot be
+  published to crates.io by accident.
 
 ## v4.13.1 (2026-11-16)
 

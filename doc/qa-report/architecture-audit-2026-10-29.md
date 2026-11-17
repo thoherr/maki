@@ -69,8 +69,11 @@ One finding was a defect and is fixed in the same change as this report
   the library (doctor's row comparison, auto-stack candidates, writeback
   recipe lists, the embedding index loader, path completion). The
   `stack`/`collection` tests run on the real schema.
+  Public API (F27) decided: the crate is `publish = false`; the lib
+  target serves the binary and the integration tests, with no stable
+  surface to maintain.
   Open: `browse.html` JS modules; the remaining library SQL outside
-  `catalog/`; the public-API decision (F27).
+  `catalog/`.
 
 ## Verdict in one paragraph
 
