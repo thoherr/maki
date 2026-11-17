@@ -208,19 +208,21 @@ The faceted sidebar shows what's *in* the current result set — broken down by 
 
 **Tag hierarchy**: tags render as an indented tree, not a flat list. MAKI auto-expands every hierarchical tag to its ancestor paths on storage, so the panel can reshape that flat data back into the original hierarchy. Counts on parent rows reflect the union of all descendants — `event` showing 2,419 means "any photo with anything under `event`". Clicking a node always applies the **full path**, so picking `2024` under `Holzkirchner Blues- und Jazztage` filters to that specific year of that specific festival, not every photo from 2024 across the catalog.
 
-**Click-to-narrow**: every facet row is clickable, with the action matching the type of facet:
+**Click-to-narrow**: every facet row is a toggle. The first click applies the filter, a second click on the same row takes it out again:
 
-| Facet | Click action |
-|-------|--------------|
-| Tag | Adds the full tag path as a chip on the filter bar. |
-| Rating | Sets the star widget to that exact rating. |
-| Label | Sets the color-dot widget to that label. |
-| Year | Appends `date:YYYY` to the search box. |
-| Format | Toggles the format checkbox (additive — multi-select). |
-| Volume | Sets the volume dropdown to that volume. |
-| Geotagged | Appends `geotagged:1` to the search box. |
+| Facet | First click | Second click |
+|-------|-------------|--------------|
+| Tag | Adds the full tag path as a chip on the filter bar. | Removes that chip. |
+| Rating | Sets the star widget to that exact rating. | Clears the rating filter. |
+| Label | Sets the color-dot widget to that label. | Clears the label filter. |
+| Year | Appends `date:YYYY` to the search box. | Removes `date:YYYY` from the search box. |
+| Format | Checks the format checkbox (additive — multi-select). | Unchecks it. |
+| Volume | Sets the volume dropdown to that volume. | Resets it to all volumes. |
+| Geotagged | Appends `geotagged:1` to the search box. | Removes it. |
 
-Rows are keyboard-accessible: Tab to focus, Enter or Space to activate. Clicking a tag that's already in the active filter is a no-op (de-duplicated). After every click the panel re-fetches against the new filter, so the next layer of facets is computed live. The list stays in place while it refreshes: the row you clicked keeps its position in the sidebar instead of the panel jumping back to the top.
+**Selected rows are marked**: a row the current filter selects is shown in bold with an accent bar on the left and a `×` after its count. The marking follows the filter bar, so it also appears when you set the filter there (star widget, tag field, format menu). Only an exact match counts: with the rating filter on `3+` no rating row is marked, and a tag chip marks its own row, not the descendants it includes.
+
+Rows are keyboard-accessible: Tab to focus, Enter or Space to activate. After every click the panel re-fetches against the new filter, so the next layer of facets is computed live. The list stays in place while it refreshes: the row you clicked keeps its position in the sidebar instead of the panel jumping back to the top.
 
 #### Worked example: exploring a festival
 

@@ -5,7 +5,9 @@
     format dropdown, the rating/label widgets, and the dispatcher that
     translates user actions back into URL query parameters. Exposes
     `window.toggleFormatFilter`, `window.setVolumeFilterById`,
-    `window.addQueryTerm`, `window.triggerSearch` for the facet-sidebar
+    `window.addQueryTerm`, `window.toggleQueryTerm`, `window.hasQueryTerm`,
+    `window.getFormatFilters`, `window.getVolumeFilterId`,
+    `window.triggerSearch` for the facet-sidebar
     click handlers and other modules to call into.
 -->
 <script>
@@ -193,6 +195,31 @@
 
     function addTagAndSearch(name) {
         addTag(name);
+        onFilterChange();
+    }
+
+    // The chip filtering by exactly this tag name, whatever its modifiers.
+    function chipFor(name) {
+        var found = null;
+        document.querySelectorAll('#tag-chips .tag-chip').forEach(function(c) {
+            if (!found && c.getAttribute('data-name') === name) found = c;
+        });
+        return found;
+    }
+
+    // Names of the tags the filter includes (negated chips left out).
+    function includedTagNames() {
+        var names = [];
+        document.querySelectorAll('#tag-chips .tag-chip').forEach(function(c) {
+            if (c.getAttribute('data-negated') !== '1') names.push(c.getAttribute('data-name'));
+        });
+        return names;
+    }
+
+    // Add the tag to the filter, or remove its chip when it is already there.
+    function toggleTagAndSearch(name) {
+        var chip = chipFor(name);
+        if (chip) { chip.remove(); } else { addTag(name); }
         onFilterChange();
     }
 
@@ -407,6 +434,8 @@
         // append a tag to the current filter and trigger a refresh
         // without duplicating the chip-build + search-rerun dance.
         addTagAndSearch: addTagAndSearch,
+        toggleTagAndSearch: toggleTagAndSearch,
+        includedTagNames: includedTagNames,
     };
     window.getSelectedTags = getSelectedTags;
 
@@ -521,6 +550,33 @@
         if (!sel) return;
         sel.value = volId || '';
         sel.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    // The facet panel marks its selected rows from these.
+    window.getFormatFilters = function() {
+        var vals = [];
+        document.querySelectorAll('#format-panel .format-cb:checked').forEach(function(cb) { vals.push(cb.value); });
+        return vals;
+    };
+    window.getVolumeFilterId = function() {
+        var sel = document.querySelector('.filter-row [name=volume]');
+        return sel ? sel.value : '';
+    };
+
+    function queryTokens() {
+        var input = document.querySelector('.search-row input[name=q]');
+        return input ? input.value.trim().split(/\s+/).filter(Boolean) : [];
+    }
+    window.hasQueryTerm = function(term) { return queryTokens().indexOf(term) !== -1; };
+    // Add the free-text term to the search box, or take it out again.
+    window.toggleQueryTerm = function(term) {
+        var input = document.querySelector('.search-row input[name=q]');
+        if (!input) return;
+        var tokens = queryTokens();
+        var at = tokens.indexOf(term);
+        if (at === -1) { tokens.push(term); } else { tokens.splice(at, 1); }
+        input.value = tokens.join(' ');
+        onFilterChange();
     };
 
     // Helper exposed for the facet panel: append a `date:YYYY` (or

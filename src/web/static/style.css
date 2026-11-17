@@ -3881,6 +3881,18 @@ body.has-batch-toolbar { padding-bottom: 60px; }
     background: var(--badge-bg);
     outline: none;
 }
+/* A row the current filter selects; a click takes the filter out again. */
+.facet-item.facet-selected {
+    background: var(--badge-bg);
+    box-shadow: inset 3px 0 0 var(--primary);
+    font-weight: 600;
+}
+.facet-item.facet-selected .facet-count::after {
+    content: "\00d7";
+    margin-left: 0.4rem;
+    color: var(--text-muted);
+}
+.facet-item.facet-selected:hover .facet-count::after { color: var(--primary); }
 /* Tag rows in the facet panel render as an indented hierarchy. Each row
    carries a `--depth` CSS variable set inline (0 for root, +1 per nest),
    driving padding-left so children stack visually under their parents

@@ -4,9 +4,11 @@
 // year, ...) for the current filter, and the clicks that turn a facet
 // into a filter. Loaded by browse.html from /static/browse/facets.js
 // after the calendar and map sections; exposes window.damFacets. Reaches
-// the filter bar only through window.* (onFilterChange, addQueryTerm,
-// setRatingFilter, setLabelFilter, setVolumeFilterById,
-// toggleFormatFilter, damTags), looked up when a facet is used.
+// the filter bar only through window.* (onFilterChange, toggleQueryTerm,
+// hasQueryTerm, get/setRatingFilter, get/setLabelFilter,
+// setVolumeFilterById, getVolumeFilterId, toggleFormatFilter,
+// getFormatFilters, damTags), looked up when a facet is rendered or used.
+// Every row is a toggle, and rows the filter currently selects are marked.
 //
 // Plain ES5, no template expressions.
 window.damFacets = (function() {
@@ -57,23 +59,26 @@ window.damFacets = (function() {
             offset: row.getBoundingClientRect().top - sidebar.getBoundingClientRect().top,
             focus: document.activeElement === row,
         };
+        // Every row is a toggle: a click on a selected row takes that
+        // filter out again (see isSelected for what counts as selected).
+        var on = isSelected(type, value);
         switch (type) {
             case 'tag':
-                if (window.damTags && window.damTags.addTagAndSearch) {
-                    window.damTags.addTagAndSearch(value);
+                if (window.damTags && window.damTags.toggleTagAndSearch) {
+                    window.damTags.toggleTagAndSearch(value);
                 }
                 break;
             case 'rating':
                 if (window.setRatingFilter) {
                     // Star widget uses '+' for "≥N", but a row click sets
                     // the exact value. Empty string clears.
-                    window.setRatingFilter(value);
+                    window.setRatingFilter(on ? '' : value);
                     if (window.onFilterChange) window.onFilterChange();
                 }
                 break;
             case 'label':
                 if (window.setLabelFilter) {
-                    window.setLabelFilter(value);
+                    window.setLabelFilter(on ? '' : value);
                     if (window.onFilterChange) window.onFilterChange();
                 }
                 break;
@@ -81,15 +86,52 @@ window.damFacets = (function() {
                 if (window.toggleFormatFilter) window.toggleFormatFilter(value);
                 break;
             case 'volume':
-                if (window.setVolumeFilterById) window.setVolumeFilterById(value);
+                if (window.setVolumeFilterById) window.setVolumeFilterById(on ? '' : value);
                 break;
             case 'year':
-                if (window.addQueryTerm) window.addQueryTerm('date:' + value);
+                if (window.toggleQueryTerm) window.toggleQueryTerm('date:' + value);
                 break;
             case 'geotagged':
-                if (window.addQueryTerm) window.addQueryTerm('geotagged:1');
+                if (window.toggleQueryTerm) window.toggleQueryTerm('geotagged:1');
                 break;
         }
+    }
+
+    // Whether the filter bar currently filters by exactly this facet row.
+    // Read from the filter bar's own state, the same state a click changes.
+    // A broader filter that merely covers the row (rating "3+", a parent
+    // tag including its descendants) does not select it.
+    function isSelected(type, value) {
+        switch (type) {
+            case 'tag':
+                return !!(window.damTags && window.damTags.includedTagNames) &&
+                    window.damTags.includedTagNames().indexOf(value) !== -1;
+            case 'rating':
+                return !!window.getFilterRating && window.getFilterRating() === value;
+            case 'label':
+                return !!window.getFilterLabel && window.getFilterLabel() === value;
+            case 'format':
+                return !!window.getFormatFilters && window.getFormatFilters().indexOf(value) !== -1;
+            case 'volume':
+                return !!window.getVolumeFilterId && window.getVolumeFilterId() === value;
+            case 'year':
+                return !!window.hasQueryTerm && window.hasQueryTerm('date:' + value);
+            case 'geotagged':
+                return !!window.hasQueryTerm && window.hasQueryTerm('geotagged:1');
+        }
+        return false;
+    }
+
+    // Opening attributes shared by every facet row: type, value, the
+    // selected state and a title saying what a click will do.
+    function rowAttrs(type, value, addTitle, extraClass) {
+        var on = isSelected(type, value);
+        return '<div class="facet-item facet-clickable' + (extraClass ? ' ' + extraClass : '') +
+            (on ? ' facet-selected' : '') + '" ' +
+            'data-facet-type="' + type + '" ' +
+            'data-facet-value="' + MAKI.escAttr(value) + '" ' +
+            'role="button" tabindex="0" aria-pressed="' + (on ? 'true' : 'false') + '" ' +
+            'title="' + MAKI.escAttr(on ? 'Selected — click to remove this filter' : addTitle) + '"';
     }
 
     function toggle() {
@@ -186,12 +228,8 @@ window.damFacets = (function() {
         function walk(node, depth) {
             node._order.forEach(function(k) {
                 var c = node.children[k];
-                h += '<div class="facet-item facet-clickable facet-tag-row" ' +
-                     'data-facet-type="tag" ' +
-                     'data-facet-value="' + MAKI.escAttr(c.fullPath) + '" ' +
-                     'style="--depth: ' + depth + '" ' +
-                     'role="button" tabindex="0" ' +
-                     'title="' + MAKI.escAttr(c.fullPath) + ' — click to narrow">';
+                h += rowAttrs('tag', c.fullPath, c.fullPath + ' — click to narrow', 'facet-tag-row') +
+                     ' style="--depth: ' + depth + '">';
                 h += '<span class="facet-label">' + MAKI.escHtml(c.name) + '</span>';
                 h += '<span class="facet-count">' + c.count + '</span>';
                 h += '</div>';
@@ -229,11 +267,7 @@ window.damFacets = (function() {
                 }
                 var pct = Math.round((cnt / maxCount) * 100);
                 var ratingValue = val === null ? '0' : String(val);
-                h += '<div class="facet-item facet-clickable" ' +
-                     'data-facet-type="rating" ' +
-                     'data-facet-value="' + ratingValue + '" ' +
-                     'role="button" tabindex="0" ' +
-                     'title="Click to filter by this rating">';
+                h += rowAttrs('rating', ratingValue, 'Click to filter by this rating') + '>';
                 h += '<span class="facet-label">' + stars + '</span>';
                 h += '<span class="facet-bar-wrap"><span class="facet-bar" style="width:' + pct + '%"></span></span>';
                 h += '<span class="facet-count">' + cnt + '</span>';
@@ -251,11 +285,7 @@ window.damFacets = (function() {
                 var cnt = sorted[i][1];
                 var labelValue = val === null ? 'none' : val;
                 var dot = val && labelColors[val] ? '<span class="facet-label-dot" style="background:' + labelColors[val] + '"></span>' : '';
-                h += '<div class="facet-item facet-clickable" ' +
-                     'data-facet-type="label" ' +
-                     'data-facet-value="' + MAKI.escAttr(labelValue) + '" ' +
-                     'role="button" tabindex="0" ' +
-                     'title="Click to filter by this label">';
+                h += rowAttrs('label', labelValue, 'Click to filter by this label') + '>';
                 h += '<span class="facet-label">' + dot + MAKI.escHtml(val || 'No label') + '</span>';
                 h += '<span class="facet-count">' + cnt + '</span>';
                 h += '</div>';
@@ -283,11 +313,7 @@ window.damFacets = (function() {
                     var val = data.years[i][0];
                     var cnt = data.years[i][1];
                     var pct = Math.round((cnt / maxCount) * 100);
-                    h += '<div class="facet-item facet-clickable" ' +
-                         'data-facet-type="year" ' +
-                         'data-facet-value="' + MAKI.escAttr(val) + '" ' +
-                         'role="button" tabindex="0" ' +
-                         'title="Click to filter by this year">';
+                    h += rowAttrs('year', String(val), 'Click to filter by this year') + '>';
                     h += '<span class="facet-label">' + MAKI.escHtml(val) + '</span>';
                     h += '<span class="facet-bar-wrap"><span class="facet-bar" style="width:' + pct + '%"></span></span>';
                     h += '<span class="facet-count">' + cnt + '</span>';
@@ -303,11 +329,7 @@ window.damFacets = (function() {
             for (var i = 0; i < (data.formats || []).length; i++) {
                 var val = data.formats[i][0];
                 var cnt = data.formats[i][1];
-                h += '<div class="facet-item facet-clickable" ' +
-                     'data-facet-type="format" ' +
-                     'data-facet-value="' + MAKI.escAttr(val) + '" ' +
-                     'role="button" tabindex="0" ' +
-                     'title="Click to toggle this format">';
+                h += rowAttrs('format', val, 'Click to filter by this format') + '>';
                 h += '<span class="facet-label">' + MAKI.escHtml(val) + '</span>';
                 h += '<span class="facet-count">' + cnt + '</span>';
                 h += '</div>';
@@ -323,11 +345,7 @@ window.damFacets = (function() {
                     var vid = data.volumes[i][0];
                     var vlabel = data.volumes[i][1];
                     var cnt = data.volumes[i][2];
-                    h += '<div class="facet-item facet-clickable" ' +
-                         'data-facet-type="volume" ' +
-                         'data-facet-value="' + MAKI.escAttr(vid) + '" ' +
-                         'role="button" tabindex="0" ' +
-                         'title="Click to filter by this volume">';
+                    h += rowAttrs('volume', vid, 'Click to filter by this volume') + '>';
                     h += '<span class="facet-label">' + MAKI.escHtml(vlabel) + '</span>';
                     h += '<span class="facet-count">' + cnt + '</span>';
                     h += '</div>';
@@ -339,11 +357,7 @@ window.damFacets = (function() {
         // Geotagged — clicking appends `geotagged:1` to the q box.
         if (data.geotagged > 0) {
             html += '<div class="facet-section facet-geo">';
-            html += '<div class="facet-item facet-clickable" ' +
-                 'data-facet-type="geotagged" ' +
-                 'data-facet-value="1" ' +
-                 'role="button" tabindex="0" ' +
-                 'title="Click to filter to geotagged assets">';
+            html += rowAttrs('geotagged', '1', 'Click to filter to geotagged assets') + '>';
             html += '<span class="facet-label">\uD83D\uDCCD Geotagged</span>';
             html += '<span class="facet-count">' + data.geotagged + '</span>';
             html += '</div></div>';
