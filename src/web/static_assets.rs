@@ -5,6 +5,44 @@
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 
+use axum::extract::Path;
+use axum::http::StatusCode;
+
+/// Browse-page script modules (`src/web/static/browse/*.js`), served at
+/// `/static/browse/<name>`: the sections of the former inline script of
+/// `browse.html`, one file each (architecture audit F22.3).
+pub(crate) const BROWSE_MODULES: &[(&str, &str)] = &[("batch.js", include_str!("static/browse/batch.js"))];
+
+/// URL of a browse module with a content fingerprint as its query, so the
+/// response can be cached forever and a new binary is never paired with
+/// a cached script of the old one. Unknown names get no fingerprint (and
+/// a 404 when fetched); `every_browse_module_is_served` guards the list.
+pub(crate) fn browse_module_url(name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    match BROWSE_MODULES.iter().find(|(n, _)| *n == name) {
+        Some((_, source)) => {
+            let digest = Sha256::digest(source.as_bytes());
+            let tag: String = digest[..6].iter().map(|b| format!("{b:02x}")).collect();
+            format!("/static/browse/{name}?v={tag}")
+        }
+        None => format!("/static/browse/{name}"),
+    }
+}
+
+pub async fn browse_module(Path(name): Path<String>) -> Response {
+    match BROWSE_MODULES.iter().find(|(n, _)| *n == name) {
+        Some((_, source)) => (
+            [
+                (header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            ],
+            *source,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 const HTMX_JS: &[u8] = include_bytes!("static/htmx.min.js");
 const STYLE_CSS: &str = include_str!("static/style.css");
 

@@ -1127,6 +1127,13 @@ mod filters {
         Ok(serde_json::to_string(crate::models::asset::COLOR_LABELS).unwrap_or_else(|_| "[]".to_string()))
     }
 
+    /// `"batch.js"|browse_module_url` → the fingerprinted URL of a browse
+    /// script module (`src/web/static/browse/`). Plain ASCII, attribute-safe.
+    #[askama::filter_fn]
+    pub fn browse_module_url(name: &str, _: &dyn askama::Values) -> ::askama::Result<String> {
+        Ok(crate::web::static_assets::browse_module_url(name))
+    }
+
     /// The shared browser helpers (`src/web/static/maki-core.js`), embedded
     /// at compile time like every other static asset. base.html emits it
     /// inline in `<head>` so it runs before any page script; the file has

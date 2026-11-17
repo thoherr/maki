@@ -12,6 +12,12 @@ All notable changes to the Digital Asset Manager are documented here.
   scripts, the web UI) were ordered by their random ID, so `maki undo`
   could revert the older one first. An operation is now always stamped
   after the newest one in the journal.
+- **Browse page: script error after every results refresh.** The handler
+  that runs when the grid is swapped (paging, filtering, sorting, batch
+  edits) called a helper it could not see and stopped there. Thumbnails
+  regenerated on the detail page were therefore not refreshed in the
+  grid, and the "selected on other pages" hint in the batch toolbar was
+  not recomputed after the swap.
 
 ### Internal
 
@@ -43,6 +49,11 @@ All notable changes to the Digital Asset Manager are documented here.
   into named `Catalog` methods. No behaviour change, except that a failing
   count query in `status` or the `rebuild-catalog` tips is now reported
   instead of being shown as zero.
+- **First browse-page script module.** The batch-selection section of
+  `browse.html` (1,200 of its 3,400 lines) is now
+  `src/web/static/browse/batch.js`, served at `/static/browse/batch.js`
+  with a content fingerprint in the URL and cached by the browser instead
+  of being re-sent with every page. Further sections follow one at a time.
 - **The crate is marked `publish = false`.** MAKI is distributed as
   release binaries; the library target has no stable API and cannot be
   published to crates.io by accident.

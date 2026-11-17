@@ -822,6 +822,7 @@ fn static_routes(state: &AppState) -> AppRouter {
         .route("/static/maki-icon.svg", axum::routing::get(static_assets::maki_icon))
         .route("/static/htmx.min.js", axum::routing::get(static_assets::htmx_js))
         .route("/static/style.css", axum::routing::get(static_assets::style_css))
+        .route("/static/browse/{name}", axum::routing::get(static_assets::browse_module))
         .route("/static/leaflet.min.js", axum::routing::get(static_assets::leaflet_js))
         .route("/static/leaflet.css", axum::routing::get(static_assets::leaflet_css))
         .route("/static/leaflet.markercluster.min.js", axum::routing::get(static_assets::markercluster_js))

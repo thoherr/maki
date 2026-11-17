@@ -404,6 +404,27 @@ async fn browse_page_renders_seeded_asset() {
 }
 
 #[tokio::test]
+async fn every_browse_module_is_served_and_loaded_by_the_browse_page() {
+    let srv = TestServer::new();
+    let (_, _, page) = srv.get("/").await;
+    for (name, source) in crate::web::static_assets::BROWSE_MODULES {
+        let url = crate::web::static_assets::browse_module_url(name);
+        assert!(url.contains("?v="), "{name} must carry a content fingerprint");
+        assert!(page.contains(&format!("<script src=\"{url}\"></script>")), "browse page must load {url}");
+
+        let (status, headers, body) = srv.get(&url).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(headers["content-type"].to_str().unwrap().starts_with("application/javascript"));
+        assert!(headers["cache-control"].to_str().unwrap().contains("immutable"));
+        assert_eq!(&body, source);
+        // A static file is not a template: nothing in it is rendered.
+        assert!(!source.contains("{{") && !source.contains("{%"), "{name} holds a template expression");
+    }
+    let (status, _, _) = srv.get("/static/browse/nope.js").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn asset_page_renders() {
     let srv = TestServer::new();
     let (status, _, body) = srv.get(&format!("/asset/{}", srv.asset_id)).await;
