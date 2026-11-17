@@ -6,7 +6,7 @@
     <title>{% block title %}MAKI{% endblock %}</title>
     <link rel="icon" href="/favicon.ico" sizes="16x16 32x48">
     <script>var t=localStorage.getItem('maki-theme');if(t)document.documentElement.setAttribute('data-theme',t);</script>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="{{ ""|style_css_url }}">
     <script src="/static/htmx.min.js"></script>
     <script>
 {{ ""|maki_core_js|safe }}

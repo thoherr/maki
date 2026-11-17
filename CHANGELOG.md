@@ -23,6 +23,11 @@ All notable changes to the Digital Asset Manager are documented here.
 - **Facet sidebar no longer jumps to the top.** The list stays in place
   (dimmed) while counts refresh, and the row you clicked keeps its
   position, also when rows above it drop out of the narrower result.
+- **Stale stylesheet after an upgrade.** `style.css` was cached by the
+  browser for an hour under a fixed URL, so pages of a new version could
+  render with the old styles. Pages now link it with a content
+  fingerprint (`/static/style.css?v=…`, cached permanently); the bare URL
+  is revalidated on every request.
 - **Undo order for edits made within the same millisecond.** The
   edit-history journal orders operations by a millisecond timestamp in
   the file name; two operations recorded in the same millisecond (shell

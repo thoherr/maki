@@ -1134,6 +1134,12 @@ mod filters {
         Ok(crate::web::static_assets::browse_module_url(name))
     }
 
+    /// `""|style_css_url` → the fingerprinted stylesheet URL for base.html.
+    #[askama::filter_fn]
+    pub fn style_css_url(_s: &str, _: &dyn askama::Values) -> ::askama::Result<String> {
+        Ok(crate::web::static_assets::style_css_url())
+    }
+
     /// The shared browser helpers (`src/web/static/maki-core.js`), embedded
     /// at compile time like every other static asset. base.html emits it
     /// inline in `<head>` so it runs before any page script; the file has

@@ -425,6 +425,23 @@ async fn every_browse_module_is_served_and_loaded_by_the_browse_page() {
 }
 
 #[tokio::test]
+async fn stylesheet_is_linked_by_fingerprint_and_cached_accordingly() {
+    let srv = TestServer::new();
+    let url = crate::web::static_assets::style_css_url();
+    assert!(url.starts_with("/static/style.css?v="));
+    let (_, _, page) = srv.get("/").await;
+    assert!(page.contains(&format!("<link rel=\"stylesheet\" href=\"{url}\">")), "pages must link {url}");
+
+    let (status, headers, _) = srv.get(&url).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(headers["cache-control"].to_str().unwrap().contains("immutable"));
+    // Without the fingerprint nothing in the URL tracks the content.
+    let (status, headers, _) = srv.get("/static/style.css").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["cache-control"], "no-cache");
+}
+
+#[tokio::test]
 async fn asset_page_renders() {
     let srv = TestServer::new();
     let (status, _, body) = srv.get(&format!("/asset/{}", srv.asset_id)).await;

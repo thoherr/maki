@@ -5,7 +5,7 @@
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 
-use axum::extract::Path;
+use axum::extract::{Path, RawQuery};
 use axum::http::StatusCode;
 
 /// Browse-page script modules (`src/web/static/browse/*.js`), served at
@@ -22,15 +22,22 @@ pub(crate) const BROWSE_MODULES: &[(&str, &str)] = &[
 /// a cached script of the old one. Unknown names get no fingerprint (and
 /// a 404 when fetched); `every_browse_module_is_served` guards the list.
 pub(crate) fn browse_module_url(name: &str) -> String {
-    use sha2::{Digest, Sha256};
     match BROWSE_MODULES.iter().find(|(n, _)| *n == name) {
-        Some((_, source)) => {
-            let digest = Sha256::digest(source.as_bytes());
-            let tag: String = digest[..6].iter().map(|b| format!("{b:02x}")).collect();
-            format!("/static/browse/{name}?v={tag}")
-        }
+        Some((_, source)) => format!("/static/browse/{name}?v={}", fingerprint(source)),
         None => format!("/static/browse/{name}"),
     }
+}
+
+/// Twelve hex digits of the content's SHA-256: the `?v=` of a static URL.
+fn fingerprint(source: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(source.as_bytes())[..6].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// URL of the stylesheet, fingerprinted like the browse modules, so a new
+/// binary's pages never render with a cached stylesheet of the old one.
+pub(crate) fn style_css_url() -> String {
+    format!("/static/style.css?v={}", fingerprint(STYLE_CSS))
 }
 
 pub async fn browse_module(Path(name): Path<String>) -> Response {
@@ -79,15 +86,13 @@ pub async fn htmx_js() -> Response {
         .into_response()
 }
 
-pub async fn style_css() -> Response {
-    (
-        [
-            (header::CONTENT_TYPE, "text/css"),
-            (header::CACHE_CONTROL, "public, max-age=3600"),
-        ],
-        STYLE_CSS,
-    )
-        .into_response()
+/// The stylesheet. Requested through `style_css_url` (with `?v=`) it is
+/// cached forever; a bare `/static/style.css` is revalidated every time,
+/// since nothing in that URL changes when the content does.
+pub async fn style_css(RawQuery(query): RawQuery) -> Response {
+    let fingerprinted = query.is_some_and(|q| q.starts_with("v="));
+    let cache = if fingerprinted { "public, max-age=31536000, immutable" } else { "no-cache" };
+    ([(header::CONTENT_TYPE, "text/css"), (header::CACHE_CONTROL, cache)], STYLE_CSS).into_response()
 }
 
 pub async fn leaflet_js() -> Response {
