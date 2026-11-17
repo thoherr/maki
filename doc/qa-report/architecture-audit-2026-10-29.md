@@ -76,8 +76,8 @@ One finding was a defect and is fixed in the same change as this report
   (`static_assets::BROWSE_MODULES`, `/static/browse/<name>`, the
   `browse_module_url` filter with a content fingerprint) and the first
   section, batch selection, is `static/browse/batch.js`; keyboard
-  navigation followed as `keyboard.js` (browse.html 3,380 → 1,862
-  lines). The move exposed one cross-section call that
+  navigation (`keyboard.js`) and the faceted sidebar (`facets.js`)
+  followed (browse.html 3,380 → 1,495 lines). The move exposed one cross-section call that
   never resolved (`bustChangedPreviews`), fixed.
   Open: the other `browse.html` sections, one at a time; the remaining
   library SQL outside `catalog/`.

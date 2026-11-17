@@ -1,0 +1,377 @@
+// Browse page: faceted sidebar.
+//
+// The facet panel (counts per rating, label, type, format, volume, tag,
+// year, ...) for the current filter, and the clicks that turn a facet
+// into a filter. Loaded by browse.html from /static/browse/facets.js
+// after the calendar and map sections; exposes window.damFacets. Reaches
+// the filter bar only through window.* (onFilterChange, addQueryTerm,
+// setRatingFilter, setLabelFilter, setVolumeFilterById,
+// toggleFormatFilter, damTags), looked up when a facet is used.
+//
+// Plain ES5, no template expressions.
+window.damFacets = (function() {
+    var sidebar = document.getElementById('facet-sidebar');
+    var content = document.getElementById('facet-content');
+    var fetchController = null;
+
+    function isOpen() {
+        return document.documentElement.getAttribute('data-sidebar') === 'open';
+    }
+
+    function init() {
+        var pref = localStorage.getItem('maki-sidebar');
+        if (pref === 'open') {
+            document.documentElement.setAttribute('data-sidebar', 'open');
+            fetchFacets();
+        }
+        document.getElementById('sidebar-close').addEventListener('click', toggle);
+        // Click-to-narrow on facet rows. Event delegation on the content
+        // container so re-renders (which replace innerHTML) don't drop the
+        // listener. Each facet type maps to a different filter-bar setter
+        // for consistency with the existing widgets.
+        content.addEventListener('click', handleFacetClick);
+        content.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+                if (e.target.closest && e.target.closest('[data-facet-type]')) {
+                    e.preventDefault();
+                    handleFacetClick(e);
+                }
+            }
+        });
+        // Restore section collapse states
+        restoreCollapseStates();
+    }
+
+    function handleFacetClick(e) {
+        var row = e.target.closest('[data-facet-type]');
+        if (!row) return;
+        var type = row.getAttribute('data-facet-type');
+        var value = row.getAttribute('data-facet-value');
+        switch (type) {
+            case 'tag':
+                if (window.damTags && window.damTags.addTagAndSearch) {
+                    window.damTags.addTagAndSearch(value);
+                }
+                break;
+            case 'rating':
+                if (window.setRatingFilter) {
+                    // Star widget uses '+' for "≥N", but a row click sets
+                    // the exact value. Empty string clears.
+                    window.setRatingFilter(value);
+                    if (window.onFilterChange) window.onFilterChange();
+                }
+                break;
+            case 'label':
+                if (window.setLabelFilter) {
+                    window.setLabelFilter(value);
+                    if (window.onFilterChange) window.onFilterChange();
+                }
+                break;
+            case 'format':
+                if (window.toggleFormatFilter) window.toggleFormatFilter(value);
+                break;
+            case 'volume':
+                if (window.setVolumeFilterById) window.setVolumeFilterById(value);
+                break;
+            case 'year':
+                if (window.addQueryTerm) window.addQueryTerm('date:' + value);
+                break;
+            case 'geotagged':
+                if (window.addQueryTerm) window.addQueryTerm('geotagged:1');
+                break;
+        }
+    }
+
+    function toggle() {
+        if (isOpen()) {
+            document.documentElement.removeAttribute('data-sidebar');
+            localStorage.setItem('maki-sidebar', 'closed');
+            updateToggleBtn(false);
+        } else {
+            document.documentElement.setAttribute('data-sidebar', 'open');
+            localStorage.setItem('maki-sidebar', 'open');
+            updateToggleBtn(true);
+            fetchFacets();
+        }
+    }
+
+    function updateToggleBtn(active) {
+        var btn = document.querySelector('.sidebar-toggle-btn');
+        if (btn) btn.classList.toggle('active', active);
+    }
+
+    function getFilterParams() {
+        var params = {};
+        var urlParams = new URLSearchParams(window.location.search);
+        ['q', 'type', 'tag', 'format', 'volume', 'rating', 'label', 'collection', 'path', 'stacks'].forEach(function(k) {
+            var v = urlParams.get(k);
+            if (v) params[k] = v;
+        });
+        return params;
+    }
+
+    function fetchFacets() {
+        if (!isOpen()) return;
+        if (fetchController) fetchController.abort();
+        fetchController = new AbortController();
+        var params = getFilterParams();
+        var qs = Object.keys(params).map(function(k) { return k + '=' + encodeURIComponent(params[k]); }).join('&');
+        content.innerHTML = '<div class="facet-loading">Loading\u2026</div>';
+        MAKI.api.get('/api/facets?' + qs, { signal: fetchController.signal })
+            .then(function(data) { render(data); })
+            .catch(function(e) { if (e.name !== 'AbortError') content.innerHTML = '<div class="facet-loading">Error loading facets</div>'; });
+    }
+
+    var labelColors = MAKI.labelColors;
+
+    // Build a tree from the catalog's flat (auto-expanded) tag list.
+    // Input: [["event", 47], ["event|festival", 47], ["event|festival|H...|2024", 12], ...]
+    // Output: nested {name, fullPath, count, children: []} ordered alphabetically
+    // at each depth. Auto-expansion guarantees every parent path is present in
+    // the input, so we can rely on lookup-or-create to wire children to parents.
+    function buildTagTree(flat) {
+        var root = { children: {}, _order: [] };
+        flat.forEach(function(entry) {
+            var path = entry[0];
+            var count = entry[1];
+            var parts = path.split('|');
+            var node = root;
+            var acc = '';
+            for (var i = 0; i < parts.length; i++) {
+                acc = i === 0 ? parts[i] : (acc + '|' + parts[i]);
+                if (!node.children[parts[i]]) {
+                    node.children[parts[i]] = {
+                        name: parts[i],
+                        fullPath: acc,
+                        count: 0,
+                        children: {},
+                        _order: [],
+                    };
+                    node._order.push(parts[i]);
+                }
+                node = node.children[parts[i]];
+            }
+            node.count = count;
+        });
+        function sortRec(n) {
+            n._order.sort(function(a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
+            n._order.forEach(function(k) { sortRec(n.children[k]); });
+        }
+        sortRec(root);
+        return root;
+    }
+
+    function renderTagTree(root) {
+        var h = '';
+        function walk(node, depth) {
+            node._order.forEach(function(k) {
+                var c = node.children[k];
+                h += '<div class="facet-item facet-clickable facet-tag-row" ' +
+                     'data-facet-type="tag" ' +
+                     'data-facet-value="' + MAKI.escAttr(c.fullPath) + '" ' +
+                     'style="--depth: ' + depth + '" ' +
+                     'role="button" tabindex="0" ' +
+                     'title="' + MAKI.escAttr(c.fullPath) + ' — click to narrow">';
+                h += '<span class="facet-label">' + MAKI.escHtml(c.name) + '</span>';
+                h += '<span class="facet-count">' + c.count + '</span>';
+                h += '</div>';
+                walk(c, depth + 1);
+            });
+        }
+        walk(root, 0);
+        return h;
+    }
+
+    // Section ordering reflects how often the user filters by each axis:
+    // tags (the curated taxonomy) above formats/volumes (which most users
+    // touch rarely after initial setup). Ratings/labels stay near the top
+    // because the star/dot UI in the filter row makes them headline filters.
+    function render(data) {
+        var html = '';
+
+        // Rating section — clicking a row mirrors the star widget.
+        html += facetSection('ratings', 'Ratings', function() {
+            var h = '';
+            var sorted = (data.ratings || []).slice().sort(function(a, b) {
+                if (a[0] === null) return 1;
+                if (b[0] === null) return -1;
+                return b[0] - a[0];
+            });
+            var maxCount = Math.max.apply(null, sorted.map(function(r) { return r[1]; }).concat([1]));
+            for (var i = 0; i < sorted.length; i++) {
+                var val = sorted[i][0];
+                var cnt = sorted[i][1];
+                var stars = '';
+                if (val !== null) {
+                    for (var s = 1; s <= 5; s++) stars += s <= val ? '\u2605' : '\u2606';
+                } else {
+                    stars = 'Unrated';
+                }
+                var pct = Math.round((cnt / maxCount) * 100);
+                var ratingValue = val === null ? '0' : String(val);
+                h += '<div class="facet-item facet-clickable" ' +
+                     'data-facet-type="rating" ' +
+                     'data-facet-value="' + ratingValue + '" ' +
+                     'role="button" tabindex="0" ' +
+                     'title="Click to filter by this rating">';
+                h += '<span class="facet-label">' + stars + '</span>';
+                h += '<span class="facet-bar-wrap"><span class="facet-bar" style="width:' + pct + '%"></span></span>';
+                h += '<span class="facet-count">' + cnt + '</span>';
+                h += '</div>';
+            }
+            return h;
+        });
+
+        // Label section — clicking a row mirrors the label-dot widget.
+        html += facetSection('labels', 'Labels', function() {
+            var h = '';
+            var sorted = (data.labels || []).slice().sort(function(a, b) { return b[1] - a[1]; });
+            for (var i = 0; i < sorted.length; i++) {
+                var val = sorted[i][0];
+                var cnt = sorted[i][1];
+                var labelValue = val === null ? 'none' : val;
+                var dot = val && labelColors[val] ? '<span class="facet-label-dot" style="background:' + labelColors[val] + '"></span>' : '';
+                h += '<div class="facet-item facet-clickable" ' +
+                     'data-facet-type="label" ' +
+                     'data-facet-value="' + MAKI.escAttr(labelValue) + '" ' +
+                     'role="button" tabindex="0" ' +
+                     'title="Click to filter by this label">';
+                h += '<span class="facet-label">' + dot + MAKI.escHtml(val || 'No label') + '</span>';
+                h += '<span class="facet-count">' + cnt + '</span>';
+                h += '</div>';
+            }
+            return h;
+        });
+
+        // Tags section — hierarchical render. Auto-expansion on storage means
+        // every ancestor path is already in the flat list with its own count,
+        // so we can simply reshape into a tree and indent. Click-to-narrow
+        // applies the FULL path (so picking "2024" under "Holzkirchner..."
+        // adds the disambiguated tag, not the bare leaf).
+        if (data.tags && data.tags.length > 0) {
+            html += facetSection('tags', 'Tags', function() {
+                return renderTagTree(buildTagTree(data.tags));
+            });
+        }
+
+        // Years section — clicking appends `date:YYYY` to the q box.
+        if (data.years && data.years.length > 0) {
+            html += facetSection('years', 'Years', function() {
+                var h = '';
+                var maxCount = Math.max.apply(null, data.years.map(function(y) { return y[1]; }).concat([1]));
+                for (var i = 0; i < data.years.length; i++) {
+                    var val = data.years[i][0];
+                    var cnt = data.years[i][1];
+                    var pct = Math.round((cnt / maxCount) * 100);
+                    h += '<div class="facet-item facet-clickable" ' +
+                         'data-facet-type="year" ' +
+                         'data-facet-value="' + MAKI.escAttr(val) + '" ' +
+                         'role="button" tabindex="0" ' +
+                         'title="Click to filter by this year">';
+                    h += '<span class="facet-label">' + MAKI.escHtml(val) + '</span>';
+                    h += '<span class="facet-bar-wrap"><span class="facet-bar" style="width:' + pct + '%"></span></span>';
+                    h += '<span class="facet-count">' + cnt + '</span>';
+                    h += '</div>';
+                }
+                return h;
+            });
+        }
+
+        // Format section — clicking toggles the format checkbox.
+        html += facetSection('formats', 'Formats', function() {
+            var h = '';
+            for (var i = 0; i < (data.formats || []).length; i++) {
+                var val = data.formats[i][0];
+                var cnt = data.formats[i][1];
+                h += '<div class="facet-item facet-clickable" ' +
+                     'data-facet-type="format" ' +
+                     'data-facet-value="' + MAKI.escAttr(val) + '" ' +
+                     'role="button" tabindex="0" ' +
+                     'title="Click to toggle this format">';
+                h += '<span class="facet-label">' + MAKI.escHtml(val) + '</span>';
+                h += '<span class="facet-count">' + cnt + '</span>';
+                h += '</div>';
+            }
+            return h;
+        });
+
+        // Volume section — clicking sets the volume select (single-select).
+        if (data.volumes && data.volumes.length > 0) {
+            html += facetSection('volumes', 'Volumes', function() {
+                var h = '';
+                for (var i = 0; i < data.volumes.length; i++) {
+                    var vid = data.volumes[i][0];
+                    var vlabel = data.volumes[i][1];
+                    var cnt = data.volumes[i][2];
+                    h += '<div class="facet-item facet-clickable" ' +
+                         'data-facet-type="volume" ' +
+                         'data-facet-value="' + MAKI.escAttr(vid) + '" ' +
+                         'role="button" tabindex="0" ' +
+                         'title="Click to filter by this volume">';
+                    h += '<span class="facet-label">' + MAKI.escHtml(vlabel) + '</span>';
+                    h += '<span class="facet-count">' + cnt + '</span>';
+                    h += '</div>';
+                }
+                return h;
+            });
+        }
+
+        // Geotagged — clicking appends `geotagged:1` to the q box.
+        if (data.geotagged > 0) {
+            html += '<div class="facet-section facet-geo">';
+            html += '<div class="facet-item facet-clickable" ' +
+                 'data-facet-type="geotagged" ' +
+                 'data-facet-value="1" ' +
+                 'role="button" tabindex="0" ' +
+                 'title="Click to filter to geotagged assets">';
+            html += '<span class="facet-label">\uD83D\uDCCD Geotagged</span>';
+            html += '<span class="facet-count">' + data.geotagged + '</span>';
+            html += '</div></div>';
+        }
+
+        content.innerHTML = html;
+        restoreCollapseStates();
+    }
+
+    function facetSection(key, title, contentFn) {
+        var wasOpen = getSectionState(key);
+        return '<details class="facet-section" data-section="' + key + '"' + (wasOpen ? ' open' : '') + '>' +
+            '<summary>' + title + '</summary>' +
+            '<div class="facet-section-body">' + contentFn() + '</div></details>';
+    }
+
+    function getSectionState(key) {
+        try {
+            var states = JSON.parse(localStorage.getItem('maki-facet-sections') || '{}');
+            return states[key] !== false; // default open
+        } catch(e) { return true; }
+    }
+
+    function restoreCollapseStates() {
+        var sections = content.querySelectorAll('.facet-section[data-section]');
+        sections.forEach(function(det) {
+            det.addEventListener('toggle', function() {
+                saveSectionState(det.getAttribute('data-section'), det.open);
+            });
+        });
+    }
+
+    function saveSectionState(key, open) {
+        try {
+            var states = JSON.parse(localStorage.getItem('maki-facet-sections') || '{}');
+            states[key] = open;
+            localStorage.setItem('maki-facet-sections', JSON.stringify(states));
+        } catch(e) {}
+    }
+
+    // Re-fetch facets after results update
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target && e.detail.target.id === 'results') {
+            updateToggleBtn(isOpen());
+            fetchFacets();
+        }
+    });
+
+    init();
+    return { toggle: toggle, fetchFacets: fetchFacets, isOpen: isOpen };
+})();

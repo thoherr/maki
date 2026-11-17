@@ -14,6 +14,7 @@ use axum::http::StatusCode;
 pub(crate) const BROWSE_MODULES: &[(&str, &str)] = &[
     ("batch.js", include_str!("static/browse/batch.js")),
     ("keyboard.js", include_str!("static/browse/keyboard.js")),
+    ("facets.js", include_str!("static/browse/facets.js")),
 ];
 
 /// URL of a browse module with a content fingerprint as its query, so the
