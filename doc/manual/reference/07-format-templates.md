@@ -8,7 +8,7 @@ The `--format` flag controls how `maki search` and `maki duplicates` display the
 
 ### `ids`
 
-One full UUID per line, with no header or decoration. Ideal for scripting and piping into other commands.
+One full UUID per line (for `maki duplicates`: one content hash per line), with no header or decoration. Ideal for scripting and piping into other commands.
 
 **Shorthand:** `-q` (equivalent to `--format=ids`)
 
@@ -26,8 +26,8 @@ Default compact view. One line per result showing short ID, filename, type, form
 
 ```
 $ maki search "sunset"
-a1b2c3d4  IMG_1234.jpg [image] (JPEG) -- 2026-01-15T10:30:00
-e5f6a7b8  DSC_5678.nef [image] (NEF) -- 2026-01-14T16:45:00
+a1b2c3d4  IMG_1234.jpg [image] (jpg) — 2026-01-15T10:30:00+00:00
+e5f6a7b8  DSC_5678.nef [image] (nef) — 2026-01-14T16:45:00+00:00
 
 2 result(s)
 ```
@@ -40,8 +40,8 @@ Detailed view including tags and description on each line.
 
 ```
 $ maki search "sunset" --format full
-a1b2c3d4  IMG_1234.jpg [image] (JPEG) -- 2026-01-15T10:30:00 tags:sunset,landscape A golden sunset over the mountains
-e5f6a7b8  DSC_5678.nef [image] (NEF) -- 2026-01-14T16:45:00 tags:sunset,nature
+a1b2c3d4  IMG_1234.jpg [image] (jpg) — 2026-01-15T10:30:00+00:00 tags:sunset,landscape A golden sunset over the mountains
+e5f6a7b8  DSC_5678.nef [image] (nef) — 2026-01-14T16:45:00+00:00 tags:sunset,nature
 ```
 
 ### `json`
@@ -89,9 +89,9 @@ Available in `maki search --format`:
 | `{name}` | Asset name if set, otherwise falls back to the original filename |
 | `{filename}` | Original filename (always the file's actual name, ignoring any custom asset name) |
 | `{type}` | Asset type: `image`, `video`, `audio`, `document`, or `other` |
-| `{format}` | Primary variant format/extension (e.g., `JPEG`, `NEF`, `MOV`) |
-| `{date}` | Asset creation timestamp (ISO 8601 format) |
-| `{tags}` | Comma-separated list of tags (empty string if no tags) |
+| `{format}` | Primary variant format: the lowercase file extension (e.g., `jpg`, `nef`, `mov`) |
+| `{date}` | Asset creation timestamp (RFC 3339, e.g., `2026-01-15T10:30:00+00:00`) |
+| `{tags}` | Tags joined with `, ` (comma and space; empty string if no tags) |
 | `{description}` | Description text (empty string if no description) |
 | `{hash}` | Content hash of the best display variant |
 | `{label}` | Color label name (e.g., `Red`, `Blue`; empty string if no label) |
@@ -100,11 +100,17 @@ Available in `maki search --format`:
 
 ## Placeholders (duplicates)
 
-Available in `maki duplicates --format`. Includes all search placeholders above, plus:
+Available in `maki duplicates --format`. This is a separate set; the search placeholders above (`{id}`, `{short_id}`, `{type}`, `{date}`, `{tags}`, ...) are not available here and are left in place verbatim. The `ids` preset prints one content hash per line (duplicates are files, not assets).
 
 | Placeholder | Description |
 |-------------|-------------|
-| `{locations}` | Comma-separated list of all file locations where the duplicate exists (format: `volume_label -> relative/path`) |
+| `{hash}` | Content hash of the duplicated file |
+| `{filename}` | Original filename |
+| `{format}` | File format (lowercase extension) |
+| `{size}` | Human-readable file size |
+| `{name}` | Asset name if set, otherwise the original filename |
+| `{locations}` | All file locations of the duplicate, joined with `, `. Each has the form `Label[purpose]:relative/path`; the `[purpose]` part is omitted when the volume has no purpose |
+| `{volumes}` | Number of distinct volumes holding the file |
 
 ---
 
@@ -133,8 +139,8 @@ maki search "type:image" --format '{name}\t{format}\t{date}\t{tags}'
 Output:
 
 ```
-IMG_1234.jpg	JPEG	2026-01-15T10:30:00	sunset,landscape
-DSC_5678.nef	NEF	2026-01-14T16:45:00	sunset,nature
+IMG_1234.jpg	jpg	2026-01-15T10:30:00+00:00	sunset, landscape
+DSC_5678.nef	nef	2026-01-14T16:45:00+00:00	sunset, nature
 ```
 
 ### One name per line with rating label
@@ -160,13 +166,13 @@ Output:
 
 ```
 Golden Sunset
-  Format: NEF
-  Tags: sunset,landscape,portfolio
+  Format: nef
+  Tags: sunset, landscape, portfolio
   A golden sunset over the mountain range
 
 Mountain Lake
-  Format: JPEG
-  Tags: nature,lake,portfolio
+  Format: jpg
+  Tags: nature, lake, portfolio
   Crystal clear reflections at dawn
 ```
 
@@ -205,7 +211,7 @@ maki duplicates --format '{filename}\t{format}\t{locations}'
 Output:
 
 ```
-DSC_1234.NEF	NEF	Photos -> Capture/2026-01-15/DSC_1234.NEF, Backup -> Capture/2026-01-15/DSC_1234.NEF
+DSC_1234.NEF	nef	Photos[working]:Capture/2026-01-15/DSC_1234.NEF, Backup[backup]:Capture/2026-01-15/DSC_1234.NEF
 ```
 
 ---
@@ -215,7 +221,7 @@ DSC_1234.NEF	NEF	Photos -> Capture/2026-01-15/DSC_1234.NEF, Backup -> Capture/20
 | Flag | Equivalent | Result count shown |
 |------|------------|:---:|
 | (none) | `--format short` | yes |
-| `--format short` | default | yes |
+| `--format short` | -- | no |
 | `--format ids` | `-q` | no |
 | `-q` | `--format ids` | no |
 | `--format full` | -- | no |

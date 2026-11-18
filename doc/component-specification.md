@@ -1,6 +1,6 @@
 # Component Specification
 
-> **As of v4.12.2 (October 2026).** Reviewed against the code at that
+> **As of v4.14.0 (November 2026).** Reviewed against the code at that
 > version: the data model below matches `src/models/*.rs` and the SQLite
 > schema in `src/catalog/schema.rs` (schema v13), the routes list is
 > generated from `build_router` in `src/web/mod.rs`, and the config
@@ -162,11 +162,11 @@ Stack membership is tracked on the `assets` table via `stack_id` and `stack_posi
 **Responsibility**: file identity, deduplication, and physical location tracking.
 
 **Operations**:
-- `ingest(path) -> SHA-256` — hash a file, register it. If hash already exists, skip copy (dedup).
-- `locate(hash) -> Vec<FileLocation>` — find all known locations of a file.
-- `relocate(hash, from_volume, to_volume)` — move/copy a file between volumes, update locations.
-- `verify(hash, location) -> bool` — re-hash file at location, confirm integrity.
-- `remove_location(hash, location)` — unregister a location (file moved/deleted externally).
+- `ingest(path, volume) -> SHA-256` / `hash_file(path) -> SHA-256` — hash a file and return `sha256:<hex>`. Referenced mode: nothing is copied; deduplication happens in the import workflow when the hash is already known.
+- `copy_and_verify(source, dest, expected_hash)` — copy a file and re-hash the copy, failing on a mismatch (used by relocate and export).
+- `verify(hash, path) -> bool` — re-hash the file at a path, confirm integrity.
+
+`ContentStore` itself keeps no location records. Known locations of a file are rows of the catalog's `file_locations` table and the variant's `locations` in the sidecar (`Catalog::get_variant_file_locations(hash)`, `insert_file_location`, `delete_file_location`); moving or copying files between volumes is `AssetService::relocate` (`src/asset_service/relocate.rs`); unregistering locations of files that are gone is done by `sync --remove-stale` and `cleanup`.
 
 **Storage model**: referenced mode — files stay in their original directory structure on each volume. The content store indexes their hash and location but never moves or renames originals. This preserves interoperability with tools like CaptureOne that expect a specific directory layout. Deduplication is logical (same hash → same variant) rather than physical.
 
@@ -205,7 +205,7 @@ recipes:
 - `save(asset)` — write/update sidecar YAML.
 - `load(asset_id) -> Asset` — read sidecar YAML.
 - `list() -> Vec<AssetSummary>` — enumerate all known assets.
-- `sync_to_catalog_with_log(&catalog, log)` — rebuild SQLite catalog from sidecar files (source of truth → cache), with optional per-sidecar progress.
+- `sync_to_catalog_with(&catalog, on_asset)` — rebuild SQLite catalog from sidecar files (source of truth → cache); `on_asset` is called for every sidecar that loaded (per-sidecar progress).
 
 ### 3. Local Catalog (SQLite)
 
@@ -242,7 +242,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 - `find_duplicates() -> Vec<DuplicateGroup>` — find variants with same hash on multiple locations.
 - `verify(paths, volume, asset, config) -> VerifyResult` — re-hash files on disk and compare against stored content hashes. Reports `Ok`, `Mismatch`, `Modified` (recipe with changed hash), `Missing`, `Skipped`, `SkippedRecent`, or `Untracked`. Modified recipes are not treated as failures — their stored hash is updated. Supports path mode (verify specific files/dirs), catalog mode (verify all locations), `--volume`, `--asset`, `--include`/`--skip` filters, `--max-age` (skip files verified within N days), and `--force` (override `--max-age`). Persists `verified_at` timestamps to sidecar YAML for both variant and recipe locations.
 - `refresh(paths, volume, asset_id, dry_run, media) -> RefreshResult` — re-read metadata from changed recipe/sidecar files. Iterates recipe file locations, compares on-disk hash to stored hash, and for changed files re-extracts XMP metadata and updates catalog + sidecar. Reports `Unchanged`, `Refreshed`, `Missing`, or `Offline`. When `media` is true, also scans JPEG/TIFF variant files and re-extracts embedded XMP metadata. Lighter than `sync` — only touches metadata, never file locations.
-- `fix_roles(paths, volume, asset, apply) -> FixRolesResult` — scan multi-variant assets with a RAW variant and re-role non-RAW variants from `Original` to `Alternate`. Assets with only non-RAW variants are untouched. Dry-run by default; `--apply` writes changes to both sidecar YAML and SQLite catalog.
+- `fix_roles(paths, volume, asset, apply) -> FixRolesResult` — scan multi-variant assets with a RAW variant and re-role non-RAW variants whose role is `Original` or `Alternate` to `Export` (`Export`, `Processed` and `Sidecar` roles are left alone). Assets with only non-RAW variants are untouched. Dry-run by default; `--apply` writes changes to both sidecar YAML and SQLite catalog.
 - `cleanup(volume, path_prefix, apply) -> CleanupResult` — remove stale location/recipe records, locationless variants, orphaned assets, and all orphaned derived files (previews, smart previews, SigLIP embeddings, face crops, ArcFace embeddings). `path_prefix` scopes scanning to files under a specific directory.
 - `delete_assets(asset_ids, apply, remove_files) -> DeleteResult` — remove assets from the catalog. Report-only by default; `apply` executes deletion (asset rows, variants, file locations, recipes, previews, smart previews, face crops, face/embedding DB records, embedding binaries, sidecar YAML, collection memberships, stack membership). `remove_files` (requires `apply`) also deletes physical files from disk. Supports ID prefix matching and stdin piping.
 - `sync_metadata(volume, asset, dry_run, media) -> SyncMetadataResult` — bidirectional XMP metadata sync. Inbound: re-reads externally modified XMP recipes. Outbound: writes pending DAM edits. Detects conflicts when both sides changed.
@@ -261,7 +261,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 - Visual similarity: `similar:<asset-id>` or `similar:<asset-id>:<limit>` (feature-gated: `--features ai`)
 - Search by query image: `maki search --image <file> [QUERY] [--limit N]` — a local file not in the catalog; content-hash exact match pinned first, then SigLIP ranking via the shared `embedding_store::rank_similar` (feature-gated: `--features ai`; module `src/query_image.rs`)
 - Full-text search over name, filename, description, and source metadata
-- Sort by: date, name, file size, import date
+- Sort by: date, name, file size (each ascending or descending), and similarity score for similarity searches
 - Output: asset list with summary info, or detailed asset view
 
 **Editing capabilities**:
@@ -322,10 +322,10 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 
 **Architecture**:
 - **Connections**: `CatalogPool` pre-opens four SQLite connections with `Catalog::open_fast()` (WAL, mmap, tuned pragmas; no migrations — `open_fast` is an alias of `open`). Handlers check one out per request (`state.catalog()`, RAII `PooledCatalog` returned on drop) inside `tokio::task::spawn_blocking`, since `rusqlite::Connection` is not `Send`; an exhausted pool opens a temporary extra connection. The schema version is verified once at process startup; the server never migrates.
-- **`AppState`** holds the catalog root, the pool, preview config and extension, the dropdown cache (tags, formats, volumes, collections, people — warmed at startup, invalidated by write endpoints), and the serve-time config: `per_page`, the six `stroll_*` limits, `default_filter`, `slideshow_seconds` / `slideshow_loop`, `remember_latest_filter`, the import-dialog defaults `import_smart_previews` / `import_embeddings` / `import_descriptions`, `dedup_prefer`, `smart_on_demand`, `read_only`, `basic_auth`, `vlm_config` / `vlm_enabled`, and the `jobs: JobRegistry`. With `--features ai` it also carries the lazily loaded `ai_model` (SigLIP), `ai_label_cache`, `ai_embedding_index` (in-memory dot-product index, loaded on first similarity query), `face_detector`, and `query_images` (TTL-evicted sessions for search by query image). Most of these are surfaced to the browser through `GET /api/build-info`.
+- **`AppState`** holds the catalog root, the pool, preview config and extension, the dropdown cache (tags, formats, volumes, collections, people — warmed at startup, invalidated by write endpoints), and the serve-time config: `per_page`, the five `stroll_*` limits, `default_filter`, `slideshow_seconds` / `slideshow_loop`, `remember_latest_filter`, the import-dialog defaults `import_smart_previews` / `import_embeddings` / `import_descriptions`, `dedup_prefer`, `smart_on_demand`, `read_only`, `basic_auth`, `vlm_config` / `vlm_enabled`, and the `jobs: JobRegistry`. With `--features ai` it also carries the lazily loaded `ai_model` (SigLIP), `ai_label_cache`, `ai_embedding_index` (in-memory dot-product index, loaded on first similarity query), `face_detector`, and `query_images` (TTL-evicted sessions for search by query image). Most of these are surfaced to the browser through `GET /api/build-info`.
 - **Middleware** (outermost first): `guard_request` enforces HTTP Basic auth when `[serve] username`/`password` are set (`MAKI_SERVE_PASSWORD` overrides the config password; digest comparison; `WWW-Authenticate: Basic realm="MAKI"`) on every route including previews and SSE, then read-only mode: with `--read-only` or `[serve] read_only`, every non-GET/HEAD request is rejected with 403 — enforcement is by method, so a new write endpoint cannot be forgotten — with the single exception of `POST /api/query-image`, which carries a file body but writes nothing. `log_request` prints `METHOD URI -> status (duration)` to stderr when `--log` is set and adds `Cache-Control: no-cache` to `/preview/`, `/smart-preview/` and `/face/` responses so rotated or regenerated previews revalidate.
 - **Jobs**: long-running operations (import, batch embed / auto-tag / detect-faces / describe, every `/api/maintain/*` operation, the suggest-tags review) run in a background task registered in `JobRegistry`; the start endpoint returns `{job_id}` immediately, progress streams over SSE from `GET /api/jobs/{id}/progress` (ring-buffered so a re-attach after reload replays), and the terminal event carries the summary counters. The global progress toast in `base.html` consumes this.
-- **Static assets** are embedded at compile time: htmx, `style.css`, the favicon and `maki-icon.svg`, plus Leaflet, Leaflet.markercluster, their CSS and five marker images for the map view.
+- **Static assets** are embedded at compile time: htmx, `style.css`, the favicon and `maki-icon.svg`, plus Leaflet, Leaflet.markercluster, their CSS and five marker images for the map view. `maki-core.js` (the shared `MAKI.*` front-end helpers) is embedded inline by `base.html`, and the browse page's script modules `src/web/static/browse/{batch,keyboard,facets}.js` are served at `/static/browse/{name}`; those modules and `style.css` are linked with a content fingerprint (`?v=`) and cached as immutable.
 - **Media**: previews are served from `<catalog>/previews/` via `tower-http::ServeDir`; smart previews go through a handler that can generate them on demand (`[preview] generate_on_demand`); face crops are a second `ServeDir` on `<catalog>/faces/`; video and audio originals stream through one range-capable handler.
 
 **Routes** (from `build_router`; *(ai)* = only with `--features ai`; *(pro)* = only meaningful in a Pro build):
@@ -354,7 +354,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 - `GET /api/calendar?year…` — per-day counts for the heatmap (`{year, counts, years}`)
 - `GET /api/map` — geo points for the map view
 - `GET /api/tags` — all tags with counts as JSON (autocomplete)
-- `GET /api/stats` — `CatalogStats` JSON
+- `GET /api/stats` — overview counts as JSON: `{assets, variants, recipes, total_size}`
 - `GET /api/build-info` — feature flags (`ai`, `pro`), read-only state, serve-time defaults (slideshow, remember-last-filter, import checkboxes)
 
 *Per-asset edits (return the corresponding htmx fragment; every edit is journaled for `maki undo` and, where applicable, written back to XMP)*
@@ -473,7 +473,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 **Module**: `src/config.rs` — `CatalogConfig` with one sub-struct per section: `PreviewConfig`, `ServeConfig`, `ImportConfig` (+ `ImportProfile`), `DedupConfig`, `VerifyConfig`, `AiConfig`, `ContactSheetDefaults`, `VlmConfig` (+ `VlmModelConfig` per-model overrides), `BrowseConfig`, `WritebackConfig`, `TrashConfig`, `HistoryConfig`, `CliDefaults`, `GroupConfig`, `WatchConfig`, `AudioConfig`. `CatalogConfig::load(root)` parses the file — the CLI entry point calls it once per invocation and hands the result to every handler through `CliContext` (`ctx.catalog()`), the web server keeps it in `AppState::config()`; `resolve_model_dir()` expands `~/` in `[ai] model_dir`. The settings dialog reads and writes the file through `GET|POST /api/config`, with a JSON Schema derived from the same structs (`schemars`) driving the form.
 
 **Sections** (every field optional; defaults in `src/config.rs`, full documentation in `doc/manual/reference/08-configuration.md`):
-- top level: `default_volume` (UUID fallback for import)
+- top level: `default_volume` (UUID; reserved — parsed and preserved, but no command currently reads it)
 - `[preview]`: `max_edge`, `format` (jpeg/webp), `quality`, `smart_max_edge`, `smart_quality`, `generate_on_demand`
 - `[serve]`: `port`, `bind`, `per_page`, `stroll_neighbors`, `stroll_neighbors_max`, `stroll_fanout`, `stroll_fanout_max`, `stroll_discover_pool`, `read_only`, `username`, `password`
 - `[import]`: `exclude`, `auto_tags`, `smart_previews`, `embeddings`, `descriptions`, `[import.profiles.<name>]` (named presets of the same fields)
@@ -505,7 +505,7 @@ This is a **derived cache**, not the source of truth. Running `maki rebuild-cata
 
 **Module**: `src/xmp_reader.rs` — uses the `quick-xml` crate for parsing; write-back is an event-driven locate-and-splice pipeline (`locate()` maps the existing element layout, then the changed properties are spliced in while every other byte of the file is preserved). `src/embedded_xmp.rs` / `src/embedded_xmp_write.rs` apply the same to the APP1 XMP segment of JPEG files (`writeback --embed`).
 
-**Read operations**: `extract_xmp_metadata(path)` — parses `dc:subject` (keywords/tags), `dc:description`, `xmp:Rating`, `xmp:Label`, `dc:creator`, `dc:rights` from XMP sidecar files. When `xmp:Rating` is absent, `MicrosoftPhoto:Rating` (percentage scale: 1, 25, 50, 75, 99) is read and normalized to 1–5 via `normalize_rating()`.
+**Read operations**: `xmp_reader::extract(path)` — parses `dc:subject` (keywords/tags), `dc:description`, `xmp:Rating`, `xmp:Label`, `dc:creator`, `dc:rights` from XMP sidecar files. When `xmp:Rating` is absent, `MicrosoftPhoto:Rating` (percentage scale: 1, 25, 50, 75, 99) is read and normalized to 1–5 via `normalize_rating()` (`src/models/format.rs`).
 
 **Write operations** (all preserve existing XMP structure):
 - `update_rating(path, rating)` — write `xmp:Rating` value
@@ -524,11 +524,11 @@ After each write, the file is re-hashed and the recipe's `content_hash` is updat
 **Operations**:
 - `create(name, description)` — create a new collection
 - `list()` — list all collections with asset counts
-- `show(name)` — list asset IDs in a collection
-- `add(name, asset_ids)` — add assets to a collection
-- `remove(name, asset_ids)` — remove assets from a collection
+- `get_by_name(name)` — load a collection with its asset IDs (`asset_ids_for_collection(name)` returns the IDs only)
+- `add_assets(name, asset_ids)` — add assets to a collection
+- `remove_assets(name, asset_ids)` — remove assets from a collection
 - `delete(name)` — delete a collection
-- `restore_from_yaml()` — rebuild SQLite tables from YAML (used during `rebuild-catalog`)
+- `import_from_yaml(file)` — rebuild SQLite tables from the loaded `collections.yaml` (used during `rebuild-catalog`)
 
 ### 15. Saved Search Store
 
@@ -570,15 +570,15 @@ After each write, the file is re-hashed and the recipe's `content_hash` is updat
 **Module**: `src/face_store.rs` — `FaceStore` struct backed by `faces` and `people` tables.
 
 **Operations**:
-- `insert_face(face)` — store a detected face with bbox, confidence, embedding, and recognition model
+- `store_face(...)` — store a detected face with bbox, confidence, embedding, and recognition model
 - `faces_for_asset(asset_id)` — list all faces detected in an asset
 - `create_person()` — create a new unnamed person
 - `name_person(id, name)` — assign a name to a person
-- `assign_face(face_id, person_id)` — link a face to a person
+- `assign_face_to_person(face_id, person_id)` — link a face to a person
 - `unassign_face(face_id)` — remove a face from its person
 - `merge_people(target_id, source_id)` — move all faces from source to target person
 - `delete_person(id)` — delete a person (faces become unassigned)
-- `auto_cluster(threshold, apply)` — group similar face embeddings into people using agglomerative hierarchical clustering
+- `auto_cluster(threshold, min_confidence, asset_ids)` — group similar face embeddings into people using agglomerative hierarchical clustering
 
 **Clustering algorithm**: Loads all unassigned face embeddings of the active `recognition_model` (faces from another model are skipped with a warning), then merges clusters bottom-up with **average linkage (UPGMA)** — the Lance-Williams update keeps the inter-cluster average similarity exact — until no pair exceeds `[ai] face_cluster_threshold` (default 0.35). Order-independent, unlike the greedy single-linkage it replaced in v4.4.0. Each cluster becomes a new person; singletons are skipped. Faces below `[ai] face_min_confidence` (default 0.7) are excluded.
 
@@ -629,7 +629,7 @@ After each write, the file is re-hashed and the recipe's `content_hash` is updat
 
 **Responsibility**: the edit-history journal behind `maki undo` and `maki history` — an independent, non-authoritative, prunable log of field-level metadata edits. Neither a sidecar (not source of truth) nor part of `catalog.db` (not a derived cache): it survives `rebuild-catalog`, is ignored by `doctor`, and can be deleted at the cost of undo capability only.
 
-**Module**: `src/history.rs` — `HistoryStore` over `<catalog_root>/history/`, one JSON file per operation (`<epoch-millis>-<opid>.json`); undone operations move to `history/undone/`. `Operation` carries `command`, `summary`, `source` (`OpSource`, labelled `cli` for every surface in v4.12) and one `AssetDelta` (full prior `Asset` state) per touched asset.
+**Module**: `src/history.rs` — `HistoryStore` over `<catalog_root>/history/`, one JSON file per operation (`<epoch-millis>-<opid>.json`); undone operations move to `history/undone/`. `Operation` carries `command`, `summary`, `source` (`OpSource`, labelled `cli` for every surface) and one `AssetDelta` (full prior `Asset` state) per touched asset.
 
 **Operations**:
 - `HistoryStore::new_with(catalog_root, &HistoryConfig)` — honours `[history] enabled` / `max_operations`

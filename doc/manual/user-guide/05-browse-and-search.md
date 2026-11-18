@@ -8,11 +8,11 @@ This chapter covers how to find, inspect, and analyze assets in your catalog usi
 
 The `maki search` command is the primary way to find assets. It accepts free-text keywords and structured filters in a single query string.
 
-**Free-text search** matches against asset names, filenames, descriptions, and source metadata:
+**Free-text search** matches against asset names, filenames, descriptions, and source metadata. The free text of a query is matched as one case-insensitive substring, so several words form a phrase rather than independent keywords:
 
 ```
 maki search "sunset"
-maki search "beach vacation"
+maki search "beach vacation"              # the phrase "beach vacation", not "beach" AND "vacation"
 ```
 
 **Structured filters** use a `key:value` syntax and can be combined freely with free-text:
@@ -23,10 +23,11 @@ maki search "sunset tag:landscape camera:fuji iso:100-800"
 maki search "format:nef focal:35-70 f:1.4-2.8"
 ```
 
-Tokens that don't match a known filter prefix are treated as free-text, so you can mix them in any order:
+Tokens that don't match a known filter prefix are treated as free-text, wherever they stand in the query. All free-text tokens are joined in order, with single spaces, into that one phrase:
 
 ```
-maki search "type:image sunset rating:4+ golden hour"
+maki search "type:image rating:4+ golden hour"    # phrase "golden hour"
+maki search "golden type:image hour rating:4+"    # the same search
 ```
 
 **Values with spaces** are supported using double quotes inside the query:
@@ -125,7 +126,7 @@ All filters can be combined in a single query. Remaining tokens become free-text
 
 **Hierarchical tag matching**: The `tag:` filter matches hierarchically. Searching for `tag:animals` finds assets tagged `animals`, `animals|birds`, `animals|birds|eagles`, and any other descendant of `animals` — and a full path like `tag:animals|birds` still includes its descendants. To match one tag value and nothing else, use the whole-path marker: `tag:=animals|birds`. Three more leading markers exist: `tag:/x` (leaf only — the tag with no deeper child on the asset), `tag:^x` (case-sensitive), and `tag:|x` (prefix anchor: any component starting with `x`). They combine, e.g. `tag:=^Legoland`. See [tag](../reference/06-search-filters.md#tag) in the reference.
 
-**Pro filters on a standard build**: `similar:`, `min_sim:`, `text:` and `--image` are silently ignored when MAKI was built without the `ai` feature; `person:` matches nothing there.
+**Pro filters on a standard build**: when MAKI was built without the `ai` feature, a search using `similar:`, `text:` or `--image` fails with an error (for example ``the similar: filter requires a build with the `ai` feature``) instead of returning unfiltered results. `min_sim:` on its own has no effect, and `person:` matches nothing there.
 
 **Multilingual `text:` search** *(Pro)*: The default AI model is English-only. To search in German, French, Spanish, etc., switch to the multilingual model in `maki.toml` and re-embed: see [AI Models](02-setup.md#ai-models-pro) in the setup guide.
 
@@ -229,6 +230,8 @@ maki search "rating:5" --format '{name}\n  {description}\n'
 | `{description}` | Asset description |
 | `{hash}` | Content hash of the best variant |
 | `{label}` | Color label (Red, Blue, etc.) |
+| `{similarity}` | Similarity score in percent (0-100) on `similar:` and `--image` searches; empty otherwise |
+| `{exact}` | `exact` for the byte-identical match of an `--image` search; empty otherwise |
 
 **Escape sequences:** `\t` (tab), `\n` (newline), `\\` (literal backslash).
 
@@ -310,6 +313,8 @@ maki search -q "rating:5 type:image" | xargs -I{} maki tag {} portfolio
 maki search -q "path:Capture/2026-02" | xargs -I{} maki generate-previews --asset {}
 ```
 
+Scripts can also branch on the exit code: `maki` returns 3 when an asset, volume or collection is not found and 4 when a volume is offline, besides 1 for general failures and 2 for usage errors (a search that matches nothing is not an error and exits 0). See [Scripting](08-scripting.md#tips) for the full list and an example.
+
 ---
 
 ## Showing Asset Details
@@ -355,9 +360,11 @@ Variants:
     Location: Photos → Export/2026-01-15/DSC_1234-Edit.tif
 
 Recipes:
-  [xmp] CaptureOne (e4f5a6b7c8...)
-    Path: Capture/2026-01-15/DSC_1234.NEF.xmp
+  [sidecar] Adobe/CaptureOne → …def45678 (sha256:e4f5a6b7c8...)
+    Location: Photos:Capture/2026-01-15/DSC_1234.xmp
 ```
+
+Each recipe line shows the recipe type, the software family, the last eight characters of the hash of the variant it belongs to, and the recipe file's own content hash.
 
 For structured output, use the `--json` flag:
 
@@ -391,12 +398,13 @@ Files that appear more than once on the **same** volume are almost always accide
 
 ```bash
 $ maki duplicates --same-volume
-DSC_0042.NEF (NEF, 48.2 MB)
-  Hash: abc123def456...
-    Photos[working] → Capture/2026-01-15/DSC_0042.NEF  [SAME VOLUME]
-    Photos[working] → Import/Unsorted/DSC_0042.NEF      [SAME VOLUME]
+DSC_0042 (nef, 48.2 MB)
+  Hash: sha256:abc123def456...
+    Photos [working] → Capture/2026-01-15/DSC_0042.NEF
+    Photos [working] → Import/Unsorted/DSC_0042.NEF
+  ⚠ same-volume duplicates on: Photos
 
-1 file(s) with same-volume duplicate locations
+1 same-volume duplicate(s)
 ```
 
 These are candidates for cleanup with `maki dedup` (see [Maintenance](07-maintenance.md#storage-hygiene)).
@@ -407,12 +415,12 @@ Files that exist on **different** volumes represent your backup strategy at work
 
 ```bash
 $ maki duplicates --cross-volume
-DSC_0042.NEF (NEF, 48.2 MB)
-  Hash: abc123def456...
-    Photos[working] → Capture/2026-01-15/DSC_0042.NEF
-    Backup[backup]  → Capture/2026-01-15/DSC_0042.NEF
+DSC_0042 (nef, 48.2 MB) [2 volumes]
+  Hash: sha256:abc123def456...
+    Photos [working] → Capture/2026-01-15/DSC_0042.NEF
+    Backup [backup] → Capture/2026-01-15/DSC_0042.NEF
 
-1 file(s) with cross-volume locations
+1 file(s) with cross-volume copies
 ```
 
 Cross-volume copies are healthy -- they mean your backups are working. If you see *fewer* cross-volume copies than expected, that is a signal to check backup coverage with `maki backup-status`.
@@ -579,28 +587,29 @@ Gathering catalog status (scanning derived files; may take a moment)...
 MAKI catalog status — /Users/you/.maki
 
 Catalog
-  Schema:   v8 (current)
-  Counts:   12,847 assets · 18,203 variants · 9,614 recipes · 21,118 file locations
-  Storage:  1.8 TB across 3 volume(s) (2 online, 1 offline)
+  Schema:   v13 (current)
+  Counts:   12847 assets · 18203 variants · 9614 recipes · 21118 file locations
+  Storage:  1843.2 GB across 3 volume(s) (2 online, 1 offline)
 
 Cleanup
-  ✗ 5 locationless variant(s)                          → maki cleanup --apply
-  ✗ 47 orphaned embedding file(s) on disk              → maki cleanup --apply
+  ✗ 5 locationless variant(s)  → maki cleanup --apply
+  ✗ 47 orphaned embedding file(s) on disk  → maki cleanup --apply
 
 Pending work
-  ✗ 28 pending XMP writeback(s) on offline volume(s)   → mount the volumes, then `maki writeback`
-  ✗ 142 asset(s) without an embedding                  → maki embed
+  ✗ 28 pending XMP writeback(s) on offline volume(s)  → mount the volumes, then `maki writeback`
+      └─    28 on Travel-2026 (offline)
+  ✗ 142 asset(s) without an embedding  → maki embed
 
 Backup coverage
-  ✗ 124 of 12847 asset(s) (1.0%) have fewer than 2 copies → maki backup-status --at-risk
+  ✗ 124 of 12847 asset(s) (1.0%) have fewer than 2 copies  → maki backup-status --at-risk
 
 Volumes
-  ● Photos       /Volumes/Photos    10234 asset(s), 1.2 TB [media]
-  ● Backup-A     /Volumes/Backup-A  10234 asset(s), 1.2 TB [backup]
-  ○ Travel-2026  /Volumes/Travel    810 asset(s), 35 GB [working] (offline)
+  ● Photos             /Volumes/Photos              10234 asset(s), 1228.8 GB [media]
+  ● Backup-A           /Volumes/Backup-A            10234 asset(s), 1228.8 GB [backup]
+  ○ Travel-2026        /Volumes/Travel              810 asset(s), 35.0 GB [working] (offline)
 ```
 
-Run it as part of a routine maintenance pass. The orphan-on-disk scan is the slow part (the same pass `maki cleanup --dry-run` runs); on a 12k-asset catalog expect ~30 seconds. The command is informational only — exit code is always 0 even when action items are present.
+Run it as part of a routine maintenance pass. The orphan-on-disk scan is the slow part (the same pass `maki cleanup` runs); on a 12k-asset catalog expect ~30 seconds. The command is informational only — exit code is always 0 even when action items are present.
 
 `--min-copies N` raises the backup-coverage floor; `--json` produces a structured `StatusReport` for scripting.
 
@@ -641,7 +650,7 @@ When assets span multiple volumes, each volume's files are placed under a `<volu
 For email or upload delivery, export directly to a ZIP archive instead of a directory:
 
 ```bash
-maki export "collection:Wedding Selects" delivery.zip --zip
+maki export 'collection:"Wedding Selects"' delivery.zip --zip
 ```
 
 This creates a single file that's easy to share. Combines with all other options (`--all-variants`, `--include-sidecars`, etc.).
@@ -718,7 +727,7 @@ Generate a contact sheet from any search query:
 maki contact-sheet "tag:wedding date:2026-03" wedding-proofs.pdf
 ```
 
-This produces an A4 PDF with the standard layout (4 columns, 6 rows per page) using smart previews when available.
+This produces an A4 PDF with the standard layout (4 columns, 5 rows per page) using smart previews when available.
 
 ### Client proofing
 
@@ -731,7 +740,7 @@ maki contact-sheet "tag:wedding rating:3+" proofs.pdf \
   --fields "filename,rating"
 ```
 
-The `--fields` option accepts a comma-separated list: `filename`, `date`, `rating`, `label`, `format`, `size`, `dimensions`.
+The `--fields` option accepts a comma-separated list: `filename`, `name`, `date`, `rating`, `label`, `tags`, `format`, `id`, `dimensions`, `camera`, `lens`.
 
 ### Shoot overview
 
@@ -751,8 +760,8 @@ Three built-in layout presets control thumbnail density:
 | Preset | Columns | Rows | Best for |
 |--------|---------|------|----------|
 | `dense` | 6 | 8 | Index prints, archival reference |
-| `standard` | 4 | 6 | Client proofing (default) |
-| `large` | 3 | 4 | Portfolio review, detail inspection |
+| `standard` | 4 | 5 | Client proofing (default) |
+| `large` | 3 | 3 | Portfolio review, detail inspection |
 
 Override columns and rows individually with `--columns` and `--rows`. Paper sizes: `a4` (default), `letter`, `a3`.
 
@@ -768,12 +777,14 @@ maki contact-sheet "volume:Archive" archive-index.pdf \
 
 ### Color labels and sorting
 
-The `--label-style` option controls how color labels appear: `border` (colored border around thumbnail), `dot` (small colored circle), or `none`. Sort with `--sort`: `date`, `name`, `rating`, `filename`.
+The `--label-style` option controls how color labels appear: `border` (colored border around thumbnail), `dot` (small colored circle), or `none`.
 
 ```bash
 maki contact-sheet "label:Green,Blue" selects.pdf \
-  --sort rating --label-style border
+  --label-style border
 ```
+
+Thumbnails appear in search order (newest first). The `--sort` option (`date`, `name`, `rating`, `filename`) is accepted but currently has no effect on the order.
 
 ### Dry run
 

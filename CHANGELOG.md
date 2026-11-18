@@ -2,7 +2,10 @@
 
 All notable changes to the Digital Asset Manager are documented here.
 
-## Unreleased
+## v4.14.0 (2026-11-18)
+
+Facet sidebar, web search fixes, and the first part of architecture
+audit Phase 3. No schema migration.
 
 ### Changed
 
@@ -23,6 +26,28 @@ All notable changes to the Digital Asset Manager are documented here.
 - **Facet sidebar no longer jumps to the top.** The list stays in place
   (dimmed) while counts refresh, and the row you clicked keeps its
   position, also when rows above it drop out of the narrower result.
+- **`volume:` typed in the web search box was ignored.** `volume:<label>`,
+  `-volume:<label>`, `volume:none` and `-volume:none` in the search box
+  (or in a saved search or the default filter) were resolved only by the
+  CLI; the web UI dropped them and showed every asset. They now filter
+  the grid, the facets, the calendar, the map and exports. A label no
+  volume has matches nothing in the web UI (the CLI still reports an
+  error).
+- **Geotagged facet did nothing useful.** The row added `geotagged:1`
+  to the search box, which is not a filter and was searched as text. It
+  now toggles `geo:any`.
+- **Facet sidebar keys leaked into the grid.** Enter or Space on a
+  focused facet row also opened the lightbox or toggled the focused
+  card's selection, and the arrow keys moved the grid focus.
+- **Facet counts ignored the people filter.** The sidebar's request left
+  out the `person` filter and the "ignore default filter" switch, so its
+  counts could describe a different result than the grid.
+- **`maki faces dump-aligned` without a query processed nothing.** *(Pro)*
+  The command searched for the literal text `*` instead of every asset.
+- **Message wording.** VLM errors no longer start with "vLM"; the
+  `duplicates` summary line reads "file(s) with cross-volume copies"; the
+  `faces cluster --threshold` help names the real default (0.35); the
+  shell help lists `--verbose` and uses `.maki` for script names.
 - **Stale stylesheet after an upgrade.** `style.css` was cached by the
   browser for an hour under a fixed URL, so pages of a new version could
   render with the old styles. Pages now link it with a content
@@ -78,6 +103,19 @@ All notable changes to the Digital Asset Manager are documented here.
   of being re-sent with every page. Keyboard navigation (`keyboard.js`)
   and the faceted sidebar (`facets.js`) followed; `browse.html` is down
   to 1,500 lines. Further sections move one at a time.
+- **Documentation audit.** Planning documents, user guide, reference,
+  developer docs, README and quick-reference sheets were checked
+  against the code and corrected: more than a hundred errors, among them examples
+  that selected the wrong assets (`-rating:1+` for "unrated"), filters
+  that do not exist (`description:none`, `tag:untagged`, `imported:`),
+  the claim that migrations run at startup, and stale API names in the
+  module reference. The user guide gains an "Upgrading" section and a
+  tag-provenance section; the roadmap gains "Maintenance & Technical
+  Debt".
+- **`chrono` advisory ignored.** RUSTSEC-2026-0543 flags `chrono` as
+  unmaintained (no vulnerability, no upgrade path); it is ignored in
+  `deny.toml` with a justification, and the replacement is on the
+  roadmap.
 - **The crate is marked `publish = false`.** MAKI is distributed as
   release binaries; the library target has no stable API and cannot be
   published to crates.io by accident.

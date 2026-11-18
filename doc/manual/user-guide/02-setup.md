@@ -14,10 +14,12 @@ Download a pre-built binary from the [GitHub releases page](https://github.com/t
 | `maki-VERSION-PLATFORM.tar.gz` | MAKI (standard) |
 | `maki-VERSION-PLATFORM-pro.tar.gz` | MAKI Pro (with AI features) |
 
+The Windows archives are `.zip` files (`maki-VERSION-windows-x86_64.zip`, `maki-VERSION-windows-x86_64-pro.zip`).
+
 Extract the archive and copy the `maki` binary to a directory on your `PATH`:
 
 ```bash
-tar xzf maki-4.2.1-macos-arm64-pro.tar.gz
+tar xzf maki-4.14.0-macos-arm64-pro.tar.gz
 cp maki /usr/local/bin/
 ```
 
@@ -25,13 +27,13 @@ Verify the installation:
 
 ```bash
 maki --version
-# MAKI:     maki 4.2.1
-# MAKI Pro: maki 4.2.1 Pro
+# MAKI:     maki 4.14.0
+# MAKI Pro: maki 4.14.0 Pro
 ```
 
 ### Building from source
 
-MAKI is written in Rust. You need a working Rust toolchain (rustc + cargo), version 1.89 or newer. Install one via [rustup](https://rustup.rs/) if you have not already.
+MAKI is written in Rust. You need a working Rust toolchain (rustc + cargo), version 1.92 or newer. Install one via [rustup](https://rustup.rs/) if you have not already.
 
 ```bash
 git clone https://github.com/thoherr/maki.git
@@ -91,6 +93,8 @@ This creates the following structure:
   smart-previews/    # High-resolution previews for zoom/pan (2560px)
 ```
 
+More files and directories appear at the catalog root as you use the corresponding features: `collections.yaml`, `stacks.yaml`, and `searches.toml` (collections, stacks, saved searches), `faces.yaml`, `people.yaml`, `faces/`, and `embeddings/` (face recognition and AI embeddings, *(Pro)*), `history/` (the undo journal), and `.trash/` (deleted files awaiting `maki trash empty`). See the [Data Model reference](../reference/09-data-model.md) for the complete layout.
+
 The `vocabulary.yaml` defines your planned tag hierarchy — MAKI uses it to offer autocomplete suggestions for tags you've planned but haven't used yet. Edit it to match your photography focus. See the [Tagging Guide](11-tagging-guide.md) for vocabulary design recommendations.
 
 The `.gitignore` is set up so you can optionally track the catalog with git for backup and history. See [Backing Up Your Catalog with Git](07-maintenance.md#backing-up-your-catalog-with-git) for details.
@@ -113,12 +117,12 @@ maki stats            # fails -- no maki.toml above /tmp
 If no catalog is found, MAKI prints:
 
 ```
-Error: No maki catalog found. Run `maki init` to create one.
+Error: no maki catalog found. Run `maki init` to create one.
 ```
 
 ### Reinitializing
 
-`maki init` refuses to overwrite an existing catalog. If you need to start fresh, delete the catalog files first (`maki.toml`, `catalog.db`, `metadata/`, `previews/`, `smart-previews/`, `volumes.yaml`) and run `maki init` again.
+`maki init` refuses to overwrite an existing catalog. If you need to start fresh, delete the catalog files first and run `maki init` again: `maki.toml`, `catalog.db`, `metadata/`, `previews/`, `smart-previews/`, `volumes.yaml`, and -- where present -- `collections.yaml`, `stacks.yaml`, `searches.toml`, `faces.yaml`, `people.yaml`, `faces/`, `embeddings/`, `history/`, and `.trash/`. `maki init` keeps an existing `vocabulary.yaml` and `.gitignore`; delete them as well if you want the defaults back.
 
 
 ## Registering Volumes
@@ -331,9 +335,6 @@ The `maki.toml` file at the catalog root controls MAKI's behavior. All sections 
 Here is an example showing common options (see the [Configuration Reference](../reference/08-configuration.md) for the full list):
 
 ```toml
-# Default volume for import when auto-detection is ambiguous
-default_volume = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-
 [preview]
 max_edge = 800        # Maximum width/height in pixels (default: 800)
 format = "jpeg"       # "jpeg" or "webp" (default: "jpeg")
@@ -357,8 +358,6 @@ auto_tags = [         # Tags automatically applied to every new asset
 
 ### Section summary
 
-**`default_volume`** -- UUID of the volume to use when `maki import` cannot auto-detect the correct volume from the file path. Useful if you always import from the same drive.
-
 **`[preview]`** -- Controls preview generation. `max_edge` sets the longest side of generated thumbnails. `format` chooses between JPEG (smaller, lossy) and WebP (lossless via the `image` crate). `quality` only applies to JPEG output.
 
 **`[serve]`** -- Web UI server settings. Change `bind` to `"0.0.0.0"` to allow access from other machines on your network. CLI flags `--port` and `--bind` override these values.
@@ -374,13 +373,13 @@ If you use Lightroom, CaptureOne, or another tool that reads `.xmp` sidecar file
 enabled = true
 ```
 
-> **Warning:** Enabling writeback causes MAKI to modify `.xmp` files on your storage volumes whenever you change ratings, tags, labels, or descriptions. If you prefer MAKI to keep its edits strictly in its own catalog (YAML sidecars + SQLite), leave writeback disabled (the default). You can always enable it later and run `maki writeback --all` to push all edits at once.
+> **Warning:** Enabling writeback causes MAKI to modify `.xmp` files on your storage volumes whenever you change ratings, tags, labels, or descriptions. If you prefer MAKI to keep its edits strictly in its own catalog (YAML sidecars + SQLite), leave writeback disabled (the default). You can always enable it later and run `maki writeback --all` *(Pro)* to push all edits at once.
 
 For a complete reference of every option and its behavior, see the [Configuration Reference](../reference/08-configuration.md).
 
 ## AI Models *(Pro)*
 
-MAKI Pro uses SigLIP vision-language models for `text:` search (find images by typed description), similarity browsing, and `auto-tag`. The model is downloaded once on demand and cached in `~/.maki/models/`.
+MAKI Pro uses SigLIP vision-language models for `text:` search (find images by typed description), similarity browsing, and `auto-tag`. Models are not downloaded automatically: run `maki auto-tag --download` once to fetch the configured model (commands that need it stop with a "Model not downloaded" message until then). The files are cached in `~/.maki/models/`.
 
 ### Available models
 
@@ -431,7 +430,8 @@ If you interrupted an earlier `maki embed` run (Ctrl-C, machine sleep, power los
 To see how many embeddings exist per model in your catalog:
 
 ```bash
-sqlite3 .maki/catalog.db "SELECT model, COUNT(*) FROM embeddings GROUP BY model;"
+# Run in the catalog directory (the one containing maki.toml)
+sqlite3 catalog.db "SELECT model, COUNT(*) FROM embeddings GROUP BY model;"
 ```
 
 You'll see one row per model that has any embeddings. After switching, the count for the old model stays where it was, and the count for the new model grows from zero as you run `maki embed ''`.
@@ -452,14 +452,46 @@ The active model is the one referenced in `[ai] model` in `maki.toml`, or the CL
 
 ### Disk space cleanup
 
-Old model embeddings remain in the catalog and embedding store after a switch. They are small (~3 KB per asset for base, ~4 KB for large) and don't slow anything down — `text:` and similarity search only query the active model. If you're certain you don't want to switch back, you can delete unused embeddings directly:
+Old model embeddings remain in the catalog database and in the on-disk embedding store (`embeddings/<model>/` in the catalog directory) after a switch. They are small (~3 KB per asset for base, ~4 KB for large) and don't slow anything down — `text:` and similarity search only query the active model. If you're certain you don't want to switch back, you can delete unused embeddings directly:
 
 ```bash
-sqlite3 .maki/catalog.db "DELETE FROM embeddings WHERE model = 'siglip-vit-b16-256';"
-maki cleanup    # removes orphaned on-disk embedding binaries
+# Run in the catalog directory (the one containing maki.toml)
+sqlite3 catalog.db "DELETE FROM embeddings WHERE model = 'siglip-vit-b16-256';"
+rm -rf embeddings/siglip-vit-b16-256/
 ```
 
+Remove both: the binaries under `embeddings/<model>/` are the rebuild source for the database rows, so if you leave the directory in place the next `maki rebuild-catalog` restores the rows you deleted. `maki cleanup` does not do this for you -- it only removes embedding files of assets that no longer exist. Take care not to touch `embeddings/arcface/`, which holds the face recognition embeddings.
+
 But unless disk space is a real concern, just leaving old embeddings in place is the simplest option.
+
+## Upgrading
+
+Installing a new version means replacing the `maki` binary (or rebuilding from source). Your catalog stays where it is. Two things to do afterwards:
+
+**Run `maki migrate` when asked.** Some releases change the catalog's database schema (most recently v4.12.0, schema v12, and v4.13.0, schema v13). Migrations never run implicitly: until the catalog is migrated, every command except `init` and `migrate` stops with
+
+```
+Error: catalog schema is outdated (v12, expected v13). Run `maki migrate` to update.
+```
+
+Run it once in the catalog directory:
+
+```bash
+maki migrate
+```
+
+It applies all pending schema versions in order, however many releases you skipped. If a step fails, `maki migrate` names it and leaves the catalog at the last version that completed, so it can simply be run again. On a catalog that is already current it does nothing.
+
+**Check consistency with `maki doctor`.** After an upgrade, confirm that the catalog database and the YAML sidecars agree:
+
+```bash
+maki doctor            # report; exits 1 if it finds problems
+maki doctor --repair   # rebuild the flagged assets' database rows from their sidecars
+```
+
+If you are upgrading from a version before v4.12.3, run `maki doctor --repair` once in any case: that release changed the rule for which variant represents an asset's preview, and the repair brings the stored choices in line with it.
+
+The [changelog](https://github.com/thoherr/maki/blob/main/CHANGELOG.md) lists what each release changed, including any step to run once after upgrading. Scripts written before v4.13.0 that test for an exit status of exactly 1 should note that "not found" is now exit code 3 and "volume offline" exit code 4 (see [CLI Conventions](../reference/00-cli-conventions.md)).
 
 ---
 

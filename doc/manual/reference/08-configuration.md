@@ -35,7 +35,7 @@ The web UI's **Settings** entry (top nav, next to Maintain) opens a schema-drive
 - **Type:** UUID string (optional)
 - **Default:** none
 
-Fallback volume for `maki import` when auto-detection from the file path is ambiguous or fails. When set, import uses this volume if it cannot determine the correct volume from the first path argument.
+Reserved. The field is parsed and preserved when `maki.toml` is rewritten, but no command currently reads it: `maki import` always determines the volume from the path being imported (the registered volume whose mount point contains it).
 
 ```toml
 default_volume = "550e8400-e29b-41d4-a716-446655440000"
@@ -85,7 +85,7 @@ Maximum pixel size of the longest edge for smart previews. Smart previews are a 
 - **Type:** unsigned integer (1--100)
 - **Default:** `85`
 
-JPEG compression quality for smart previews. Only applies when the preview format is JPEG.
+JPEG compression quality for smart previews. Only applies when the preview format is JPEG. Values outside 1--100 are rejected when the configuration is loaded.
 
 ### generate_on_demand
 
@@ -134,10 +134,10 @@ Bind address for the web server. Use `"127.0.0.1"` to restrict access to the loc
 
 ### per_page
 
-- **Type:** unsigned 32-bit integer
+- **Type:** unsigned 32-bit integer (1--1000)
 - **Default:** `60`
 
-Number of results per page in the browse grid.
+Number of results per page in the browse grid. Values outside 1--1000 are rejected when the configuration is loaded.
 
 ### stroll_neighbors
 
@@ -252,7 +252,7 @@ Controls import behavior for `maki import`.
 - **Type:** array of glob pattern strings
 - **Default:** `[]` (empty, nothing excluded)
 
-Glob patterns matched against filenames (not full paths). Files matching any pattern are skipped during import. Useful for excluding OS-generated files, temporary files, and other non-media clutter.
+Glob patterns matched against the name of each entry (not full paths). Files matching any pattern are skipped during import; a directory whose name matches is pruned with everything below it. Independently of this list, entries whose name starts with a dot (`.DS_Store`, `.git`, ...) are always skipped when a directory is walked. Useful for excluding OS-generated files, temporary files, and other non-media clutter.
 
 Pattern matching uses the `glob-match` crate with standard glob syntax: `*` matches any sequence of characters, `?` matches a single character.
 
@@ -541,7 +541,7 @@ Text encoder prompt template. The `{}` placeholder is replaced with each label n
 
 > GPU providers require the macOS Pro build (which includes CoreML support). On other platforms, all values fall back to CPU.
 
-Selects the ONNX Runtime execution provider for AI inference (SigLIP, YuNet, ArcFace). `"auto"` uses CoreML when available on macOS (Neural Engine on Apple Silicon, Metal on Intel), falling back to CPU. `"cpu"` forces CPU-only inference. `"coreml"` explicitly requests CoreML (errors if unavailable).
+Selects the ONNX Runtime execution provider for AI inference (SigLIP, YuNet, ArcFace). `"auto"` uses CoreML when available on macOS (Neural Engine on Apple Silicon, Metal on Intel), falling back to CPU. `"cpu"` forces CPU-only inference. `"coreml"` explicitly requests CoreML; if it is unavailable, inference falls back to CPU (visible with `--debug`).
 
 ### face_cluster_threshold
 
@@ -639,7 +639,7 @@ Maximum number of tokens in the VLM response. 500 tokens is typically 3--5 sente
 - **Type:** string (optional)
 - **Default:** none (uses built-in photography-focused prompt)
 
-Custom system prompt sent to the VLM. When not set, uses a built-in prompt appropriate for the mode (describe or tags). In `--mode both`, custom prompts are ignored because each of the two calls uses its specialized built-in prompt.
+Custom system prompt sent to the VLM. When not set, uses a built-in prompt appropriate for the mode (describe or tags). A custom prompt applies in `--mode describe` and to the description call of `--mode both`. It has no effect in `--mode tags`, and the tags call of `both` likewise always uses the built-in tags prompt.
 
 Override for specialized workflows:
 
@@ -730,7 +730,7 @@ Repetition penalty applied to tokens that have already appeared. Values above `1
 
 ### Per-Model Configuration
 
-You can override any VLM setting for specific models using `[vlm.model_config."model-name"]` sections. When `maki describe` runs with a given model (via `--model` or `[vlm] model`), any matching per-model section is merged on top of the global `[vlm]` settings. CLI flags always win over both.
+You can override the generation settings (listed below) for specific models using `[vlm.model_config."model-name"]` sections. When `maki describe` runs with a given model (via `--model` or `[vlm] model`), any matching per-model section is merged on top of the global `[vlm]` settings. CLI flags always win over both.
 
 This is useful when different models need different timeouts, context sizes, or sampling parameters:
 
@@ -1002,7 +1002,7 @@ Has no effect while `enabled = false`: there would be nothing to write into the 
 ```toml
 [writeback]
 enabled = true
-create_sidecars = true   # new sidecar on first edit of a sidecar-less asset
+create_sidecars = true   # new sidecar at import or on first edit of a sidecar-less asset
 ```
 
 ---
@@ -1072,7 +1072,7 @@ bpm_command = "/Users/me/.venvs/beats/bin/beat_this"
 A complete `maki.toml` with all options set and annotated:
 
 ```toml
-# Default volume for import when auto-detection is ambiguous.
+# Reserved: parsed and preserved, but no command currently reads it.
 # Find volume UUIDs with: maki volume list --json
 default_volume = "550e8400-e29b-41d4-a716-446655440000"
 
@@ -1188,8 +1188,8 @@ mirror_tags = false
 # Name for sidecars MAKI creates: "stem" = DSC_1234.xmp (Capture One,
 # Lightroom), "full" = DSC_1234.NEF.xmp (darktable).
 sidecar_naming = "stem"
-# With enabled = true: create the sidecar on first edit of an asset
-# that has none yet (otherwise run `maki create-sidecars --apply`).
+# With enabled = true: create the sidecar at import or on first edit of
+# an asset that has none yet (otherwise run `maki create-sidecars --apply`).
 create_sidecars = false
 
 # VLM image description settings (Pro).

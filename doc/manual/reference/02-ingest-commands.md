@@ -22,6 +22,7 @@ Commands for importing files, applying metadata, and merging asset variants. Imp
 | [auto-group](#maki-auto-group) | Auto-group by filename stem |
 | [auto-tag](#maki-auto-tag) | AI-powered tag suggestions *(Pro)* |
 | [embed](#maki-embed) | Generate image embeddings *(Pro)* |
+| [ai export-vocabulary](#maki-ai-export-vocabulary) | Export the AI label vocabulary as YAML *(Pro)* |
 | [audio analyze](#maki-audio-analyze) | Detect musical key and tempo of audio assets |
 | [describe](#maki-describe) | Generate VLM descriptions *(Pro)* |
 
@@ -408,7 +409,7 @@ Asset IDs support unique prefix matching (see [CLI Conventions](00-cli-conventio
 **--remove**
 : Remove the specified tags instead of adding them.
 
-`--json` outputs `{"changed": [...], "tags": [...]}`: the tags actually added or removed, and the full tag list after the operation (`maki tag clear --json` uses the same shape).
+`--json` outputs `{"changed": [...], "promoted": [...], "tags": [...]}`: the tags actually added or removed, the existing machine-added tags that an explicit add promoted to `user` (empty otherwise), and the full tag list after the operation (`maki tag clear --json` outputs `{"changed": [...], "tags": [...]}`, without `promoted`).
 
 ### EXAMPLES
 
@@ -1099,7 +1100,7 @@ Asset IDs support unique prefix matching (see [CLI Conventions](00-cli-conventio
 : Remove all tags from the asset. Useful for cleaning up merged tags after splitting mis-grouped assets.
 
 **--date \<YYYY-MM-DD\>**
-: Set the asset's creation date (accepts ISO date or datetime strings).
+: Set the asset's creation date. Accepts `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or an ISO 8601 datetime; a missing month or day defaults to the first.
 
 **--clear-date**
 : Reset the asset's creation date to the current time. The date is a required field, so it cannot be removed entirely; use `--date` to set a specific value.
@@ -1190,7 +1191,7 @@ Merges multiple variants (identified by their content hashes) into a single asse
 
 The target asset is the oldest by creation date among the variants' current assets. All other ("donor") assets have their variants, tags, and recipes merged into the target.
 
-Donor variants that have the role `original` are re-roled to `alternate` to avoid multiple originals on the same asset. This role change is applied in both the YAML sidecar and the SQLite catalog.
+Donor variants that have the role `original` are re-roled to avoid multiple originals on the same asset: a non-RAW donor variant merged into a target that has a RAW variant becomes `export`, any other becomes `alternate`. This role change is applied in both the YAML sidecar and the SQLite catalog.
 
 After merging, donor assets are deleted (their sidecar YAML files and catalog rows are removed). The target asset's denormalized columns (best variant hash, primary format, variant count) are updated.
 
@@ -1542,7 +1543,7 @@ Export default labels as a blueprint for customization:
 ```bash
 maki auto-tag --list-labels > my-labels.txt
 # Edit the file, then use it:
-maki auto-tag --labels my-labels.txt --apply
+maki auto-tag --labels my-labels.txt "" --apply
 ```
 
 Show model status:
@@ -1654,7 +1655,7 @@ maki embed "" --force
 Generate embeddings for untagged images only:
 
 ```bash
-maki embed "tag:none type:image"
+maki embed "tagcount:0 type:image"
 ```
 
 Check progress with JSON output:
@@ -1837,7 +1838,7 @@ For each asset, the command:
 : VLM server base URL. Default from `[vlm] endpoint` in `maki.toml`, or `http://localhost:11434`.
 
 **--prompt \<TEXT\>**
-: Custom prompt sent to the VLM. Default from `[vlm] prompt` in `maki.toml`, or a built-in photography-focused prompt. In `--mode both`, custom prompts are ignored because each call uses its specialized built-in prompt.
+: Custom prompt sent to the VLM. Default from `[vlm] prompt` in `maki.toml`, or a built-in photography-focused prompt. Applies in `--mode describe` and to the description call of `--mode both`; it has no effect in `--mode tags` (the tags call always uses the built-in tags prompt).
 
 **--max-tokens \<N\>**
 : Maximum tokens in the VLM response. Default from `[vlm] max_tokens` in `maki.toml`, or `500`.
@@ -1883,10 +1884,10 @@ Check that Ollama is running and see available models:
 maki describe --check
 ```
 
-Preview descriptions for undescribed assets (report-only):
+Preview descriptions for images (report-only). Assets that already have a description are skipped unless `--force` is given:
 
 ```bash
-maki describe "description:none type:image"
+maki describe "type:image"
 ```
 
 Generate and apply descriptions to a specific volume:
@@ -1910,13 +1911,13 @@ maki describe "date:2024-06" --model moondream --apply
 Use a remote server or larger model:
 
 ```bash
-maki describe --endpoint http://gpu-server:11434 --model qwen2.5vl:7b --apply
+maki describe "" --endpoint http://gpu-server:11434 --model qwen2.5vl:7b --apply
 ```
 
 Generate tags only:
 
 ```bash
-maki describe --mode tags "tag:untagged" --apply
+maki describe --mode tags "tagcount:0" --apply
 ```
 
 Generate both descriptions and tags in one pass (two VLM calls per asset):
@@ -1946,7 +1947,7 @@ maki describe --model qwen2.5vl:7b --timeout 300 --asset a1b2c3d4
 Use a larger context window and nucleus sampling with a specific model:
 
 ```bash
-maki describe --model qwen3-vl:4b --num-ctx 4096 --top-p 0.9 --apply
+maki describe "rating:4+" --model qwen3-vl:4b --num-ctx 4096 --top-p 0.9 --apply
 ```
 
 Overwrite existing descriptions with a better model:
@@ -1961,10 +1962,10 @@ Dry run with JSON output:
 maki describe "rating:4+" --dry-run --json
 ```
 
-Use a cloud API (OpenAI-compatible endpoint):
+Use a cloud API (OpenAI-compatible endpoint; pass `--endpoint` or set `[vlm] endpoint`). MAKI sends no authentication header, so an endpoint that needs an API key must be reached through a local proxy:
 
 ```bash
-maki describe ""
+maki describe "" --endpoint https://api.example.com --model <model-id>
 ```
 
 ### SEE ALSO

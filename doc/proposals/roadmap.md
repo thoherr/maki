@@ -2,7 +2,7 @@
 
 Living document tracking planned enhancements. Previous proposals (all implemented or deferred) are in `archive/`. Active proposals are in `doc/proposals/`.
 
-Current version: **v4.13.1** (2026-11-16)
+Current version: **v4.14.0** (2026-11-18)
 
 ---
 
@@ -24,8 +24,9 @@ ANN deferred until scale is a felt pain. See
 (2026-06-23): the edit-history journal + write-through choke point (the
 one the codebase has wanted since the v4.5.15 divergence) + `maki undo`
 / `maki history` for field-level edits. Remaining Reversibility work:
-undo for tag rename/split/delete and structural ops, redo, and the web
-undo-toast / history panel. Then the Reach arc — multi-machine (v5.0),
+undo for tag rename/split/delete and structural ops, redo, the web
+undo-toast / history panel, and web/shell source labels in the journal
+(every entry is still labeled `cli`). Then the Reach arc — multi-machine (v5.0),
 which is proposal-doc-gated. ANN deferred until scale is a felt pain.
 
 ### v4.6.x ff. Horizons — Trust Hardening & Foundation Rework
@@ -63,23 +64,6 @@ web `<audio>` player + key/BPM/technical badges. Next: Phase 2
 
 **Complexity:** Phase 1 low (shipped), Phase 2 medium, Phase 3 (core
 derivation edges) medium-high.
-
-### Search by Query Image (reverse image lookup) *(Pro)*
-
-Find catalog assets similar to an image file that is not in the catalog
-— locate the original behind a preview or export without importing the
-throwaway. Exact-hash fast path, then SigLIP embedding search through
-the existing `similar:` pipeline. CLI `maki search --image <path>`; web
-"Find by image" button + drag-and-drop in the always-visible search row,
-query pill with thumbnail, `similar:@<token>` session reference. See
-`doc/proposals/query-image-search.md`.
-
-**Status:** ✅ Shipped in **v4.10.0** (2026-09-03): CLI `--image` /
-`--limit`, web upload + session store + pill, shared ranker, tests, docs.
-Open follow-ons: batch "find my originals" (`--image` over a directory),
-clipboard/drop on the asset page.
-
-**Complexity:** Low–Medium (no schema change).
 
 ### Manual Translation (i18n)
 
@@ -188,6 +172,17 @@ Surface drive health and verification staleness proactively.
 
 ---
 
+### Query Image: Batch "Find My Originals" *(Pro)*
+
+Follow-on to search by query image (shipped v4.10.0, design in
+`archive/query-image-search.md`): `maki search --image` over a directory
+of exports, reporting the catalog original for each; and dropping or
+pasting a query image on the asset detail page.
+
+**Complexity:** Low.
+
+---
+
 ## Tier 3 — Polish & Future
 
 > Undo / Edit History shipped in **v4.9.0** (`maki undo` / `maki
@@ -201,11 +196,11 @@ Surface drive health and verification staleness proactively.
 Live import during a connected camera session. Essentially watch mode + auto-import + immediate preview in the web UI.
 
 **Scope:**
-- Build on watch mode (Tier 1) with lower latency
+- Build on watch mode (shipped v4.8.0) with lower latency
 - Auto-open imported assets in the web UI
 - CaptureOne hot folder integration as primary use case
 
-**Complexity:** Medium (requires watch mode first).
+**Complexity:** Low-Medium (watch mode did the hard part).
 
 ### Print Workflow
 
@@ -217,6 +212,32 @@ Print selected assets with proper page layout. Currently only contact sheets are
 - ICC color profile support for accurate print colors
 
 **Complexity:** High. Color management is complex; layout engine already exists in contact sheet code.
+
+---
+
+## Maintenance & Technical Debt
+
+Not features: work the codebase owes itself. None is scheduled.
+
+- **Architecture audit Phase 3 remainder** — the other `browse.html`
+  script sections into `static/browse/*.js` (one per release), the 15
+  SQL sites left in the library outside `catalog/`, unit tests for
+  refresh, sync-metadata, fix-recipes, describe and the AI operations,
+  and the architecture-overview update. See
+  `doc/qa-report/architecture-audit-2026-10-29.md`.
+- **chrono replacement** — chrono is flagged unmaintained
+  (RUSTSEC-2026-0543, ignored in `deny.toml` since 2026-11-18; no
+  vulnerability). Replace with `jiff` or `time`, keeping the stored
+  timestamp format in sidecars and catalog byte-identical. Complexity:
+  Medium (timestamps throughout models, sidecars, catalog).
+- **quick-xml 0.42** — deferred in v4.12.3: 14 call sites in
+  `xmp_reader.rs` need porting; the XMP property tests are the safety
+  net.
+- **rustyline 19** — deferred in v4.12.3 because it needed Rust 1.95;
+  the toolchain is past that now, so only the update itself is left.
+- **rustfmt gate** — the tree is not rustfmt-clean (about 2,400 hunks)
+  and `cargo fmt --check` is deliberately not in CI; formatting the
+  whole tree is a separate decision.
 
 ---
 
@@ -251,7 +272,7 @@ Design documents for completed features are in `doc/proposals/archive/`. Key mil
 - **v4.4.2**: Filter bar refinements — the browse filter bar's person picker is now a chip-based multi-select on the same row as tag chips (layout: `[tags] [people] [path]`). **Multiple tag chips and multiple person chips now AND** (asset must contain all selected), fixing a bug where chip selection was silently OR'd at the catalog level. Comma-OR (`tag:a,b`, `person:a,b`) still works in the q field for power users. Person chips are tinted teal to distinguish from salmon tag chips; same interaction grammar (type, ↑/↓/Enter, backspace to remove last chip).
 - **v4.4.3**: `face_scan_status` column on assets (schema v6→v7) so `faces detect` no longer re-scans zero-face assets on every run. Persisted to both SQLite and YAML sidecar (maintaining the dual-storage invariant). Dual-storage audit fixed `faces.recognition_model` round-trip through faces.yaml and added `post_migration_sync` hook. New "Visual Discovery" user-guide chapter (12) covering face recognition, similarity search, and stroll as workflows.
 - **v4.4.4**: Tag search marker swap — `tag:=` is now **whole-path match** (exact tag value equality, reads naturally as "equals"), `tag:/` is leaf-only-at-any-level. Breaking change vs v4.4.3 where the assignments were reversed. Tri-state tag chip toggle cycles ▼ → = → /. Disambiguates same-named tags at different hierarchy levels (the "Legoland" problem — root-level `Legoland` vs `location|Denmark|Legoland` vs `location|Germany|Legoland`).
-- **v4.4.5**: Maintenance release. Internal refactoring of the four largest files (`main.rs`, `web/routes.rs`, `catalog.rs`, `asset_service.rs`) — `run_faces_command` lifted out of `run_command` (P1a), `build_search_where` split into named helpers (P1b), `Volume::online_map()` and `resolve_collection_ids()` extracted to deduplicate 20 call sites (P2), new `src/cli_output.rs` module consolidating three drifted copies of `format_size` + the `item_status(id, verb, elapsed)` pattern (P3b), and `web/routes.rs` split from 6,599 LOC into 13 domain submodules (348 LOC in `mod.rs`) (P3c). Tagging guide gains the "Thinking in facets" framework, worked examples for events and color, and the opt-in `event` / `color` top-level facets synced into the built-in default vocabulary. New `doc/qa-report.md` with the codebase analysis that drove the priorities.
+- **v4.4.5**: Maintenance release. Internal refactoring of the four largest files (`main.rs`, `web/routes.rs`, `catalog.rs`, `asset_service.rs`) — `run_faces_command` lifted out of `run_command` (P1a), `build_search_where` split into named helpers (P1b), `Volume::online_map()` and `resolve_collection_ids()` extracted to deduplicate 20 call sites (P2), new `src/cli_output.rs` module consolidating three drifted copies of `format_size` + the `item_status(id, verb, elapsed)` pattern (P3b), and `web/routes.rs` split from 6,599 LOC into 13 domain submodules (348 LOC in `mod.rs`) (P3c). Tagging guide gains the "Thinking in facets" framework, worked examples for events and color, and the opt-in `event` / `color` top-level facets synced into the built-in default vocabulary. New QA report (now `doc/qa-report/archive/qa-report-2026-04-17.md`) with the codebase analysis that drove the priorities.
 - **v4.4.6**: New `maki tag split OLD NEW1 [NEW2...] [--keep]` command for one-to-many tag restructuring (e.g. `subject|event|wedding-jane-2025` → `event|wedding-jane-2025` + `subject|event|wedding` in one pass; or with `--keep`, additive / copy semantics). Matching split UI on the web tags page — a second button on leaf rows only (non-leaf rows get an alignment placeholder), opens a modal with dynamic target-input list, `Keep source` checkbox, Preview/Apply flow identical to rename. New "Tagging Quick Guide" A3 landscape poster at `doc/quickref/tagging.pdf` (printable wall reference with facet cards, decision helper, worked example, and tag-command cheat). Tagging-guide chapter gets a capstone illustration (SVG from maki-marketing rendered to PNG) showing one photo with nine tags from seven facets.
 - **v4.4.7**: Small feature pack. New `tagcount:N` search filter counts *leaf* tags (intentional tags, not auto-expanded ancestors) via a denormalised `leaf_tag_count` column on `assets` (schema v7→v8, O(1) per row on large catalogues) — especially useful for restructuring (`tagcount:0` finds gaps, `tagcount:5+` surfaces noise). Path autocomplete on the filter bar: shell-style hierarchical completion with `↑`/`↓`/`Tab`/`Enter`/`Escape`, wildcard suppression, absolute-path auto-strip, volume scoping; backend aggregates in SQL (`GROUP BY` on a computed next-segment expression) so dense directories don't hide sparse siblings. `maki search --help` now embeds a categorised ~60-line filter reference via `long_help` (`-h` stays compact). Tagging-poster polish. Dep hygiene: `lofty` 0.23 → 0.24 (was yanked); transitive `core2` (unmaintained) dropped via `ravif` 0.13 / `image` 0.25.10 bump — `cargo deny check` clean again.
 - **v4.4.8**: Tag vocabulary interchange with Lightroom / Capture One. `maki tag export-vocabulary --format text` writes a tab-indented keyword file (the format both tools import): full hierarchy preserved, XML entities decoded (`&amp;` → `&`), `,` and `;` replaced with spaces (both tools reject them as delimiters), whitespace collapsed. Sanitized tags are reported to stderr with a rename hint. The same normalization runs at ingest — `QueryEngine::tag` now auto-splits comma/semicolon-containing inputs at the single chokepoint used by CLI, web UI, and `auto-tag`, so AI-produced strings like `"red, gold, white"` can never land as one literal tag. Two maintenance bugs fixed: `maki sync --apply --remove-stale --path <dir>` now actually deletes stale recipe (XMP) records (previously it reported them and did nothing — only the media-file branch had the removal code); `maki cleanup --path/--volume` no longer mixes path-scoped counts with whole-catalog orphan counts (previews / embeddings / face files live in shared catalog directories, so the scan can't be meaningfully scoped — skip those passes when scope is narrowed and print a note pointing at a scope-free run).
@@ -302,3 +323,4 @@ Design documents for completed features are in `doc/proposals/archive/`. Key mil
 - **v4.12.3**: Preview representative + October currency check. **Preview rule**: `variant_score` is format-class first (+1000 for developed image formats), then role, then size -- an alternate web-export JPEG now beats a 50 MB RAW original (before: 100 vs 149, and an original JPEG beat the RAW by one point). **Single accessor**: `AssetDetails.best_variant_hash` loaded from the row, `AssetDetails::best_variant_index()` (stored → override → scoring fallback) replaces every `best_preview_index_details(&details.variants)` call (stroll, similarity, compare/media, templates, contact sheets, export, audio, AI embed source, shell, show); `set_variant_role` refreshes the column; auto-group preview upgrade honours `preview_variant`. Repair: `maki doctor --repair` (compare_asset already checked the column); on the reference catalog 261 assets change, the 792 alternate-JPEG cases from the report already agree as stored. **Currency**: `cargo update` (webpki-root-certs advisory, yanked clipboard-win, tokio AsyncFd), rusqlite 0.41 (SQLite 3.54), ort rc.15 (ONNX Runtime 1.31, explicit `Environment`; AI/Pro builds need Rust 1.92), deny ignore for basic-toml (askama_derive); deferred rustyline 19 (Rust 1.95) and quick-xml 0.42 (14 sites in xmp_reader.rs). VLM guide: gpt-6.1-sol/terra/luna, qwen3.6 vision on all tags, qwen3.5:0.8b, untested Nemotron 3.5 Bolt E4B + LFM3-VL; model downloads verified. Tests: 994 + 297 + 7 + 14 standard, 1146 + 344 + 7 + 14 pro.
 - **v4.13.0**: Architecture release — Phases 0–2 of the 2026-10-29 design audit (`doc/qa-report/architecture-audit-2026-10-29.md`, 28 findings), schema v13. **Phase 0 (quick wins)**: `CliContext`, injected `Arc<CatalogConfig>`, `DeviceRegistry::online_map`, `jobs::launch_job`, `maki-core.js` (one escape helper, one colour-label map), `path_util` / `platform`, clippy `-D warnings` as a CI gate. **Phase 1 (correctness)**: `Catalog::with_tx` around every multi-row writer, `run_migrations() -> Result` with one transaction per version, faces/people/embeddings/stack/collection DDL in the versioned schema (v13, feature-independent), `resync_asset_from_sidecar` / `delete_asset_rows` as the single resync and removal, atomic store-owned YAML (`FaceStore` / `StackStore` / `CollectionStore::open`), `MakiError` with CLI exit codes 3 (not found) / 4 (offline) and typed HTTP statuses, `doctor` exit status. **Phase 2 (structure)**: pure `models` (no upward imports), `QueryEngine` split into per-concern files (`query.rs` 6,362 → 465 lines) holding one connection fed by the web pool, one `mutate_asset` behind every field setter (idempotent sets are no-ops, name/date/description join batch undo), service functions phase-split behind request structs and typed events (no function over 300 lines), web describe / generate-previews / browse-derived endpoints and the CLI dispatcher as adapters over the service, `maki.toml` read once per invocation, `features` module; standard builds reject `similar:` / `text:` instead of dropping them. **Follow-up**: `src/tx.rs` — store YAML exports happen once at the outermost commit, so a nested store mutation can no longer leave YAML ahead of SQLite. Tests 1,383 standard / 1,570 pro. Phase 3 (browse.html JS modules, test architecture, `Catalog::conn()` visibility) remains open.
 - **v4.13.1**: Tag provenance follow-up. An explicit human add (`maki tag`, detail-page tag field, batch tagging) of a tag the asset already carries from `xmp-import` / `auto-tag` / `vlm` promotes it and its ancestors to `user` (`Asset::promote_tags_to_user`, `TagResult.promoted`): one-way, one undoable operation, no XMP write-back; machine pipelines never change an existing source, and first-source-wins stays the rule everywhere else (an import-profile tag that is also in the XMP stays `user`). Tag-chip tooltips now state the source ("Added by XMP import …" / "Your tag") -- the badge records who added a tag, not whether the XMP file contains it. No schema change. Tests 1,386 standard / 1,573 pro.
+- **v4.14.0**: Facet sidebar + architecture audit Phase 3 (first part). **Facet sidebar**: rows toggle (a second click removes the filter) and rows selected by the current filter are marked; the tag tree collapses and expands (chevrons, top level only at start, expanded branches remembered per browser, Right/Left keys); the list no longer jumps to the top on refresh. **Fixes**: `style.css` linked by content fingerprint (stale styles after an upgrade); `maki undo` order for operations journaled in the same millisecond; a browse-page script error after every results swap (grid thumbnails and the "selected on other pages" hint not refreshed). **Internal (Phase 3)**: `tests/cli.rs` → `tests/cli/` (20 modules, one binary); shared `src/test_support.rs`; catalog and service tests moved to their section files, 18 new service-operation unit tests + migration-from-old, path-separator and pool-concurrency tests; `Catalog::conn()` is `pub(crate)`; crate `publish = false`; `browse.html` 3,380 → 1,495 lines with `static/browse/{batch,keyboard,facets}.js` served under content fingerprints. No schema change. Tests 1,410 standard / 1,597 pro. Phase 3 remainder: other `browse.html` sections, library SQL outside `catalog/`.

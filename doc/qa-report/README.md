@@ -9,7 +9,7 @@ report is closed it moves to `archive/` and is not updated further.
 |---|---|---|
 | `archive/qa-report-2026-04-17.md` | commit `855ad50` (post P1a) | Closed — superseded by the 2026-05-03 report |
 | `archive/qa-report-2026-05-03.md` | v4.4.14 | Closed 2026-10-19 (see below) |
-| `architecture-audit-2026-10-29.md` | v4.12.3 | **Open** — design audit (SRP, DRY, separation of concerns, layering, invariants, error model, tests) with a four-phase improvement plan; Phases 0–2 done (through 2026-11-16), Phase 3 open |
+| `architecture-audit-2026-10-29.md` | v4.12.3 | **Open** — design audit (SRP, DRY, separation of concerns, layering, invariants, error model, tests) with a four-phase improvement plan; Phases 0–2 done (released in v4.13.0); Phase 3 in progress since 2026-11-16 (test architecture, `conn()` visibility, public-API decision and three `browse.html` modules done, released in v4.14.0; remaining `browse.html` sections and library SQL open) |
 
 ## Closing status of the 2026-05-03 report (as of 2026-10-19, v4.12.1)
 
@@ -36,3 +36,7 @@ measured on 2026-10-19:
 No further batches are planned for this report. Both carryovers remain
 opportunistic — migrate a site or lift an arm when the surrounding
 code is touched anyway — unless a new QA pass is requested.
+
+Update 2026-11-16: both carryovers were closed by the architecture audit
+(v4.13.0). Raw `spawn_blocking` is down to 3 commented sites, and the
+inline `run_command` arms moved behind `CliContext` adapters.

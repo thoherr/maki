@@ -50,11 +50,11 @@ cargo test
 cargo test --features pro
 ```
 
-Both feature matrices must pass before a release. The suite consists of four targets; the counts below are the single place in the manual where they are recorded (as of v4.12.2):
+Both feature matrices must pass before a release. The suite consists of four targets; the counts below are the single place in the manual where they are recorded (as of v4.14.0):
 
 | Target | Command | Standard build | `--features pro` |
 |--------|---------|----------------|------------------|
-| Unit tests (`src/**`, incl. the web harness) | `cargo test --lib` | 1091 | 1231 |
+| Unit tests (`src/**`, incl. the web harness) | `cargo test --lib` | 1092 | 1232 |
 | CLI integration tests (`tests/cli/`) | `cargo test --test cli` | 297 | 344 |
 | XMP property tests (`tests/xmp_proptest.rs`) | `cargo test --test xmp_proptest` | 7 | 7 |
 | Doc tests | `cargo test --doc` | 14 | 14 |
@@ -105,15 +105,21 @@ Runs only tests whose names match the given pattern.
 
 ### Continuous Integration
 
-`.github/workflows/ci.yml` runs on every push and pull request with a matrix of three platforms (macOS, Linux, Windows) times three feature sets (default, `--features ai`, `--features pro`). Every matrix cell builds and runs the lib and CLI targets (`cargo test --lib`, `cargo test --test cli`); the default-features cell additionally runs `cargo test --test xmp_proptest` and `cargo test --doc`. The Linux job also runs `cargo deny` (advisories, licenses, bans, sources) against `deny.toml`.
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request against it. The build-and-test matrix has three jobs, one per platform (macOS, Linux, Windows); each job covers the three feature sets in sequence: default, `--features ai`, then `--features pro`. Every feature set is built and runs the lib and CLI targets (`cargo test --lib`, `cargo test --test cli`); the default-features pass additionally runs `cargo test --test xmp_proptest` and `cargo test --doc`. Clippy is a gate: `cargo clippy --all-targets -- -D warnings` runs for the default features and again with `--features pro`. The macOS job also builds `cargo build --release --features ai-gpu` (the CoreML execution provider exists only there). `cargo deny check` (advisories, licenses, bans, sources, against `deny.toml`) is a separate job on Linux.
 
 ### Test Helpers
 
-The integration test suite provides helper functions for setting up test catalogs:
+Shared fixtures exist at each test level; use them instead of hand-written `Variant { … }` literals or ad-hoc catalog setup:
 
-- **`setup_search_catalog()`** -- Creates a catalog with pre-populated assets for search testing. Requires `asset.variants` to be populated before calling `catalog.insert_asset()` (because denormalized columns `best_variant_hash`, `primary_variant_format`, and `variant_count` are computed at insert time).
+- **Unit tests, crate-wide** (`src/test_support.rs`, test-only; `use crate::test_support::*;`) -- `TempCatalog::new()` creates a temporary catalog on disk, and `cat.seed(test_asset(hash).file(..).tags(..))` writes an asset built with the `test_asset()` builder to both the sidecar and the catalog. `memory_catalog()` gives an in-memory catalog, `insert_rows()` inserts an asset's rows into it, and `test_variant()` builds a single variant. `src/query/test_support.rs` re-exports these and adds the query fixtures.
 
-- **`setup_metadata_catalog()`** -- Creates a catalog with assets that have metadata (tags, ratings, descriptions, recipes) for metadata operation testing. Same requirement: variants must be populated before insert.
+- **Catalog tests** (`src/catalog/test_support.rs`) -- Catalog tests sit in the `#[cfg(test)] mod tests` of the section file whose functions they exercise (`src/catalog/<section>.rs`). Fixtures used by more than one section live here: `setup_search_catalog()` (pre-populated assets for search testing), `setup_metadata_catalog()` (assets with metadata and recipes) and `catalog_with_tags()`.
+
+- **Service-operation tests** (`src/asset_service/test_support.rs`) -- `ServiceEnv` bundles a temporary catalog, an online volume and an `AssetService`; `env.add(rel, content)` writes a file on the volume and imports it.
+
+- **CLI integration tests** (`tests/cli/common.rs`) -- `maki()`, `init_catalog()`, `create_test_file()`, `init_two_volumes()`, `import_and_get_ids()`, `show_json()` and the other helpers shared by the modules under `tests/cli/`.
+
+When building an asset by hand, `asset.variants` must be populated before calling `catalog.insert_asset()`, because the denormalized columns (`best_variant_hash`, `primary_variant_format`, `variant_count`) are computed at insert time.
 
 ## Documentation
 

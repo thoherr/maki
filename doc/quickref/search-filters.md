@@ -91,7 +91,7 @@ Numeric, date, and boolean filters ignore the dash. `-label:none` = has a color 
 
 ## Path Normalization
 
-`path:` auto-normalizes in the CLI: `~` expands to home, `./` and `../` resolve relative to cwd, absolute paths matching a volume mount are stripped to volume-relative form with `volume:` implicitly applied.
+`path:` auto-normalizes in the CLI: `~` expands to home, `./` and `../` resolve relative to cwd, absolute paths matching a volume mount are stripped to volume-relative form with `volume:` implicitly applied. The web UI path input normalizes absolute paths the same way (no `~`, `./`, `../` expansion).
 
 ## Output Formats
 

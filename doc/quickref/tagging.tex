@@ -196,7 +196,7 @@
     \cmd{color|pastel} \quad \cmd{color|muted}\\[2pt]
     {\color{maki-stone} Keep flat.\\
     Content colour is different from MAKI's editorial
-    color-label field (5 fixed values).}
+    color-label field (7 fixed values).}
   \end{facetcard}\end{minipage}\hfill
   \begin{minipage}[t]{0.244\textwidth}\begin{facetcard}{maki-stone}{When to promote to top-level}
     \textit{\small Ask: what distinct question does this answer?}\\[3pt]
@@ -240,8 +240,8 @@
 
     {\color{maki-stone}\itshape
     9 leaf tags across 7 facets. With ancestor expansion,
-    \textasciitilde 15 tags stored. Search ``\cmd{event:wedding-jane-2025
-    person:Alice color:warm}'' intersects three orthogonal axes.}
+    \textasciitilde 15 tags stored. Search ``\cmd{tag:event|wedding-jane-2025
+    tag:"person|friend|Alice M." tag:color|warm}'' intersects three orthogonal axes.}
   \end{tcolorbox}
 
   \vspace{6pt}
@@ -278,6 +278,8 @@
     \cmd{maki tag \textit{ID} foo bar}            & Add tags (ancestors auto-expanded). \\
     \cmd{maki tag \textit{ID} --remove foo}       & Remove tags (orphaned ancestors cleaned). \\
     \cmd{maki tag clear \textit{ID}}              & Remove all tags from an asset. \\
+    \cmd{~~...\ --source auto-tag}                & Only tags of one source (\cmd{user}, \cmd{xmp-import}, \cmd{auto-tag}, \cmd{vlm}). \\
+    \cmd{maki tag scan}                           & Report malformed tag values (read-only). \\
     \cmd{maki tag rename \textit{OLD} \textit{NEW} --apply} & Rename a tag everywhere. Cascades to descendants. \\
     \cmd{maki tag delete \textit{TAG} --apply}    & Delete a tag (and descendants) from every asset. \\
     \cmd{maki tag split \textit{OLD} \textit{A B...} --apply} & Replace one tag with multiple (variadic). \\
@@ -302,7 +304,7 @@
     \cmd{-tag:rejected}                           & Exclude. \\
     \cmd{tag:a,b}                                 & Either \cmd{a} or \cmd{b}. \\
     \cmd{tag:a tag:b}                             & Both \cmd{a} and \cmd{b}. \\
-    \cmd{event:jane person:Alice color:warm}      & Intersect three facets. \\
+    \cmd{tag:subject|event tag:person|friend tag:color|warm} & Intersect three facets. \\
   \end{tabularx}\\[2pt]
   {\scriptsize\color{maki-stone}\itshape Same filters work in CLI \cmd{maki search} and in the web UI search box.}
 \end{minipage}

@@ -23,7 +23,7 @@ flowchart LR
 
 After `sync`, there are two paths: `sync-metadata` handles both directions (reading recipe changes and writing back edits) in a single command with conflict detection. Alternatively, `refresh` and `writeback` can be run separately for finer control. After `cleanup`, the storage hygiene commands check for unwanted duplicates and verify backup coverage.
 
-Each command is safe by default -- destructive operations require an explicit `--apply` flag, and most commands support `--dry-run` or report-only mode.
+The commands that remove catalog records or files in bulk (`sync`, `cleanup`, `dedup`, `fix-roles`, `fix-dates`, `fix-recipes`, `volume remove`) are report-only until you pass `--apply`. Others act as soon as you run them -- `refresh`, `writeback`, `sync-metadata`, `relocate`, `undo`, and `trash empty` -- and offer `--dry-run` to preview what they would do.
 
 
 ## Edit History and Undo
@@ -56,7 +56,13 @@ This walks all file locations on all online volumes. Offline volumes are skipped
 Sample output:
 
 ```
-Verify complete: 1847 verified, 2 modified, 0 FAILED, 3 skipped
+Verify complete: 1847 verified, 2 modified, 3 skipped
+```
+
+Counts that are zero are left out of the summary; a run with hash mismatches adds e.g. `1 FAILED`:
+
+```
+Verify complete: 1846 verified, 2 modified, 1 FAILED, 3 skipped
 ```
 
 ### Verify specific files or directories
@@ -65,7 +71,7 @@ Verify complete: 1847 verified, 2 modified, 0 FAILED, 3 skipped
 maki verify /Volumes/PhotosDrive/Capture/2026-02-01
 ```
 
-Only files under the given path are checked.
+Only files under the given path are looked at. Note that path mode answers a different question than the catalog-driven modes -- see [Two verification modes](#two-verification-modes) below.
 
 ### Limit to a volume
 
@@ -86,29 +92,31 @@ Asset IDs can be abbreviated to a unique prefix.
 ### Filter by file type
 
 ```bash
-# Only verify RAW files
-maki verify --include raw
+# Also verify CaptureOne settings files (a group that is off by default)
+maki verify --include captureone
 
 # Skip audio files
 maki verify --skip audio
 ```
 
+`--include` adds a file type group to the default set (`images`, `video`, `audio`, `xmp`); it does not restrict the run to that group. The optional groups are `documents`, `captureone`, `rawtherapee`, `dxo`, and `on1`. RAW files belong to `images`, so there is no separate `raw` group. `--skip` removes a default group.
+
 ### Two verification modes
 
-**Catalog mode** (no paths): `maki verify` walks all file locations known to the catalog on online volumes. This checks whether your cataloged files are intact.
+**Catalog mode** (no paths; optionally `--volume` or `--asset`): `maki verify` walks the file locations known to the catalog on online volumes, re-hashes each file, and compares the result to the hash recorded for that location. This is the integrity check: a changed media file is reported as **FAILED**, a vanished one as **MISSING**.
 
-**Path mode** (with paths): `maki verify /some/path` scans files on disk and looks them up in the catalog. This also detects files that are not in the catalog at all.
+**Path mode** (with paths): `maki verify /some/path` hashes the files found on disk and looks each *hash* up in the catalog. A file whose content matches a known variant or recipe is verified; a recipe whose content changed is reported as modified. A media file whose content changed, however, no longer matches any known hash and is therefore reported as **UNTRACKED** -- exactly like a file that was never imported -- and counted under "skipped"; path mode never reports FAILED and exits 0. Files deleted from the directory are not noticed either. Use path mode to find files that are not in the catalog; to check a directory or drive for corruption, use catalog mode (`--volume`, `--asset`) or `maki sync <path>`, which reports changed files as modified and deleted ones as missing.
 
 ### What the results mean
 
 - **verified** -- file hash matches the catalog. The `verified_at` timestamp is updated.
 - **modified** -- a recipe file (`.xmp`, `.cos`, etc.) was changed externally. maki updates the stored hash and reports it as "modified" rather than "FAILED". This is expected when CaptureOne or Lightroom edits a sidecar.
-- **FAILED** -- a media file's hash does not match. This indicates corruption, accidental overwrite, or a file that was replaced. Investigate immediately.
+- **FAILED** -- a media file's hash does not match (catalog mode only). This indicates corruption, accidental overwrite, or a file that was replaced. Investigate immediately.
 - **MISSING** -- a file referenced in the catalog no longer exists on disk (catalog mode only). The file's location record exists but the file is gone from an online volume.
-- **UNTRACKED** -- a file was found on disk but is not in the catalog (path mode only). The file's content hash does not match any known variant or recipe. Run `maki import` to bring it into the catalog, or ignore it if it is not a media file.
-- **skipped** -- the file is on an offline volume, or the path could not be read.
+- **UNTRACKED** -- a file was found on disk but its content hash does not match any known variant or recipe (path mode only). Either the file was never imported, or it is a cataloged media file whose content has changed. Untracked files are listed on stderr and counted as "skipped". Run `maki import` to bring a new file into the catalog, or `maki sync` on the directory to find out whether a known file was modified.
+- **skipped** -- the file could not be read, is missing or untracked, or does not belong to any registered volume.
 
-If any files fail verification (FAILED status), MAKI exits with code 1. Scripts can check `$?` to detect problems:
+If any files fail verification (FAILED status, catalog mode), MAKI exits with code 1. Missing, untracked, and skipped files do not change the exit status. Scripts can check `$?` to detect problems:
 
 ```bash
 maki verify --volume "Archive" || echo "Integrity check failed!"
@@ -179,7 +187,15 @@ maki doctor --log            # every finding, per asset
 maki doctor --repair         # rebuild the SQLite side of every flagged asset from YAML
 ```
 
-It flags sidecars without a catalog row and phantom rows without a sidecar, then compares metadata fields, denormalized columns, variant / location / recipe sets (including the pending-writeback flag), and face counts. `--repair` rewrites the catalog from the sidecar for flagged assets and deletes phantom rows; it never edits sidecars. Run it after an interrupted operation, before a big reorganisation, or whenever pending-writeback markers look wrong.
+It flags sidecars without a catalog row and phantom rows without a sidecar, then compares metadata fields, denormalized columns, variant / location / recipe sets (including the pending-writeback flag), and face counts. `--repair` rewrites the catalog from the sidecar for flagged assets and deletes phantom rows; it never edits sidecars. Run it after an interrupted operation, after upgrading MAKI, before a big reorganisation, or whenever pending-writeback markers look wrong.
+
+Since v4.13.0 the report drives the exit status: `maki doctor` exits with code 1 when it finds problems it leaves unresolved (also with `--json`), and 0 when the catalog is consistent. `maki doctor --repair` exits 0 when it repaired everything it found. This makes it usable as a check in scripts:
+
+```bash
+maki doctor --sample 500 || echo "Catalog and sidecars disagree -- run maki doctor --repair"
+```
+
+All commands share the same exit codes: 0 success, 1 general failure (including a failed `verify` or `doctor` check), 2 usage error, 3 a referenced asset, volume, stack, collection, or person was not found, 4 the operation needs a volume that is offline. See [CLI Conventions](../reference/00-cli-conventions.md).
 
 ## Sync
 
@@ -196,7 +212,9 @@ maki sync /Volumes/PhotosDrive/Photos/
 Without `--apply`, sync scans the directory and reports what it finds, but changes nothing:
 
 ```
-Sync complete: 1200 unchanged, 3 moved, 2 new, 1 modified, 4 missing
+Dry run — Sync complete: 1200 unchanged, 3 moved, 2 new, 1 modified, 4 missing
+  Run with --apply to apply changes.
+  Run with --apply --remove-stale to remove missing file records.
   Tip: run 'maki import' to import new files.
 ```
 
@@ -312,10 +330,10 @@ maki refresh --dry-run --log
 Sample output:
 
 ```
-  DSC_001.xmp — changed (12ms)
+  DSC_001.xmp — refreshed (12ms)
   DSC_002.xmp — unchanged (3ms)
-  DSC_003.xmp — changed (11ms)
-Dry run — Refresh complete: 2 refreshed, 1 unchanged, 0 missing, 0 skipped (offline)
+  DSC_003.xmp — refreshed (11ms)
+Dry run — Refresh complete: 2 refreshed, 1 unchanged
 ```
 
 ### Monitoring flags
@@ -399,8 +417,9 @@ When recipes are skipped because their volume is offline, the summary names the 
 
 ```
 Writeback: 0 written, 1 skipped (offline volumes: Archive 2025)
-  → Reconnect "Archive 2025" and re-run `maki writeback`.
 ```
+
+Reconnect the named volume and re-run `maki writeback`.
 
 With `--json`, the same information is available as a `skipped_offline_volumes` array on the result object.
 
@@ -437,7 +456,7 @@ This works because MAKI's writeback is idempotent at the field level (the underl
 
 `maki sync-metadata` performs bidirectional XMP metadata sync in a single command — combining the inbound (refresh) and outbound (writeback) steps with conflict detection.
 
-> **Note:** The outbound (writeback) phase honours `[writeback] enabled`. With auto-flush off (the default), `sync-metadata` performs inbound sync only — the catalog absorbs external XMP changes, but MAKI edits stay queued as `pending_writeback` until you run `maki writeback` (which always works regardless of the flag). With `enabled = true`, both directions run inline. See the [Configuration Reference](../reference/08-configuration.md#writeback-section).
+> **Note:** Like `maki writeback`, the outbound phase is an explicit flush and runs regardless of `[writeback] enabled`. That setting governs only the *automatic* writeback on every edit; with it off (the default), edits queue up as `pending_writeback` and `sync-metadata` writes them to the `.xmp` files when you run it. Use `--dry-run` first if you want to see what would be written. See the [Configuration Reference](../reference/08-configuration.md#writeback-section).
 
 ### Basic usage
 
@@ -505,8 +524,8 @@ Importing never creates `.xmp` files. Tags and ratings you assign right after a 
 So, before the first Capture One or Lightroom session on a freshly imported shoot:
 
 ```bash
-maki create-sidecars "volume:Work SSD"          # report only
-maki create-sidecars "volume:Work SSD" --apply  # write DSC_1234.xmp files
+maki create-sidecars --volume "Work SSD"          # report only
+maki create-sidecars --volume "Work SSD" --apply  # write DSC_1234.xmp files
 ```
 
 Each sidecar carries the asset's rating, label, description, and tags and is registered as a recipe, so from then on both directions work: `maki refresh` reads the tool's edits, `maki writeback` (or `[writeback] enabled = true`) pushes yours. To skip the manual step entirely, set `[writeback] enabled = true` together with `create_sidecars = true`: an import that assigns tags (`--add-tag`, the web import dialog's tag field, `[import] auto_tags`) creates the sidecars in the same run, and the first edit of any other sidecar-less asset creates the file on the spot.
@@ -708,16 +727,16 @@ The single-asset examples above are useful for individual files, but the real po
 
 ```bash
 # Preview: migrate all 2025 images from the work SSD to archive
-maki relocate --query "date:2025 volume:Work SSD" --target "Archive 2025" --dry-run
+maki relocate --query 'date:2025 volume:"Work SSD"' --target "Archive 2025" --dry-run
 
 # Execute the copy
-maki relocate --query "date:2025 volume:Work SSD" --target "Archive 2025" --log
+maki relocate --query 'date:2025 volume:"Work SSD"' --target "Archive 2025" --log
 
 # After verifying the archive, free the working drive
-maki relocate --query "date:2025 volume:Work SSD" --target "Archive 2025" --remove-source --log
+maki relocate --query 'date:2025 volume:"Work SSD"' --target "Archive 2025" --remove-source --log
 ```
 
-The `--query` flag accepts the same search syntax as `maki search`, so you can combine any filters:
+The `--query` flag accepts the same search syntax as `maki search`, so you can combine any filters. A value that contains a space needs its own quotes inside the query (`volume:"Work SSD"`), otherwise the query splits at the space:
 
 ```bash
 # Move a specific shoot to archive
@@ -727,7 +746,7 @@ maki relocate --query "tag:johnson-wedding" --target "Archive 2026" --log
 maki backup-status --at-risk -q | maki relocate --target "Backup A" --log
 
 # Move all videos to a dedicated video drive
-maki relocate --query "type:video volume:Work SSD" --target "Video Archive" --remove-source --log
+maki relocate --query 'type:video volume:"Work SSD"' --target "Video Archive" --remove-source --log
 ```
 
 **Tip:** Always run without `--remove-source` first (copy), verify the result, then run again with `--remove-source` (move) in a second pass. This gives you a safety window before deleting source files.
@@ -742,7 +761,7 @@ maki relocate --query "rating:3+" --target "Work SSD" --create-sidecars --log
 
 This creates an XMP sidecar alongside each variant that doesn't already have one on the target volume. The external tool picks up your ratings and tags immediately on import. The file is named `DSC_1234.xmp` by default (`[writeback] sidecar_naming = "full"` switches to darktable's `DSC_1234.NEF.xmp`); a sidecar that already exists on disk but was never imported is left alone.
 
-For files that stay where they are, `maki create-sidecars --apply` does the same thing in place (see below).
+For files that stay where they are, `maki create-sidecars --apply` does the same thing in place (see [above](#prerequisite-on-the-maki-side-sidecars-must-exist-before-the-first-session)).
 
 
 ## Updating File Locations
@@ -790,7 +809,9 @@ maki rebuild-catalog
 Sample output:
 
 ```
-Rebuild complete: 1847 assets, 2914 variants, 312 recipes, 3 collections, 45 stacks
+Rebuild complete: 1847 asset(s) synced
+  3 collection(s) restored
+  45 stack(s) restored
 ```
 
 ### When to use it
@@ -816,7 +837,7 @@ Rebuild complete: 1847 assets, 2914 variants, 312 recipes, 3 collections, 45 sta
 - Collection membership records (from `collections.yaml`).
 - Stack membership records (from `stacks.yaml`).
 
-This is a safe operation -- only the derived cache (SQLite) is rebuilt. No files on disk are modified or deleted.
+This is a safe operation -- only the derived cache (SQLite) is rebuilt. No files on disk are modified or deleted. It is not a quick one, though: a full rebuild reads every sidecar and takes hours on a catalog with hundreds of thousands of assets. To resynchronise individual assets, use `maki rebuild-catalog --asset <id>` or `maki doctor --repair` instead (see [Consistency Check](#consistency-check-doctor)).
 
 
 ## Fix Dates
@@ -843,7 +864,7 @@ Shows what would be changed:
 
 ```
 Warning: volume 'Archive' is offline — cannot read files for date extraction
-Fix-dates: 5000 checked, 3200 fixed, 800 already correct, 1000 skipped (volume offline)
+Dry run — Fix-dates: 5000 checked, 3200 fixed, 800 already correct, 1000 skipped (volume offline)
   Run with --apply to make changes.
   Mount offline volumes and re-run to fix remaining assets.
 ```
@@ -954,8 +975,12 @@ Smart previews are high-resolution versions (2560px) that enable zoom and pan in
 maki generate-previews --volume "Work SSD" --smart --log
 
 # Generate smart previews for your best images
-maki search -q "rating:4+" | maki generate-previews --smart --log
+maki search -q "rating:4+" | while read -r id; do
+  maki generate-previews --asset "$id" --smart
+done
 ```
+
+`generate-previews` does not read asset IDs from standard input and takes no search query -- its scopes are `--volume`, `--asset`, and paths -- hence the loop. Without a scope it processes the whole catalog.
 
 Smart previews are also generated during import with `maki import --smart` or when `[import] smart_previews = true` is set in `maki.toml`.
 
@@ -1228,13 +1253,22 @@ See [Aligning Flat Tags to the AI Vocabulary](#aligning-flat-tags-to-the-ai-voca
 
 ### 6. Nuclear option: rebuild
 
-If the catalog seems fundamentally out of sync -- searches return wrong results, show displays stale data -- rebuild from the sidecar files:
+If searches return wrong results or `maki show` displays stale data, start with the targeted repair. `maki doctor` compares every sidecar with the catalog, and `--repair` rebuilds only the assets it flags:
+
+```bash
+maki doctor --repair
+
+# Or resynchronise one asset you know is wrong
+maki rebuild-catalog --asset a1b2c3d4
+```
+
+Only if the database itself is damaged or missing, rebuild all of it from the sidecar files:
 
 ```bash
 maki rebuild-catalog
 ```
 
-This is safe and fast. The sidecar YAML files are the source of truth; the SQLite database is just a derived cache.
+This is safe -- the sidecar YAML files are the source of truth and the SQLite database is just a derived cache -- but not fast: a full rebuild takes hours on a large catalog (roughly two hours for 270,000 assets).
 
 ### Putting it all together
 
@@ -1273,26 +1307,32 @@ maki stats --volumes
 
 ## Backing Up Your Catalog with Git
 
-MAKI's source of truth is the YAML sidecar files in the `metadata/` directory. The SQLite database, previews, and embeddings are all derived and can be regenerated. This makes the catalog an ideal candidate for git version control — you get full history, easy rollback, and protection against accidental bulk operations.
+MAKI's source of truth is the YAML sidecar files in the `metadata/` directory, plus a handful of YAML/TOML files at the catalog root. The SQLite database, previews, and embeddings are all derived and can be regenerated. This makes the catalog an ideal candidate for git version control — you get full history, easy rollback, and protection against accidental bulk operations.
 
 ### Setup
 
-`maki init` creates a `.gitignore` that excludes derived files. To start tracking your catalog:
+`maki init` creates a `.gitignore` that excludes derived files. It does not exclude the trash or the edit-history journal, so add those yourself before the first commit -- otherwise `git add -A` commits every trashed media file into the repository:
 
 ```bash
 cd /path/to/your/catalog   # the directory containing maki.toml
+printf '%s\n' '.trash/' 'history/' >> .gitignore
 git init
 git add -A
 git commit -m "Initial catalog snapshot"
 ```
 
-The `.gitignore` excludes:
+The generated `.gitignore` excludes:
 
-- `catalog.db` (rebuilt via `maki rebuild-catalog`)
+- `catalog.db*` (rebuilt via `maki rebuild-catalog`)
 - `previews/` and `smart-previews/` (regenerated via `maki generate-previews`)
 - `embeddings/` and `faces/` (regenerated via `maki embed`, `maki faces detect`)
 
-What gets tracked: `metadata/**/*.yaml` (all asset metadata), `volumes.yaml`, `collections.yaml`, `stacks.yaml`, `searches.toml`, and `maki.toml`.
+The two lines added above exclude:
+
+- `.trash/` -- deleted media files awaiting `maki trash empty`; these are full-size originals and do not belong in git
+- `history/` -- the undo journal (optional: it is small JSON, but it changes with every edit and git already gives you history)
+
+What gets tracked: `metadata/**/*.yaml` (all asset metadata), `volumes.yaml`, `collections.yaml`, `stacks.yaml`, `searches.toml`, `vocabulary.yaml`, `maki.toml`, and -- once face recognition has been used *(Pro)* -- `faces.yaml` and `people.yaml`.
 
 ### Snapshotting before bulk operations
 
@@ -1324,10 +1364,10 @@ maki rebuild-catalog
 
 # Or restore just specific assets
 git checkout HEAD~1 -- metadata/a1/a1b2c3d4-*.yaml
-maki rebuild-catalog
+maki rebuild-catalog --asset a1b2c3d4
 ```
 
-The `maki rebuild-catalog` step regenerates the SQLite database from the restored YAML files.
+The `maki rebuild-catalog` step regenerates the SQLite database from the restored YAML files. A full rebuild takes hours on a large catalog; after restoring a few sidecars, `maki rebuild-catalog --asset <id>` or `maki doctor --repair` brings just those assets back in line.
 
 ### What this protects against
 
@@ -1381,23 +1421,23 @@ If you have partial data recovery from the failed drive, import the recovered fi
 maki import /path/to/recovered-files/ --log
 ```
 
-### 4. Clean up stale records
+### 4. Remove the dead volume
 
-Once you've recovered everything possible, remove the references to the dead drive:
+Once you've recovered everything possible, remove the failed drive from the catalog. `maki cleanup` cannot do this: it skips offline volumes, because it cannot tell a dead drive from a disconnected one. Removing the volume is the explicit statement that it is gone for good:
 
 ```bash
-# Preview what would be cleaned up
-maki cleanup --volume "FailedDrive"
+# Report what would be removed
+maki volume remove "FailedDrive"
 
-# Apply cleanup
-maki cleanup --volume "FailedDrive" --apply --log
+# Remove the volume
+maki volume remove "FailedDrive" --apply
 ```
 
-This removes file location records pointing to the failed volume. Assets that still have locations on other volumes are preserved. Assets with no remaining locations become orphaned and are removed in the cleanup pass.
+This removes the volume itself and every file location and recipe record on it, from the catalog and the sidecar files. Assets that still have locations on other volumes are preserved. Assets with no remaining locations anywhere are deleted from the catalog together with their previews -- the report run lists how many (`orphaned assets`), so check that number against step 2 before you apply.
 
 ### 5. Rebuild backup coverage
 
-After cleanup, check what gaps remain and fill them:
+After removing the volume, check what gaps remain and fill them:
 
 ```bash
 # Which assets now have only one copy?
@@ -1409,7 +1449,19 @@ maki backup-status --at-risk -q | maki relocate --target "New Backup" --log
 
 ### 6. If the catalog itself is lost
 
-If the drive that held your MAKI catalog (the `.maki/` directory) fails, but your media volumes are intact, you can rebuild from scratch. The YAML sidecar files next to your media files are the source of truth — the SQLite database is just a derived cache:
+The catalog directory (the one containing `maki.toml`) holds everything MAKI knows: the YAML sidecars in `metadata/` -- they live in the catalog, not next to your media files -- plus `volumes.yaml`, `collections.yaml`, `stacks.yaml`, `searches.toml`, `faces.yaml`, `people.yaml`, `vocabulary.yaml`, and the derived `catalog.db`, previews, and embeddings. What you can recover depends on what was lost.
+
+**Only `catalog.db` is lost or damaged.** The sidecars and the other catalog files are intact, so the database can be rebuilt from them. Run this in the catalog directory:
+
+```bash
+maki rebuild-catalog
+```
+
+This restores all assets, variants, recipes, file locations, tags, ratings, and descriptions from the sidecars, volumes from `volumes.yaml`, collections and stacks from their YAML files, and faces, people, and embeddings *(Pro)* from `faces.yaml`, `people.yaml`, and the binaries under `embeddings/`. Saved searches are read directly from `searches.toml` and need no rebuild. Expect it to take hours on a large catalog.
+
+**The whole catalog directory is lost.** Restore it from a backup -- a git clone (see [Backing Up Your Catalog with Git](#backing-up-your-catalog-with-git)), a file-level backup, or a copy on another drive. If the backup does not contain `catalog.db`, run `maki rebuild-catalog` afterwards, then `maki generate-previews` (and `maki embed` / `maki faces detect` for Pro features) to regenerate the derived files that were not backed up.
+
+**The catalog is lost and there is no backup.** `rebuild-catalog` cannot help, because there are no sidecars to rebuild from. Your media files are untouched, so you can start over and import them again:
 
 ```bash
 # In a new directory
@@ -1419,11 +1471,12 @@ maki init
 maki volume add "Photos" /Volumes/PhotosDrive
 maki volume add "Backup" /Volumes/BackupDrive
 
-# Rebuild the catalog from sidecar files
-maki rebuild-catalog
+# Re-import the media
+maki import /Volumes/PhotosDrive --log
+maki import /Volumes/BackupDrive --log
 ```
 
-This restores all assets, variants, recipes, metadata, tags, ratings, and descriptions — everything that was stored in the YAML sidecars. Collections, stacks, and saved searches are also restored (they're stored as YAML in the catalog directory). Only preview thumbnails and AI embeddings need to be regenerated.
+A re-import recovers what is stored in the files themselves: EXIF data, and the ratings, labels, tags, and descriptions found in `.xmp` sidecars and embedded XMP. Everything that existed only in the catalog is gone: collections, stacks, saved searches, people and face assignments, manual grouping, and any metadata edits that were never written back to XMP. This is the reason to back up the catalog directory -- it is small compared to the media it describes.
 
 ---
 

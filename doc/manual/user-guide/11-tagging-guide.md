@@ -112,7 +112,7 @@ The cleaner choice is a top-level `event` facet.
 - Keeps the subject tree stable and navigable. *Subject* answers "what's depicted"; *event* answers "what occasion is this from". Distinct questions, distinct facets.
 - Event cardinality grows unboundedly (one new entry per wedding, per trip, per festival). Isolating it prevents the subject tree from getting skewed.
 - Event names become their own namespace — easy to keep consistent (`event|wedding-jane-2025`, or grouped by year: `event|2025|wedding-jane`).
-- Queries read clearly: `event:wedding-jane-2025 person:Alice` intersects two independent axes.
+- Queries read clearly: `tag:event|wedding-jane-2025 person:Alice` intersects two independent axes (the event tag and the recognized person).
 - Migration is cheap — `maki tag rename "subject|event|wedding-jane-2025" "event|wedding-jane-2025" --apply` handles the pure rename case. For the common situation where an old `subject|event|xxx` tag should become *both* the specific-occasion tag AND the generic scene-type tag, use `maki tag split "subject|event|wedding-jane-2025" "event|wedding-jane-2025" "subject|event|wedding" --apply` to replace one tag with both in a single pass.
 
 **Cons:**
@@ -136,7 +136,7 @@ Similar reasoning applies when you start tagging dominant color. You have three 
 
 Color isn't really a subject (unless the photo is *about* red — an abstract color study). It isn't really a technique (red isn't a choice you make, it's an attribute of the scene). What it *is* is an independent axis — orthogonal to what's depicted, where it was taken, how it was shot. So color gets its own facet: `color|red`, `color|blue`, `color|monochrome`.
 
-One caveat: MAKI already has a first-class **color label** field (Red/Yellow/Green/Blue/Purple — the Lightroom-style editorial label). If you only ever tag the five standard colors, you're duplicating that label with more keystrokes. Content-color tagging earns its keep when you want finer distinctions (`teal`, `magenta`, `warm`, `cold`, `pastel`, `monochrome`) or dominant-color filtering across a catalog — which is a different use case from the workflow-oriented color label.
+One caveat: MAKI already has a first-class **color label** field (Red/Orange/Yellow/Green/Blue/Pink/Purple — the editorial label known from Lightroom and CaptureOne). If you only ever tag those seven colors, you're duplicating that label with more keystrokes. Content-color tagging earns its keep when you want finer distinctions (`teal`, `magenta`, `warm`, `cold`, `pastel`, `monochrome`) or dominant-color filtering across a catalog — which is a different use case from the workflow-oriented color label.
 
 #### Worked example: striking objects that span subject and event
 
@@ -185,7 +185,7 @@ Some words look like obvious tags but actually compress three different question
 **The recommendation:**
 
 - Don't add a bare `action` tag — it's not searchable for anything specific.
-- For sense (1), use the specific activity tag. "All my action photos" becomes a saved search like `tag:subject|person|activity OR tag:subject|animal OR tag:subject|performing arts`.
+- For sense (1), use the specific activity tag. "All my action photos" becomes a saved search like `tag:"subject|person|activity,subject|animal,subject|performing arts"` (a comma inside one `tag:` value means OR).
 - For sense (2), `subject|motion|*` earns its keep only if you actively want to slice the catalog by motion-quality independent of subject. If you're not sure, you don't need it.
 - For sense (3), `technique|motion|*` follows the same rule as other technique tags — only worth it if you tag technique systematically.
 
@@ -409,7 +409,7 @@ color
 
 Low-cardinality vocabulary (15-30 terms covers almost everything). Keep it flat — a hierarchy like `color|warm|red` adds no real structure, since "red" is already obviously warm.
 
-**When to use it:** content-color tagging earns its keep when you want finer distinctions than MAKI's built-in color label (Red/Yellow/Green/Blue/Purple — which is an editorial workflow field, not a content descriptor), or when you want to filter a catalog by dominant color. If you only ever tag the five standard colors and only use them as a workflow marker, use the color label field instead — that's what it's for.
+**When to use it:** content-color tagging earns its keep when you want finer distinctions than MAKI's built-in color label (Red/Orange/Yellow/Green/Blue/Pink/Purple — which is an editorial workflow field, not a content descriptor), or when you want to filter a catalog by dominant color. If you only ever tag those seven colors and only use them as a workflow marker, use the color label field instead — that's what it's for.
 
 ---
 
@@ -429,7 +429,7 @@ Aim for **5-15 tags per image**:
 
 Example: a concert photo might carry `subject|performing arts|concert`, `subject|performing arts|concert|guitarist`, `location|Germany|Bayern|Gelting|Kulturbühne Hinterhalt`, `technique|lighting|stage lighting`, `event|concert-alice-viola-2024-11-15` — five intentional tags that you choose.
 
-These counts refer to the **leaf-level tags you consciously assign**, not the total number of tags stored. MAKI automatically expands each hierarchical tag to include all ancestor paths (e.g., `subject|performing arts|concert|guitarist` also stores `subject`, `subject|performing arts`, and `subject|performing arts|concert`). The five tags in the example produce 15 stored entries — but you only think about the five leaves.
+These counts refer to the **leaf-level tags you consciously assign**, not the total number of tags stored. MAKI automatically expands each hierarchical tag to include all ancestor paths (e.g., `subject|performing arts|concert|guitarist` also stores `subject`, `subject|performing arts`, and `subject|performing arts|concert`). The five tags in the example produce 14 stored entries — but you only think about the five leaves.
 
 Fewer intentional tags means poor discoverability. More than 20 usually means you're tagging noise or duplicating information that belongs elsewhere.
 
@@ -452,7 +452,7 @@ If your unique tag count is climbing past 1,000 (excluding person names and even
 
 ---
 
-## Auto-Tagging and the Label Vocabulary
+## Auto-Tagging and the Label Vocabulary *(Pro)* {#auto-tagging-and-the-label-vocabulary}
 
 MAKI's auto-tagging uses a vision-language model (SigLIP) to suggest tags based on visual content. It works by matching image features against a list of text labels -- the **AI vocabulary**.
 
@@ -587,11 +587,42 @@ Apply the same reasoning to your own catalog when you notice a leaf that you kee
 If your catalog has flat tags from earlier AI runs (before the YAML mapping existed), batch-reorganize with `maki tag rename`:
 
 ```bash
-maki tag rename "concert" "subject|performing arts|concert"
-maki tag rename "dog" "subject|animal|domestic|dog"
+maki tag rename "concert" "subject|performing arts|concert" --apply
+maki tag rename "dog" "subject|animal|domestic|dog" --apply
 ```
 
-Then update `my-labels.yaml` so future AI suggestions land at the new path directly.
+Without `--apply`, `maki tag rename` only reports what it would change. Then update `my-labels.yaml` so future AI suggestions land at the new path directly.
+
+---
+
+## Where a tag came from
+
+Every tag on an asset carries a **source** that records who added it:
+
+| Source | Added by |
+|---|---|
+| `user` | You: `maki tag`, the web UI tag fields, batch tagging, `--add-tag`, and `[import] auto_tags` |
+| `xmp-import` | Keywords read from an XMP sidecar or from embedded XMP |
+| `auto-tag` | SigLIP auto-tagging *(Pro)* |
+| `vlm` | VLM tag suggestions, `maki describe --mode tags` *(Pro)* |
+
+A tag without a recorded source is a `user` tag; that includes everything stored before provenance was introduced in v4.7.0. Renames and splits carry the source along, so a renamed machine tag stays a machine tag.
+
+**Seeing it.** `maki show` annotates machine-added tags, for example `festival (vlm)`, `concert (auto-tag)` or `Bayern (xmp)`; user tags are printed bare, and `maki show --json` has a `tag_sources` object. On the asset detail page in the web UI, machine-added tag chips carry a small `auto`, `vlm` or `xmp` badge whose tooltip names the source; your own tags have no badge. The badge records who added a tag, not where it is stored -- a tag of yours may well be present in the XMP file too.
+
+**First source wins, except when you add the tag yourself.** Imports, auto-tag, VLM describe and XMP refresh never change the source of a tag the asset already has. An explicit add by you does (since v4.13.1): `maki tag <asset-id> <tag>`, the tag field on the detail page, or batch tagging with a tag the asset already carries as a machine tag turns it -- and its ancestors -- into a `user` tag. The CLI reports `Now your tags (were machine-added): ...`, the badge disappears, and the change is one undoable operation. Promotion is one-way.
+
+**Clearing by source.** `maki tag clear` removes all tags from one asset; with `--source` it removes only the tags of that source. This is the clean way to discard one model's guesses before re-running auto-tag with a better model or vocabulary, without touching what you tagged by hand:
+
+```bash
+# Remove the auto-tag suggestions from one asset
+maki tag clear a1b2c3d4 --source auto-tag
+
+# Remove VLM tags from a whole shoot
+maki search -q "path:Capture/2024-08-15" | xargs -I{} maki tag clear {} --source vlm
+```
+
+Tags you promoted by adding them yourself are `user` tags and survive a `--source auto-tag`, `vlm` or `xmp-import` clear.
 
 ---
 
@@ -614,7 +645,7 @@ On import, MAKI keeps only the `lr:hierarchicalSubject` entries (the pipe-separa
 
 On writeback, MAKI regenerates both formats: flat components for `dc:subject`, ancestor paths for `lr:hierarchicalSubject`. CaptureOne and Lightroom see exactly what they expect — no data loss in the roundtrip.
 
-Internally, MAKI stores: `location`, `location|Germany`, `location|Germany|Bayern`, `location|Germany|Bayern|Wolfratshausen`. Searching `tag:Germany` matches `location|Germany` via prefix matching. Standalone `Germany` is not stored because it's redundant.
+Internally, MAKI stores: `location`, `location|Germany`, `location|Germany|Bayern`, `location|Germany|Bayern|Wolfratshausen`. Searching `tag:Germany` matches `location|Germany` via component matching: a `tag:` value matches a whole hierarchy component at any level, and with it everything below that component. Standalone `Germany` is not stored because it's redundant.
 
 ### Controlled vocabularies
 
@@ -672,10 +703,12 @@ Fix the mechanical issues first -- these can be done in bulk:
 
 ```bash
 # Rename a tag across the entire catalog (case-insensitive matching)
-maki tag rename "Concert" "concert"
-maki tag rename "Konzert" "concert"
-maki tag rename "Munich" "München"
+maki tag rename "Concert" "concert" --apply
+maki tag rename "Konzert" "concert" --apply
+maki tag rename "Munich" "München" --apply
 ```
+
+Run each command without `--apply` first: it is then report-only and shows how many assets would change.
 
 All matching is case-insensitive — `maki tag rename "Concert" "concert"` catches "Concert", "CONCERT", and "concert".
 
@@ -685,9 +718,9 @@ Once the duplicates are resolved, introduce hierarchy:
 
 ```bash
 # Move flat tags into hierarchy (ancestors are auto-expanded)
-maki tag rename "concert" "subject|performing arts|concert"
-maki tag rename "landscape" "subject|nature|landscape"
-maki tag rename "München" "location|Germany|Bayern|München"
+maki tag rename "concert" "subject|performing arts|concert" --apply
+maki tag rename "landscape" "subject|nature|landscape" --apply
+maki tag rename "München" "location|Germany|Bayern|München" --apply
 ```
 
 When renaming to a hierarchical tag, all ancestor paths are automatically added. For example, the last command replaces "München" with `location|Germany|Bayern|München` and also adds `location`, `location|Germany`, and `location|Germany|Bayern`.
@@ -705,7 +738,7 @@ Review tags with very low usage (< 5 assets). For each one, decide:
 - **Keep** if it's genuinely specific and useful
 - **Remove** if it's noise
 
-### Phase 5: Enrich
+### Phase 5: Enrich *(Pro)* {#phase-5-enrich}
 
 Run auto-tagging on untagged or under-tagged assets to fill in descriptive tags:
 
@@ -719,19 +752,19 @@ maki auto-tag "path:Capture/2024-08-15" --apply --log
 
 Review suggestions in the web UI -- accept good ones, dismiss bad ones, and adjust your label vocabulary or threshold if needed.
 
-### Reviewing suggestions before committing (web UI)
+### Reviewing suggestions before committing (web UI) *(Pro)* {#reviewing-suggestions-before-committing-web-ui}
 
-`maki auto-tag --apply` is unconditional: every suggestion above the configured threshold is written to every matching asset. For a curated collection -- a vacation set, a wedding shoot, anything where false positives accumulate noticeably -- the **Review tags…** button on the browse toolbar gives you a per-tag confirmation step without forcing you to select assets one by one.
+`maki auto-tag --apply` is unconditional: every suggestion above the configured threshold is written to every matching asset. For a curated collection -- a vacation set, a wedding shoot, anything where false positives accumulate noticeably -- the **Review tags…** button in the batch toolbar gives you a per-tag confirmation step.
 
 Flow:
 
-1. Filter the browse page down to the assets you want to review (or select a subset). Click **Review tags…**.
-2. MAKI computes AI suggestions for every asset in scope -- roughly 1-2 s per image on CPU, faster with the `ai-gpu` feature. Progress shows in the toast, same as Embed or Auto-tag.
-3. When the job finishes, the review modal opens. The left pane lists every suggested tag sorted by candidate count (most-suggested first). The right pane shows the candidate thumbnails for the selected tag, all pre-checked, each with its confidence score and -- when the AI's underlying label differs from the hierarchical tag MAKI mapped it to -- a small "from: *skyscraper*" hint.
+1. Select the assets you want to review on the browse page -- the batch toolbar only appears once something is selected. To review everything the current filter matches, select all matching assets (Shift+Cmd/Ctrl+A). Click **Review tags…** and confirm the asset count.
+2. The review modal opens right away and shows a progress bar while MAKI computes AI suggestions for the selected assets -- roughly 1-2 s per image on CPU, faster with the `ai-gpu` feature; loading the model can take 30-60 s on the first request. There is no corner toast for this job; the modal is the progress display.
+3. When the job finishes, the modal switches to the review view. The left pane lists every suggested tag sorted by candidate count (most-suggested first). The right pane shows the candidate thumbnails for the selected tag, all pre-checked, each with its confidence score and -- when the AI's underlying label differs from the hierarchical tag MAKI mapped it to -- a small "from: *skyscraper*" hint.
 4. Uncheck false positives. Drag the **Threshold** slider to bulk-toggle by confidence. Tick **Skip already-tagged** to hide assets that already carry the tag.
 5. Click **Apply *building*** to write the tag to the checked set. The row strikes through and the next un-reviewed tag opens. Use **Skip** to leave a tag for later.
 
-The collection pass runs at half your configured `[ai].threshold` so the slider has room to drag both above and below your normal auto-tag floor. Suggestions are held in server memory on the job's record (page-reload survival within the session), so you can close the modal, finish another task, and reopen the review via the toast badge -- a server restart drops them.
+The collection pass runs at half your configured `[ai].threshold` so the slider has room to drag both above and below your normal auto-tag floor. Tags you have applied are saved as you go. Closing the modal ends the review: there is no way to reopen it, so start a new review (which recomputes the suggestions) for any tags you left unreviewed.
 
 ---
 
@@ -742,7 +775,7 @@ The collection pass runs at half your configured `[ai].threshold` so the slider 
 - Define your vocabulary before you start tagging. Spend an hour on structure to save hundreds of hours of cleanup.
 - Use hierarchy. It scales; flat lists don't.
 - Tag new imports immediately. The longer you wait, the less you remember about the context.
-- Use auto-tagging for broad descriptive categories, then refine manually.
+- Use auto-tagging *(Pro)* for broad descriptive categories, then refine manually.
 - Review your tag list periodically. A 15-minute audit every few months catches drift early.
 
 **Don't:**
@@ -844,7 +877,7 @@ subject:  # 5 assets
   nature:  # 3 assets
     - landscape  # 2 assets
     - bird  # 1 asset
-- legoland  # 1 asset
+legoland:  # 1 asset
 ```
 
 In **text** format (Lightroom / Capture One) the flag is silently ignored — those tools reject comments. In **json** format every node already has a `count` field; the flag is implied.
@@ -854,8 +887,10 @@ In **text** format (Lightroom / Capture One) the flag is silently ignored — th
 For dashboards, integration scripts, or any tool that finds the keyword-text or YAML formats awkward to walk, export as nested JSON:
 
 ```bash
-maki tag export-vocabulary --format json --prune > tags.json
+maki tag export-vocabulary --format json --prune --output tags.json
 ```
+
+The command always writes a file (`vocabulary.json` in the catalog root unless `--output` names another path) and prints a confirmation message to stdout, so shell redirection would capture the message, not the JSON.
 
 Each node has a `count` field plus an optional `children` map keyed by child segment name. Leaf nodes omit `children`:
 
@@ -897,9 +932,9 @@ The vocabulary file and the auto-tagging label file (`labels` in `[ai]` config) 
 | | `vocabulary.yaml` | AI label file |
 |---|---|---|
 | **Purpose** | Autocomplete guidance | Vision model classification |
-| **Format** | Nested YAML tree | Flat text, one term per line |
+| **Format** | Nested YAML tree | YAML map: label to hierarchical tag(s); legacy flat `.txt` lists (one label per line) still load |
 | **Content** | Full hierarchy including abstract/personal terms | Only visually recognizable concepts |
-| **Used by** | CLI and web UI autocomplete | `maki auto-tag` |
+| **Used by** | CLI and web UI autocomplete | `maki auto-tag`, Suggest tags, Review tags *(Pro)* |
 
 ---
 
@@ -911,9 +946,9 @@ The vocabulary file and the auto-tagging label file (`labels` in `[ai]` config) 
 
 Every principle in this chapter plays out on a single photo. Consider a shot from Jane's wedding reception in Bayern:
 
-![One photo, nine tags, seven facets — each answering a different question.](../../images/maki-tagging.png){width=90%}
+![One photo, nine tags, six facets — each answering a different question.](../../images/maki-tagging.png){width=90%}
 
-Nine leaf tags across seven facets. Ancestor expansion bumps the stored count to roughly fifteen — but you only think about the nine leaves you picked.
+Nine leaf tags across six facets (the seventh, `project`, is not used on this photo). Ancestor expansion bumps the stored count to 23 — but you only think about the nine leaves you picked.
 
 Each tag answers a different question about the same image:
 
@@ -925,7 +960,7 @@ Each tag answers a different question about the same image:
 - **Color** records the *dominant palette* — useful when you later want to assemble a warm-toned or monochrome gallery across the catalog.
 - **Project** would tie it to an assignment or body of work (a photo book, a 365 project) if applicable. Not every photo has one.
 
-A search like `event:wedding-jane-2025 person:Jane color:warm` intersects three independent axes. You can recombine them however the question of the moment demands — `technique:golden` across every event, or `color:monochrome subject:nature|landscape` across every location. The catalog becomes a dense multidimensional space you can slice any way you want, rather than a tree you have to walk in a fixed order.
+A search like `tag:event|wedding-jane-2025 tag:person|friend|Jane tag:color|warm` intersects three independent axes (facets are tags, so they are searched with the `tag:` filter). You can recombine them however the question of the moment demands — `tag:"golden hour"` across every event, or `tag:color|monochrome tag:subject|nature|landscape` across every location. The catalog becomes a dense multidimensional space you can slice any way you want, rather than a tree you have to walk in a fixed order.
 
 That's the whole point of faceted tagging: invest up front in the vocabulary structure, and every photo you've ever tagged becomes available to arbitrary future queries you didn't think to ask when you tagged it.
 
@@ -940,10 +975,10 @@ If you're starting fresh or resetting your tagging approach:
 3. Define your top-level facets — start with the five essentials (subject, location, person, technique, project) and add `event` and/or `color` if you'll use them
 4. Edit `vocabulary.yaml` in your catalog root to reflect your planned hierarchy
 5. Write 50-100 tags for your most common subjects
-6. Save them as your label vocabulary for auto-tagging (`labels = "my-labels.txt"` in `maki.toml`)
-7. Set a confidence threshold (`threshold = 0.3` is a reasonable start)
+6. Save them as your label vocabulary for auto-tagging *(Pro)* (`labels = "my-labels.yaml"` in `maki.toml`; see [Configuring labels](#configuring-labels))
+7. Set a confidence threshold for auto-tagging *(Pro)* (`threshold = 0.3` is a reasonable start)
 8. Tag your next import using the new vocabulary
-9. Run auto-tagging on a test batch and review the suggestions
+9. Run auto-tagging *(Pro)* on a test batch and review the suggestions
 10. Expand `vocabulary.yaml` as new subjects appear
 11. Schedule a quarterly review of your tag list and vocabulary file
 

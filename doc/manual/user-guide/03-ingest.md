@@ -63,7 +63,7 @@ maki import --dry-run /Volumes/PhotosDrive/Photos/2026-02-20/
 Files are still hashed during a dry run (so duplicate detection works), but no assets, variants, recipes, or previews are created. The output shows the same counters as a real import:
 
 ```
-Dry run — would import: 47 imported, 3 skipped, 2 locations added, 5 recipes attached
+Dry run — would import: 47 imported, 3 skipped, 2 location(s) added, 5 recipe(s) attached
 ```
 
 Add `--json` for structured output (includes a `dry_run: true` field) or `--log` to see per-file details.
@@ -207,7 +207,7 @@ maki import /Volumes/PhotosDrive/Shoot/*.xmp
 
 MAKI finds the parent variant by matching the filename stem and directory, then attaches the recipe to it. Both sidecar naming conventions resolve to the same parent: `DSC_1234.xmp` (Capture One, Lightroom) and `DSC_1234.NEF.xmp` (darktable).
 
-Importing never *creates* sidecars. If you tag and rate freshly imported RAW files in MAKI and want those values visible in Capture One or Lightroom, run `maki create-sidecars --apply` before the first session there, or set `[writeback] enabled = true` and `create_sidecars = true`, after which an import that assigns tags writes the sidecars in the same run (see [Working with External Tools](07-maintenance.md#working-with-external-tools)).
+By default, importing never *creates* sidecars. If you tag and rate freshly imported RAW files in MAKI and want those values visible in Capture One or Lightroom, run `maki create-sidecars --apply` before the first session there, or set `[writeback] enabled = true` and `create_sidecars = true`. With both set, an import that leaves an asset with metadata (for example `auto_tags`) but no `.xmp` writes the sidecar in the same run, and the first later edit creates one for any asset that still has none (see [Working with External Tools](07-maintenance.md#working-with-external-tools)). The name of a created file follows `[writeback] sidecar_naming` (since v4.11.0): `stem` (the default) writes `DSC_1234.xmp`, `full` writes `DSC_1234.NEF.xmp`.
 
 ### Enabling Non-Default Recipe Groups
 
@@ -235,7 +235,7 @@ Extracted directly from image files (RAW, JPEG, TIFF). Provides camera and captu
 - Capture date and time
 - GPS coordinates (if present)
 
-EXIF data is stored in the variant's `source_metadata` and used to populate the asset's `captured_at` timestamp.
+EXIF data is stored in the variant's `source_metadata` and used to populate the asset's `created_at` timestamp.
 
 ### XMP Sidecar Files
 
@@ -248,7 +248,7 @@ When an `.xmp` file is attached as a recipe, its contents are parsed and merged 
 | `xmp:Rating` | Rating | Integer 1-5 |
 | `xmp:Label` | Color label | Red, Orange, Yellow, Green, Blue, Pink, Purple |
 | `dc:creator` | Source metadata | Stored as `creator` |
-| `dc:rights` | Source metadata | Stored as `rights` |
+| `dc:rights` | Source metadata | Stored as `copyright` |
 
 ### Video Metadata
 
@@ -272,7 +272,7 @@ For rating, description, and color label, the **first source to set a value wins
 
 When a sidecar recipe is **updated later** (e.g. after editing in Capture One or Lightroom), the behavior changes: sidecar XMP **overwrites** rating, description, and color label. This ensures that edits made in photo editing software take effect. The `created_at` date is never overwritten — it is always derived from EXIF.
 
-> **Note:** The reverse direction — writing MAKI edits back to `.xmp` files — has two modes. `[writeback] enabled = true` in `maki.toml` flushes every edit immediately. With it off (the default safety net), edits land in the catalog and YAML sidecar and are flagged `pending_writeback` until you run `maki writeback` — that command always works regardless of the flag. See the [Configuration Reference](../reference/08-configuration.md#writeback-section) for the full split.
+> **Note:** The reverse direction — writing MAKI edits back to `.xmp` files *(Pro)* — has two modes. `[writeback] enabled = true` in `maki.toml` flushes every edit immediately. With it off (the default safety net), edits land in the catalog and YAML sidecar and are flagged `pending_writeback` until you run `maki writeback` *(Pro)* — that command always works regardless of the flag. See the [Configuration Reference](../reference/08-configuration.md#writeback-section) for the full split.
 
 ## Preview Generation
 
@@ -293,9 +293,9 @@ The maximum edge size (default 800px) and output format (JPEG or WebP) are confi
 [preview]
 max_edge = 800          # regular thumbnail max edge (default 800)
 format = "jpeg"         # jpeg or webp
-quality = 85            # JPEG/WebP quality (1-100)
+quality = 85            # JPEG quality (1-100); ignored for WebP, which is lossless
 smart_max_edge = 2560   # smart preview max edge (default 2560)
-smart_quality = 92      # smart preview quality (default 92)
+smart_quality = 85      # smart preview JPEG quality (default 85)
 ```
 
 To generate smart previews during import, use `--smart` or enable permanently:
@@ -379,6 +379,10 @@ auto_tags = ["inbox", "unreviewed"]
 
 Auto-tags are merged with any tags extracted from XMP metadata (deduplicated).
 
+### Where Imported Tags Come From
+
+Every tag carries a **source** that records who added it: `user` (you, including `--add-tag` and `[import] auto_tags`), `xmp-import` (keywords read from sidecar or embedded XMP), `auto-tag` (SigLIP suggestions), or `vlm` (`maki describe --mode tags`). `maki show` annotates the machine-added ones, for example `festival (vlm)` or `concert (xmp)`, and the asset detail page shows a small badge on those tag chips. The first source wins -- a later import or auto-tag run never changes the source of a tag the asset already has -- with one exception: adding a machine tag by hand (`maki tag <asset-id> <tag>`, or the tag field in the web UI) makes it a `user` tag. To remove one kind of machine tag from an asset, for example before re-running auto-tag with a better model, use `maki tag clear <asset-id> --source auto-tag` (also `vlm`, `xmp-import`, `user`). Tags stored before v4.7.0 count as `user`. See [Where a tag came from](11-tagging-guide.md#where-a-tag-came-from) in the Tagging Guide.
+
 ### All Flags
 
 | Flag | Effect |
@@ -387,10 +391,12 @@ Auto-tags are merged with any tags extracted from XMP metadata (deduplicated).
 | `--profile <name>` | Use a named import profile from `maki.toml` (see [Configuration](../reference/08-configuration.md#profiles)) |
 | `--dry-run` | Show what would happen without writing to catalog, sidecar, or disk |
 | `--auto-group` | After import, group new assets with nearby catalog assets by filename stem |
+| `--add-tag <tag>` | Add a tag to every imported asset (repeatable) |
 | `--include <group>` | Enable an additional file type group (repeatable) |
 | `--skip <group>` | Disable a default file type group (repeatable) |
 | `--smart` | Generate smart previews (2560px) for zoom/pan in the web UI |
 | `--embed` | Generate image embeddings for visual similarity search *(Pro)* |
+| `--describe` | Generate VLM descriptions for the imported assets; needs a running VLM server *(Pro)* |
 | `--json` | Structured JSON output to stdout |
 | `--log` | Per-file progress to stderr (`filename -- status (duration)`) |
 | `--time` | Show total elapsed time |
@@ -489,7 +495,7 @@ maki auto-tag "type:image" --apply
 
 The command uses SigLIP vision-language models for zero-shot classification against ~100 built-in photography categories (landscape, portrait, architecture, animals, etc.). Tags above the confidence threshold (default 0.1) are suggested. Use `--threshold` to adjust sensitivity.
 
-Two models are available: the default ViT-B/16-256 (~207 MB) and the larger ViT-L/16-256 (~670 MB) for higher accuracy. Switch with `--model` or set `[ai] model` in `maki.toml`:
+Four models are available: the default SigLIP ViT-B/16-256 (`siglip-vit-b16-256`, ~207 MB), the larger ViT-L/16-256 (`siglip-vit-l16-256`, ~670 MB) for higher accuracy, and the multilingual SigLIP 2 base and large variants (`siglip2-base-256-multi`, ~410 MB; `siglip2-large-256-multi`, ~920 MB). `maki auto-tag --list-models` shows them with their download status. Switch with `--model` or set `[ai] model` in `maki.toml`:
 
 ```
 # Download and use the larger model
@@ -524,7 +530,7 @@ Or enable it permanently in `maki.toml`:
 embeddings = true
 ```
 
-This runs embedding generation as a post-import phase using the preview image for each imported asset. If the AI model is not downloaded, the embedding phase is silently skipped. You can also batch-generate embeddings for existing assets with `maki embed ""`.
+This runs embedding generation as a post-import phase using the preview image for each imported asset. If the AI model is not downloaded, the embedding phase is skipped with a notice (`Skipping embed phase: model not downloaded`); the import itself completes normally. You can also batch-generate embeddings for existing assets with `maki embed ""`.
 
 See the [auto-tag reference](../reference/02-ingest-commands.md#maki-auto-tag) for all options and the [configuration reference](../reference/08-configuration.md#ai-section) for `[ai]` settings in `maki.toml`.
 
@@ -621,7 +627,7 @@ endpoint = "https://api.openai.com"
 model = "gpt-6-astra"
 ```
 
-Requires `OPENAI_API_KEY` in your environment. Charged per image; see OpenAI's current pricing.
+OpenAI requires an API key, which MAKI does not send (see the note on authentication below). Charged per image; see OpenAI's current pricing.
 
 **Groq (free tier available):**
 
@@ -631,7 +637,7 @@ endpoint = "https://api.groq.com/openai"
 model = "<current Groq vision model>"   # check console.groq.com/docs/models
 ```
 
-Requires `GROQ_API_KEY`. Free tier allows ~30 requests/minute.
+Groq requires an API key as well (see the note below). Free tier allows ~30 requests/minute.
 
 **Together AI:**
 
@@ -641,19 +647,20 @@ endpoint = "https://api.together.xyz"
 model = "<current Together vision model>"   # check docs.together.ai
 ```
 
-Requires `TOGETHER_API_KEY`.
+Together AI requires an API key as well (see the note below).
 
 Cloud model rosters rotate quickly (OpenAI's `gpt-4o`, its GPT-5.x line, and the Llama 3.2
 vision previews once listed here have all been retired) -- always take
 the exact identifier from the provider's current model list.
 
-> **Note on authentication:** maki currently sends requests without authentication headers. For cloud APIs that require bearer tokens, you may need a local proxy that adds the header, or use a server like Ollama as a gateway. Native API key support may be added in a future version.
+> **Note on authentication:** MAKI sends its requests without an authentication header and reads no API key from the environment. An endpoint that needs a key (all three above) must be reached through a local proxy that adds the `Authorization` header; point `endpoint` at the proxy. Native API key support may be added in a future version.
 
 ### Generating Descriptions
 
 ```bash
-# Preview descriptions without saving (report-only)
-maki describe "description:none type:image" --log
+# Preview descriptions without saving (report-only; assets that already
+# have a description are skipped unless you pass --force)
+maki describe "type:image" --log
 
 # Apply descriptions to undescribed assets on a volume
 maki describe --volume "Photos 2024" --apply --log
@@ -668,7 +675,7 @@ maki describe "rating:5" --model qwen2.5vl:7b --force --apply
 maki describe --prompt "List the key subjects and artistic techniques." "tag:art" --apply
 
 # Generate tags instead of descriptions
-maki describe --mode tags "tag:untagged" --apply
+maki describe --mode tags "tagcount:0" --apply
 
 # Generate both descriptions and tags (two VLM calls per asset)
 maki describe --mode both --asset a1b2c3d4 --apply
@@ -741,10 +748,10 @@ This metadata is stored in the catalog and available as search filters.
 During import, MAKI uses `ffmpeg` to extract a representative frame as the preview thumbnail. If ffmpeg is not installed, the video gets an info card instead. You can install ffmpeg later and regenerate previews:
 
 ```bash
-maki generate-previews --include video --force --log
+maki generate-previews --skip images --skip audio --force --log
 ```
 
-In the web UI, video assets show a play icon overlay. Hovering plays a short proxy clip (generated automatically when ffmpeg is available).
+`--skip images --skip audio` limits the forced run to video; without it, `--force` regenerates every preview in the catalog.
 
 ### Searching for video
 
@@ -801,7 +808,7 @@ rsync -av /Volumes/CARD/DCIM/ /Volumes/FastSSD/Capture/Johnson-Wedding/
 
 # Import from the fast local copy
 maki import /Volumes/FastSSD/Capture/Johnson-Wedding/ \
-  --add-tag "shoot:johnson-wedding" \
+  --add-tag johnson-wedding \
   --auto-group --smart --log
 ```
 
@@ -813,12 +820,13 @@ maki volume add /Volumes/EOS_DIGITAL --purpose media
 
 # Import from card — generates previews but doesn't copy files
 maki import --profile card /Volumes/EOS_DIGITAL/DCIM \
-  --add-tag "shoot:johnson-wedding" --auto-group --log
+  --add-tag johnson-wedding --auto-group --log
 
 # Eject card, cull in web UI on smart previews, rate keepers
 maki serve
 
-# Copy only rated images to working drive (with XMP sidecars for CaptureOne)
+# Copy only rated images to working drive (with XMP sidecars for CaptureOne,
+# named per [writeback] sidecar_naming: DSC_1234.xmp by default)
 maki relocate --query "volume:EOS_DIGITAL rating:1+" \
   --target "Work SSD" --create-sidecars --log
 

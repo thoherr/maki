@@ -46,9 +46,9 @@ maki serve --log
 Output on stderr:
 
 ```
-GET / -> 200 (12ms)
-GET /static/style.css -> 200 (1ms)
-GET /preview/ab/ab3f...jpg -> 200 (2ms)
+GET / -> 200 OK (12.3ms)
+GET /static/style.css?v=3f9c2a1b -> 200 OK (1.1ms)
+GET /preview/ab/ab3f...jpg -> 200 OK (2.4ms)
 ```
 
 This is useful for debugging slow requests or understanding access patterns.
@@ -110,18 +110,21 @@ The search bar has two rows:
 
 In the Pro edition the first row also carries a **Find by image** button: pick a local image file that is not in the catalog and the grid ranks the catalog by visual similarity to it (see [Similarity browse](#similarity-browse) below). You can also drop an image file anywhere on the browse page, or paste one from the clipboard.
 
+When `[browse] default_filter` is set in `maki.toml`, the first row also shows a checkbox followed by the default filter expression. It is ticked by default; untick it to search without the default filter (the same as the "more without default filter" link in the result count).
+
 The filter bar is collapsible. Press **Shift+F** to toggle its visibility on the browse page. Your preference is saved in the browser. This is useful for maximizing screen space when you want to focus on the grid without changing filters.
 
-**Row 2** -- a row of filter controls, left to right:
+**Row 2** -- the filter controls, on two lines. The upper line holds the tag filter, the people filter *(Pro)* and the path input; the lower line holds the star rating and color label filters on the left and the collection, type, format and volume controls on the right:
 
-- **Tag filter**: a chip-based input with autocomplete. Type to see tag suggestions, click or press Enter to add a tag chip. Multiple tags narrow the results (AND logic). Remove a tag by clicking the x on its chip, or press Backspace in an empty input to remove the last chip. Each chip has three inline toggles: `+`/`−` (include vs exclude — a `−` chip is the inline equivalent of `-tag:foo` in the search field), `▼`/`=`/`/` (mode: include descendants vs whole-path vs leaf-only), and `cc`/`Cc` (case-insensitive vs sensitive). Adding, removing, or toggling a chip triggers an immediate search.
-- **Star rating filter**: five clickable stars with a three-state cycle. First click sets a minimum match (e.g. "3+"), second click narrows to an exact match ("3"), third click clears the filter. Star 5 is two-state (exact and clear, since 5 and 5+ are identical). Triggers an immediate search.
-- **Color label filter**: seven colored dots (Red, Orange, Yellow, Green, Blue, Pink, Purple). Click a dot to filter by that label. Click the active dot again to clear. Triggers an immediate search.
+- **Tag filter**: a chip-based input with autocomplete. Type to see tag suggestions; clicking a suggestion (or highlighting it with the arrow keys and pressing Enter or Tab) completes it into the input, so you can extend a hierarchical tag further. Pressing Enter on the input itself then adds the tag chip. Multiple tags narrow the results (AND logic). Remove a tag by clicking the x on its chip, or press Backspace in an empty input to remove the last chip. Each chip has three inline toggles: `+`/`−` (include vs exclude — a `−` chip is the inline equivalent of `-tag:foo` in the search field), `▼`/`=`/`/` (mode: include descendants vs whole-path vs leaf-only), and `cc`/`Cc` (case-insensitive vs sensitive). Adding, removing, or toggling a chip triggers an immediate search.
+- **People filter** *(Pro)*: a chip-based input ("Filter by people…"), shown when the catalog has people. Type to pick a person from the dropdown; each pick becomes a chip. Multiple chips narrow the results (AND logic: the asset must contain all selected people).
+- **Path prefix input**: filter by file location path prefix. Type a directory path to see only assets stored under that path, or pick one from the autocomplete dropdown. Focus the field to browse the directory tree from scratch (empty prefix lists all top-level directories); type to narrow. Each accepted directory ends in `/` and the dropdown immediately fetches the next level — drill down one segment at a time without retyping, shell-style. Accepting a file leaf commits the filter. Use `↑`/`↓` to move through suggestions, `Tab` or `Enter` to accept the highlighted one, `Escape` to close the dropdown. Wildcard patterns (anything containing `*`) disable autocomplete — the filter already understands `*` itself. If you paste an absolute path that matches one of your registered volume mounts, the mount prefix is stripped automatically and the dropdown pins to that volume. If a volume is selected in the Volume dropdown, path suggestions are narrowed to that volume. Debounces at 120ms; Enter with no highlighted suggestion fires the search immediately.
+- **Star rating filter**: five clickable stars with a three-state cycle. First click sets a minimum match (e.g. "3+"), second click narrows to an exact match ("3"), third click clears the filter. Star 5 is two-state (exact and clear, since 5 and 5+ are identical). The "unrated" icon in front of the stars (an empty-set sign) filters to assets without a rating; click it again to clear. Triggers an immediate search.
+- **Color label filter**: seven colored dots (Red, Orange, Yellow, Green, Blue, Pink, Purple). Click a dot to filter by that label. Click the active dot again to clear. The "unlabeled" icon in front of the dots filters to assets without a color label. Triggers an immediate search.
+- **Collection dropdown**: filter by collection membership. Only shown when you have collections. Triggers immediately on change.
 - **Type dropdown**: filter by asset type (Image, Video, Audio, Document). Triggers immediately on change.
 - **Format filter**: a grouped multi-select dropdown. Click the trigger button to open a panel showing all formats in your catalog organized by category (RAW, Image, Video, Audio, Other). Each format shows its variant count. Check individual formats or use the group-level toggles ("All RAW", "All Image", etc.) to select entire categories. Multiple selections combine with OR logic (e.g., selecting NEF and CR3 shows assets in either format). The trigger button shows: "All formats" when nothing is selected, the format name for a single selection, the group name when a full group is selected (e.g., "All RAW"), or a compact summary like "nef +3..." for mixed selections. Hover the button to see the full list in a tooltip. Triggers an immediate search on every checkbox change.
 - **Volume dropdown**: filter by storage volume. Only shown when you have registered volumes. Triggers immediately on change.
-- **Collection dropdown**: filter by collection membership. Only shown when you have collections. Triggers immediately on change.
-- **Path prefix input**: filter by file location path prefix. Type a directory path to see only assets stored under that path, or pick one from the autocomplete dropdown. Focus the field to browse the directory tree from scratch (empty prefix lists all top-level directories); type to narrow. Each accepted directory ends in `/` and the dropdown immediately fetches the next level — drill down one segment at a time without retyping, shell-style. Accepting a file leaf commits the filter. Use `↑`/`↓` to move through suggestions, `Tab` or `Enter` to accept the highlighted one, `Escape` to close the dropdown. Wildcard patterns (anything containing `*`) disable autocomplete — the filter already understands `*` itself. If you paste an absolute path that matches one of your registered volume mounts, the mount prefix is stripped automatically and the dropdown pins to that volume. If a volume is selected in the Volume dropdown, path suggestions are narrowed to that volume. Debounces at 120ms; Enter with no highlighted suggestion fires the search immediately.
 
 All filters compose with each other. You can combine a text search with a tag, a minimum rating, a color label, and a volume restriction at the same time.
 
@@ -146,7 +149,7 @@ Cards that belong to a stack have a colored left border for quick visual identif
 
 **Per-stack expand/collapse**: Click the stack badge (⊞ N) on any browse card to expand or collapse just that individual stack, regardless of the global collapse setting. When stacks are globally collapsed, clicking a badge fetches and displays that stack's members inline. When stacks are globally expanded, clicking a badge collapses only that stack while others remain expanded. Re-clicking restores the previous state.
 
-Click a card to open the [asset detail page](#asset-detail-page).
+Click a card's thumbnail to open the asset in the [lightbox](#lightbox); click the title and badge area below it to open the [asset detail page](#asset-detail-page).
 
 ### View mode toggle
 
@@ -204,7 +207,7 @@ The faceted sidebar shows what's *in* the current result set — broken down by 
 
 **Toggle**: click the facet icon in the results bar (next to the stack-collapse button) or press `f`. Your preference is saved per browser. Hidden on viewports narrower than 768 px.
 
-**Section order**: Ratings, Labels, Tags, Years, Formats, Volumes, Geotagged. Tags are above formats and volumes because the curated tag taxonomy is most users' main filtering axis; formats and volumes are usually set up once and rarely toggled. Each section is collapsible (open/closed state remembered per browser).
+**Section order**: Ratings, Labels, Tags, Years, Formats, Volumes, Geotagged. Tags are above formats and volumes because the curated tag taxonomy is most users' main filtering axis; formats and volumes are usually set up once and rarely toggled. Each section is collapsible (open/closed state remembered per browser), except Geotagged, which is a single row rather than a section. The Ratings section includes an **Unrated** row and the Labels section a **No label** row, for the assets without a rating or color label.
 
 **Tag hierarchy**: tags render as an indented tree, not a flat list. MAKI auto-expands every hierarchical tag to its ancestor paths on storage, so the panel can reshape that flat data back into the original hierarchy. Counts on parent rows reflect the union of all descendants — `event` showing 2,419 means "any photo with anything under `event`". Clicking a node always applies the **full path**, so picking `2024` under `Holzkirchner Blues- und Jazztage` filters to that specific year of that specific festival, not every photo from 2024 across the catalog.
 
@@ -220,7 +223,7 @@ The faceted sidebar shows what's *in* the current result set — broken down by 
 | Year | Appends `date:YYYY` to the search box. | Removes `date:YYYY` from the search box. |
 | Format | Checks the format checkbox (additive — multi-select). | Unchecks it. |
 | Volume | Sets the volume dropdown to that volume. | Resets it to all volumes. |
-| Geotagged | Appends `geotagged:1` to the search box. | Removes it. |
+| Geotagged | Appends `geo:any` to the search box. | Removes `geo:any` from the search box. |
 
 **Selected rows are marked**: a row the current filter selects is shown in bold with an accent bar on the left and a `×` after its count. The marking follows the filter bar, so it also appears when you set the filter there (star widget, tag field, format menu). Only an exact match counts: with the rating filter on `3+` no rating row is marked, and a tag chip marks its own row, not the descendants it includes.
 
@@ -233,13 +236,13 @@ Suppose you want to see what's left under-tagged at the *Holzkirchner Blues- und
 1. Open the browse page with no filters. The Tags section shows top-level facets: `event`, `person`, `subject`, `location`, etc.
 2. Click `event` → results narrow to all photos tagged as some kind of event. The panel re-fetches and `event` opens; the tag tree now shows `event > anniversary`, `event > concert`, `event > festival`, …
 3. Expand `festival` with its chevron and click `Holzkirchner Blues- und Jazztage` → narrows to all 13 years. The Tags section now lists `…|2026`, `…|2025`, `…|2024`, … with per-year counts. The Years section also shows the matching calendar years.
-4. Click a Years row, say `2018`. The query box gains `date:2018` — and you discover the asset count there *is greater than* the festival's `…|2018` row count: those extra photos are likely festival photos missing the festival tag. Use the result grid to spot-check and re-tag them.
+4. Click a Years row, say `2018`. The query box gains `date:2018` — and you discover the asset count there *is greater than* the festival's `…|2018` row count: the festival filter is still active, so those extra photos are festival photos taken in 2018 that carry only the festival tag and are missing its `…|2018` year sub-tag. Use the result grid to spot-check and re-tag them.
 
 This is the "what other tags appear in the same result set?" exploration mode — useful for both navigation (find a specific year/band) and audit (find inconsistently tagged photos).
 
 #### Tip: combine with chips
 
-Each click adds a filter; the chips at the top of the filter bar show your current path. Click a chip's `×` — or the marked row in the sidebar again — to back out one step without rebuilding the query. The browser back button works too — every filter change updates the URL.
+Each click adds a filter, and the filter bar shows your current path: a tag click appears as a chip in the tag filter, a rating, label, format or volume click sets the corresponding control, and a year or Geotagged click adds a term to the search box. Click the marked row in the sidebar again — or, for a tag, the `×` on its chip — to back out one step without rebuilding the query. The browser back button works too — every filter change updates the URL.
 
 ### Sorting
 
@@ -271,9 +274,11 @@ When searching with `similar:<asset-id>`, the browse grid shows visually similar
 Below the search bar, a row of saved search chips provides quick access to your **favorite** named searches (smart albums). Each chip loads its stored query, filters and sort order when clicked.
 
 - **Save the current search**: click the "Save" button at the end of the chip row. A prompt asks for a name, and the current search state (text query, filters, sort order) is saved and marked as a favorite, so the new chip appears immediately.
-- Only favorites are shown as chips. Renaming, deleting, and toggling the favorite star are done on the [Saved Searches Page](#saved-searches-page) (**Searches** in the navigation bar).
+- Only favorites are shown as chips. Renaming, deleting, and toggling the favorite star are done on the [Saved Searches Page](#saved-searches-page) (**Searches** in the navigation bar, or the **Manage…** link at the end of the chip row).
 
 Saved searches are stored in `searches.toml` at the catalog root and work identically to CLI saved searches (see [Organizing Assets](04-organize.md) for the `maki saved-search` command). Searches saved from the CLI start out as non-favorites (unless `maki saved-search save --favorite` was used) and do not show up as chips until starred.
+
+**Remembered filter**: with `[browse] remember_latest_filter = true` (the default), the browse page stores the most recently viewed filter, sort order and page in the browser, and opening the browse page without any parameters restores it. A "Restored from last session" pill then appears in the chip row. The **Clear** button next to Save, shown whenever a filter is active or remembered, resets all filters and forgets the remembered state. Set the option to `false` to always start with an unfiltered grid.
 
 ### How page updates work
 
@@ -303,7 +308,7 @@ flowchart LR
     D -- "similar card" --> D
     B -- "s" --> S
     S -- "l" --> L
-    S -- "d / Enter" --> D
+    S -- "d" --> D
     S -- "Esc / Back" --> B
     B -- "c (2-4 sel)" --> C
     C -- "d" --> D
@@ -332,18 +337,19 @@ flowchart LR
 | Detail | `s` | Stroll (from current asset) |
 | Detail | Escape / Back | Previous page (`history.back()`) |
 | Stroll | `l` | Lightbox (center or focused satellite) |
-| Stroll | `d` / Enter | Detail page |
+| Stroll | Enter (satellite focused) | Stroll, recentred on that satellite |
+| Stroll | `d` (or Enter with the center focused) | Detail page |
 | Stroll | Escape / Back | Previous page (`history.back()`) |
 | Compare | `d` | Detail page (focused column) |
 | Compare | Escape / Back | Previous page (`history.back()`) |
-| Any page | Shift+B | Jump directly to browse grid |
+| Detail / Stroll / Compare | Shift+B | Jump directly to browse grid (not while the lightbox is open) |
 
 ### Back navigation {#back-navigation}
 
 There are two distinct "go back" actions:
 
 - **Escape** (or browser Back button) — step back one level. On a page, this returns to wherever you came from via `history.back()`. In the lightbox overlay, it closes the overlay. On the browse grid, it clears the current selection or focus.
-- **Shift+B** — jump directly to the browse grid, regardless of how deep you are. Useful when you've followed a chain of similar images or navigated through stroll and want to return to your search results.
+- **Shift+B** — jump directly to the browse grid from the detail, stroll, or compare page, regardless of how deep you are. It does not work while the lightbox is open (there, `b` sets the Blue label); close the lightbox first. Useful when you've followed a chain of similar images or navigated through stroll and want to return to your search results.
 
 The lightbox is available on browse, detail, and stroll pages. It uses the same shared component with page-specific callbacks for rating/label changes and navigation. Rating and color label editing (stars, color dots, 0–5 / Alt+1–7 keys) works everywhere the lightbox is open.
 
@@ -363,7 +369,7 @@ Clicking a thumbnail opens a full-screen lightbox overlay. The lightbox is avail
 - **Counter**: the top bar shows your position (e.g., "3 / 156")
 - **Close**: click the × button or press Escape to close the overlay
 - **Detail page**: click the image, press `d`, or click "↗ Detail" to open the full detail page for the current asset
-- **Stroll**: press `s` to start strolling from the current asset
+- **Stroll** *(Pro)*: press `s` to start strolling from the current asset
 
 ### Info panel
 
@@ -406,6 +412,7 @@ All browse keyboard shortcuts for rating and label work inside the lightbox:
 | Click image | Open detail page |
 | i | Toggle info panel |
 | d | Open detail page |
+| s | Stroll from the current asset *(Pro)* |
 | 1-5 | Set rating |
 | 0 | Clear rating |
 | Alt+1 through Alt+7 | Set color label |
@@ -413,7 +420,7 @@ All browse keyboard shortcuts for rating and label work inside the lightbox:
 | r/o/y/g/b/p/u | Set label by color initial |
 | , (comma) | Fit to screen (zoom) |
 | . (period) | 100% zoom |
-| + | Zoom in *(or bump slideshow speed +1 s when slideshow is running)* |
+| + or = | Zoom in *(or bump slideshow speed +1 s when slideshow is running)* |
 | - | Zoom out *(or bump slideshow speed −1 s when slideshow is running)* |
 | Space | Start / pause slideshow |
 
@@ -490,11 +497,11 @@ The right side contains the asset's metadata, all editable inline:
 
 **Color label** -- seven colored dots (Red, Orange, Yellow, Green, Blue, Pink, Purple) with a label name shown below the active dot. Click a dot to set that label; click the active dot again to clear it. Changes are written back to XMP recipe files on disk.
 
-**Tags** -- displayed as removable chips. Click the x on a chip to remove that tag. Use the text input below to add new tags -- it offers autocomplete suggestions from your catalog's tag list as you type. Changes are written back to XMP recipe files on disk with operation-level deltas (tags added independently in CaptureOne or Lightroom are preserved).
+**Tags** -- displayed as removable chips. Click the x on a chip to remove that tag. Use the text input below to add new tags -- it offers autocomplete suggestions from your catalog's tag list as you type. A tag that was added by a machine carries a small source badge on its chip: `xmp` (XMP import), `auto` (auto-tag) or `vlm` (VLM describe); your own tags have no badge, and hovering a chip explains its origin. Adding such a tag yourself in the input makes it -- and its ancestors -- a `user` tag: the badge disappears and `maki tag clear --source ...` no longer removes it. Changes are written back to XMP recipe files on disk with operation-level deltas (tags added independently in CaptureOne or Lightroom are preserved).
 
 **Suggest tags** *(Pro)* -- a "Suggest tags" button appears below the tag input in the Pro edition. Click it to analyze the asset image with the SigLIP vision model. The button shows "Analyzing..." while the model processes (the first request may take a few seconds while the model loads). Results appear as suggestion chips, each showing the tag name and a confidence percentage. Tags already on the asset appear dimmed with an "already applied" label. Click ✓ to accept a new tag (it is added immediately), click × to dismiss it, or click "Accept new" to apply all unapplied suggestions at once.
 
-**Similar images** *(Pro)* -- a collapsible section with three buttons: **Embed** builds the asset's SigLIP embedding (no tags applied), **Find similar** lists the nearest assets inline with similarity percentages, **Browse similar** opens the browse grid as a `similar:<id>` search, and **Stack similar** proposes a stack from the nearest neighbours above a threshold.
+**Similar images** *(Pro)* -- a collapsible section with five buttons: **Embed** builds the asset's SigLIP embedding (no tags applied), **Find similar** lists the nearest assets inline with similarity percentages, **Browse similar** opens the browse grid as a `similar:<id>` search, **Stack similar** proposes a stack from the nearest neighbours above a threshold (only shown when the asset is not in a stack yet), and **Stroll from here** opens the [stroll page](#stroll-page) with this asset as the center.
 
 **Re-import metadata** -- a "Re-import metadata" button appears below the tag section. Click it to clear the asset's tags, description, rating, and color label, then re-extract metadata from variant source files (XMP recipe sidecars and embedded XMP in JPEG/TIFF files). A confirmation dialog asks before proceeding since the operation is destructive. This is useful for cleaning up metadata after splitting mis-grouped assets, where tags from multiple unrelated images may have been merged together. The page reloads after completion to reflect all changes. Offline volumes are silently skipped during re-extraction.
 
@@ -567,7 +574,7 @@ A fixed toolbar appears at the bottom of the screen whenever one or more assets 
 - When you are **not** browsing a collection, a "+ Collection" button adds the selected assets to the chosen collection.
 - When you **are** browsing a collection (the collection filter is active), a "- Collection" button removes the selected assets from that collection. The dropdown auto-selects the current collection.
 
-**Stack**: creates a stack from the selected assets. The first selected asset becomes the pick. This is a lightweight, reversible grouping -- assets remain independent. When the selection already touches an existing stack, the button gives way to three context-sensitive ones: **+ Stack** adds the unstacked selection to that stack, **− Stack** removes the selected members from it, and **Set pick** makes the single selected member the stack's pick.
+**Stack**: creates a stack from the selected assets. The first selected asset becomes the pick. This is a lightweight, reversible grouping -- assets remain independent. When the selection already touches an existing stack, up to three context-sensitive buttons appear in addition to **Stack** and **Unstack**: **+ Stack** adds the unstacked selection to that stack (when the selection touches exactly one stack), **− Stack** removes the selected members from their stack, and **Set pick** makes the single selected member the stack's pick.
 
 **Unstack**: removes the selected assets from their stacks. If a stack has one or fewer members after removal, it auto-dissolves.
 
@@ -581,7 +588,7 @@ A fixed toolbar appears at the bottom of the screen whenever one or more assets 
 
 **Auto-tag** *(Pro)*: analyzes each selected asset with the SigLIP vision model and applies suggested tags above the configured confidence threshold. A confirmation dialog shows the count of selected assets. After processing, a summary reports how many tags were applied. This is the one-shot "trust the model" path — every suggestion above threshold is written immediately.
 
-**Review tags…** *(Pro)*: same model pass as Auto-tag, but instead of writing immediately, opens a two-pane review modal so you can prune the AI's picks before any tag is committed. Operates on the current selection if non-empty, otherwise on every asset matching the live filter. The modal opens immediately in a "Computing…" phase that streams progress while the model loads and scores assets (the first request can take 30–60 s while the model warms up — the progress bar reassures you nothing is hung). When the pass completes, the modal flips to a two-pane review:
+**Review tags…** *(Pro)*: same model pass as Auto-tag, but instead of writing immediately, opens a two-pane review modal so you can prune the AI's picks before any tag is committed. Operates on the current selection; like every batch toolbar button it is only available while at least one asset is selected (use Shift+Cmd+A / Shift+Ctrl+A first to review everything matching the current filter). The modal opens immediately in a "Computing…" phase that streams progress while the model loads and scores assets (the first request can take 30–60 s while the model warms up — the progress bar reassures you nothing is hung). When the pass completes, the modal flips to a two-pane review:
 
 - **Left pane**: every tag the model proposed, sorted by candidate count, with a mean-confidence bar per row. Click a tag to inspect its candidates in the right pane. Three states per tag — pending (default), applied (after you commit it, strikethrough on the row), or skipped (dismissed without applying).
 - **Right pane**: thumbnail grid of every asset the selected tag was proposed for, pre-checked with a confidence overlay. A `from: <label> →` caption appears when the AI vocabulary mapping is non-identity (e.g. SigLIP scored `skyscraper` but the vocabulary maps that to `subject|urban|architecture|skyscraper`). A confidence slider auto-toggles cells above/below the threshold; a "Skip already-tagged assets" filter hides assets that already carry the tag.
@@ -678,13 +685,13 @@ The focused card has a blue outline, visually distinct from the selection highli
 | Shift+F | Toggle filter bar visibility |
 | f | Toggle the facet sidebar |
 | m | Toggle the map view |
-| s | Open the stroll page for the focused card (visual similarity exploration) |
+| s | Open the stroll page for the focused card (visual similarity exploration) *(Pro)* |
 
 Single-letter label shortcuts and number keys for rating operate on the focused card when no batch selection is active. When assets are selected (selection count > 0), rating keys apply to the entire batch.
 
 ### Focus persistence
 
-Focus position is preserved across pagination and sort changes. If you are focused on card 5 and sort by name, card 5 (by position) remains focused after the grid reloads.
+Focus is preserved across pagination and sort changes. Focus follows the asset first: if you are focused on a card and sort by name, the same asset remains focused after the grid reloads, wherever it now sits on the page. Only when that asset is no longer on the page (for example after turning the page) does focus fall back to the same position in the grid.
 
 ### Input suppression
 
@@ -721,6 +728,7 @@ Smart previews are loaded automatically when available, with a pulsing HD badge 
 | d | Open detail page for focused asset |
 | s | Toggle sync zoom |
 | Escape | Return to browse |
+| Shift+B | Jump straight back to the browse grid |
 | 1-5 | Set rating on focused asset |
 | 0 | Clear rating |
 | Alt+1 through Alt+7 | Set color label |
@@ -763,7 +771,7 @@ The `(N as leaf)` text is **clickable** — it lands on the browse page with `ta
 
 ### Export vocabulary
 
-The **Export vocabulary…** button in the page header downloads the whole tag vocabulary through `GET /api/tags/export-vocabulary`. A small modal picks the format — YAML (the `[ai] labels` vocabulary format, hierarchy preserved), plain keyword text (one tag per line, importable into Lightroom / Capture One), or JSON — and two options: include asset counts, and prune entries that exist in the vocabulary file but are unused in the catalog. The CLI equivalent is `maki tag export-vocabulary`.
+The **Export vocabulary…** button in the page header downloads the whole tag vocabulary through `GET /api/tags/export-vocabulary`. A small modal picks the format — YAML (the `[ai] labels` vocabulary format, hierarchy preserved), plain keyword text (one tag per line, importable into Lightroom / Capture One), or JSON — and three options: include asset counts (YAML / JSON only), prune entries that exist in the vocabulary file but are unused in the catalog, and export the built-in default vocabulary only (ignores your catalog tags; useful for comparing your tree to the default). The CLI equivalent is `maki tag export-vocabulary`.
 
 ### Inline edit actions
 
@@ -808,7 +816,7 @@ Every action writes straight to `searches.toml` and reloads the page, so the CLI
 
 ## Stats Page
 
-Navigate to `/stats` or click "Stats" in the navigation bar to see a visual overview of your catalog.
+Navigate to `/stats` or choose "Stats" from the Catalog ▾ menu in the navigation bar to see a visual overview of your catalog.
 
 The stats page displays:
 
@@ -846,7 +854,7 @@ On the asset detail page, a "Faces" section appears when faces have been detecte
 
 ### Browse face filters
 
-- **Person dropdown**: in the browse filter row, a person dropdown (when people exist) lets you filter to assets containing a specific person.
+- **People filter**: in the browse filter row, a chip-based "Filter by people…" input (shown when people exist) lets you filter to assets containing one or more people. Each picked person becomes a chip; multiple chips combine with AND, so the asset must contain all of them.
 - **Face count badge**: browse cards show a face count badge next to the variant count badge.
 - **Query filters**: `faces:any`, `faces:none`, `faces:N`, `faces:N+`, `person:<name>` work in the query input.
 
@@ -857,7 +865,7 @@ On the asset detail page, a "Faces" section appears when faces have been detecte
 
 The stroll page provides a visual similarity exploration experience. Instead of browsing a flat grid, you start with a center image and see its most visually similar neighbors arranged in a radial layout around it. Click any neighbor to make it the new center, and the neighbors update -- letting you "stroll" through your collection by visual similarity.
 
-Navigate to `/stroll` or click "Stroll" in the navigation bar. You can also press `s` on the browse page (when a card is focused) or click the "Stroll" button on the asset detail page to start strolling from a specific asset.
+Navigate to `/stroll` or click "Stroll" in the navigation bar. You can also press `s` on the browse page (when a card is focused) or click the "Stroll from here" button in the Similar images section of the asset detail page to start strolling from a specific asset.
 
 ### Layout
 
@@ -913,7 +921,7 @@ Each group lists its file locations with a per-location **Remove** button that d
 
 ![Analytics dashboard with charts and statistics](../screenshots/analytics-dashboard.png)
 
-Navigate to `/analytics` or click "Analytics" in the navigation bar to see shooting and storage analytics.
+Navigate to `/analytics` or choose "Analytics" from the Catalog ▾ menu in the navigation bar to see shooting and storage analytics.
 
 The analytics page displays:
 
@@ -930,7 +938,7 @@ All charts auto-scale to their data. This complements the [Stats Page](#stats-pa
 
 ## Backup Status Page
 
-Navigate to `/backup` or click "Backup" in the navigation bar to see backup health at a glance.
+Navigate to `/backup` or choose "Backup" from the Catalog ▾ menu in the navigation bar to see backup health at a glance.
 
 The backup status page displays:
 
@@ -944,7 +952,7 @@ This is the web equivalent of `maki backup-status` on the command line. See [Mai
 
 ## Volumes Page
 
-Navigate to `/volumes` or click "Volumes" in the navigation bar to manage registered volumes from the browser. This page is the web equivalent of `maki volume add/list/rename/set-purpose/remove` and is designed for users who don't want to drop into the CLI for routine volume management.
+Navigate to `/volumes` or choose "Volumes" from the Catalog ▾ menu in the navigation bar to manage registered volumes from the browser. This page is the web equivalent of `maki volume add/list/rename/set-purpose/remove` and is designed for users who don't want to drop into the CLI for routine volume management.
 
 The page shows a table of all registered volumes with:
 

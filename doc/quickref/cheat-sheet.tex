@@ -117,10 +117,13 @@ Delete a tag (cascades to descendants) from every asset. \opt{--apply} \\
 TAG accepts the same \cmd{=} / \cmd{\textasciicircum} markers as \cmd{tag rename}.
 
 \subsection{maki tag split \textit{OLD NEW...}}
-Replace one leaf tag by two or more tags. \opt{--keep} \opt{--apply}
+Replace one leaf tag by one or more tags. \opt{--keep} \opt{--apply}
 
-\subsection{maki tag scan / expand-ancestors \textit{[QUERY]}}
-Report malformed tags (read-only); add missing ancestor levels. \opt{--asset} \opt{--apply}
+\subsection{maki tag scan}
+Report malformed tags in the whole catalog (read-only).
+
+\subsection{maki tag expand-ancestors \textit{[QUERY]}}
+Add missing ancestor levels. \opt{--asset} \opt{--apply}
 
 \subsection{maki tag clear \textit{ASSET\_ID}}
 Remove all tags from an asset. \opt{--source SRC}
@@ -311,7 +314,7 @@ Rebuild SQLite from YAML sidecars. \opt{--asset ID} (per-asset)
 \subsection{Maintenance Cycle}
 \begin{enumerate}[leftmargin=1.5em]
 \item \cmd{maki verify} — check integrity
-\item \cmd{maki sync} — detect moved/missing
+\item \cmd{maki sync /Volumes/Photos} — detect moved/missing
 \item \cmd{maki sync-metadata} — bidirectional XMP \pro
 \item \cmd{maki cleanup --apply} — remove stale
 \end{enumerate}
@@ -319,7 +322,7 @@ Rebuild SQLite from YAML sidecars. \opt{--asset ID} (per-asset)
 \subsection{Backup \& Archive}
 \begin{enumerate}[leftmargin=1.5em]
 \item \cmd{maki volume add Archive /mnt/nas --purpose backup}
-\item \cmd{maki relocate --target Archive ""} — copy all
+\item \cmd{maki relocate --target Archive --query ""} — copy all
 \item \cmd{maki backup-status} — check coverage
 \item \cmd{maki dedup --apply} — remove same-volume dups
 \end{enumerate}
@@ -397,9 +400,10 @@ All support: \cmd{x} (exact), \cmd{x+} (min), \cmd{x-y} (range), \cmd{x,y} (OR)
 \cmd{copies:2+} & File copies \\
 \cmd{variants:2+} & Variant count \\
 \cmd{scattered:2+} & Files spread across 2+ session roots \\
-\cmd{duration:30+} & Video duration (seconds) \\
+\cmd{duration:30+} & Audio/video duration (seconds) \\
 \cmd{codec:h264} & Video codec (partial) \\
-\cmd{faces:2+} & Face count \pro \\
+\cmd{faces:2+} & Face count \\
+\cmd{embed:none} & No embedding \\
 \end{tabularx}
 
 \subsection{Date Filters}
@@ -428,7 +432,6 @@ All support: \cmd{x} (exact), \cmd{x+} (min), \cmd{x-y} (range), \cmd{x,y} (OR)
 \cmd{similar:72a0bb4b} & Visual similarity \\
 \cmd{min\_sim:90} & Similarity threshold \\
 \cmd{text:sunset} & Text-to-image search \\
-\cmd{embed:none} & No embedding \\
 \end{tabularx}
 
 \subsection{Combining Filters}
@@ -445,7 +448,7 @@ All support: \cmd{x} (exact), \cmd{x+} (min), \cmd{x-y} (range), \cmd{x,y} (OR)
 \begin{tabularx}{\columnwidth}{@{}lX@{}}
 \cmd{ids} & One UUID per line \\
 \cmd{short} & ID, name, type, format, date \\
-\cmd{full} & + tags, description, rating \\
+\cmd{full} & + tags, description \\
 \cmd{json} & JSON array \\
 \cmd{'\{id\}\textbackslash t\{name\}'} & Custom template \\
 \end{tabularx}

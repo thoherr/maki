@@ -1,6 +1,6 @@
 # Scripting
 
-MAKI's CLI is designed for composability with shell scripts and external programs. Every command supports `--json` for structured output, `-q` for piping asset IDs, and stderr/stdout separation so human messages never pollute machine-readable output.
+MAKI's CLI is designed for composability with shell scripts and external programs. Every command supports `--json` for structured output and keeps stderr and stdout separate, so human messages never pollute machine-readable output. For piping asset IDs, `search` and `backup-status` have `-q` (one ID per line); other listing commands such as `collection show` and `duplicates` take `--format ids`.
 
 This chapter covers practical scripting patterns using bash and Python. For interactive multi-step workflows with variables and tab completion, see the [Interactive Shell](09-shell.md) chapter — `maki shell` provides a REPL that eliminates much of the piping and quoting complexity shown here.
 
@@ -103,7 +103,7 @@ Create a "Best of 2026" collection from highly-rated images:
 maki col create "Best of 2026"
 maki search -q "rating:4+ dateFrom:2026-01-01 dateUntil:2026-12-31" \
   | xargs maki col add "Best of 2026"
-echo "Added $(maki col show 'Best of 2026' -q | wc -l | tr -d ' ') assets"
+echo "Added $(maki col show 'Best of 2026' --format ids | wc -l | tr -d ' ') assets"
 ```
 
 ### Verification and Health Checks
@@ -349,7 +349,7 @@ maki backup-status --at-risk -q > at-risk-ids.txt
 cut -d, -f1 ratings.csv | tail -n +2 > ids.txt
 
 # Saved from a previous session
-maki shell -c 'search tag:concert' > concert-ids.txt
+maki shell -c 'search -q tag:concert' > concert-ids.txt
 ```
 
 ---
@@ -362,15 +362,41 @@ maki shell -c 'search tag:concert' > concert-ids.txt
 maki search -q 'tag:"Fools Theater"'
 ```
 
-**Use `--json` for reliable parsing.** Human-readable output is designed for readability, not stability. Field positions, formatting, and labels may change between versions. JSON output is versioned and stable.
+**Use `--json` for reliable parsing.** Human-readable output is designed for readability, not stability. Field positions, formatting, and labels may change between versions. JSON output is the stable interface for scripts.
 
 **Stderr is for humans, stdout is for machines.** Progress messages, warnings, and `--log` output go to stderr. When piping maki's output, only structured results appear on stdout.
 
-**Check exit codes.** maki returns 0 on success and 1 on failure. Commands like `verify` return 1 if any mismatches are found, making them suitable for CI/cron health checks:
+**Check exit codes.** maki distinguishes the outcomes a script usually wants to act on:
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | General failure (I/O, catalog, parse errors), including a failed check: `verify` with hash mismatches, `doctor` with unresolved findings |
+| 2 | Usage error (unknown flag, missing argument) |
+| 3 | Not found (no asset, volume, collection, ... matches what was asked for) |
+| 4 | Volume offline |
+
+Commands like `verify` return 1 if any mismatches are found, making them suitable for CI/cron health checks:
 
 ```bash
 maki verify --volume "Photos" || echo "Integrity check failed!"
 ```
+
+Branch on 3 and 4 to tell a wrong ID or an unmounted drive from a real failure:
+
+```bash
+maki edit "$id" --rating 3
+case $? in
+    0) ;;
+    3) echo "skipping $id: not in the catalog" ;;
+    4) echo "volume offline, retry after mounting" ; exit 0 ;;
+    *) echo "edit failed for $id" >&2 ; exit 1 ;;
+esac
+```
+
+Commands that work through a list of assets do not stop at the first problem: `relocate`, for example, reports a missing asset or an offline volume per asset in its summary (and in the `errors` array of its `--json` output) and still exits 0, so check that output rather than the exit code.
+
+These codes apply to one-shot `maki` invocations. Inside `maki shell`, a failing line prints its error and the script continues (or stops with exit code 1 under `--strict`).
 
 **Dry-run first.** Most destructive commands (sync, cleanup, auto-group, fix-roles) default to report-only mode. Always review the dry-run output before adding `--apply`.
 

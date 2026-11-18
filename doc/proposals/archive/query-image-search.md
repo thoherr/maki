@@ -1,6 +1,6 @@
 # Proposal: Search by Query Image (reverse image lookup)
 
-**Status:** ✅ shipped in v4.10.0 (2026-09-03) as designed below; the batch "find my originals" and persistence questions remain open.
+**Status:** ✅ shipped in v4.10.0 (2026-09-03) as designed below; archived 2026-11-18. Only the batch "find my originals" follow-on and drop/paste on the asset detail page remain open (tracked in `../roadmap.md`, Tier 2).
 
 ## Goal
 

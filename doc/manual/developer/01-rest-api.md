@@ -2,7 +2,7 @@
 
 The `maki serve` command starts an Axum-based web server (default `127.0.0.1:8080`) that exposes HTML page routes, htmx fragment endpoints, and JSON APIs. This chapter documents every route registered in `build_router` (`src/web/mod.rs`); the handlers live in `src/web/routes/`.
 
-*Last reconciled with the router: v4.12.2 (2026-10-19).*
+*Last reconciled with the router: v4.14.0 (2026-11-18).*
 
 Base URL: `http://127.0.0.1:8080` (configurable via `--bind` and `--port`, or `[serve]` in `maki.toml`).
 
@@ -540,7 +540,8 @@ Face crops are served from `/face/{prefix}/{face_id}.jpg`.
 | `GET /smart-preview/{prefix}/{file}` | Smart previews from `<catalog>/smart-previews/`; generated on demand from an online source when `[preview] generate_on_demand` is set, otherwise 404 when missing. `Cache-Control: public, max-age=86400` |
 | `GET /video/{hash}` / `GET /audio/{hash}` | Streams the original file of the variant with that content hash (hex without the `sha256:` prefix) from an online volume. Supports `Range` requests (206, `Accept-Ranges: bytes`); 404 when offline, 416 for an unsatisfiable range. One handler serves both; the two paths only differ in what the URL says |
 | `GET /face/{prefix}/{face_id}.jpg` *(ai)* | Face crops from `<catalog>/faces/` |
-| `GET /favicon.ico`, `GET /static/favicon.ico`, `GET /static/maki-icon.svg`, `GET /static/htmx.min.js`, `GET /static/style.css`, `GET /static/leaflet.min.js`, `GET /static/leaflet.css`, `GET /static/leaflet.markercluster.min.js`, `GET /static/MarkerCluster.css`, `GET /static/MarkerCluster.Default.css`, `GET /static/images/marker-icon.png`, `GET /static/images/marker-icon-2x.png`, `GET /static/images/marker-shadow.png`, `GET /static/images/layers.png`, `GET /static/images/layers-2x.png` | Assets embedded at compile time |
+| `GET /favicon.ico`, `GET /static/favicon.ico`, `GET /static/maki-icon.svg`, `GET /static/htmx.min.js`, `GET /static/style.css`, `GET /static/leaflet.min.js`, `GET /static/leaflet.css`, `GET /static/leaflet.markercluster.min.js`, `GET /static/MarkerCluster.css`, `GET /static/MarkerCluster.Default.css`, `GET /static/images/marker-icon.png`, `GET /static/images/marker-icon-2x.png`, `GET /static/images/marker-shadow.png`, `GET /static/images/layers.png`, `GET /static/images/layers-2x.png` | Assets embedded at compile time. `style.css` is linked as `/static/style.css?v=<fingerprint>` (content hash) and then answers `Cache-Control: public, max-age=31536000, immutable`; without the `v=` query it answers `no-cache` |
+| `GET /static/browse/{name}` | Browse-page script modules (`batch.js`, `keyboard.js`, `facets.js`), embedded at compile time and linked with a content fingerprint (`?v=<fingerprint>`); immutable cache. 404 for any other name |
 
 Responses under `/preview/`, `/smart-preview/` and `/face/` get `Cache-Control: no-cache` from the logging middleware so rotated or regenerated previews revalidate (unchanged files answer 304).
 

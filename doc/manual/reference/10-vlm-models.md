@@ -13,7 +13,7 @@ MAKI tries the **Ollama native API** (`/api/generate`) first, falling back to th
 1. Install [Ollama](https://ollama.com) (or another backend — see [Backends](#backends) below).
 2. Pull a model: `ollama pull qwen2.5vl:3b`
 3. Test connectivity: `maki describe --check`
-4. Describe assets: `maki describe "description:none" --apply --log`
+4. Describe assets: `maki describe "" --apply --log` (assets that already have a description are skipped unless `--force` is given)
 
 To switch models, either set `[vlm] model` in `maki.toml` or pass `--model` on the command line.
 
@@ -387,7 +387,7 @@ No configuration is needed — thinking models work out of the box. If you see e
 **Start small, upgrade later.** Run `maki describe` with Moondream for a quick first pass, then re-describe the best assets with a larger model using `--force`:
 
 ```bash
-maki describe "description:none" --model moondream --apply --log
+maki describe "" --model moondream --apply --log   # already-described assets are skipped
 maki describe "rating:4+" --model qwen3-vl:8b --apply --force --log
 ```
 
@@ -417,7 +417,7 @@ endpoint = "http://localhost:11434"
 model = "qwen2.5vl:3b"                  # the default for plain `maki describe`
 models = ["qwen2.5vl:3b", "qwen3-vl:8b", "moondream:latest"]  # web UI dropdown
 max_image_edge = 512                    # global: resize before sending
-timeout = 300                           # global: 5 min server-side
+timeout = 300                           # global: client waits up to 5 min
 
 # Bigger model — needs more time to load + more context for richer prompts.
 # Lower temperature because we want more deterministic output on careful runs.

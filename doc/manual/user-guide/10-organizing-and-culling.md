@@ -71,14 +71,7 @@ default_filter = "-label:Red"
 
 ### Combined approaches
 
-You can combine filters. For example, show everything that is either rated or not yet tagged as `rest`:
-
-```toml
-[browse]
-default_filter = "rating:1+ OR -tag:rest"
-```
-
-Or hide Red-labeled rejects and rest-tagged shots:
+You can combine filters. Space-separated filters are ANDed (there is no `OR` operator between filters; a comma inside one filter value, as in `label:Green,Blue`, is the only OR form). For example, hide Red-labeled rejects and rest-tagged shots:
 
 ```toml
 [browse]
@@ -93,7 +86,7 @@ The `[browse] default_filter` option in `maki.toml` applies a search filter auto
 
 ### What it does
 
-When set, every browse page load, search query, and stroll session starts with this filter pre-applied. Assets that don't match the filter are hidden from view -- but they remain in the catalog and are fully accessible to CLI commands.
+When set, every browse page load, search query, and stroll session starts with this filter pre-applied. Assets that don't match the filter are hidden from view -- but they remain in the catalog and are fully accessible to operational CLI commands (see [Scope](#scope) below).
 
 ### How to configure it
 
@@ -112,7 +105,7 @@ The web UI shows a checkbox in the filter bar when a default filter is configure
 
 ### Scope
 
-The default filter applies to **browsing views only**: the browse grid, search results, and the stroll page. It does **not** affect operational commands like `maki export`, `maki describe`, `maki verify`, or `maki search` on the CLI. Those commands always operate on the full catalog unless you explicitly pass a query.
+The default filter applies to **browsing and search views**: the browse grid, search results, the stroll page, and `maki search` on the CLI (where it is ANDed with the query you type). It does **not** affect operational commands like `maki export`, `maki describe`, or `maki verify`. Those commands operate on exactly the query or scope you pass.
 
 ### Examples for common workflows
 
@@ -196,7 +189,7 @@ Default filter: `rating:2+` (hide the bottom tier from daily browsing)
 **Bulk-tag the remainder after a culling session.** After rating your keepers from a shoot, tag everything unrated as `rest` in one command:
 
 ```
-maki search -q "path:Capture/2026-03-15 -rating:1+" | xargs maki tag rest
+maki search -q "path:Capture/2026-03-15 rating:0" | xargs -I{} maki tag {} rest
 ```
 
 This clears the backlog for that shoot without deleting anything.
@@ -207,8 +200,8 @@ This clears the backlog for that shoot without deleting anything.
 
 ```
 maki ss save "Portfolio candidates" "rating:4+ -tag:rest" --sort date_desc
-maki ss save "Unreviewed this month" "date:2026-03 -rating:1+ -tag:rest" --sort date_desc
-maki ss save "Needs keywords" "-tag:rest rating:1+ tag:untagged" --sort date_desc
+maki ss save "Unreviewed this month" "date:2026-03 rating:0 -tag:rest" --sort date_desc
+maki ss save "Needs keywords" "-tag:rest rating:1+ tagcount:0" --sort date_desc
 ```
 
 **Don't delete -- set aside.** The `rest` tag is reversible. Deletion is not. You can always reconsider an image later by toggling off the default filter in the web UI.

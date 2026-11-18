@@ -44,7 +44,7 @@ The comma operator works within a single filter value. To require multiple tags,
 maki search "tag:landscape tag:sunset"    # assets with BOTH landscape AND sunset tags
 ```
 
-**Repeating a filter means AND only for `tag:`, `meta:`, and `person:`** (the same in the CLI and the web UI; see [person](#person)). The equality and LIKE filters flatten their repeated values into one OR list, exactly as if they had been written with commas: `type:image type:video` is the same as `type:image,video`, `camera:sony camera:nikon` matches either camera, `format:nef format:cr3` matches either format. The same holds for `label:`, `lens:`, `description:`, `path:`, and `volume:`; repeated `collection:` entries OR-union their members. Numeric, date, and string filters (`rating:`, `iso:`, `focal:`, `f:`, `width:`, `height:`, `copies:`, `variants:`, `duration:`, `tagcount:`, `stale:`, `date:`, `dateFrom:`, `dateUntil:`) are single-valued: when repeated, only the last token counts.
+**Repeating a filter means AND only for `tag:`, `meta:`, and `person:`** (the same in the CLI and the web UI; see [person](#person)). The equality and LIKE filters flatten their repeated values into one OR list, exactly as if they had been written with commas: `type:image type:video` is the same as `type:image,video`, `camera:sony camera:nikon` matches either camera, `format:nef format:cr3` matches either format. The same holds for `label:`, `lens:`, `description:`, `path:`, and `volume:`; repeated `collection:` entries OR-union their members. Numeric, date, and string filters (`rating:`, `iso:`, `focal:`, `f:`, `width:`, `height:`, `copies:`, `variants:`, `duration:`, `tagcount:`, `stale:`, `scattered:`, `bpm:`, `faces:`, `date:`, `dateFrom:`, `dateUntil:`, `codec:`, `key:`, `geo:`, `embed:`, `stacked:`, `similar:`, `min_sim:`, `text:`) are single-valued: when repeated, only the last token counts.
 
 ### Combining Negation and OR
 
@@ -120,7 +120,7 @@ In the web UI, click the mode indicator on a tag chip to cycle through the three
 
 The `=`, `/`, `^`, and `|` prefixes can be combined in any order: `tag:=^Foo`, `tag:/^Foo`, `tag:^|Wed`, etc. `=` and `/` together **combine**: `tag:=/location|Germany` matches the exact path `location|Germany` *and* requires that the asset carries no descendant of it — this is the form the tags page uses for its "(N as leaf)" link. `|` paired with `=` or `/` resolves to `|` (the prefix anchor wins, the other markers are dropped).
 
-`/` and `=` when positioned after another modifier or inside the name are treated as literal characters in tag names (e.g., `f/1.4` works naturally without escaping). Only a **leading** marker is interpreted as a prefix.
+Markers are recognised only in the **leading run** of marker characters (`=`, `/`, `^`, `|`) at the start of the value. After the first other character they are literal, so `/` and `=` inside a tag name need no escaping (e.g., `f/1.4` works naturally).
 
 > **Note:** prior to v4.4.4 the `=` and `/` markers were swapped — `=` meant leaf-only-at-any-level and `/` meant whole-path. The swap was made because `=` reads naturally as "equals" / exact value match, which is what most users expect. If you have saved searches or scripts using the old semantics, swap `=` and `/` in the tag values to preserve the previous behavior.
 
@@ -341,7 +341,7 @@ maki search "focal:35-70"       # between 35mm and 70mm inclusive
 
 ```
 maki search "f:2.8"             # exactly f/2.8
-maki search "f:1.4+"           # f/1.4 or wider (numerically >= 1.4)
+maki search "f:1.4+"           # f/1.4 or narrower (f-number >= 1.4)
 maki search "f:1.4-2.8"        # between f/1.4 and f/2.8 inclusive
 ```
 
@@ -421,7 +421,7 @@ A trailing `*` is implicit — `path:Pictures/2026` and `path:Pictures/2026*` ar
 
 **Performance note:** `path:` is evaluated as `fl.relative_path LIKE ? ESCAPE '\'` and there is no index on `file_locations.relative_path` (the table is indexed only on `content_hash` and `volume_id`), so every pattern is a scan over the file-location rows. Left-anchored patterns reject non-matching rows after a few characters and are noticeably cheaper than patterns starting with `*`, which compare the whole path; on catalogs with hundreds of thousands of assets either form costs more than an indexed filter, so combine `path:` with a selective filter (`volume:`, `tag:`, `date:`) where possible.
 
-**Automatic normalization** (CLI only, not in web UI or saved searches):
+**Automatic normalization** (CLI, including `maki saved-search run`):
 
 | Input | Behavior |
 |-------|----------|
@@ -431,7 +431,9 @@ A trailing `*` is implicit — `path:Pictures/2026` and `path:Pictures/2026*` ar
 | `path:../other` | Resolved relative to current working directory |
 | `path:/Volumes/Photos/Capture/2026` | Stripped to `Capture/2026` with implicit `volume:` filter for the Photos volume |
 
-Patterns containing `*` skip the absolute-path / volume normalization (they pass through unchanged). An explicit `volume:` filter in the same query takes precedence over the auto-detected volume from path normalization.
+Patterns containing `*` are normalized the same way, so an absolute pattern under a volume's mount point is also stripped and scoped to that volume. When a query has several `path:` entries, only the first one is normalized. The auto-detected volume is combined with an explicit `volume:` filter by AND: naming a different volume in the same query yields no results.
+
+In the web UI, the dedicated path input normalizes absolute paths under a volume's mount point in the same way (`~`, `./` and `../` are not expanded there, since the server has no meaningful working directory), and a volume selected in the volume dropdown takes precedence over the auto-detected one. A `path:` token typed into the web search box is used as-is.
 
 **Examples:**
 
@@ -545,6 +547,8 @@ maki search "volume:none orphan:false"       # has locations, but all on offline
 maki search "-volume:none"                   # reachable now: at least one file on an online volume
 maki search "volume:\"External SSD\""        # volume label with spaces (quoted)
 ```
+
+In the CLI, a `volume:` label that matches no registered volume is an error (`unknown volume: '<label>'`), not an empty result. In the web search box the same label matches nothing.
 
 In the web UI, the volume filter is also available as a dropdown control that passes the volume UUID directly to the search backend.
 
@@ -1149,10 +1153,11 @@ maki search "camera:fuji"
 
 ### Values with dashes
 
-Without quotes, a leading `-` is interpreted as negation (`-tag:rejected` means "not tagged rejected"). When a dash appears *inside* a value (like a project name), quoting prevents misinterpretation:
+Negation applies only to a token that **starts** with `-` (`-tag:rejected` means "not tagged rejected"). A dash *inside* a value (`tag:my-project`) is literal and needs no quoting. A value that contains a dash surrounded by spaces fails without quotes because of the spaces, not the dash: the value ends at the first space and the remaining words become free text:
 
 ```bash
-# Wrong: "Geflüchtete" is parsed as negated free-text, not part of the tag
+# Wrong: the tag value ends at the first space ("project/Angekommen");
+# the remaining words, including the lone "-", become free text
 maki search "tag:project/Angekommen im Stadtbild - Geflüchtete im Portait"
 
 # Correct: inner quotes keep the entire value together
@@ -1173,7 +1178,7 @@ maki search 'tag:subject'  # matches all descendants — no | needed
 | Character | In filter value | Solution |
 |-----------|----------------|----------|
 | Space | Splits into multiple tokens | `tag:"golden hour"` |
-| `-` | Interpreted as negation | `tag:"my - project"` |
+| `-` | Negation only at the start of a token; literal inside a value | `tag:my-project` (no quoting needed); `tag:"my - project"` when spaces surround it |
 | `\|` | Shell pipe | `'tag:"subject\|nature"'` |
 | `"` | Ends quoted value | No escape sequence exists — a literal `"` cannot be typed in a query value. Match such tags via the web UI tag chips or the tags page. |
 

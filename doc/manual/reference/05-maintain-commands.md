@@ -181,6 +181,7 @@ Checked per asset:
   recipe's `content_hash` and `pending_writeback` flag (the exact
   divergence class behind the v4.5.15 stale-pending bug).
 - **face_count** against the faces table.
+- **tag_sources** — the tag provenance map against the sidecar's.
 
 `--repair` rebuilds the SQLite side from YAML for every flagged
 asset (faces, embeddings, and collection/stack memberships are
@@ -245,6 +246,7 @@ On successful verification, updates the `verified_at` timestamp on each file loc
 | **MISSING** | Catalog location exists but file is gone from disk. | Catalog |
 | **UNTRACKED** | File on disk not found in catalog. | Path |
 | **SKIPPED** | Volume offline, path unreadable, or other error. | Both |
+| **RECENT** | Not re-hashed because it was verified within `--max-age` days (shown by `--log`). | Both |
 
 **Exit codes**: Exits with code 1 if any hash mismatches (FAILED) are found. Exits with code 0 for all other statuses, including MODIFIED.
 
@@ -381,7 +383,7 @@ New files are reported but not auto-imported -- run `maki import` separately to 
 **--remove-stale**
 : Remove catalog location records for missing files. Requires `--apply`. Assets that become locationless (all locations removed) are automatically deleted along with their sidecar files.
 
-`--json` outputs a `SyncResult` with counts and detail arrays for each state.
+`--json` outputs a `SyncResult` with one counter per state (`unchanged`, `moved`, `new_files`, `modified`, `missing`, `stale_removed`, `orphaned_cleaned`, `locationless_after`) and an `errors` array. There are no per-file detail arrays; use `--log` for per-file status.
 
 `--log` prints per-file status to stderr.
 
@@ -477,7 +479,7 @@ Non-XMP recipes (COS, pp3, etc.) get their hash updated but no metadata extracti
 **--exif-only**
 : Re-extract only EXIF/source metadata (camera, lens, ISO, exposure, resolution, date) from media files, WITHOUT clearing tags, description, rating, or color label. Useful for backfilling missing EXIF data on assets whose tags and ratings have been manually curated. Requires `--asset <ID>` or asset IDs as positional arguments.
 
-`--json` outputs a refresh result with changed/unchanged counts and detail arrays.
+`--json` outputs a `RefreshResult` with the counters `unchanged`, `refreshed`, `missing`, `skipped` and an `errors` array (no per-file detail arrays).
 
 `--log` prints per-file status to stderr.
 
@@ -485,7 +487,7 @@ Non-XMP recipes (COS, pp3, etc.) get their hash updated but no metadata extracti
 
 ### EXAMPLES
 
-Check all recipes for changes (report-only by default):
+Check all recipes for changes without applying them (`refresh` applies changes unless `--dry-run` is given):
 
 ```bash
 maki refresh --dry-run
@@ -565,7 +567,7 @@ Without `--dry-run`, changes are applied immediately.
 **--media**
 : Also re-extract embedded XMP from JPEG/TIFF variant files (phase 3).
 
-`--json` outputs a `SyncMetadataResult` with per-status counts and conflict details.
+`--json` outputs a `SyncMetadataResult` with per-status counters (`inbound`, `outbound`, `unchanged`, `skipped`, `conflicts`, `media_refreshed`), the `dry_run` flag and an `errors` array. Conflicts are only counted; `--log` shows which recipes are affected.
 
 `--log` prints per-recipe status to stderr.
 
@@ -646,7 +648,7 @@ Scope can be narrowed with a positional search query, `--asset`, or `--volume`. 
 : Write current metadata to every XMP recipe in the matching set, not just those flagged pending. Useful for an initial sync, for rematerialising catalog metadata onto disk after large catalog-only restructuring (rename, split, rebuild), or for pushing accumulated edits when you've kept auto-flush off and now want a known asset set written through.
 
 **--mirror-tags** (requires `--all`)
-: Make XMP keyword lists exactly mirror the catalog. Without this flag, writeback is **additive**: catalog tags get pushed onto the XMP but XMP tags the catalog no longer has are left untouched. Renames, splits, deletions, and `tag fix-unicode` performed in MAKI therefore leave stale entries on disk — invisible drift that compounds across batches. With `--mirror-tags`, the writer reads the existing `dc:subject` and `lr:hierarchicalSubject`, diffs against the asset's catalog tags, and removes the stale entries before writing the current set. Pair with a query (`--mirror-tags --all "tag:NewName"` etc.) to scope a one-shot reconciliation; `--all` is required because the mirror operation is most useful as a broad sweep, not on the narrow pending-only default.
+: Make XMP keyword lists exactly mirror the catalog. Without this flag, writeback is **additive**: catalog tags get pushed onto the XMP but XMP tags the catalog no longer has are left untouched. Renames, splits, deletions, and `tag fix-unicode` performed in MAKI therefore leave stale entries on disk — invisible drift that compounds across batches. With `--mirror-tags`, the writer reads the existing `dc:subject` and `lr:hierarchicalSubject`, diffs against the asset's catalog tags, and removes the stale entries before writing the current set. Setting `[writeback] mirror_tags = true` in `maki.toml` turns mirror mode on by default for every writeback run (the flag and the config value are OR-ed). Pair with a query (`--mirror-tags --all "tag:NewName"` etc.) to scope a one-shot reconciliation; `--all` is required because the mirror operation is most useful as a broad sweep, not on the narrow pending-only default.
 
 **--force**
 : Rebuild the `dc:subject` and `lr:hierarchicalSubject` blocks from catalog state, discarding any pre-existing XMP entry. More aggressive than `--mirror-tags`: where `--mirror-tags` diffs against the catalog and only removes entries the catalog doesn't have, `--force` empties both blocks completely and re-adds the catalog's tags fresh. Use this when stale entries are stuck in a file that `--mirror-tags` doesn't catch — runaway entity-escape leftovers (`Bobby &amp;amp;amp;… the BigTones`), leaf-only entries stranded in `lr:hierarchicalSubject` from years of multi-tool roundtrips, manually corrupted XMP — or as a guaranteed "this file now matches catalog" escape hatch after metadata drift. Unlike `--all`, `--force` keeps the explicit scope (`--asset`, query, or `--volume`) but ignores the pending-flag filter. Combinable with `--all` if you want catalog-wide rebuild.
@@ -773,7 +775,7 @@ Scans all file locations and recipes across online volumes, checking for files t
 2. **Locationless variants**: Removes variants with zero remaining file locations from assets that still have other located variants. Prevents ghost variants from accumulating after file moves or reimports. Cleans up derived files (previews, smart previews) and updates denormalized columns.
 3. **Orphaned assets**: Deletes assets where all variants have zero remaining file locations, along with their recipes, variants, faces, embeddings, previews, smart previews, face crops, embedding binaries, catalog rows, and sidecar YAML files.
 4. **Orphaned previews**: Removes preview files whose content hash no longer matches any variant in the catalog.
-5. **Orphaned smart previews**: Same as above for the `smart_previews/` directory.
+5. **Orphaned smart previews**: Same as above for the `smart-previews/` directory.
 6. **Orphaned SigLIP embeddings**: Removes embedding binary files (`embeddings/<model>/`) whose asset ID no longer exists in the catalog.
 7. **Orphaned face crops**: Removes face crop thumbnails (`faces/`) whose face ID no longer exists in the catalog.
 8. **Orphaned ArcFace embeddings**: Removes face embedding binaries (`embeddings/arcface/`) whose face ID no longer exists in the catalog.
@@ -789,7 +791,7 @@ None.
 ### OPTIONS
 
 **--volume \<LABEL\>**
-: Limit stale-location scanning to a specific volume. When omitted, checks all online volumes.
+: Limit stale-location scanning to a specific volume. When omitted, checks all online volumes. A run scoped with `--volume` or `--path` skips the catalog-wide orphan passes 4-8 (previews, smart previews, embeddings, face files); the JSON result reports this as `skipped_global_passes: true`. Run `maki cleanup` without a scope to cover them.
 
 **--path \<PREFIX\>**
 : Limit stale-location scanning to files under this path prefix. Accepts either a relative path on the volume or an absolute path (auto-detects the volume and converts to a relative prefix). Useful for scoping cleanup to a specific subdirectory without scanning the full volume.
@@ -842,7 +844,7 @@ maki cleanup --volume "Photos" --path "Archive/Old" --apply --log
 Cleanup with JSON output for scripting:
 
 ```bash
-maki cleanup --apply --json | jq '{stale: .stale_locations, orphans: .orphaned_assets, previews: .orphaned_previews}'
+maki cleanup --apply --json | jq '{stale: .stale, orphans: .orphaned_assets, previews: .orphaned_previews}'
 ```
 
 ### SEE ALSO
@@ -1694,15 +1696,11 @@ maki [GLOBAL FLAGS] migrate
 
 Runs all pending database schema migrations. Migrations are idempotent (safe to run repeatedly) and add new columns, indexes, and tables needed by newer versions of maki.
 
-A `schema_version` table tracks the current schema version. On startup, MAKI performs a single-query fast-check against this version number and skips migration logic entirely when the schema is already up to date, avoiding the overhead of running dozens of idempotent `ALTER TABLE` statements on every launch.
+A `schema_version` table tracks the current schema version. Migrations never run implicitly: every command except `init` and `migrate` checks the stored version at startup with a single query and exits with an error (`catalog schema is outdated ... Run maki migrate to update.`) if the catalog is older than the binary expects. Run `maki migrate` once after upgrading MAKI; `maki init` and `maki rebuild-catalog` also apply all migrations.
 
 Each schema version migrates in its own transaction and records its version number inside that transaction. If a step fails, `maki migrate` prints which one (for example `schema migration v12: backfill assets_tags_fts`), the catalog stays at the previous version, and the command can simply be re-run after the cause is fixed.
 
-Migrations also run automatically once at program startup for all commands, so this command is primarily useful for:
-
-- Explicit migration after a version upgrade
-- Scripting and automation
-- Verifying the schema is up to date
+On a catalog that is already up to date the command changes nothing, so it is also safe to use in scripts and to verify that the schema is current.
 
 **Rating repair**: The migration includes a `MicrosoftPhoto:Rating` normalization pass. Windows Photo Gallery and some other tools write a percentage-based rating scale (1/13/25/50/75/99) into `MicrosoftPhoto:Rating` instead of the standard `xmp:Rating` (1–5). The `normalize_rating()` function maps these values to the 1–5 scale. The migration fixes affected ratings in both the SQLite catalog and YAML sidecar files.
 

@@ -215,7 +215,7 @@ Supports stdin piping for integration with `maki search -q` and shell scripting.
 : The name of the collection to add assets to.
 
 **ASSET_IDS** (required)
-: One or more asset IDs to add. Also accepts IDs from stdin.
+: One or more asset IDs to add. Also accepts IDs from stdin. Full asset UUIDs are required; unique prefixes are not resolved here (use `maki search -q` to obtain full IDs).
 
 ### OPTIONS
 
@@ -279,7 +279,7 @@ Removes one or more assets from a collection. The assets themselves are not dele
 : The name of the collection to remove assets from.
 
 **ASSET_IDS** (required)
-: One or more asset IDs to remove.
+: One or more asset IDs to remove. Must be full asset UUIDs (prefixes are not resolved).
 
 ### OPTIONS
 
@@ -638,7 +638,7 @@ Stacks are persisted in `stacks.yaml` at the catalog root and restored during `r
 ### ARGUMENTS
 
 **ASSET_IDS** (required)
-: Two or more asset IDs. The first ID becomes the pick (position 0).
+: Two or more asset IDs. The first ID becomes the pick (position 0). Full asset UUIDs are required; unique prefixes are not resolved here (use `maki search -q` to obtain full IDs).
 
 ### OPTIONS
 
@@ -691,10 +691,10 @@ Assets that are already in a stack (any stack) cannot be added and will produce 
 ### ARGUMENTS
 
 **REFERENCE** (required)
-: Any asset ID that is already in the target stack.
+: Any asset ID that is already in the target stack. Must be a full asset UUID (prefixes are not resolved).
 
 **ASSET_IDS** (required)
-: One or more asset IDs to add to the stack.
+: One or more asset IDs to add to the stack. Must be full asset UUIDs (prefixes are not resolved).
 
 ### OPTIONS
 
@@ -746,7 +746,7 @@ Assets not currently in a stack are silently skipped.
 ### ARGUMENTS
 
 **ASSET_IDS** (required)
-: One or more asset IDs to remove from their stacks.
+: One or more asset IDs to remove from their stacks. Must be full asset UUIDs (prefixes are not resolved).
 
 ### OPTIONS
 
@@ -796,7 +796,7 @@ Promotes an asset to position 0 (the "pick") of its stack. The pick is the asset
 ### ARGUMENTS
 
 **ASSET_ID** (required)
-: The asset ID to make the pick. Must be in a stack.
+: The asset ID to make the pick. Must be in a stack. Must be a full asset UUID (prefixes are not resolved).
 
 ### OPTIONS
 
@@ -846,7 +846,7 @@ Dissolves the stack that contains the given asset. All member assets become unst
 ### ARGUMENTS
 
 **ASSET_ID** (required)
-: Any asset ID in the stack to dissolve.
+: Any asset ID in the stack to dissolve. Must be a full asset UUID (prefixes are not resolved).
 
 ### OPTIONS
 
@@ -945,7 +945,7 @@ Displays the ordered member list of the stack containing the given asset. The pi
 ### ARGUMENTS
 
 **ASSET_ID** (required)
-: Any asset ID that belongs to a stack.
+: Any asset ID that belongs to a stack. Must be a full asset UUID (prefixes are not resolved).
 
 ### OPTIONS
 
@@ -1488,7 +1488,7 @@ Assigns a human-readable name to a person. Person IDs are shown by `maki faces p
 ### ARGUMENTS
 
 **PERSON_ID** (required)
-: The person's UUID.
+: The person's UUID or a unique prefix of it.
 
 **NAME** (required)
 : The name to assign.
@@ -1520,10 +1520,10 @@ Moves all faces from the source person to the target person, then deletes the so
 ### ARGUMENTS
 
 **TARGET_ID** (required)
-: The person to keep.
+: The person to keep (UUID or unique prefix).
 
 **SOURCE_ID** (required)
-: The person to merge into the target (deleted after merge).
+: The person to merge into the target (deleted after merge; UUID or unique prefix).
 
 ### EXAMPLES
 
@@ -1552,7 +1552,7 @@ Deletes a person record. All faces assigned to this person become unassigned (th
 ### ARGUMENTS
 
 **PERSON_ID** (required)
-: The person's UUID.
+: The person's UUID or a unique prefix of it.
 
 ### EXAMPLES
 
@@ -1581,7 +1581,7 @@ Removes the person assignment from a single face. The face record is preserved; 
 ### ARGUMENTS
 
 **FACE_ID** (required)
-: The face's UUID.
+: The face's UUID or a unique prefix of it.
 
 ### EXAMPLES
 

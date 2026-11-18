@@ -80,7 +80,7 @@ MAKI calls several external command-line tools as separate processes when they a
 | Tool | Used for | License |
 |------|----------|---------|
 | `dcraw` / `libraw` | RAW image preview generation | LGPL-2.1 (libraw), GPL-2 (dcraw) |
-| `ffmpeg` | Video thumbnail and proxy generation | LGPL-2.1 / GPL-2 (build-dependent) |
+| `ffmpeg` | Video thumbnails and audio waveform previews | LGPL-2.1 / GPL-2 (build-dependent) |
 | `ffprobe` | Video metadata extraction (duration, codec, resolution) | Same as ffmpeg |
 | `curl` | AI model download and VLM HTTP calls | MIT/X-style |
 | `keyfinder-cli` | Musical key detection (`maki audio analyze`) | GPL-3.0 |
@@ -88,7 +88,7 @@ MAKI calls several external command-line tools as separate processes when they a
 
 Because MAKI invokes these tools via `std::process::Command` (a separate-process boundary), there is no linking and no derived-work relationship — MAKI's Apache-2.0 license is unaffected by their licenses, and vice versa.
 
-If you redistribute MAKI bundled together with these tools (for example, in an installer that ships ffmpeg alongside the `maki` binary), you become the redistributor of those tools and must comply with their respective licenses. The default MAKI release archives only contain the `maki` binary, the manual PDF, and `THIRD_PARTY_LICENSES.md` — no external tools are bundled.
+If you redistribute MAKI bundled together with these tools (for example, in an installer that ships ffmpeg alongside the `maki` binary), you become the redistributor of those tools and must comply with their respective licenses. The default MAKI release archives only contain the `maki` binary, `README.md`, `LICENSE`, and `THIRD_PARTY_LICENSES.md` — no external tools are bundled. The manual and quick-reference PDFs are separate release assets.
 
 ## Reporting license concerns
 

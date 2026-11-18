@@ -76,7 +76,7 @@ Attempt to re-initialize (fails safely):
 ```bash
 cd ~/Photos
 maki init
-# Error: A maki catalog already exists in this directory.
+# Error: a maki catalog already exists in this directory.
 ```
 
 ### SEE ALSO
@@ -484,7 +484,7 @@ maki-volume-rename -- change a volume's label
 
 ### DESCRIPTION
 
-Changes the label of a registered volume. The volume's UUID, mount point, and all tracked file locations remain unchanged. Only the human-readable label is updated in the volume registry and YAML sidecars.
+Changes the label of a registered volume. The volume's UUID, mount point, and all tracked file locations remain unchanged. Only the human-readable label is updated, in the volume registry (`volumes.yaml`) and the SQLite catalog; asset sidecars reference volumes by UUID and are not touched.
 
 ### ARGUMENTS
 

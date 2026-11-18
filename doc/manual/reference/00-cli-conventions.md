@@ -96,7 +96,7 @@ maki stats            # fails -- no maki.toml above /tmp
 Error message when no catalog is found:
 
 ```
-Error: No maki catalog found. Run `maki init` to create one.
+Error: no maki catalog found. Run `maki init` to create one.
 ```
 
 
@@ -149,7 +149,7 @@ maki stats --json | jq '.overview.total_size'
 
 ### Search result count
 
-`maki search` prints a result count header by default (e.g. `Found 42 assets`). This header is suppressed when an explicit `--format` is given (including `-q`, which is shorthand for `--format=ids`), keeping output clean for scripting.
+`maki search` prints a trailing result count line after the results by default (e.g. `42 result(s)`). This line is suppressed when an explicit `--format` is given (including `-q`, which is shorthand for `--format=ids`), keeping output clean for scripting.
 
 
 ## Scripting Patterns

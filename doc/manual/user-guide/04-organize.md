@@ -4,8 +4,10 @@ Once your files are [imported](03-ingest.md), MAKI provides several tools for
 organizing them: tags, metadata editing, variant grouping, static collections,
 and saved searches. All changes are persisted in both the SQLite catalog and
 YAML sidecar files. When `.xmp` recipe files are present, edits to ratings,
-tags, descriptions, and color labels are written back to disk for bidirectional
-sync with tools like CaptureOne and Lightroom.
+tags, descriptions, and color labels can also be written back to them *(Pro)*
+for bidirectional sync with tools like CaptureOne and Lightroom -- immediately
+with `[writeback] enabled = true`, otherwise when you run `maki writeback`
+(see [XMP write-back](#xmp-write-back)).
 
 ---
 
@@ -46,8 +48,11 @@ Pass one or more tag names after the asset ID:
 maki tag a1b2c3d4 landscape nature golden-hour
 ```
 
-This adds three tags to the asset. If a tag already exists on the asset, it is
-silently skipped.
+This adds three tags to the asset. A tag the asset already has is not added a
+second time. If that existing tag was added by a machine (XMP import, auto-tag,
+or VLM), the explicit add makes it your own: it becomes a `user` tag, and the
+command reports `Now your tags (were machine-added): ...` (since v4.13.1; see
+[Where a tag came from](11-tagging-guide.md#where-a-tag-came-from)).
 
 ### Removing tags
 
@@ -59,16 +64,25 @@ maki tag a1b2c3d4 --remove unwanted blurry
 
 Tags that are not present on the asset are silently ignored.
 
-### XMP write-back
+### XMP write-back *(Pro)* {#xmp-write-back}
 
-When an asset has `.xmp` recipe files on disk, tag changes are written back
-immediately. Added tags are inserted into the `dc:subject` / `rdf:Bag` block;
-removed tags are deleted from it. Tags that were added independently in
-CaptureOne or Lightroom (not managed by maki) are preserved -- maki operates on
-deltas, not full replacement.
+Tag changes always land in the catalog and the YAML sidecar. Whether they also
+reach the asset's `.xmp` recipe files depends on `[writeback] enabled` in
+`maki.toml`:
 
-If the volume containing the `.xmp` file is offline, the write-back is skipped
-with a warning.
+- **`enabled = false` (the default):** the `.xmp` files stay untouched. The
+  recipe is flagged `pending_writeback`, and `maki writeback` flushes all
+  pending changes when you choose to.
+- **`enabled = true`:** the change is written to the `.xmp` file immediately.
+
+When a change is written, added tags are inserted into the `dc:subject` /
+`rdf:Bag` block and removed tags are deleted from it. Tags that were added
+independently in CaptureOne or Lightroom (not managed by maki) are preserved --
+maki operates on deltas, not full replacement.
+
+If the volume containing the `.xmp` file is offline, the change is queued
+without a message (the recipe is flagged `pending_writeback`); run
+`maki writeback` once the volume is back online.
 
 ### Renaming tags
 
@@ -178,14 +192,18 @@ maki edit a1b2c3d4 --label YELLOW   # stored as "Yellow"
 This is a superset of Lightroom's 5-color palette, matching CaptureOne's 7
 colors.
 
-### XMP write-back for metadata
+### XMP write-back for metadata *(Pro)* {#xmp-write-back-for-metadata}
 
-Changes to **rating**, **description**, and **color label** are automatically
-written back to any `.xmp` recipe files attached to the asset. This enables
+Changes to **rating**, **description**, and **color label** follow the same
+rule as tags (see [XMP write-back](#xmp-write-back)): with
+`[writeback] enabled = true` they are written to the asset's `.xmp` recipe
+files immediately; with the default `enabled = false`, or when the volume is
+offline, they are queued until you run `maki writeback`. This enables
 round-trip editing with external tools:
 
 1. Rate an image in maki (`maki edit ... --rating 4`).
-2. Open CaptureOne -- the rating is already reflected in the XMP sidecar.
+2. Open CaptureOne -- the rating is reflected in the XMP sidecar (after
+   `maki writeback` if automatic write-back is off).
 3. Change the rating in CaptureOne.
 4. Run `maki refresh` to pick up the change.
 
@@ -240,7 +258,11 @@ inspect them with `maki show`.
 ## Auto-Grouping
 
 The `maki auto-group` command finds assets that belong together by matching
-their filename stems across the catalog. This handles the common case where a
+their filename stems within one **session root** (by default the deepest
+folder whose name starts with a date; see `[group] session_root_pattern`), so
+a `DSC_0001` from January is never merged with a `DSC_0001` from June. Only
+`--global` matches across all directories, and it can merge unrelated assets
+that share a filename. This handles the common case where a
 RAW original and its processed exports end up as separate assets -- for
 example, when CaptureOne exports land in a different directory from the
 originals.
@@ -352,13 +374,14 @@ When assets are accidentally grouped, their tags get merged. After splitting the
 
 ```
 # Split the mis-grouped variant out
-maki split abc12345 --variant def456...
+maki split abc12345 def456...
 
 # Clear the inherited merged tags from the new asset
 maki edit <new-asset-id> --clear-tags
 
-# Re-read the original tags from the XMP sidecar
-maki refresh --asset <new-asset-id>
+# Re-read the original tags from the XMP sidecar (a plain refresh skips
+# a recipe file that has not changed, so force a re-import)
+maki refresh --asset <new-asset-id> --reimport
 ```
 
 ---
@@ -394,10 +417,13 @@ maki collection show "Best of 2024" --format full
 ### Adding assets
 
 ```
-maki collection add "Best of 2024" a1b2c3d4 e5f6a7b8
+maki collection add "Best of 2024" \
+    3f2a9c1e-7b4d-4e8a-9c55-0d1e2f3a4b5c 8d7c6b5a-4e3f-4a2b-9c1d-0e9f8a7b6c5d
 ```
 
-You can pipe asset IDs from a search:
+Collection commands take **full asset IDs**; unlike `maki show` or `maki tag`,
+they do not resolve 8-character prefixes. The easiest way to supply them is to
+pipe asset IDs from a search:
 
 ```
 maki search -q "rating:5 tag:landscape" | xargs maki col add "Best of 2024"
@@ -409,7 +435,7 @@ in a single command.
 ### Removing assets
 
 ```
-maki collection remove "Best of 2024" a1b2c3d4
+maki collection remove "Best of 2024" 3f2a9c1e-7b4d-4e8a-9c55-0d1e2f3a4b5c
 ```
 
 ### Deleting a collection
@@ -460,10 +486,17 @@ The alias `maki st` can be used in place of `maki stack` for brevity.
 
 ### Creating a stack
 
+Stack commands identify a stack by **any asset in it** -- there is no stack ID
+to pass -- and they take **full asset IDs**; unlike `maki show` or `maki tag`,
+they do not resolve 8-character prefixes. `maki search -q` prints full IDs, so
+piping is the convenient form. The examples below write `<asset-id>` for a full
+ID.
+
 Pass two or more asset IDs to create a new stack:
 
 ```
-maki stack create a1b2c3d4 e5f6a7b8 c9d0e1f2
+maki stack create <asset-id-1> <asset-id-2> <asset-id-3>
+maki search -q "path:Capture/2026-03-28 tag:burst" | xargs maki stack create
 ```
 
 The first asset becomes the pick (position 0). The remaining assets are ordered
@@ -471,36 +504,42 @@ by their position in the argument list.
 
 ### Adding assets to a stack
 
+Name any asset that is already in the target stack, then the assets to add:
+
 ```
-maki stack add <stack-id> f3a4b5c6
+maki stack add <member-asset-id> <new-asset-id>
 ```
 
 The new asset is appended to the end of the stack.
 
 ### Setting the pick
 
-Promote any member to the pick position:
+Promote any member to the pick position by passing its asset ID:
 
 ```
-maki stack pick <stack-id> e5f6a7b8
+maki stack pick <asset-id>
 ```
 
-The previous pick moves to position 1; all other positions shift accordingly.
+The new pick and the previous pick swap positions; the other members keep
+theirs.
 
 ### Removing assets from a stack
 
+Pass the assets to remove; each is taken out of whichever stack it is in:
+
 ```
-maki stack remove <stack-id> c9d0e1f2
+maki stack remove <asset-id>
 ```
 
 If the stack has one or fewer members after removal, it auto-dissolves.
 
 ### Dissolving a stack
 
-Dissolve a stack entirely, returning all members to standalone assets:
+Dissolve a stack entirely, returning all members to standalone assets. Pass
+any asset in the stack:
 
 ```
-maki stack dissolve <stack-id>
+maki stack dissolve <asset-id>
 ```
 
 ### Listing stacks
@@ -514,10 +553,11 @@ Shows all stacks with their member counts.
 ### Showing stack details
 
 ```
-maki stack show <stack-id>
+maki stack show <asset-id>
 ```
 
-Displays the stack's members in position order, with the pick marked.
+Pass any asset in the stack. Displays the stack's members in position order,
+with the pick marked.
 
 ### Searching for stacked assets
 
@@ -558,7 +598,7 @@ All stack commands support `--json`:
 
 ```
 maki --json stack list
-maki --json stack show <stack-id>
+maki --json stack show <asset-id>
 ```
 
 ### Web UI {#stacks-web-ui}
@@ -614,7 +654,7 @@ maki ss save "Unrated"    "rating:0 type:image" --favorite
 maki ss save "At Risk"    "copies:1" --favorite
 ```
 
-Favorite searches appear as clickable chips above the browse grid — one click to filter, another to clear. This is the fastest way to access your most-used views.
+Favorite searches appear as clickable chips above the browse grid — one click loads the saved query and sort order. This is the fastest way to access your most-used views.
 
 ### Practical examples
 
@@ -641,7 +681,9 @@ maki ss run "Five Stars" --format ids | xargs maki col add "Portfolio"
   UI with a single click.
 - The **Save button** captures the current search state (query, filters, sort
   order) as a new saved search.
-- **Hover** over a chip to reveal rename and delete buttons.
+- Chips are plain links. **Rename**, **Delete**, and the favorite star (which
+  decides whether a search appears as a chip) are on the `/saved-searches`
+  page, reached via the **Manage...** link next to the chips.
 
 ---
 
@@ -756,6 +798,10 @@ Then sweep up the unassigned orphans:
 maki faces clean --apply
 ```
 
+`faces clean` deletes **every** face record that is not assigned to a person,
+including freshly detected faces you have not clustered or assigned yet. Run it
+without `--apply` first to see the count.
+
 ### Searching by face and person
 
 Use the `faces:` and `person:` search filters:
@@ -796,21 +842,21 @@ v4.4.0 replaced the face recognition pipeline wholesale (new model, proper align
 
 ```
 maki faces status                # see how many faces are stale
-maki faces clean --apply         # delete stale unassigned faces (optional)
+maki faces clean --apply         # delete ALL unassigned faces, stale or not (optional)
 maki faces detect --force --query <scope> --apply   # re-embed with the new pipeline
 ```
 
-For named people you want to keep, `faces detect --force` will preserve the person assignments — it just re-embeds. You'll probably want to re-cluster any auto-clusters afterward.
+`faces detect --force` deletes an asset's existing face records, including their person assignments, and detects from scratch. The people themselves (names) remain, but the new faces are unassigned: re-cluster afterward and re-assign or merge the resulting groups into your named people.
 
 ---
 
 ## Deleting Assets
 
-Tagging images as `rest` or leaving them unrated hides them from browsing (see [Organizing & Culling](10-organizing-and-culling.md)), but the files and catalog records remain. When you want to permanently remove assets — confirmed rejects, test shots, accidental imports — use `maki delete`.
+Tagging images as `rest` or leaving them unrated hides them from browsing (see [Organizing & Culling](10-organizing-and-culling.md)), but the files and catalog records remain. When you want to remove assets — confirmed rejects, test shots, accidental imports — use `maki delete`.
 
 ### When to delete vs. cull
 
-For most images, culling (tagging as `rest` or leaving unrated) is the better choice. Deletion is permanent and cannot be undone. Consider deleting only when:
+For most images, culling (tagging as `rest` or leaving unrated) is the better choice. Deleting removes the asset's catalog record and sidecar, and that part cannot be undone (`maki undo` covers metadata edits, not deletions). Files removed with `--remove-files` go to the trash by default and can be restored for a while (see [Physical file deletion](#physical-file-deletion)). Consider deleting only when:
 
 - The files genuinely have no value (accidental shutter fires, blank frames, duplicates you've already deduplicated)
 - You need to reclaim disk space and are certain you have backups
@@ -825,8 +871,8 @@ maki delete a1b2c3d4
 ```
 
 ```
-Would delete: DSC_0042 (2 variants, 3 locations, 1 recipe)
-  Dry run — no changes made. Run with --apply to delete.
+Delete (dry run): 1 would be deleted
+  Run with --apply to delete.
 ```
 
 ### Catalog-only deletion
@@ -841,13 +887,15 @@ This is useful when you want to stop tracking a file in MAKI but don't want to t
 
 ### Physical file deletion
 
-With `--remove-files`, the physical files are also deleted from all online volumes:
+With `--remove-files`, the physical files are also removed from all online volumes. By default they are not destroyed but moved to the trash (`<catalog>/.trash/`), from where `maki trash list` and `maki trash restore` put them back at their original location (the files only; re-import them to catalog them again) until the retention period ends (`[trash] retention_days`, default 30):
 
 ```bash
 maki delete a1b2c3d4 --apply --remove-files
 ```
 
-Files on offline volumes are not deleted — they remain on disk until you reconnect the volume and run `maki cleanup`.
+To delete the files permanently, add `--no-trash` or set `[trash] enabled = false`.
+
+Files on offline volumes are not touched: MAKI prints a warning and they stay on disk. Because the asset is gone from the catalog afterwards, `maki cleanup` does not remove them either (it only drops stale location records of assets still in the catalog) -- delete those leftover files by hand once the volume is connected.
 
 ### Batch deletion
 

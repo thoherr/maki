@@ -67,7 +67,7 @@ Each Variant tracks one or more **file locations** -- a volume plus a relative p
 
 A processing sidecar file (`.xmp`, `.cos`, `.cot`, `.cop`, `.pp3`, `.dop`, `.on1`) attached to a Variant. Recipes store edits from tools like CaptureOne, Lightroom, RawTherapee, DxO, and ON1. Unlike Variants, Recipes are identified by **location** (volume + path) rather than content hash, because external tools routinely modify them in place. This means re-importing after an external edit updates the existing Recipe rather than creating a duplicate.
 
-MAKI reads metadata from Recipes during import (rating, tags, description, color label) and can write changes back to XMP files via `maki writeback` or `maki sync-metadata`.
+MAKI reads metadata from Recipes during import (rating, tags, description, color label) and can write changes back to XMP files via `maki writeback` or `maki sync-metadata` *(Pro)*.
 
 ### Volume
 
@@ -124,13 +124,13 @@ For example, importing a directory containing:
 
 ```
 DSC_4521.NEF       --> Original variant (RAW)
-DSC_4521.jpg       --> Original variant (JPEG)
+DSC_4521.jpg       --> Alternate variant (JPEG)
 DSC_4521.xmp       --> Recipe (attached to NEF variant)
 ```
 
-produces one Asset with two Variants and one Recipe. The RAW file takes priority as the primary variant (defining the asset's identity, EXIF metadata, and deterministic UUID).
+produces one Asset with two Variants and one Recipe. The RAW file takes priority as the primary variant (defining the asset's identity, EXIF metadata, and deterministic UUID) and is the Original; a non-RAW file that joins a RAW during import becomes an **Alternate**. Without a RAW in the group, every file is an Original.
 
-For files that end up in different directories -- common with CaptureOne exports that land in an `output/` subfolder -- the `auto-group` command performs **fuzzy prefix matching** across the entire catalog. It matches stems like `DSC_4521` and `DSC_4521-1-HighRes` by checking that the shorter stem is a prefix of the longer one and the next character is a non-alphanumeric separator (`-`, `_`, space, `(`).
+For files that end up in different directories -- common with CaptureOne exports that land in an `output/` subfolder -- the `auto-group` command performs **fuzzy prefix matching** across the entire catalog. It matches stems like `DSC_4521` and `DSC_4521-1-HighRes` by checking that the shorter stem is a prefix of the longer one and the next character is a non-alphanumeric separator (`-`, `_`, space, `(`). When grouping (`auto-group` or `maki group`) merges a non-RAW file into an asset that has a RAW, that file's role changes from Original to **Export**; in a group without a RAW it becomes an Alternate.
 
 See [Ingesting Assets](03-ingest.md) for import details and [Organizing Assets](04-organize.md) for manual and automatic grouping.
 
@@ -234,8 +234,12 @@ Additional modules handle EXIF extraction, XMP reading/writing, configuration pa
 - `searches.toml` -- saved searches
 - `collections.yaml` -- static album definitions
 - `stacks.yaml` -- stack definitions (member order and pick)
+- `faces.yaml`, `people.yaml` -- face and person records *(Pro)*
+- `faces/`, `embeddings/` -- face crops and AI embedding binaries *(Pro)*
 - `maki.toml` -- configuration
 - `vocabulary.yaml` -- planned tag hierarchy for autocomplete
+- `history/` -- edit-history journal for `maki undo` / `maki history`
+- `.trash/` -- deleted files awaiting `maki trash empty`
 
 **Media Volumes** (may be offline): The actual asset files on external drives, NAS, or local directories. MAKI never moves or modifies original media files unless explicitly asked (via `relocate --remove-source`).
 

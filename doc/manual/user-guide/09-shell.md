@@ -19,7 +19,7 @@ maki shell
 Output:
 
 ```
-maki shell v3.2.2 — type 'help' or 'quit' to exit
+maki shell v4.14.0 — type 'help' or 'quit' to exit
 photos>
 ```
 
@@ -52,7 +52,11 @@ Inside the shell, type any maki subcommand directly. There is no need to type `m
 ```
 photos> stats
 photos> search "tag:portrait rating:4+"
-  42 assets found
+a1b2c3d4  DSC_1234 [image] (nef) — 2026-01-15T10:30:00
+e5f6a7b8  DSC_5678 [image] (nef) — 2026-01-14T16:45:00
+...
+
+42 result(s)
 photos> show abc12345
 photos> edit --rating 5 abc12345
 ```
@@ -92,46 +96,63 @@ The shell supports named variables that hold lists of asset IDs. Variables let y
 
 ### The implicit `_` variable
 
-Every command that produces asset IDs (such as `search`, `duplicates`, or `show`) automatically stores its results in the implicit `_` variable. Use `_` in the next command to refer to those results:
+`search` stores the IDs of its results in the implicit `_` variable (it is the only command that does; `duplicates`, `show` and the others leave `_` unchanged). Use `_` in the next command to refer to those results:
 
 ```
 photos> search "tag:landscape rating:4+"
-  12 assets found
+a1b2c3d4  DSC_1234 [image] (nef) — 2026-01-15T10:30:00
+...
+
+12 result(s)
 photos> edit --rating 5 _
-  12 assets edited
-photos> tag --add "portfolio" _
-  12 assets tagged
+Name: DSC_1234
+Description: (none)
+Rating: ★★★★★ (5/5)
+Label: (none)
+Date: 2026-01-15
+...
+photos> tag _ portfolio
+Added tags: portfolio
+Tags: landscape, portfolio
+...
 ```
 
-The `_` variable is updated after every command that returns assets. It only expands when it appears as a standalone token -- underscores inside words like `my_tag` or `_foo` are left alone.
+`edit` and `tag` take one asset, so the shell runs them once per ID and each run prints its own summary.
+
+The `_` variable is updated after every `search` that returns at least one asset. It only expands when it appears as a standalone token -- underscores inside words like `my_tag` or `_foo` are left alone.
 
 ### Named variables
 
-Store results in a named variable with the `$name = command` syntax:
+Store results in a named variable with the `$name = command` syntax (the search listing itself, omitted here, is printed as usual):
 
 ```
 photos> $picks = search "rating:5 date:2024"
-  38 assets --> $picks
-photos> $untagged = search "tags:none type:image"
-  142 assets --> $untagged
+  38 assets → $picks
+photos> $untagged = search "tagcount:0 type:image"
+  142 assets → $untagged
 ```
 
 Use variables in any command by referencing `$name`:
 
 ```
-photos> tag --add "needs-review" $untagged
-  142 assets tagged
+photos> tag $untagged needs-review
+Added tags: needs-review
+Tags: needs-review
+...
 photos> export $picks /tmp/best
-  38 assets exported
+Export complete: 38 files copied
+  Total size: 1.2 GB
 ```
 
 You can also copy the last result into a named variable:
 
 ```
 photos> search "rating:5"
-  38 assets found
+...
+
+38 result(s)
 photos> $best = _
-  38 assets --> $best
+  38 assets → $best
 ```
 
 ### Variable rules
@@ -140,7 +161,10 @@ photos> $best = _
 - Variables hold asset ID lists -- they are not re-evaluated queries
 - Variables persist for the session and are cleared on `reload`
 - Expanding an undefined variable leaves it as-is in the command
-- **Position does not matter.** When a variable expands, its asset IDs are always placed at the end of the argument list (the trailing positional slot where commands expect asset IDs). This means `tag --add portfolio $picks` and `tag $picks --add portfolio` produce the same result. You never need to worry about where you place the variable in the command.
+- **Position does not matter.** A variable is taken out of the command line and its asset IDs are put where the command expects them, so `tag portfolio $picks` and `tag $picks portfolio` produce the same result:
+  - Single-asset commands (`tag`, `edit`, `show`, `split`, `update-location`, `preview`) receive the ID right after the command name and are run once per ID.
+  - `export` and `contact-sheet` receive the IDs as an `id:… id:…` query in their first position (`export $picks /tmp/best`).
+  - Every other command gets the IDs appended at the end of the argument list in a single run (`delete --apply $picks`). This only works for commands that accept a list of asset IDs; commands that take a search query or paths instead (`auto-group`, `generate-previews`, ...) reject or ignore them.
 
 ### Listing and removing variables
 
@@ -178,17 +202,19 @@ photos> set --json
   Active defaults: --json --log
 ```
 
-The settable flags are: `--json`, `--log`, `--debug`, and `--time`.
+The settable flags are: `--json`, `--log`, `--verbose`, `--debug`, and `--time`.
 
 After setting `--log`, every command will include progress output automatically:
 
 ```
 photos> set --log
-photos> generate-previews "rating:5"
-  [1/38] abc12345 -- generated preview
-  [2/38] def67890 -- generated preview
+photos> generate-previews /Volumes/Photos/Capture/2026-02-22
+  DSC_1234.NEF — generated (212ms)
+  DSC_1235.NEF — generated (198ms)
   ...
 ```
+
+(`generate-previews` takes files or directories, not a search query; without arguments it covers the whole catalog and skips assets that already have a preview.)
 
 ### Removing defaults
 
@@ -240,10 +266,12 @@ A `.maki` script file is a sequence of commands, one per line. Scripts support t
 import /Volumes/Cards/DCIM --log
 auto-group
 generate-previews --log
-auto-tag --apply --log
-describe "description:none" --apply --log
+auto-tag "" --apply --log
+describe "type:image" --apply --log
 stats
 ```
+
+`auto-tag` needs a scope; the empty query `""` means all assets. `describe` skips assets that already have a description unless `--force` is given, so a broad scope only touches the undescribed ones.
 
 Execute it:
 
@@ -257,11 +285,10 @@ Variables work across lines, making multi-step workflows clean:
 
 ```bash
 # curate-and-export.maki
-$new = search "imported:today type:image"
-auto-group $new
-generate-previews $new --log
-$picks = search "imported:today rating:4+"
-tag --add "selects" $picks
+auto-group "path:Capture/2026-02-22"
+generate-previews /Volumes/Photos/Capture/2026-02-22 --log
+$picks = search "path:Capture/2026-02-22 rating:4+"
+tag $picks selects
 export $picks /tmp/selects
 stats
 ```
@@ -333,10 +360,10 @@ The shell uses smart quote handling that lets search filter syntax pass through 
 This means search filters with quoted values work without extra escaping:
 
 ```
-photos> search text:"woman with glasses" tag:portrait
+photos> search text:"woman with glasses"
 ```
 
-The shell splits this into two tokens: `text:"woman with glasses"` and `tag:portrait`. The quotes around `woman with glasses` are preserved because they start mid-token (after `text:`), so the search engine receives them intact.
+The shell passes this on as one token, `text:"woman with glasses"`. The quotes around `woman with glasses` are preserved because they start mid-token (after `text:`), so the search engine receives them intact.
 
 Compare with grouping quotes, which wrap the entire token from the start:
 
@@ -344,17 +371,17 @@ Compare with grouping quotes, which wrap the entire token from the start:
 photos> search "tag:landscape rating:4+"
 ```
 
-Here the outer quotes are stripped (they start at the beginning of the token), producing two arguments: `tag:landscape` and `rating:4+`. This is equivalent to typing them without quotes.
+Here the outer quotes are stripped (they start at the beginning of the token), and their content reaches `search` as one argument: the query `tag:landscape rating:4+`. This matters because `search` (like every command that takes a query) accepts exactly one query argument. Typing `search tag:landscape rating:4+` without quotes produces two arguments and fails with `unexpected argument 'rating:4+' found`.
 
-You can mix both styles:
+To combine a quoted value with other filters, group the whole query in single quotes and keep the double quotes inside:
 
 ```
-photos> search "type:image" camera:"NIKON Z 9" rating:4+
+photos> search 'type:image camera:"NIKON Z 9" rating:4+'
 ```
 
-This produces three tokens: `type:image` (grouping quotes stripped), `camera:"NIKON Z 9"` (mid-token quotes preserved), and `rating:4+`.
+The outer single quotes are stripped; the inner double quotes are kept, so the query arrives as `type:image camera:"NIKON Z 9" rating:4+`.
 
-**Tip:** If you are used to the standard CLI where you type `maki search 'text:"query"'`, inside the shell you can drop the outer quotes entirely and just type `search text:"query"`.
+**Tip:** A query that consists of a single filter needs no outer quotes: where the standard CLI wants `maki search 'text:"query"'`, inside the shell you can type `search text:"query"`.
 
 ---
 
@@ -364,9 +391,12 @@ The shell expands `~` to your home directory (`$HOME` on Unix, `%USERPROFILE%` o
 
 ```
 photos> export $picks ~/Desktop/delivery
-  38 assets exported to /Users/alice/Desktop/delivery
-photos> export "rating:5" ~/exports/portfolio --zip
-  Export complete: 12 files archived
+Export complete: 38 files copied
+  Total size: 1.2 GB
+photos> export "rating:5" ~/exports/portfolio.zip --zip
+Export complete: 12 files archived
+  Total size: 410.5 MB
+  Written to: /Users/alice/exports/portfolio.zip
 ```
 
 Only `~` at the start of a token is expanded — `~` appearing elsewhere (e.g. inside a search query) is left as-is.
@@ -379,8 +409,6 @@ Most commands in the shell are maki subcommands run directly. A few commands are
 
 | Command | Purpose |
 |---------|---------|
-| `export` | Export assets to a directory or ZIP archive (supports `$var` expansion for multi-ID export) |
-| `preview` | Show asset previews in the terminal (supports `$var` and `_`) |
 | `help` | Shell help and syntax reference |
 | `reload` | Re-read config, clear variables and defaults |
 | `set` / `unset` | Manage session defaults and variables |
@@ -388,25 +416,32 @@ Most commands in the shell are maki subcommands run directly. A few commands are
 | `vars` | List defined variables |
 | `quit` / `exit` | End the session |
 
-### Shell `export`
+### `export` and `preview` with variables
 
-The `export` command is a built-in that supports variable expansion and all standard export flags:
+`export` and `preview` are ordinary maki commands, not built-ins; the shell only decides where variable IDs go.
+
+`export` takes a query or a variable in its first position, plus all standard export flags:
 
 ```
 photos> export <query|$var> <target> [--layout flat|mirror] [--all-variants]
         [--include-sidecars] [--dry-run] [--overwrite] [--symlink] [--zip]
 ```
 
-When a variable expands to multiple asset IDs, all assets are exported in a single operation:
+When a variable expands to multiple asset IDs, they are turned into one `id:… id:…` query, so all assets are exported in a single operation:
 
 ```
 photos> $picks = search "rating:5 tag:landscape"
-  24 assets --> $picks
+  24 assets → $picks
 photos> export $picks ~/Desktop/landscapes
-  24 assets exported
+Export complete: 24 files copied
+  Total size: 980.4 MB
 photos> export $picks ~/Desktop/landscapes.zip --zip
-  Export complete: 24 files archived
+Export complete: 24 files archived
+  Total size: 980.4 MB
+  Written to: /Users/alice/Desktop/landscapes.zip
 ```
+
+`preview` opens an asset's preview image in the operating system's default image viewer. It takes one asset, so `preview $picks` (or `preview _`) runs once per ID and opens one viewer window per asset.
 
 ---
 
@@ -418,12 +453,12 @@ Browse a recent shoot, refine selections, and export:
 
 ```
 photos> $candidates = search "date:2024-06 type:image rating:3+"
-  287 assets --> $candidates
+  287 assets → $candidates
 photos> $portraits = search "date:2024-06 tag:portrait rating:4+"
-  42 assets --> $portraits
-photos> tag --add "june-selects" $portraits
+  42 assets → $portraits
+photos> tag $portraits june-selects
 photos> export $portraits /tmp/june-portraits
-  42 assets exported
+Export complete: 42 files copied
 ```
 
 ### Post-import script
@@ -432,13 +467,14 @@ Save this as `post-import.maki` and run after every import:
 
 ```bash
 # post-import.maki
-$new = search "imported:today"
-auto-group $new
-generate-previews $new --log
-auto-tag "tags:none type:image" --apply --log
-describe "description:none" --apply --log
+auto-group
+generate-previews --log
+auto-tag "tagcount:0 type:image" --apply --log
+describe "type:image" --apply --log
 stats
 ```
+
+`auto-group` without `--apply` only reports what it would merge; add `--apply` once you trust the result. `generate-previews` skips assets that already have a preview, and `describe` skips assets that already have a description, so the script only works on what is new.
 
 Run it:
 
@@ -460,11 +496,11 @@ Investigate and fix grouping issues:
 ```
 photos> set --log
 photos> $scattered = search "scattered:2 variants:3+"
-  15 assets --> $scattered
+  15 assets → $scattered
 photos> show $scattered
   ... review each asset ...
-photos> split abc12345 --variants def678,ghi901
-photos> auto-group $scattered
+photos> split abc12345 def678 ghi901
+photos> auto-group "scattered:2 variants:3+"
 ```
 
 ### Batch tagging with variables
@@ -473,29 +509,31 @@ Tag assets from multiple searches without re-querying:
 
 ```
 photos> $landscapes = search "tag:landscape rating:4+"
-  85 assets --> $landscapes
+  85 assets → $landscapes
 photos> $portraits = search "tag:portrait rating:4+"
-  42 assets --> $portraits
-photos> tag --add "portfolio" $landscapes
-photos> tag --add "portfolio" $portraits
+  42 assets → $portraits
+photos> tag $landscapes portfolio
+photos> tag $portraits portfolio
 photos> $portfolio = search "tag:portfolio"
-  127 assets --> $portfolio
+  127 assets → $portfolio
 photos> export $portfolio /tmp/portfolio
 ```
 
 ### Quick one-liners with `-c`
 
-Use `-c` mode for cron jobs or shell aliases:
+Use `-c` mode for cron jobs or shell aliases. The command string is split into commands at line breaks only; `;` is not a separator, so put each command on its own line:
 
 ```bash
 # Daily stats check
 maki shell -c 'stats'
 
-# Export today's picks
-maki shell -c '$picks = search "imported:today rating:4+"; export $picks /tmp/daily'
+# Export one day's picks
+maki shell -c '$picks = search "date:2026-02-22 rating:4+"
+export $picks /tmp/daily'
 
 # Verify with logging
-maki shell -c 'set --log; verify'
+maki shell -c 'set --log
+verify'
 ```
 
 ---
@@ -507,7 +545,7 @@ Four commands are blocked inside the shell because they conflict with the shell 
 | Command | Reason |
 |---------|--------|
 | `init` | Creates a new catalog; the shell is already inside one |
-| `migrate` | Schema migration should be run standalone |
+| `migrate` | Schema migration is run standalone (`maki migrate`). Migrations never run implicitly: when the catalog schema is older than the binary, `maki shell` (like every other command) exits with a hint to run `maki migrate` first |
 | `serve` | Starts a long-running web server that conflicts with the shell loop |
 | `shell` | No nesting; use `source` to run script files instead |
 
@@ -525,7 +563,7 @@ photos> serve
 **The shell prompt tells you what is in memory.** When named variables are defined, the prompt shows their counts in brackets:
 
 ```
-photos [picks=38 untagged=142]> tag --add "review" $untagged
+photos [picks=38 untagged=142]> tag $untagged review
 ```
 
 **Variables are snapshots, not live queries.** If you run `$picks = search "rating:5"` and then rate more assets, `$picks` still holds the original results. Run the assignment again to refresh.

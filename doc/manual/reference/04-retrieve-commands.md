@@ -90,11 +90,11 @@ Filters can be freely combined. Free-text tokens that do not match a filter pref
 
 **Path normalization**: The `path:` filter automatically normalizes paths. `~` expands to `$HOME`, `./` and `../` resolve relative to the current working directory, and absolute paths matching a registered volume's mount point are stripped to volume-relative form with the volume filter implicitly applied (e.g., `path:/Volumes/Photos/Capture/2026` becomes `path:Capture/2026` scoped to the Photos volume).
 
-**Output formats**: The `--format` flag controls output. Presets: `ids` (one UUID per line), `short` (default: abbreviated ID, name, type, format, date), `full` (adds tags, description, rating, label), `json` (JSON array). Custom templates use `{placeholder}` substitution with escape sequences (`\t`, `\n`).
+**Output formats**: The `--format` flag controls output. Presets: `ids` (one UUID per line), `short` (default: abbreviated ID, name, type, format, date), `full` (adds tags and description), `json` (JSON array). Custom templates use `{placeholder}` substitution with escape sequences (`\t`, `\n`).
 
-Available placeholders: `{id}`, `{short_id}` (first 8 characters), `{name}`, `{filename}`, `{type}`, `{format}`, `{date}`, `{tags}`, `{description}`, `{label}`, `{hash}` (best-variant content hash), `{similarity}` (rounded percentage, empty unless the query is a `similar:`/`text:`/`--image` search), and `{exact}` (the word `exact` for a byte-identical `--image` match, otherwise empty). Unknown placeholders are left in place verbatim.
+Available placeholders: `{id}`, `{short_id}` (first 8 characters), `{name}`, `{filename}`, `{type}`, `{format}`, `{date}`, `{tags}`, `{description}`, `{label}`, `{hash}` (best-variant content hash), `{similarity}` (rounded percentage, empty unless the query is a `similar:` or `--image` search; `text:` searches do not fill it), and `{exact}` (the word `exact` for a byte-identical `--image` match, otherwise empty). Unknown placeholders are left in place verbatim.
 
-The result count header (e.g., "Found 42 assets") is suppressed when an explicit `--format` is given.
+The trailing result count line (e.g., `42 result(s)`) is suppressed when an explicit `--format` is given.
 
 ### ARGUMENTS
 
@@ -219,12 +219,12 @@ maki [GLOBAL FLAGS] show <ASSET_ID> [--locations]
 Displays comprehensive details for a single asset, including:
 
 - Asset metadata: ID, name, description, type, tags, rating (as stars), color label, creation date.
-- Variants: content hash, role (original/export/processed/sidecar), format, file size, original filename, file locations (volume + path), source metadata (camera, lens, ISO, etc.), and preview status.
+- Variants: content hash, role (original/alternate/processed/export/sidecar), format, file size, original filename, file locations (volume + path), source metadata (camera, lens, ISO, etc.), and preview status.
 - Recipes: content hash, format (XMP, COS, etc.), original filename, and file locations.
 
 Asset IDs support unique prefix matching (see [CLI Conventions](00-cli-conventions.md#asset-id-matching)).
 
-The display logic for previews prefers Export > Processed > Original variant previews (skipping Sidecar). Within the same role, standard image formats are preferred over RAW, with file size as a tiebreaker.
+The display logic for previews picks the best variant: developed image formats (JPEG, PNG, TIFF, WebP) before RAW and other formats, then Export > Processed > Original > Alternate, with file size as a tiebreaker. A `preview_variant` override wins.
 
 ### ARGUMENTS
 
@@ -330,7 +330,7 @@ maki [GLOBAL FLAGS] export <QUERY> <TARGET> [OPTIONS]
 
 Exports files from the catalog to a target directory or ZIP archive. Searches for assets matching the query, resolves their file locations on online volumes, and copies (or symlinks) files to the target. With `--zip`, writes a single ZIP archive instead of individual files.
 
-By default, only the **best variant** per asset is exported (Export > Processed > Original, image formats preferred, file size tiebreaker). Use `--all-variants` to export every variant.
+By default, only the **best variant** per asset is exported (developed image formats before RAW, then Export > Processed > Original > Alternate, file size tiebreaker). Use `--all-variants` to export every variant.
 
 **Layout modes**:
 
@@ -496,7 +496,7 @@ Color labels can be rendered as colored borders around cells, small dots next to
 : Title printed in page headers.
 
 **--fields \<FIELDS\>**
-: Comma-separated metadata fields: `filename`, `date`, `rating`, `label`, `format`, `size`, `dimensions`.
+: Comma-separated metadata fields: `filename`, `name`, `date`, `rating`, `label`, `tags`, `format`, `id`, `dimensions`, `camera`, `lens`.
 
 **--sort \<ORDER\>**
 : Sort order: `date`, `name`, `rating`, `filename`.
@@ -589,7 +589,7 @@ None.
 ### OPTIONS
 
 **--format \<FMT\>**
-: Output format. Same presets as `maki search`: `ids`, `short` (default), `full`, `json`. Custom templates support all search placeholders plus `{locations}` and `{volumes}` (distinct volume count). Location strings include the volume purpose in brackets (e.g., `Photos[working]:Capture/photo.jpg`).
+: Output format. Same presets as `maki search`: `ids`, `short` (default), `full`, `json`. The `ids` preset prints content hashes. Custom templates support `{hash}`, `{filename}`, `{format}`, `{size}`, `{name}`, `{locations}` and `{volumes}` (distinct volume count); the other search placeholders are not available. Location strings include the volume purpose in brackets (e.g., `Photos[working]:Capture/photo.jpg`).
 
 **--same-volume**
 : Show only same-volume duplicates. Mutually exclusive with `--cross-volume`.
@@ -1040,7 +1040,7 @@ Starts a local web server that provides a browser-based interface for browsing, 
 - **Batch operations**: Checkbox selection on browse cards with a fixed bottom toolbar for batch tagging, rating, labeling, auto-grouping, stacking, and unstacking. "Stack" creates a new stack from selected assets; "Unstack" removes selected assets from their stacks.
 - **Keyboard navigation**: Arrow keys navigate between cards, Enter opens details, Space toggles selection, 1-5 sets rating, 0 clears rating, Alt+1-7 sets label, single letters (r/o/y/g/b/p/u) set label by color initial, x clears label.
 - **Saved search chips**: Clickable chips on the browse page load saved searches into the filter UI.
-- **Tags page**: Shows a collapsible tree view for hierarchical tags (tags containing `/` as a hierarchy separator). Non-hierarchical tags continue to display in the flat multi-column layout.
+- **Tags page**: Shows a collapsible tree view for hierarchical tags (tags containing `|` as the hierarchy separator; `>` is also accepted on input). Non-hierarchical tags continue to display in the flat multi-column layout.
 - **Analytics page** (`/analytics`): Shooting frequency, camera/lens usage, rating distribution, format breakdown, monthly import volume, and storage per volume charts.
 - **Drag-and-drop**: Drag browse cards onto the collection dropdown to add to a collection. Drag stack members on the detail page to reorder.
 - **Per-stack expand/collapse**: Click the stack badge (⊞ N) on a browse card to expand/collapse just that stack, independent of the global toggle.
@@ -1181,7 +1181,7 @@ Runs `<command>` and stores the resulting asset IDs in `$name`. The count is pri
 
 **Expansion:**
 
-`$name` and `_` expand to asset IDs. The IDs are always placed at the **end** of the argument list, regardless of where the variable appears in the command. This means `tag $picks --add portfolio` and `tag --add portfolio $picks` are equivalent — the IDs always land in the trailing positional slot where commands expect asset IDs. Unknown variables are left as-is.
+`$name` and `_` expand to asset IDs. The shell places the IDs where the command expects them, regardless of where the variable appears in the line. Single-asset commands (`tag`, `edit`, `show`, `split`, `update-location`, `preview`) get the ID right after the command name and are run once per ID, so `tag $picks portfolio` tags every asset in `$picks`. For `export` and `contact-sheet` the IDs become an `id:... id:...` query in the first positional (`export $picks /tmp/best`). All other commands receive the IDs appended at the end of the argument list. Unknown variables are left as-is.
 
 `_` (standalone, not inside a word like `_foo` or `foo_bar`) expands to the asset IDs from the most recent command that produced results.
 
@@ -1200,8 +1200,8 @@ Interactive session with variables:
 $ maki shell
 photos> $picks = search "rating:5 date:2024"
   42 assets → $picks
-photos [picks=42]> tag --add portfolio $picks
-photos [picks=42]> export --target /tmp/best $picks
+photos [picks=42]> tag $picks portfolio
+photos [picks=42]> export $picks /tmp/best
 photos [picks=42]> quit
 ```
 

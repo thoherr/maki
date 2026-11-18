@@ -80,7 +80,13 @@ One finding was a defect and is fixed in the same change as this report
   followed (browse.html 3,380 → 1,495 lines). The move exposed one cross-section call that
   never resolved (`bustChangedPreviews`), fixed.
   Open: the other `browse.html` sections, one at a time; the remaining
-  library SQL outside `catalog/`.
+  library SQL outside `catalog/` (15 uses); unit tests for refresh,
+  sync-metadata, fix-recipes, describe and the AI operations; the
+  architecture-overview update (F28; CLAUDE.md is kept current with each
+  step); `cargo fmt --check` in CI (deliberately postponed in Phase 0:
+  the tree is unformatted, a separate decision). The `log` facade of F23
+  was not introduced: typed events replaced the `log: bool` plumbing,
+  and the remaining library `eprintln!` calls are open under F23.
 
 ## Verdict in one paragraph
 
@@ -593,3 +599,6 @@ changelog entry beyond "internal"; the ones marked (behaviour) do.
 | Raw `spawn_blocking` in web | 57 | 0 | 3, each commented (job runner, the blocking helper, ZIP body streamer) |
 | Duplicated JS escape helpers / colour-label maps | 12 / 11 | 1 / 1 | 1 / 1 (Phase 0) |
 | Upward `use crate::` edges from models and catalog | 5 | 0 | 0 |
+| `Catalog::conn()` uses outside `src/catalog` | about 110 | `pub(crate)`, 0 in the binary | 15 in the library, 0 in the binary (Phase 3) |
+| `browse.html` lines | 3,571 (3,380 when Phase 3 began) | script sections as modules | 1,495 + 3 modules (Phase 3, ongoing) |
+| `tests/cli.rs` | 13,000 lines, 1 file | per-command modules | 20 modules, one binary (Phase 3) |

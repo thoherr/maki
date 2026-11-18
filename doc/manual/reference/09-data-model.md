@@ -17,7 +17,7 @@ The top-level entity. An Asset represents a single logical media item -- "photo 
 | `asset_type` | AssetType | One of: `image`, `video`, `audio`, `document`, `other`. Inferred from file extension at import. |
 | `description` | Option\<String\> | Free-text description. Extracted from XMP `dc:description` during import, or set manually. |
 | `tags` | Vec\<String\> | Keyword list. Merged from XMP `dc:subject`, embedded XMP, and manual tagging. Deduplicated. |
-| `tag_sources` | BTreeMap\<String, TagSource\> | Provenance per tag value: `user`, `xmp-import`, `auto-tag`, or `vlm`. A tag absent from the map is `user`. Only tags with a machine source are stored, so pre-provenance sidecars stay byte-identical. Mutated only through `Asset::add_tags_with_source` / `remove_tags` / `rename_tag_value`; mirrored in the SQLite `tag_sources` column (schema v10) and checked by `maki doctor`. |
+| `tag_sources` | BTreeMap\<String, TagSource\> | Provenance per tag value: `user`, `xmp-import`, `auto-tag`, or `vlm`. A tag absent from the map is `user`. Only tags with a machine source are stored, so pre-provenance sidecars stay byte-identical. Mutated only through `Asset::add_tags_with_source` / `remove_tags` / `rename_tag_value` / `promote_tags_to_user`; mirrored in the SQLite `tag_sources` column (schema v10) and checked by `maki doctor`. |
 | `rating` | Option\<u8\> | Star rating, 1--5. Extracted from XMP `xmp:Rating` during import, or set manually. |
 | `color_label` | Option\<String\> | One of 7 canonical colors: Red, Orange, Yellow, Green, Blue, Pink, Purple. Extracted from XMP `xmp:Label`, or set manually. Stored as title-case English name. |
 | `created_at` | DateTime\<Utc\> | Creation timestamp. Preferentially from EXIF `DateTimeOriginal`, falling back to filesystem modification time. |
@@ -49,7 +49,7 @@ The top-level entity. An Asset represents a single logical media item -- "photo 
 | `audio_key` | Option\<String\> | Musical key (`key:` filter; from `maki audio analyze`, schema v11). |
 | `audio_bpm` | Option\<Real\> | Tempo (`bpm:` filter; from `maki audio analyze`, schema v11). |
 
-The variant-related columns are updated by `insert_asset()`, `update_denormalized_variant_columns()`, and `fix_roles`. The stack columns are updated by `StackStore` operations, `face_count` by `FaceStore::update_face_count`. All are backfilled during schema migration and rebuilt by `rebuild-catalog`, with one exception: the v6→v7 migration does not rewrite every sidecar to stamp `face_scan_status` (too slow on large catalogs); `rebuild-catalog` stamps `done` on assets that have face records, and `faces detect` writes the flag for every asset it touches from then on.
+The variant-related columns are updated by `insert_asset()`, `update_denormalized_variant_columns()`, and `fix_roles`. The stack columns are updated by `StackStore` operations, `face_count` by `Catalog::update_face_count`. All are backfilled during schema migration and rebuilt by `rebuild-catalog`, with one exception: the v6→v7 migration does not rewrite every sidecar to stamp `face_scan_status` (too slow on large catalogs); `rebuild-catalog` stamps `done` on assets that have face records, and `faces detect` writes the flag for every asset it touches from then on.
 
 ### Variant
 
@@ -232,7 +232,7 @@ Each Variant carries a `role` that describes its purpose within the asset group.
 | **Export** | A derivative output produced by an editing tool. | Resized JPEG, web TIFF, final deliverable |
 | **Sidecar** | A non-media sidecar file imported as a variant. | Embedded metadata files |
 
-When assets are merged via `maki group` or `maki auto-group`, donor variants with the `original` role are automatically re-roled to `alternate` to avoid having multiple originals in one asset.
+When assets are merged via `maki group` or `maki auto-group`, donor variants with the `original` role are automatically re-roled to avoid having multiple originals in one asset: a non-RAW donor variant merged into a target that has a RAW variant becomes `export`, every other donor original becomes `alternate`.
 
 ---
 
@@ -271,7 +271,7 @@ catalog/
 
 A single `catalog.db` file providing fast indexed queries. Contains denormalized columns for efficient browse-grid rendering. The catalog is always rebuildable from the YAML sidecars via `maki rebuild-catalog` -- it is a performance optimization, not a source of truth.
 
-**Tables**: `assets`, `variants`, `file_locations`, `volumes`, `recipes`, `collections`, `collection_assets`, `stacks`, `embeddings` (created in every build; only filled by Pro), `schema_version` (single row, see [Schema Migrations](#schema-migrations)), `assets_fts` (FTS5 trigram index over name, filename, description and source metadata, kept current by six triggers on `assets` and `variants` -- schema v9), `assets_tags_fts` (FTS5 trigram copy of the `tags` column that serves the `tag:` filter's LIKE/GLOB patterns from its index, three triggers on `assets` -- schema v12), and `faces`, `people` (*(Pro)* builds only)
+**Tables**: `assets`, `variants`, `file_locations`, `volumes`, `recipes`, `collections`, `collection_assets`, `stacks`, `embeddings` (created in every build; only filled by Pro), `schema_version` (single row, see [Schema Migrations](#schema-migrations)), `assets_fts` (FTS5 trigram index over name, filename, description and source metadata, kept current by six triggers on `assets` and `variants` -- schema v9), `assets_tags_fts` (FTS5 trigram copy of the `tags` column that serves the `tag:` filter's LIKE/GLOB patterns from its index, three triggers on `assets` -- schema v12), and `faces`, `people` (created in every build since schema v13; filled only by AI builds)
 
 **Performance indexes** (created automatically via schema migrations):
 
@@ -284,18 +284,18 @@ A single `catalog.db` file providing fast indexed queries. Contains denormalized
 - `assets(leaf_tag_count)` — `tagcount:` filter
 - `recipes(variant_hash)` — recipe lookups by variant
 - `collection_assets(asset_id)` — collection membership queries
-- `faces(asset_id)`, `faces(person_id)` — face lookups per asset and per person *(Pro)*
+- `faces(asset_id)`, `faces(person_id)` — face lookups per asset and per person (created in every build since schema v13; used only by AI builds)
 
 ### Schema Migrations
 
-The `schema_version` table stores the catalog's schema version (`SCHEMA_VERSION` in `src/catalog.rs`, currently 12). Every command except `init` and `migrate` checks it at startup with one query and exits with an error if the catalog is older than the binary expects; migrations themselves run only in `maki init`, `maki migrate`, and `maki rebuild-catalog`. Migrations are idempotent `ALTER TABLE ... ADD COLUMN` / `CREATE INDEX IF NOT EXISTS` blocks with guarded backfills, executed only for versions above the stored one.
+The `schema_version` table stores the catalog's schema version (`SCHEMA_VERSION` in `src/catalog.rs`, currently 13). Every command except `init` and `migrate` checks it at startup with one query and exits with an error if the catalog is older than the binary expects; migrations themselves run only in `maki init`, `maki migrate`, and `maki rebuild-catalog`. Migrations are idempotent `ALTER TABLE ... ADD COLUMN` / `CREATE INDEX IF NOT EXISTS` blocks with guarded backfills, executed only for versions above the stored one. Each version migrates in its own transaction, which also stamps the version number, so a failing step rolls back that version only and the error names it.
 
 ### Other Files
 
 | File | Format | Contents |
 |------|--------|----------|
-| `volumes.yaml` | YAML | Registered volume definitions (id, label, mount_point, type) |
-| `searches.toml` | TOML | Saved search definitions (name, query, sort) |
+| `volumes.yaml` | YAML | Registered volume definitions (id, label, mount_point, volume_type, optional purpose) |
+| `searches.toml` | TOML | Saved search definitions (name, query, sort, favorite) |
 | `collections.yaml` | YAML | Collection definitions with ordered asset ID lists |
 | `stacks.yaml` | YAML | Stack definitions with ordered asset ID lists |
 | `maki.toml` | TOML | User configuration (see [Configuration](08-configuration.md)) |

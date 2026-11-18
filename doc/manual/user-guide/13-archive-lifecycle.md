@@ -42,7 +42,7 @@ rsync -av /Volumes/CARD/DCIM/ /Volumes/FastSSD/Capture/2026-03-15/
 
 # Import into MAKI
 maki import /Volumes/FastSSD/Capture/2026-03-15/ \
-  --add-tag "shoot:johnson-wedding" --auto-group --smart --log
+  --add-tag johnson-wedding --auto-group --smart --log
 ```
 
 This is simple and reliable. The downside: you copy *everything* — including the 70% of shots you may reject during culling.
@@ -57,7 +57,7 @@ maki volume add /Volumes/EOS_DIGITAL --purpose media
 
 # Import from card using a profile with smart previews enabled
 maki import --profile card /Volumes/EOS_DIGITAL/DCIM \
-  --add-tag "shoot:johnson-wedding" --auto-group --log
+  --add-tag johnson-wedding --auto-group --log
 
 # Eject the card — previews are local, culling works offline
 ```
@@ -83,7 +83,7 @@ smart_previews = true
 auto_tags = ["from-card"]
 ```
 
-Then use `maki import --profile card /Volumes/EOS_DIGITAL/DCIM --add-tag "shoot:wedding"`.
+Then use `maki import --profile card /Volumes/EOS_DIGITAL/DCIM --add-tag johnson-wedding`.
 
 **Finding stale card volumes:** After ejecting cards, old media volumes accumulate. Find and clean them up:
 
@@ -111,8 +111,8 @@ maki serve
 # 1. Auto-group RAW+JPEG pairs
 maki auto-group --apply
 
-# 2. Tag obvious rejects
-maki search -q "path:Capture/2026-03-15 -rating:1+" | xargs -I{} maki tag {} rest
+# 2. After rating the keepers, tag everything still unrated as "rest"
+maki search -q "path:Capture/2026-03-15 rating:0" | xargs -I{} maki tag {} rest
 
 # 3. Build a collection from selects
 maki search -q "tag:johnson-wedding rating:4+" | xargs maki col add "Johnson Wedding Selects"
@@ -137,7 +137,7 @@ maki relocate --query "tag:johnson-wedding" --target "Archive 2026" --dry-run
 maki relocate --query "tag:johnson-wedding" --target "Archive 2026" --log
 
 # After confirming the archive copy, free the working drive
-maki relocate --query "tag:johnson-wedding volume:Work SSD" --target "Archive 2026" --remove-source --log
+maki relocate --query 'tag:johnson-wedding volume:"Work SSD"' --target "Archive 2026" --remove-source --log
 ```
 
 **Important:** Don't use `--remove-source` in the first pass. Copy first, verify, then remove the source in a second pass. This gives you a safety window.
@@ -155,7 +155,7 @@ An archive is only as good as its backup. Copy your archived files to a physical
 maki volume add "Backup A" /Volumes/BackupDisk --purpose backup
 
 # Copy the entire archive to the backup
-maki relocate --query "volume:Archive 2026" --target "Backup A" --log
+maki relocate --query 'volume:"Archive 2026"' --target "Backup A" --log
 ```
 
 Note: `relocate` without `--remove-source` copies files — the originals stay on the archive drive. This is intentional: you now have two copies.
@@ -244,10 +244,10 @@ At any point in the lifecycle, you can export files for delivery, sharing, or pr
 
 ```bash
 # Client delivery as ZIP
-maki export "collection:Johnson Wedding Selects" delivery.zip --zip
+maki export 'collection:"Johnson Wedding Selects"' delivery.zip --zip
 
 # Contact sheet for review
-maki contact-sheet "collection:Johnson Wedding Selects" proofs.pdf \
+maki contact-sheet 'collection:"Johnson Wedding Selects"' proofs.pdf \
   --title "Johnson Wedding" --copyright "Jane Doe Photography"
 
 # Full export with sidecars for handoff to another tool
@@ -275,11 +275,11 @@ Here is a concrete example of how these stages play out over a typical month:
 # Copy files from card to working SSD, then import
 rsync -av /Volumes/CARD/DCIM/ /Volumes/FastSSD/Capture/Corporate-2026-03/
 maki import /Volumes/FastSSD/Capture/Corporate-2026-03/ \
-  --add-tag "shoot:corporate-2026-03" --auto-group --smart --log
+  --add-tag corporate-2026-03 --auto-group --smart --log
 
 rsync -av /Volumes/CARD/DCIM/ /Volumes/FastSSD/Capture/Landscape-Spring/
 maki import /Volumes/FastSSD/Capture/Landscape-Spring/ \
-  --add-tag "shoot:landscape-spring" --auto-group --smart --log
+  --add-tag landscape-spring --auto-group --smart --log
 ```
 
 ### Week 2–3: Cull and deliver
@@ -301,11 +301,11 @@ maki relocate --query "tag:corporate-2026-03" --target "Archive 2026" --log
 maki relocate --query "tag:landscape-spring" --target "Archive 2026" --log
 
 # Remove from working drive after confirming archive
-maki relocate --query "tag:corporate-2026-03 volume:Work SSD" --target "Archive 2026" --remove-source
-maki relocate --query "tag:landscape-spring volume:Work SSD" --target "Archive 2026" --remove-source
+maki relocate --query 'tag:corporate-2026-03 volume:"Work SSD"' --target "Archive 2026" --remove-source
+maki relocate --query 'tag:landscape-spring volume:"Work SSD"' --target "Archive 2026" --remove-source
 
 # Back up new archive content
-maki relocate --query "volume:Archive 2026 copies:1" --target "Backup A" --log
+maki relocate --query 'volume:"Archive 2026" copies:1' --target "Backup A" --log
 
 # Verify and check coverage
 maki verify --volume "Archive 2026" --max-age 30
@@ -319,7 +319,7 @@ After one month:
 - Archive drive holds all culled and organized work
 - Backup drive has a copy of everything on the archive
 - `maki backup-status` confirms no at-risk assets
-- All metadata, tags, ratings, and collections travel with the files via YAML sidecars
+- All metadata, tags, ratings, and collections stay in the catalog (YAML sidecars under `metadata/`), independent of which volume the files are on
 
 ---
 
