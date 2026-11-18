@@ -611,6 +611,9 @@ impl ResolvedSearch {
         self.filters.apply_person_excludes(opts);
         // `missing:true` honored since v4.12.2 (previously CLI-only).
         self.filters.apply_missing(opts);
+        // `volume:` tokens typed in the search box, honored since v4.14.0
+        // (previously CLI-only).
+        self.filters.apply_volumes(opts);
         #[cfg(feature = "ai")]
         {
             if let Some(ref ids) = self.text_query_ids {

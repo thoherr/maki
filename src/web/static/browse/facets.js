@@ -49,14 +49,18 @@ window.damFacets = (function() {
         content.addEventListener('keydown', function(e) {
             var row = e.target.closest && e.target.closest('[data-facet-type]');
             if (!row) return;
+            // Keys used on a focused facet row stay in the sidebar: the
+            // page's own handler would otherwise also open the lightbox,
+            // toggle the focused card's selection or move the grid focus.
             if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
+                e.stopPropagation();
                 handleFacetClick(e);
-            } else if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && row.hasAttribute('aria-expanded')) {
-                // Tree convention: right opens, left closes. Kept away from
-                // the grid's arrow-key navigation.
+            } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
                 e.preventDefault();
                 e.stopPropagation();
+                if (!row.hasAttribute('aria-expanded')) return;
+                // Tree convention: right opens, left closes.
                 var open = row.getAttribute('aria-expanded') === 'true';
                 if (open !== (e.key === 'ArrowRight')) toggleTag(row);
             }
@@ -115,7 +119,7 @@ window.damFacets = (function() {
                 if (window.toggleQueryTerm) window.toggleQueryTerm('date:' + value);
                 break;
             case 'geotagged':
-                if (window.toggleQueryTerm) window.toggleQueryTerm('geotagged:1');
+                if (window.toggleQueryTerm) window.toggleQueryTerm('geo:any');
                 break;
         }
     }
@@ -140,7 +144,7 @@ window.damFacets = (function() {
             case 'year':
                 return !!window.hasQueryTerm && window.hasQueryTerm('date:' + value);
             case 'geotagged':
-                return !!window.hasQueryTerm && window.hasQueryTerm('geotagged:1');
+                return !!window.hasQueryTerm && window.hasQueryTerm('geo:any');
         }
         return false;
     }
@@ -178,7 +182,7 @@ window.damFacets = (function() {
     function getFilterParams() {
         var params = {};
         var urlParams = new URLSearchParams(window.location.search);
-        ['q', 'type', 'tag', 'format', 'volume', 'rating', 'label', 'collection', 'path', 'stacks'].forEach(function(k) {
+        ['q', 'type', 'tag', 'format', 'volume', 'rating', 'label', 'collection', 'path', 'person', 'stacks', 'nodefault'].forEach(function(k) {
             var v = urlParams.get(k);
             if (v) params[k] = v;
         });
@@ -436,7 +440,7 @@ window.damFacets = (function() {
             });
         }
 
-        // Geotagged — clicking appends `geotagged:1` to the q box.
+        // Geotagged — clicking toggles `geo:any` in the q box.
         if (data.geotagged > 0) {
             html += '<div class="facet-section facet-geo">';
             html += rowAttrs('geotagged', '1', 'Click to filter to geotagged assets') + '>';

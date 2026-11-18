@@ -105,6 +105,14 @@ pub fn run_search(
         opts.volume = Some(vid);
     }
 
+    // An unknown `volume:` label is an error on the command line (the web
+    // lets it match nothing); the labels themselves resolve below.
+    if !parsed.volumes.is_empty() || !parsed.volumes_exclude.is_empty() {
+        let volumes = DeviceRegistry::new(scope.catalog_root).list()?;
+        QueryEngine::resolve_volume_labels(&parsed.volumes, &volumes)?;
+        QueryEngine::resolve_volume_labels(&parsed.volumes_exclude, &volumes)?;
+    }
+
     // Resolve collection include/exclude, person include/exclude and
     // `missing:true` (disk probe, only when set) via the shared resolver
     // (see `crate::query::resolve`) — the same step the web routes run.
@@ -127,39 +135,6 @@ pub fn run_search(
     }
     if let Some(ids) = &plan.text_query_ids {
         opts.text_search_ids = Some(ids);
-    }
-
-    // Resolve volume labels to volume IDs, and handle volume:none
-    let resolved_volume_ids;
-    let resolved_volume_exclude_ids;
-    let online_vol_ids;
-    if !parsed.volumes.is_empty() || !parsed.volumes_exclude.is_empty() || parsed.volume_none || parsed.volume_any_online {
-        let registry = DeviceRegistry::new(scope.catalog_root);
-        let volumes = registry.list()?;
-
-        resolved_volume_ids = QueryEngine::resolve_volume_labels(&parsed.volumes, &volumes)?;
-        if !resolved_volume_ids.is_empty() {
-            opts.volume_ids = &resolved_volume_ids;
-        }
-
-        resolved_volume_exclude_ids = QueryEngine::resolve_volume_labels(&parsed.volumes_exclude, &volumes)?;
-        if !resolved_volume_exclude_ids.is_empty() {
-            opts.volume_ids_exclude = &resolved_volume_exclude_ids;
-        }
-
-        if parsed.volume_none || parsed.volume_any_online {
-            online_vol_ids = volumes
-                .iter()
-                .filter(|v| v.is_online)
-                .map(|v| v.id.to_string())
-                .collect::<Vec<_>>();
-            if parsed.volume_none {
-                opts.no_online_locations = Some(&online_vol_ids);
-            }
-            if parsed.volume_any_online {
-                opts.has_online_locations = Some(&online_vol_ids);
-            }
-        }
     }
 
     let mut rows = catalog.search_paginated(&opts)?;

@@ -1093,7 +1093,7 @@ Variables:
   unset $name        Remove a variable
 
 Session defaults:
-  set --flag         Add a default flag to all commands (--json, --log, --debug, --time)
+  set --flag         Add a default flag to all commands (--json, --log, --verbose, --debug, --time)
   unset --flag       Remove a session default
 
 Session management:
@@ -1105,7 +1105,7 @@ Examples:
   tag $picks portfolio
   export $picks /tmp/best
   set --log
-  source post-import.dam
+  source post-import.maki
 
 Other syntax:
   # comment          Lines starting with # are ignored

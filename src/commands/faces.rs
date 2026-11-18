@@ -130,7 +130,7 @@ fn faces_detect(
         } else if let Some(ref v) = volume {
             format!("volume:{v}")
         } else {
-            "*".to_string()
+            String::new()
         };
         let results = engine.search(&q)?;
         let mut seen = std::collections::HashSet::new();
@@ -236,7 +236,7 @@ fn faces_cluster(
             } else if let Some(ref v) = volume {
                 format!("volume:{v}")
             } else {
-                "*".to_string()
+                String::new()
             };
             let rows = engine.search(&q)?;
             Some(rows.into_iter().map(|r| r.asset_id).collect())
@@ -419,7 +419,7 @@ fn faces_dump_aligned(
             .resolve_asset_id_required(a)?;
         vec![full_id]
     } else {
-        let q = query.as_deref().unwrap_or("*");
+        let q = query.as_deref().unwrap_or("");
         let rows = engine.search(q)?;
         rows.into_iter().map(|r| r.asset_id).collect()
     };
@@ -512,7 +512,7 @@ fn faces_similarity(
             } else if let Some(ref v) = volume {
                 format!("volume:{v}")
             } else {
-                "*".to_string()
+                String::new()
             };
             let rows = engine.search(&q)?;
             Some(rows.into_iter().map(|r| r.asset_id).collect())

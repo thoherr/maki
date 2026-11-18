@@ -1,5 +1,5 @@
 //! Shared "ParsedSearch → SearchOptions" ID resolution for collection,
-//! person and `missing:` filters.
+//! person, `missing:` and `volume:` filters.
 //!
 //! `collection:` / `-collection:` and `person:` / `-person:` filters can't be
 //! evaluated inside the main search SQL directly — they resolve names to
@@ -16,6 +16,13 @@
 //! copies drifted. This module is the single implementation; every behavioral
 //! difference between the consumers is an explicit parameter or a documented
 //! call-site decision.
+//!
+//! `volume:<label>`, `-volume:<label>`, `volume:none` and `-volume:none`
+//! typed into a query resolve here too, since v4.14.0: before that only the
+//! CLI did it, and the same tokens in the web search box were dropped
+//! (every asset matched). The CLI additionally rejects an unknown label
+//! up front (`QueryEngine::resolve_volume_labels`); for the web an unknown
+//! label matches nothing.
 //!
 //! # Semantics (unified since v4.10.2)
 //!
@@ -101,6 +108,15 @@ pub struct ResolvedFilterIds {
     /// missing files means the filter matches nothing) regardless of the
     /// [`EmptyFilterPolicy`], mirroring the CLI's historical behavior.
     pub missing_ids: Option<Vec<String>>,
+    /// Volume IDs for `volume:<label>` entries (labels OR-ed). An unknown
+    /// label contributes [`NO_SUCH_VOLUME`], which no location carries.
+    pub volume_ids: Vec<String>,
+    /// Volume IDs for `-volume:<label>` entries; unknown labels drop out.
+    pub volume_exclude_ids: Vec<String>,
+    /// IDs of the online volumes: `Some` for `volume:none` (no location on
+    /// any of them) and `-volume:none` (a location on at least one).
+    no_online_volume_ids: Option<Vec<String>>,
+    any_online_volume_ids: Option<Vec<String>>,
     /// Whether the parsed query contained a `collection:` filter at all —
     /// drives the `MatchNothing` install of an empty resolved list.
     has_collections: bool,
@@ -154,7 +170,34 @@ impl ResolvedFilterIds {
         #[cfg(not(feature = "ai"))]
         let (person_ids, person_exclude_ids) = (Vec::<String>::new(), Vec::<String>::new());
 
+        let mut volume_ids = Vec::new();
+        let mut volume_exclude_ids = Vec::new();
+        let mut no_online_volume_ids = None;
+        let mut any_online_volume_ids = None;
+        if !parsed.volumes.is_empty()
+            || !parsed.volumes_exclude.is_empty()
+            || parsed.volume_none
+            || parsed.volume_any_online
+        {
+            let volumes = DeviceRegistry::new(catalog_root).list()?;
+            volume_ids = volume_ids_for(&parsed.volumes, &volumes, true);
+            volume_exclude_ids = volume_ids_for(&parsed.volumes_exclude, &volumes, false);
+            let online = || -> Vec<String> {
+                volumes.iter().filter(|v| v.is_online).map(|v| v.id.to_string()).collect()
+            };
+            if parsed.volume_none {
+                no_online_volume_ids = Some(online());
+            }
+            if parsed.volume_any_online {
+                any_online_volume_ids = Some(online());
+            }
+        }
+
         Ok(Self {
+            volume_ids,
+            volume_exclude_ids,
+            no_online_volume_ids,
+            any_online_volume_ids,
             collection_ids,
             collection_exclude_ids,
             person_ids,
@@ -187,6 +230,25 @@ impl ResolvedFilterIds {
         self.apply_persons(opts);
         self.apply_person_excludes(opts);
         self.apply_missing(opts);
+        self.apply_volumes(opts);
+    }
+
+    /// Install the `volume:` / `-volume:` / `volume:none` / `-volume:none`
+    /// filters. Policy-independent: a volume filter that names nothing
+    /// known must not widen the result to the whole catalog.
+    pub fn apply_volumes<'a>(&'a self, opts: &mut SearchOptions<'a>) {
+        if !self.volume_ids.is_empty() {
+            opts.volume_ids = &self.volume_ids;
+        }
+        if !self.volume_exclude_ids.is_empty() {
+            opts.volume_ids_exclude = &self.volume_exclude_ids;
+        }
+        if let Some(ref ids) = self.no_online_volume_ids {
+            opts.no_online_locations = Some(ids);
+        }
+        if let Some(ref ids) = self.any_online_volume_ids {
+            opts.has_online_locations = Some(ids);
+        }
     }
 
     /// Install the `missing:true` ID list when the query asked for it.
@@ -231,6 +293,24 @@ impl ResolvedFilterIds {
             opts.person_exclude_ids = Some(&self.person_exclude_ids);
         }
     }
+}
+
+/// Stand-in volume ID for a `volume:` label no registered volume has.
+const NO_SUCH_VOLUME: &str = "no-such-volume";
+
+/// Volume IDs for label entries (each entry comma-separated for OR,
+/// labels matched case-insensitively). An unknown label becomes
+/// [`NO_SUCH_VOLUME`] when `keep_unknown`, and is dropped otherwise.
+fn volume_ids_for(entries: &[String], volumes: &[crate::models::Volume], keep_unknown: bool) -> Vec<String> {
+    let mut ids = Vec::new();
+    for label in entries.iter().flat_map(|e| e.split(',')).map(str::trim).filter(|l| !l.is_empty()) {
+        match volumes.iter().find(|v| v.label.eq_ignore_ascii_case(label)) {
+            Some(v) => ids.push(v.id.to_string()),
+            None if keep_unknown => ids.push(NO_SUCH_VOLUME.to_string()),
+            None => {}
+        }
+    }
+    ids
 }
 
 /// Resolve `missing:true` to the IDs of assets that have at least one file

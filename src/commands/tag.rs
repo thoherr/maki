@@ -528,7 +528,7 @@ fn tag_export_vocabulary(
         "yaml" | "yml" => (Fmt::Yaml, "vocabulary.yaml"),
         "text" | "txt" => (Fmt::Text, "vocabulary.txt"),
         "json"         => (Fmt::Json, "vocabulary.json"),
-        other => anyhow::bail!("unknown --format '{}': expected 'yaml', 'text', or 'ctx.json'", other),
+        other => anyhow::bail!("unknown --format '{}': expected 'yaml', 'text', or 'json'", other),
     };
 
     if default {

@@ -406,7 +406,7 @@ pub fn run_duplicates_command(
                     let label = if same_volume {
                         "same-volume duplicate(s)"
                     } else if cross_volume {
-                        "cross-volume copie(s)"
+                        "file(s) with cross-volume copies"
                     } else {
                         "file(s) with duplicate locations"
                     };

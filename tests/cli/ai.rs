@@ -704,7 +704,7 @@ mod describe_without_vlm {
             .args(["--json", "describe", "--check", "--endpoint", "http://127.0.0.1:1", "--timeout", "2"])
             .assert()
             .failure()
-            .stderr(predicate::str::contains("vLM endpoint check failed"))
+            .stderr(predicate::str::contains("VLM endpoint check failed"))
             .get_output()
             .stdout
             .clone();

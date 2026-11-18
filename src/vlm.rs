@@ -457,7 +457,7 @@ fn call_openai_compatible(
             .get("message")
             .and_then(|m| m.as_str())
             .unwrap_or("unknown error");
-        anyhow::bail!("vLM error: {msg}");
+        anyhow::bail!("VLM error: {msg}");
     }
 
     let raw_text = resp
@@ -624,7 +624,7 @@ fn curl_post(
         }
         // Detect timeout
         if stderr.contains("timed out") || stderr.contains("Operation timeout") {
-            anyhow::bail!("vLM request timed out after {timeout}s");
+            anyhow::bail!("VLM request timed out after {timeout}s");
         }
         anyhow::bail!("curl failed (exit {}): {}{}", output.status, stderr, stdout);
     }
@@ -638,7 +638,7 @@ fn curl_post(
 
     // Detect HTTP error status from curl output
     if response.starts_with("<!DOCTYPE") || response.starts_with("<html") {
-        anyhow::bail!("vLM endpoint returned HTML (404 or error page)");
+        anyhow::bail!("VLM endpoint returned HTML (404 or error page)");
     }
 
     Ok(response)

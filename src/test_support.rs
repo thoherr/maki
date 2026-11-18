@@ -9,7 +9,7 @@
 //! ```
 //!
 //! Section-specific fixtures build on these and stay next to their tests
-//! (`query/test_support.rs`, the `setup_*` catalogs in `catalog.rs`).
+//! (`query/test_support.rs`, the `setup_*` catalogs in `catalog/test_support.rs`).
 
 #![allow(dead_code)]
 

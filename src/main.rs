@@ -1850,7 +1850,7 @@ enum FacesCommands {
         volume: Option<String>,
 
         /// Similarity threshold for clustering (0.0–1.0). Higher = stricter.
-        /// Typical range: 0.55–0.75 for the bundled face model.
+        /// Default: `[ai] face_cluster_threshold` (0.35).
         #[arg(long)]
         threshold: Option<f32>,
 

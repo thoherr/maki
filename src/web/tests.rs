@@ -424,6 +424,45 @@ async fn every_browse_module_is_served_and_loaded_by_the_browse_page() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// `volume:` tokens typed into the search box were resolved only by the
+/// CLI until v4.14.0; the web dropped them and returned every asset.
+#[tokio::test]
+async fn volume_tokens_in_the_query_filter_web_results() {
+    let srv = TestServer::new();
+    let mount = tempfile::tempdir().unwrap();
+    {
+        let volume = crate::device_registry::DeviceRegistry::new(&srv.root)
+            .register("work", mount.path(), crate::models::VolumeType::Local, None)
+            .unwrap();
+        let catalog = Catalog::open(&srv.root).unwrap();
+        catalog.ensure_volume(&volume).unwrap();
+        catalog
+            .insert_file_location(
+                "sha256:webtest1",
+                &crate::models::FileLocation {
+                    volume_id: volume.id,
+                    relative_path: "2026/sunset_beach.jpg".into(),
+                    verified_at: None,
+                },
+            )
+            .unwrap();
+    }
+
+    for (query, expected) in [
+        ("volume%3Awork", 1),
+        ("volume%3AWORK", 1),
+        ("-volume%3Awork", 0),
+        ("volume%3Anosuch", 0),
+        ("volume%3Anone", 0),
+        ("-volume%3Anone", 1),
+    ] {
+        let (status, _, body) = srv.get(&format!("/api/all-ids?q={query}")).await;
+        assert_eq!(status, StatusCode::OK, "{query}: {body}");
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["total"], expected, "{query}: {body}");
+    }
+}
+
 #[tokio::test]
 async fn stylesheet_is_linked_by_fingerprint_and_cached_accordingly() {
     let srv = TestServer::new();

@@ -838,7 +838,7 @@ pub fn run_describe_command(
                 } else {
                     eprintln!("{e}");
                 }
-                anyhow::bail!("vLM endpoint check failed");
+                anyhow::bail!("VLM endpoint check failed");
             }
         }
         return Ok(());

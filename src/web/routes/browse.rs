@@ -60,6 +60,8 @@ pub(super) struct DeltaContext<'a> {
     pub collection_ids: &'a [String],
     pub collection_exclude_ids: &'a [String],
     pub person_ids: &'a [String],
+    /// For the `volume:` tokens of the query (see `apply_volumes`).
+    pub resolved_filters: &'a crate::query::ResolvedFilterIds,
     pub volume: &'a str,
     pub path_volume_id: Option<&'a str>,
     pub effective_sort: &'a str,
@@ -111,6 +113,7 @@ pub(super) fn compute_count_deltas(
         if !parsed_nd.persons.is_empty() {
             opts_nd.person_asset_ids = Some(ctx.person_ids);
         }
+        ctx.resolved_filters.apply_volumes(&mut opts_nd);
         if !ctx.volume.is_empty() {
             opts_nd.volume = Some(ctx.volume);
         }
@@ -374,6 +377,7 @@ pub(super) fn run_browse_search(
             collection_ids: &prep.resolved.filters.collection_ids,
             collection_exclude_ids: &prep.resolved.filters.collection_exclude_ids,
             person_ids: &prep.resolved.filters.person_ids,
+            resolved_filters: &prep.resolved.filters,
             volume: &prep.filters.volume,
             path_volume_id: prep.filters.path_volume_id.as_deref(),
             effective_sort: &effective_sort,
